@@ -13,10 +13,11 @@ export function useWebSocket() {
   );
 
   const connect = useCallback(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl =
       import.meta.env.MODE === "development"
         ? "ws://localhost:3000"
-        : `ws://${window.location.host}`;
+        : `${protocol}//${window.location.host}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
