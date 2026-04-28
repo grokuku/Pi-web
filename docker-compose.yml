@@ -3,8 +3,8 @@ services:
     build: .
     container_name: pi-web
     ports:
-      - "3000:3000"
-      - "3001:3001"
+      - "3005:3000"
+      - "3006:3001"
     volumes:
       - pi-data:/home/node/.pi
       - pi-projects:/projects
