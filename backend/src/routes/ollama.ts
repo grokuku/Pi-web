@@ -5,6 +5,7 @@ import {
   fetchOllamaModels,
   writeOllamaModelsJson,
 } from "../ollama.js";
+import { reloadModelRegistry } from "../pi/session.js";
 
 const router = Router();
 
@@ -48,6 +49,9 @@ router.post("/connect", async (req: Request, res: Response) => {
     // Write models.json for Pi
     writeOllamaModelsJson(models, url);
 
+    // Reload model registry so newly discovered models are available
+    reloadModelRegistry();
+
     res.json({ success: true, models, url });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -64,6 +68,9 @@ router.post("/refresh", async (_req: Request, res: Response) => {
 
     const models = await fetchOllamaModels(config.url);
     writeOllamaModelsJson(models, config.url);
+
+    // Reload model registry so newly discovered models are available
+    reloadModelRegistry();
 
     res.json({ success: true, models });
   } catch (e: any) {

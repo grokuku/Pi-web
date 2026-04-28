@@ -7,13 +7,15 @@ export default {
       colors: {
         hacker: {
           bg: "#0a0a0a",
-          surface: "#111111",
-          border: "#1a1a1a",
+          surface: "#161616",
+          "surface-raised": "#1e1e1e",
+          border: "#2a2a2a",
+          "border-bright": "#3a3a3a",
           accent: "#00ff41",
           "accent-dim": "#00cc34",
           text: "#c0c0c0",
           "text-bright": "#e0e0e0",
-          "text-dim": "#707070",
+          "text-dim": "#888888",
           warn: "#ffaa00",
           error: "#ff4444",
           info: "#00aaff",
@@ -21,7 +23,9 @@ export default {
         hackerLight: {
           bg: "#f5f5f0",
           surface: "#ffffff",
+          "surface-raised": "#fafafa",
           border: "#d0d0d0",
+          "border-bright": "#bbbbbb",
           accent: "#008022",
           "accent-dim": "#00661a",
           text: "#333333",

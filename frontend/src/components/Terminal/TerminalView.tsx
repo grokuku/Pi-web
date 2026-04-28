@@ -8,19 +8,26 @@ interface Props {
   send: (msg: any) => void;
   on: (type: string, cb: (msg: any) => void) => () => void;
   activeProject: Project | null;
+  isActive: boolean;
 }
 
-export function TerminalView({ send, on, activeProject }: Props) {
+export function TerminalView({ send, on, activeProject, isActive }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XtermTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const projectIdRef = useRef<string | null>(null);
 
+  // ── Create / recreate terminal when project changes ──
   useEffect(() => {
     if (!containerRef.current || !activeProject) return;
 
-    // Clean up previous
+    projectIdRef.current = activeProject.id;
+
+    // Clean up previous terminal
     if (terminalRef.current) {
       terminalRef.current.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
     }
 
     const term = new XtermTerminal({
@@ -61,33 +68,36 @@ export function TerminalView({ send, on, activeProject }: Props) {
     term.loadAddon(webLinksAddon);
     term.open(containerRef.current);
 
-    // Fit initially and on resize
-    fitAddon.fit();
+    terminalRef.current = term;
+    fitAddonRef.current = fitAddon;
 
+    // Send input to backend
+    term.onData((data) => {
+      if (projectIdRef.current) {
+        send({
+          type: "terminal_input",
+          projectId: projectIdRef.current,
+          data,
+        });
+      }
+    });
+
+    // Handle resize
     const handleResize = () => {
-      fitAddon.fit();
-      send({
-        type: "terminal_resize",
-        projectId: activeProject.id,
-        cols: term.cols,
-        rows: term.rows,
-      });
+      if (!fitAddonRef.current || !terminalRef.current || !projectIdRef.current) return;
+      try {
+        fitAddonRef.current.fit();
+        send({
+          type: "terminal_resize",
+          projectId: projectIdRef.current,
+          cols: terminalRef.current.cols,
+          rows: terminalRef.current.rows,
+        });
+      } catch {}
     };
 
     const resizeObserver = new ResizeObserver(() => handleResize());
     resizeObserver.observe(containerRef.current);
-
-    // Send input to backend
-    term.onData((data) => {
-      send({
-        type: "terminal_input",
-        projectId: activeProject.id,
-        data,
-      });
-    });
-
-    terminalRef.current = term;
-    fitAddonRef.current = fitAddon;
 
     // Request terminal creation
     send({
@@ -98,15 +108,15 @@ export function TerminalView({ send, on, activeProject }: Props) {
 
     // Listen for terminal output from backend
     const unsub = on("terminal_data", (msg: any) => {
-      if (msg.projectId === activeProject.id) {
-        term.write(msg.data);
+      if (msg.projectId === activeProject.id && terminalRef.current) {
+        terminalRef.current.write(msg.data);
       }
     });
 
     // Listen for terminal exit
     const unsubExit = on("terminal_exit", (msg: any) => {
-      if (msg.projectId === activeProject.id) {
-        term.writeln(
+      if (msg.projectId === activeProject.id && terminalRef.current) {
+        terminalRef.current.writeln(
           `\r\n\x1b[33m[Process exited with code ${msg.exitCode}]\x1b[0m`
         );
       }
@@ -116,23 +126,51 @@ export function TerminalView({ send, on, activeProject }: Props) {
       unsub();
       unsubExit();
       resizeObserver.disconnect();
-      send({ type: "terminal_kill", projectId: activeProject.id });
+      if (projectIdRef.current) {
+        send({ type: "terminal_kill", projectId: projectIdRef.current });
+      }
       term.dispose();
       terminalRef.current = null;
+      fitAddonRef.current = null;
+      projectIdRef.current = null;
     };
   }, [activeProject?.id]);
 
+  // ── Fit terminal when tab becomes active ──
+  useEffect(() => {
+    if (isActive && terminalRef.current && fitAddonRef.current && projectIdRef.current) {
+      // Small delay to let layout settle after display toggle
+      const timer = requestAnimationFrame(() => {
+        if (fitAddonRef.current && terminalRef.current && projectIdRef.current) {
+          try {
+            fitAddonRef.current.fit();
+            send({
+              type: "terminal_resize",
+              projectId: projectIdRef.current,
+              cols: terminalRef.current.cols,
+              rows: terminalRef.current.rows,
+            });
+          } catch {}
+        }
+      });
+      return () => cancelAnimationFrame(timer);
+    }
+  }, [isActive]);
+
+  if (!activeProject) {
+    return (
+      <div className="h-full flex items-center justify-center text-hacker-text-dim">
+        <span>Select a project to open terminal...</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-full w-full p-0.5">
+    <div className="h-full w-full flex flex-col">
       <div
         ref={containerRef}
-        className="h-full w-full border-terminal bg-[#0a0a0a]"
+        className="flex-1 min-h-0 border-terminal bg-[#0a0a0a]"
       />
-      {!activeProject && (
-        <div className="h-full flex items-center justify-center text-hacker-text-dim">
-          <span>Select a project to open terminal...</span>
-        </div>
-      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   getSessionInfo,
   compactSession,
   newSession,
+  reloadModelRegistry,
 } from "../pi/session.js";
 
 const router = Router();
@@ -27,8 +28,8 @@ router.post("/model", async (req: Request, res: Response) => {
     if (!provider || !modelId) {
       return res.status(400).json({ error: "provider and modelId required" });
     }
-    await setModel(provider, modelId);
-    res.json({ success: true });
+    const queued = await setModel(provider, modelId);
+    res.json({ success: true, queued });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -45,14 +46,14 @@ router.post("/model/cycle", async (_req: Request, res: Response) => {
 });
 
 // POST set thinking level
-router.post("/thinking", (req: Request, res: Response) => {
+router.post("/thinking", async (req: Request, res: Response) => {
   try {
     const { level } = req.body;
     if (!level) {
       return res.status(400).json({ error: "level is required" });
     }
-    setThinkingLevel(level);
-    res.json({ success: true });
+    const queued = await setThinkingLevel(level);
+    res.json({ success: true, queued });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -76,6 +77,16 @@ router.post("/session/compact", async (req: Request, res: Response) => {
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// POST reload model registry (useful after Ollama config changes)
+router.post("/models/reload", (_req: Request, res: Response) => {
+  try {
+    reloadModelRegistry();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 

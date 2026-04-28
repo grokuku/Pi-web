@@ -14,7 +14,7 @@ export function StatusBar({
   session,
 }: Props) {
   return (
-    <div className="h-6 border-t border-hacker-border bg-hacker-surface flex items-center px-3 gap-4 text-[10px] shrink-0">
+    <div className="h-6 status-glow bg-hacker-surface flex items-center px-3 gap-4 text-[10px] shrink-0">
       {/* Project info */}
       {activeProject ? (
         <>

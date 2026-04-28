@@ -31,7 +31,7 @@ export function Sidebar({
   session,
 }: Props) {
   return (
-    <aside className="w-52 border-r border-hacker-border bg-hacker-surface flex flex-col shrink-0 text-xs">
+    <aside className="w-52 border-r border-hacker-border-bright bg-hacker-surface sidebar-stripe flex flex-col shrink-0 text-xs">
       {/* Projects section */}
       <div className="p-2 border-b border-hacker-border">
         <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
@@ -124,7 +124,7 @@ export function Sidebar({
       )}
 
       {/* Quick actions */}
-      <div className="p-2 mt-auto border-t border-hacker-border">
+      <div className="p-2 mt-auto border-t border-hacker-border-bright">
         <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
           ⚡ ACTIONS
         </div>

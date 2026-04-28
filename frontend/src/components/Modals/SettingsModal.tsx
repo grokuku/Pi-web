@@ -117,6 +117,7 @@ export function SettingsModal({ onClose, send, session }: Props) {
         const d = await res.json();
         throw new Error(d.error);
       }
+      const modelResult = await res.json();
 
       // Set thinking level
       await fetch("/api/settings/thinking", {
@@ -125,8 +126,12 @@ export function SettingsModal({ onClose, send, session }: Props) {
         body: JSON.stringify({ level: thinkingLevel }),
       });
 
-      setStatus(`✓ Using ${selectedModel}`);
-      setTimeout(onClose, 1500);
+      if (modelResult.queued) {
+        setStatus(`✓ ${selectedModel} queued — will apply when session starts`);
+      } else {
+        setStatus(`✓ Using ${selectedModel}`);
+      }
+      setTimeout(onClose, 2000);
     } catch (e: any) {
       setError(e.message);
     } finally {

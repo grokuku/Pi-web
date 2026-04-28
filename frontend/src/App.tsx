@@ -163,7 +163,7 @@ export default function App() {
       <div className="matrix-bg" />
 
       {/* ── HEADER ── */}
-      <header className="h-10 border-b border-hacker-border bg-hacker-surface flex items-center px-3 gap-3 z-10 shrink-0">
+      <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-3 z-10 shrink-0">
         {/* Logo */}
         <div className="flex items-center gap-2">
           <span className="text-hacker-accent text-lg glitch select-none">⚡</span>
@@ -172,7 +172,7 @@ export default function App() {
           </span>
         </div>
 
-        <div className="w-px h-5 bg-hacker-border" />
+        <div className="w-px h-5 bg-hacker-border-bright" />
 
         {/* Project selector */}
         <div className="flex items-center gap-2">
@@ -200,7 +200,7 @@ export default function App() {
 
         {activeProject && (
           <>
-            <div className="w-px h-5 bg-hacker-border" />
+            <div className="w-px h-5 bg-hacker-border-bright" />
             <span className="text-hacker-text-dim text-xs truncate max-w-[300px]">
               {activeProject.cwd}
             </span>
@@ -217,7 +217,7 @@ export default function App() {
           {connected ? "◉ CONNECTED" : "◌ OFFLINE"}
         </span>
 
-        <div className="w-px h-5 bg-hacker-border" />
+        <div className="w-px h-5 bg-hacker-border-bright" />
 
         {/* Session info */}
         {session && (
@@ -226,7 +226,7 @@ export default function App() {
           </span>
         )}
 
-        <div className="w-px h-5 bg-hacker-border" />
+        <div className="w-px h-5 bg-hacker-border-bright" />
 
         {/* Tab toggles */}
         <button
@@ -250,7 +250,7 @@ export default function App() {
           [TERMINAL]
         </button>
 
-        <div className="w-px h-5 bg-hacker-border" />
+        <div className="w-px h-5 bg-hacker-border-bright" />
 
         {/* Theme + Settings */}
         <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
@@ -281,11 +281,11 @@ export default function App() {
         {/* Content */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex-1 overflow-hidden relative">
-            <div className={activeTab === "pi" ? "" : "hidden"} style={{ height: "100%" }}>
+            <div className={activeTab === "pi" ? "absolute inset-0" : "hidden"}>
               <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} />
             </div>
-            <div className={activeTab === "terminal" ? "" : "hidden"} style={{ height: "100%" }}>
-              <TerminalView send={send} on={on} activeProject={activeProject} />
+            <div className={activeTab === "terminal" ? "absolute inset-0" : "hidden"}>
+              <TerminalView send={send} on={on} activeProject={activeProject} isActive={activeTab === "terminal"} />
             </div>
           </div>
 

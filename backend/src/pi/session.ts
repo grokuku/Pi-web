@@ -24,6 +24,10 @@ let currentSession: PiSessionState = {
 let sharedAuthStorage = AuthStorage.create();
 let sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
 
+// Pending config: applied when a session is created
+let pendingModel: { provider: string; modelId: string } | null = null;
+let pendingThinkingLevel: string | null = null;
+
 type EventCallback = (event: AgentSessionEvent) => void;
 let eventCallbacks = new Set<EventCallback>();
 
@@ -40,6 +44,10 @@ const activeToolCalls: Map<
 
 export function getActiveToolCalls() {
   return activeToolCalls;
+}
+
+export function reloadModelRegistry(): void {
+  sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
 }
 
 export function subscribeToEvents(callback: EventCallback): () => void {
@@ -116,6 +124,29 @@ export async function createPiSession(cwd: string): Promise<PiSessionState> {
       unsubscribe,
     };
 
+    // Apply pending model/thinking if queued before session existed
+    if (pendingModel) {
+      try {
+        const model = sharedModelRegistry.find(pendingModel.provider, pendingModel.modelId);
+        if (model) {
+          await session.setModel(model);
+          console.log(`Applied pending model: ${pendingModel.provider}/${pendingModel.modelId}`);
+        }
+      } catch (e) {
+        console.error("Failed to apply pending model:", e);
+      }
+      pendingModel = null;
+    }
+    if (pendingThinkingLevel) {
+      try {
+        session.setThinkingLevel(pendingThinkingLevel as any);
+        console.log(`Applied pending thinking level: ${pendingThinkingLevel}`);
+      } catch (e) {
+        console.error("Failed to apply pending thinking level:", e);
+      }
+      pendingThinkingLevel = null;
+    }
+
     return currentSession;
   } catch (error) {
     console.error("Failed to create Pi session:", error);
@@ -167,13 +198,22 @@ export async function abortPi(): Promise<void> {
 export async function setModel(
   provider: string,
   modelId: string
-): Promise<void> {
-  const { session } = currentSession;
-  if (!session) throw new Error("No active Pi session");
+): Promise<boolean> {
+  // Reload registry to pick up any newly configured models (e.g. from Ollama)
+  reloadModelRegistry();
 
   const model = sharedModelRegistry.find(provider, modelId);
   if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
-  await session.setModel(model);
+
+  const { session } = currentSession;
+  if (session) {
+    await session.setModel(model);
+    return false; // applied immediately
+  }
+
+  // No session yet — queue for later
+  pendingModel = { provider, modelId };
+  return true; // queued
 }
 
 export async function cycleModel(): Promise<any> {
@@ -182,16 +222,21 @@ export async function cycleModel(): Promise<any> {
   return await session.cycleModel();
 }
 
-export async function setThinkingLevel(level: string): Promise<void> {
-  const { session } = currentSession;
-  if (!session) throw new Error("No active Pi session");
-
+export async function setThinkingLevel(level: string): Promise<boolean> {
   const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
   if (!validLevels.includes(level)) {
     throw new Error(`Invalid thinking level: ${level}`);
   }
 
-  session.setThinkingLevel(level as any);
+  const { session } = currentSession;
+  if (session) {
+    session.setThinkingLevel(level as any);
+    return false; // applied immediately
+  }
+
+  // No session yet — queue for later
+  pendingThinkingLevel = level;
+  return true; // queued
 }
 
 export async function newSession(): Promise<void> {
