@@ -9,10 +9,6 @@ services:
       - /mnt/user/appdata-ssd/Pi-web/data/pi-data:/home/node/.pi
       - /mnt/user/appdata-ssd/Pi-web/data/pi-projects:/projects
       - /mnt/user/appdata-ssd/Pi-web/data/pi-sessions:/sessions
-      - /mnt/user/appdata-ssd/Pi-web/data/pi-npm-be:/app/backend/node_modules
-      - /mnt/user/appdata-ssd/Pi-web/data/pi-dist-be:/app/backend/dist
-      - /mnt/user/appdata-ssd/Pi-web/data/pi-npm-fe:/app/frontend/node_modules
-      - /mnt/user/appdata-ssd/Pi-web/data/pi-dist-fe:/app/frontend/dist
     environment:
       - NODE_ENV=development
     stdin_open: true
