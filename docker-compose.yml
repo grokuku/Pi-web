@@ -9,6 +9,10 @@ services:
       - pi-data:/home/node/.pi
       - pi-projects:/projects
       - pi-sessions:/sessions
+      - pi-npm-be:/app/backend/node_modules
+      - pi-dist-be:/app/backend/dist
+      - pi-npm-fe:/app/frontend/node_modules
+      - pi-dist-fe:/app/frontend/dist
     environment:
       - NODE_ENV=development
     stdin_open: true
@@ -19,3 +23,7 @@ volumes:
   pi-data:
   pi-projects:
   pi-sessions:
+  pi-npm-be:
+  pi-dist-be:
+  pi-npm-fe:
+  pi-dist-fe:
