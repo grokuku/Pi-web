@@ -16,9 +16,8 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -s /bin/bash node && \
-    mkdir -p /home/node/.pi/agent && \
+# Ensure directories exist
+RUN mkdir -p /home/node/.pi/agent && \
     mkdir -p /projects && \
     mkdir -p /sessions && \
     chown -R node:node /home/node /projects /sessions
