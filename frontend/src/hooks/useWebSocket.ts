@@ -11,8 +11,28 @@ export function useWebSocket() {
   const listenersRef = useRef<Map<string, Set<(msg: any) => void>>>(
     new Map()
   );
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isDestroyedRef = useRef(false);
 
   const connect = useCallback(() => {
+    // Clear any pending reconnect timer
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    // Close existing connection cleanly (prevent old socket handlers from firing)
+    if (wsRef.current) {
+      const old = wsRef.current;
+      old.onclose = null;
+      old.onerror = null;
+      old.close();
+      wsRef.current = null;
+    }
+
+    // Don't connect if component is destroyed
+    if (isDestroyedRef.current) return;
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl =
       import.meta.env.MODE === "development"
@@ -45,9 +65,13 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
-      console.log("[WS] Disconnected, reconnecting in 2s...");
+      wsRef.current = null;
       setConnected(false);
-      setTimeout(connect, 2000);
+      // Only reconnect if component is still alive
+      if (!isDestroyedRef.current) {
+        console.log("[WS] Disconnected, reconnecting in 2s...");
+        reconnectTimerRef.current = setTimeout(connect, 2000);
+      }
     };
 
     ws.onerror = (e) => {
@@ -56,9 +80,22 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    isDestroyedRef.current = false;
     connect();
     return () => {
-      wsRef.current?.close();
+      isDestroyedRef.current = true;
+      // Clear any pending reconnect timer
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      // Close socket without triggering reconnect
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [connect]);
 

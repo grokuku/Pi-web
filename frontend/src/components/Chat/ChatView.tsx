@@ -82,20 +82,27 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
             setStreamingThinking((prev) => prev + delta.delta);
           }
           if (delta.type === "toolcall_start") {
-            setCurrentToolCalls((prev) => [...prev, {
-              id: delta.toolCallId, name: delta.toolName,
-              args: delta.args, output: "", isError: false, isStreaming: true,
-            }]);
+            // Extract just the actual arguments (not the full envelope)
+            const startArgs = extractToolArgs(delta.args);
+            setCurrentToolCalls((prev) => {
+              // Dedup: don't add if same ID already exists
+              if (prev.some((tc) => tc.id === delta.toolCallId)) return prev;
+              return [...prev, {
+                id: delta.toolCallId, name: delta.toolName,
+                args: startArgs, output: "", isError: false, isStreaming: true,
+              }];
+            });
           }
           if (delta.type === "toolcall_delta") {
             setCurrentToolCalls((prev) => prev.map((tc) =>
               tc.id === delta.toolCallId
-                ? { ...tc, args: { ...tc.args, ...delta.argsDelta } } : tc));
+                ? { ...tc, args: { ...tc.args, ...extractToolArgs(delta.argsDelta) } } : tc));
           }
           if (delta.type === "toolcall_end") {
+            const endArgs = extractToolArgs(delta.toolCall);
             setCurrentToolCalls((prev) => prev.map((tc) =>
               tc.id === delta.toolCallId
-                ? { ...tc, args: delta.toolCall, isStreaming: false } : tc));
+                ? { ...tc, args: endArgs, isStreaming: false } : tc));
           }
           break;
         }
@@ -128,6 +135,18 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
             const st = streamingThinkingRef.current;
             const ct = currentToolCallsRef.current;
 
+            const msgId = currentAssistantIdRef.current || Date.now().toString();
+
+            // Dedup: don't add if a message with this ID already exists
+            if (messagesRef.current.some((m) => m.id === msgId)) {
+              // Still clear streaming state
+              setStreamingContent("");
+              setStreamingThinking("");
+              setCurrentToolCalls([]);
+              currentAssistantIdRef.current = null;
+              break;
+            }
+
             const finalContent = sc ||
               evt.message.content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") || "";
             const finalThinking = st ||
@@ -136,7 +155,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
             if (finalContent || finalThinking || ct.length > 0) {
               const msgUsage = evt.message?.usage;
               setMessages((prev) => [...prev, {
-                id: currentAssistantIdRef.current || Date.now().toString(),
+                id: msgId,
                 role: "assistant",
                 content: finalContent,
                 thinking: finalThinking,
@@ -453,6 +472,11 @@ function MarkdownRenderer({ content }: { content: string }) {
 // ── Tool Call Card ─────────────────────────────────────
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(true);
+
+  // Extract the actual arguments from a wrapped tool call envelope.
+  // The Pi SDK may send { type, id, name, arguments: {...} } instead of just { command: "..." }.
+  const displayArgs = extractToolArgs(toolCall.args);
+
   return (
     <div className="mt-2 border border-hacker-border bg-hacker-bg/50 overflow-hidden">
       <button onClick={() => setExpanded(!expanded)}
@@ -465,9 +489,9 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
       </button>
       {expanded && (
         <div>
-          {toolCall.args && Object.keys(toolCall.args).length > 0 && (
+          {displayArgs && Object.keys(displayArgs).length > 0 && (
             <div className="px-3 py-1 text-[10px] text-hacker-text-dim">
-              {JSON.stringify(toolCall.args, null, 2)}
+              {JSON.stringify(displayArgs, null, 2)}
             </div>
           )}
           {toolCall.output && (
@@ -477,4 +501,24 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
       )}
     </div>
   );
+}
+
+/** Extract the actual arguments from a potentially-wrapped tool call object.
+ *  Some SDKs send: { type: "toolCall", id: "...", name: "bash", arguments: { command: "..." } }
+ *  We want just the inner arguments for display.
+ */
+function extractToolArgs(args: any): any {
+  if (!args || typeof args !== "object") return args;
+  // If the object has an "arguments" key (and optionally type/id/name), extract it
+  if ("arguments" in args && typeof args.arguments === "object") {
+    return args.arguments;
+  }
+  // If the object has an "input" key (Claude API style)
+  if ("input" in args && typeof args.input === "object") {
+    return args.input;
+  }
+  // Otherwise strip known envelope keys
+  const { type, id, name, ...rest } = args;
+  if (Object.keys(rest).length > 0) return rest;
+  return args;
 }
