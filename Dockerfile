@@ -16,4 +16,5 @@ COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 EXPOSE 3000
+ENV HOME=/root
 ENTRYPOINT ["./entrypoint.sh"]

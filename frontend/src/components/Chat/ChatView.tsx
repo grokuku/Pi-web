@@ -11,6 +11,7 @@ interface Props {
   on: (type: string, cb: (msg: any) => void) => () => void;
   activeProject: Project | null;
   isStreaming: boolean;
+  session: any;
 }
 
 interface DisplayMessage {
@@ -23,7 +24,7 @@ interface DisplayMessage {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-export function ChatView({ send, on, activeProject, isStreaming }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, session }: Props) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
@@ -250,6 +251,9 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
     );
   }
 
+  // No messages yet — show welcome
+  const hasContent = messages.length > 0 || streamingContent || streamingThinking || currentToolCalls.length > 0;
+
   return (
     <div
       className="h-full flex flex-col"
@@ -259,7 +263,8 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
       onPaste={handlePaste}
     >
       {/* Messages */}
-      <div className={`flex-1 overflow-y-auto p-4 ${isDragOver ? "drop-zone active" : ""}`}>
+      {hasContent ? (
+        <div className={`flex-1 overflow-y-auto p-4 ${isDragOver ? "drop-zone active" : ""}`}>
         {isDragOver && (
           <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20">
             <div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div>
@@ -283,6 +288,18 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
 
         <div ref={chatEndRef} />
       </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-hacker-accent text-6xl mb-4 glitch">⚡</div>
+            <p className="text-hacker-text-dim text-sm">Session active — type a message below to start</p>
+            <p className="text-hacker-text-dim text-xs mt-2">
+              {activeProject?.git?.branch && `git:${activeProject.git.branch} · `}
+              {session?.model?.name || "No model selected"}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Input */}
       <div className="border-t border-hacker-border bg-hacker-surface p-3">
