@@ -17,6 +17,7 @@ WORKDIR /app
 COPY --chown=node:node backend/ ./backend/
 COPY --chown=node:node frontend/ ./frontend/
 COPY --chown=node:node entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 EXPOSE 3000 3001
 ENTRYPOINT ["./entrypoint.sh"]
