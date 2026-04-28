@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  pi-web:
+    build: .
+    container_name: pi-web
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    volumes:
+      - pi-data:/home/node/.pi
+      - pi-projects:/projects
+      - pi-sessions:/sessions
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  pi-data:
+  pi-projects:
+  pi-sessions:

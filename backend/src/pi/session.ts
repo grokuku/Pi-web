@@ -1,0 +1,242 @@
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import { fileURLToPath } from "url";
+import path from "path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
+
+export interface PiSessionState {
+  session: AgentSession | null;
+  isStreaming: boolean;
+  cwd: string;
+  unsubscribe: (() => void) | null;
+}
+
+let currentSession: PiSessionState = {
+  session: null,
+  isStreaming: false,
+  cwd: process.cwd(),
+  unsubscribe: null,
+};
+
+type EventCallback = (event: AgentSessionEvent) => void;
+let eventCallbacks: EventCallback[] = [];
+
+// Track active tool executions
+const activeToolCalls: Map<
+  string,
+  {
+    toolName: string;
+    args: any;
+    output: string;
+    startTime: number;
+  }
+> = new Map();
+
+export function getActiveToolCalls() {
+  return activeToolCalls;
+}
+
+export function subscribeToEvents(callback: EventCallback): () => void {
+  eventCallbacks.push(callback);
+  return () => {
+    eventCallbacks = eventCallbacks.filter((cb) => cb !== callback);
+  };
+}
+
+function emitToSubscribers(event: AgentSessionEvent) {
+  for (const cb of eventCallbacks) {
+    try {
+      cb(event);
+    } catch (e) {
+      console.error("Event callback error:", e);
+    }
+  }
+}
+
+export async function createPiSession(cwd: string): Promise<PiSessionState> {
+  // Dispose previous session
+  if (currentSession.session) {
+    if (currentSession.unsubscribe) currentSession.unsubscribe();
+    await currentSession.session.dispose();
+  }
+
+  const authStorage = AuthStorage.create();
+  const modelRegistry = ModelRegistry.create(authStorage);
+  const sessionManager = SessionManager.create(cwd);
+
+  try {
+    const { session } = await createAgentSession({
+      cwd,
+      sessionManager,
+      authStorage,
+      modelRegistry,
+    });
+
+    const unsubscribe = session.subscribe((event) => {
+      // Track tool executions
+      if (event.type === "tool_execution_start") {
+        activeToolCalls.set(event.toolCallId, {
+          toolName: event.toolName,
+          args: event.args,
+          output: "",
+          startTime: Date.now(),
+        });
+      } else if (event.type === "tool_execution_update") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing && event.partialResult?.content) {
+          existing.output = event.partialResult.content
+            .map((c: any) => c.text || "")
+            .join("");
+        }
+      } else if (event.type === "tool_execution_end") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing) {
+          if (event.result?.content) {
+            existing.output = event.result.content
+              .map((c: any) => c.text || "")
+              .join("");
+          }
+        }
+      } else if (event.type === "agent_start") {
+        currentSession.isStreaming = true;
+      } else if (event.type === "agent_end") {
+        currentSession.isStreaming = false;
+        // Clean up old tool calls
+        activeToolCalls.clear();
+      }
+
+      // Forward to WebSocket subscribers
+      emitToSubscribers(event);
+    });
+
+    currentSession = {
+      session,
+      isStreaming: false,
+      cwd,
+      unsubscribe,
+    };
+
+    return currentSession;
+  } catch (error) {
+    console.error("Failed to create Pi session:", error);
+    throw error;
+  }
+}
+
+export function getCurrentSession(): PiSessionState {
+  return currentSession;
+}
+
+export async function sendPrompt(
+  message: string,
+  images?: { data: string; mimeType: string }[]
+): Promise<void> {
+  const { session, isStreaming } = currentSession;
+
+  if (!session) {
+    throw new Error("No active Pi session");
+  }
+
+  if (isStreaming) {
+    // Queue as steer message
+    await session.steer(message);
+  } else {
+    const options: any = {};
+    if (images && images.length > 0) {
+      options.images = images.map((img) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          mediaType: img.mimeType,
+          data: img.data,
+        },
+      }));
+    }
+
+    await session.prompt(message, options);
+  }
+}
+
+export async function abortPi(): Promise<void> {
+  const { session } = currentSession;
+  if (session) {
+    await session.abort();
+  }
+}
+
+export async function setModel(
+  provider: string,
+  modelId: string
+): Promise<void> {
+  const { session } = currentSession;
+  if (!session) throw new Error("No active Pi session");
+
+  const { ModelRegistry, AuthStorage } = await import(
+    "@mariozechner/pi-coding-agent"
+  );
+  const authStorage = AuthStorage.create();
+  const registry = ModelRegistry.create(authStorage);
+  const model = registry.find(provider, modelId);
+
+  if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+  await session.setModel(model);
+}
+
+export async function cycleModel(): Promise<any> {
+  const { session } = currentSession;
+  if (!session) throw new Error("No active Pi session");
+  return await session.cycleModel();
+}
+
+export async function setThinkingLevel(level: string): Promise<void> {
+  const { session } = currentSession;
+  if (!session) throw new Error("No active Pi session");
+
+  const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  if (!validLevels.includes(level)) {
+    throw new Error(`Invalid thinking level: ${level}`);
+  }
+
+  session.setThinkingLevel(level as any);
+}
+
+export async function newSession(): Promise<void> {
+  const { session } = currentSession;
+  if (session) {
+    // For now, just dispose and recreate
+    if (currentSession.unsubscribe) currentSession.unsubscribe();
+    await session.dispose();
+  }
+  await createPiSession(currentSession.cwd);
+}
+
+export async function compactSession(
+  customInstructions?: string
+): Promise<any> {
+  const { session } = currentSession;
+  if (!session) throw new Error("No active Pi session");
+  return await session.compact(customInstructions);
+}
+
+export function getSessionInfo() {
+  const { session, isStreaming, cwd } = currentSession;
+  if (!session) return null;
+
+  return {
+    sessionId: session.sessionId,
+    sessionFile: session.sessionFile,
+    isStreaming,
+    cwd,
+    thinkingLevel: session.thinkingLevel,
+    model: session.model
+      ? {
+          id: (session.model as any).id,
+          name: (session.model as any).name,
+          provider: (session.model as any).provider,
+        }
+      : null,
+    messageCount: session.messages?.length || 0,
+  };
+}

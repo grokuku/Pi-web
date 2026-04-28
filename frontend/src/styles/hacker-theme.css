@@ -1,0 +1,240 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* ─── Hacker Theme ───────────────────────────── */
+:root {
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --border: #1a1a1a;
+  --accent: #00ff41;
+  --accent-dim: #00cc34;
+  --text: #c0c0c0;
+  --text-bright: #e0e0e0;
+  --text-dim: #707070;
+}
+
+.light {
+  --bg: #f5f5f0;
+  --surface: #ffffff;
+  --border: #d0d0d0;
+  --accent: #008022;
+  --accent-dim: #00661a;
+  --text: #333333;
+  --text-bright: #111111;
+  --text-dim: #888888;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) var(--surface);
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 3px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* ─── Scanline overlay ──────────────────────── */
+.scanlines::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ─── Glitch text ───────────────────────────── */
+.glitch {
+  text-shadow: 0 0 5px var(--accent), 0 0 10px var(--accent-dim);
+}
+
+/* ─── Terminal-style border ─────────────────── */
+.border-terminal {
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.03);
+}
+
+/* ─── Pulse dot ─────────────────────────────── */
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: dotPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+/* ─── Typewriter cursor ─────────────────────── */
+.cursor-blink::after {
+  content: "█";
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+  margin-left: 2px;
+}
+
+/* ─── xterm customizations ──────────────────── */
+.xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) var(--bg) !important;
+}
+.xterm {
+  padding: 8px;
+}
+
+/* ─── Code blocks in chat ───────────────────── */
+.chat-code-block {
+  background: var(--surface) !important;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* ─── Button styles ─────────────────────────── */
+.btn-hacker {
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn-hacker:hover {
+  background: rgba(0, 255, 65, 0.1);
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+}
+
+.btn-hacker.danger {
+  border-color: #ff4444;
+  color: #ff4444;
+}
+.btn-hacker.danger:hover {
+  background: rgba(255, 68, 68, 0.1);
+  box-shadow: 0 0 10px rgba(255, 68, 68, 0.2);
+}
+
+/* ─── Input styles ──────────────────────────── */
+.input-hacker {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: inherit;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input-hacker:focus {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.1);
+}
+.input-hacker::placeholder {
+  color: var(--text-dim);
+}
+
+/* ─── Select styles ─────────────────────────── */
+.select-hacker {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: inherit;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ff41' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+
+/* ─── Tool output collapsible ───────────────── */
+.tool-output {
+  max-height: 300px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  padding: 8px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ─── Modal ─────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.modal-box {
+  background: var(--surface);
+  border: 1px solid var(--accent-dim);
+  box-shadow: 0 0 30px rgba(0, 255, 65, 0.1), 0 0 10px rgba(0, 255, 65, 0.05);
+  max-width: 480px;
+  width: 90%;
+  padding: 24px;
+}
+
+/* ─── Matrix rain effect ────────────────────── */
+.matrix-bg {
+  position: fixed;
+  inset: 0;
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: -1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%2300ff41' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
+  background-size: 40px 40px;
+}
+
+/* ─── Drag & drop zone ──────────────────────── */
+.drop-zone {
+  border: 2px dashed var(--accent-dim);
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.drop-zone.active {
+  border-color: var(--accent);
+  background: rgba(0, 255, 65, 0.05);
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
+}
