@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { PiEvent, ToolCallInfo } from "../../types";
@@ -19,11 +20,7 @@ interface DisplayMessage {
   thinking: string;
   toolCalls: ToolCallInfo[];
   timestamp: number;
-  usage?: {
-    input: number;
-    output: number;
-    cost: { total: number };
-  };
+  usage?: { input: number; output: number; cost: { total: number } };
 }
 
 export function ChatView({ send, on, activeProject, isStreaming }: Props) {
@@ -32,35 +29,41 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
   const [streamingThinking, setStreamingThinking] = useState("");
   const [currentToolCalls, setCurrentToolCalls] = useState<ToolCallInfo[]>([]);
   const [input, setInput] = useState("");
-  const [attachedImages, setAttachedImages] = useState<
-    { data: string; mimeType: string; name: string }[]
-  >([]);
+  const [attachedImages, setAttachedImages] = useState<{ data: string; mimeType: string; name: string }[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
+  const [error, setError] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
 
-  // Auto-scroll to bottom
+  // Refs to avoid stale closures in WS handler
+  const streamingContentRef = useRef("");
+  const streamingThinkingRef = useRef("");
+  const currentToolCallsRef = useRef<ToolCallInfo[]>([]);
+  const messagesRef = useRef<DisplayMessage[]>([]);
+
+  // Keep refs in sync
+  useEffect(() => { streamingContentRef.current = streamingContent; }, [streamingContent]);
+  useEffect(() => { streamingThinkingRef.current = streamingThinking; }, [streamingThinking]);
+  useEffect(() => { currentToolCallsRef.current = currentToolCalls; }, [currentToolCalls]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Auto scroll
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  // ── Pi event handling ──
+  // ── Pi event handling (subscribed once, uses refs) ──
   useEffect(() => {
     const unsub = on("pi_event", (msg: any) => {
       const evt: PiEvent = msg.event;
 
       switch (evt.type) {
         case "message_start": {
-          if (evt.message?.role === "user") {
-            // User message - we already added it locally
-            break;
-          }
           if (evt.message?.role === "assistant") {
-            // Start new assistant message
             currentAssistantIdRef.current = evt.message.id || Date.now().toString();
             setStreamingContent("");
             setStreamingThinking("");
@@ -78,176 +81,107 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
             setStreamingThinking((prev) => prev + delta.delta);
           }
           if (delta.type === "toolcall_start") {
-            setCurrentToolCalls((prev) => [
-              ...prev,
-              {
-                id: delta.toolCallId,
-                name: delta.toolName,
-                args: delta.args,
-                output: "",
-                isError: false,
-                isStreaming: true,
-              },
-            ]);
+            setCurrentToolCalls((prev) => [...prev, {
+              id: delta.toolCallId, name: delta.toolName,
+              args: delta.args, output: "", isError: false, isStreaming: true,
+            }]);
           }
           if (delta.type === "toolcall_delta") {
-            setCurrentToolCalls((prev) =>
-              prev.map((tc) =>
-                tc.id === delta.toolCallId
-                  ? { ...tc, args: { ...tc.args, ...delta.argsDelta } }
-                  : tc
-              )
-            );
+            setCurrentToolCalls((prev) => prev.map((tc) =>
+              tc.id === delta.toolCallId
+                ? { ...tc, args: { ...tc.args, ...delta.argsDelta } } : tc));
           }
           if (delta.type === "toolcall_end") {
-            setCurrentToolCalls((prev) =>
-              prev.map((tc) =>
-                tc.id === delta.toolCallId
-                  ? {
-                      ...tc,
-                      args: delta.toolCall,
-                      isStreaming: false,
-                    }
-                  : tc
-              )
-            );
+            setCurrentToolCalls((prev) => prev.map((tc) =>
+              tc.id === delta.toolCallId
+                ? { ...tc, args: delta.toolCall, isStreaming: false } : tc));
           }
           break;
         }
 
         case "tool_execution_start": {
-          setCurrentToolCalls((prev) =>
-            prev.map((tc) =>
-              tc.id === evt.toolCallId ? { ...tc, isStreaming: true } : tc
-            )
-          );
+          setCurrentToolCalls((prev) => prev.map((tc) =>
+            tc.id === evt.toolCallId ? { ...tc, isStreaming: true } : tc));
           break;
         }
 
         case "tool_execution_update": {
-          const partialText = evt.partialResult?.content
-            ?.map((c: any) => c.text || "")
-            .join("") || "";
-          setCurrentToolCalls((prev) =>
-            prev.map((tc) =>
-              tc.id === evt.toolCallId
-                ? { ...tc, output: partialText, isStreaming: true }
-                : tc
-            )
-          );
+          const partialText = evt.partialResult?.content?.map((c: any) => c.text || "").join("") || "";
+          setCurrentToolCalls((prev) => prev.map((tc) =>
+            tc.id === evt.toolCallId ? { ...tc, output: partialText, isStreaming: true } : tc));
           break;
         }
 
         case "tool_execution_end": {
-          const resultText = evt.result?.content
-            ?.map((c: any) => c.text || "")
-            .join("") || "";
-          setCurrentToolCalls((prev) =>
-            prev.map((tc) =>
-              tc.id === evt.toolCallId
-                ? {
-                    ...tc,
-                    output: resultText,
-                    isError: evt.isError,
-                    isStreaming: false,
-                  }
-                : tc
-            )
-          );
+          const resultText = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
+          setCurrentToolCalls((prev) => prev.map((tc) =>
+            tc.id === evt.toolCallId
+              ? { ...tc, output: resultText, isError: evt.isError, isStreaming: false } : tc));
           break;
         }
 
         case "message_end": {
           if (evt.message?.role === "assistant") {
-            const finalContent =
-              streamingContent ||
-              evt.message.content
-                ?.filter((c: any) => c.type === "text")
-                .map((c: any) => c.text)
-                .join("") ||
-              "";
+            // Read from refs to get latest values safely
+            const sc = streamingContentRef.current;
+            const st = streamingThinkingRef.current;
+            const ct = currentToolCallsRef.current;
 
-            const finalThinking =
-              streamingThinking ||
-              evt.message.content
-                ?.filter((c: any) => c.type === "thinking")
-                .map((c: any) => c.thinking)
-                .join("") ||
-              "";
+            const finalContent = sc ||
+              evt.message.content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") || "";
+            const finalThinking = st ||
+              evt.message.content?.filter((c: any) => c.type === "thinking").map((c: any) => c.thinking).join("") || "";
 
-            if (finalContent || finalThinking || currentToolCalls.length > 0) {
+            if (finalContent || finalThinking || ct.length > 0) {
               const msgUsage = evt.message?.usage;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: currentAssistantIdRef.current || Date.now().toString(),
-                  role: "assistant",
-                  content: finalContent,
-                  thinking: finalThinking,
-                  toolCalls: currentToolCalls,
-                  timestamp: Date.now(),
-                  usage: msgUsage ? {
-                    input: msgUsage.input || 0,
-                    output: msgUsage.output || 0,
-                    cost: { total: msgUsage.cost?.total || 0 },
-                  } : undefined,
-                },
-              ]);
-
-              setStreamingContent("");
-              setStreamingThinking("");
-              setCurrentToolCalls([]);
-              currentAssistantIdRef.current = null;
+              setMessages((prev) => [...prev, {
+                id: currentAssistantIdRef.current || Date.now().toString(),
+                role: "assistant",
+                content: finalContent,
+                thinking: finalThinking,
+                toolCalls: [...ct],
+                timestamp: Date.now(),
+                usage: msgUsage ? {
+                  input: msgUsage.input || 0,
+                  output: msgUsage.output || 0,
+                  cost: { total: msgUsage.cost?.total || 0 },
+                } : undefined,
+              }]);
             }
+            setStreamingContent("");
+            setStreamingThinking("");
+            setCurrentToolCalls([]);
+            currentAssistantIdRef.current = null;
           }
           break;
         }
-
-        case "agent_start":
-        case "agent_end":
-        case "queue_update":
-        case "compaction_start":
-        case "compaction_end":
-          // Handled by status bar / parent
-          break;
       }
     });
 
     return () => unsub();
-  }, [on, streamingContent, streamingThinking, currentToolCalls]);
+  }, [on]); // Only re-subscribe if `on` reference changes
 
   // ── Send message ──
   const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text && attachedImages.length === 0 && attachedFiles.length === 0) return;
+    setError("");
 
     let fullMessage = text;
-
-    // Prepend file contents
     if (attachedFiles.length > 0) {
-      const filesStr = attachedFiles.join("\n");
-      fullMessage = `${filesStr}\n\n${text}`;
+      fullMessage = `${attachedFiles.join("\n")}\n\n${text}`;
     }
 
-    // Add user message to display
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        role: "user",
-        content: text || "[attachments]",
-        thinking: "",
-        toolCalls: [],
-        timestamp: Date.now(),
-      },
-    ]);
+    setMessages((prev) => [...prev, {
+      id: Date.now().toString(),
+      role: "user",
+      content: text || "[attachments]",
+      thinking: "",
+      toolCalls: [],
+      timestamp: Date.now(),
+    }]);
 
-    // Send to backend
-    const images = attachedImages.map((img) => ({
-      data: img.data,
-      mimeType: img.mimeType,
-    }));
-
+    const images = attachedImages.map((img) => ({ data: img.data, mimeType: img.mimeType }));
     send({
       type: "pi_prompt",
       message: fullMessage,
@@ -259,7 +193,6 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
     setAttachedFiles([]);
   }, [input, attachedImages, attachedFiles, send]);
 
-  // ── Key handling ──
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -271,27 +204,18 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
+    for (const file of Array.from(e.dataTransfer.files)) {
       if (file.type.startsWith("image/")) {
         const reader = new FileReader();
         reader.onload = () => {
           const base64 = (reader.result as string).split(",")[1];
-          setAttachedImages((prev) => [
-            ...prev,
-            { data: base64, mimeType: file.type, name: file.name },
-          ]);
+          setAttachedImages((prev) => [...prev, { data: base64, mimeType: file.type, name: file.name }]);
         };
         reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
         reader.onload = () => {
-          const content = reader.result as string;
-          setAttachedFiles((prev) => [
-            ...prev,
-            `File: ${file.name}\n\`\`\`\n${content}\n\`\`\``,
-          ]);
+          setAttachedFiles((prev) => [...prev, `File: ${file.name}\n\`\`\`\n${reader.result as string}\n\`\`\``]);
         };
         reader.readAsText(file);
       }
@@ -299,32 +223,19 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of items) {
+    for (const item of e.clipboardData.items) {
       if (item.type.startsWith("image/")) {
         const blob = item.getAsFile();
         if (blob) {
           const reader = new FileReader();
           reader.onload = () => {
             const base64 = (reader.result as string).split(",")[1];
-            setAttachedImages((prev) => [
-              ...prev,
-              {
-                data: base64,
-                mimeType: blob.type,
-                name: "pasted-image.png",
-              },
-            ]);
+            setAttachedImages((prev) => [...prev, { data: base64, mimeType: blob.type, name: "pasted-image.png" }]);
           };
           reader.readAsDataURL(blob);
         }
       }
     }
-  };
-
-  // ── Abort ──
-  const handleAbort = () => {
-    send({ type: "pi_abort" });
   };
 
   if (!activeProject) {
@@ -343,10 +254,7 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
     <div
       className="h-full flex flex-col"
       onDrop={handleDrop}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setIsDragOver(true);
-      }}
+      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onPaste={handlePaste}
     >
@@ -358,103 +266,61 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
           </div>
         )}
 
+        {error && (
+          <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>
+        )}
+
         {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)}
-          />
+          <MessageBubble key={msg.id} message={msg} showThinking={showThinking}
+            toggleThinking={() => setShowThinking((t) => !t)} />
         ))}
 
-        {/* Streaming assistant message */}
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
-          <StreamingBubble
-            content={streamingContent}
-            thinking={streamingThinking}
-            toolCalls={currentToolCalls}
-            showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)}
-          />
+          <StreamingBubble content={streamingContent} thinking={streamingThinking}
+            toolCalls={currentToolCalls} showThinking={showThinking}
+            toggleThinking={() => setShowThinking((t) => !t)} />
         )}
 
         <div ref={chatEndRef} />
       </div>
 
-      {/* Input area */}
+      {/* Input */}
       <div className="border-t border-hacker-border bg-hacker-surface p-3">
-        {/* Attachments */}
         {(attachedImages.length > 0 || attachedFiles.length > 0) && (
           <div className="flex gap-2 mb-2 flex-wrap">
             {attachedImages.map((img, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1"
-              >
+              <div key={i} className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1">
                 🖼 {img.name}
-                <button
-                  onClick={() =>
-                    setAttachedImages((prev) => prev.filter((_, j) => j !== i))
-                  }
-                  className="text-hacker-error ml-1"
-                >
-                  ×
-                </button>
+                <button onClick={() => setAttachedImages((prev) => prev.filter((_, j) => j !== i))}
+                  className="text-hacker-error ml-1">×</button>
               </div>
             ))}
             {attachedFiles.map((f, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1"
-              >
+              <div key={i} className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1">
                 📄 {f.slice(6, 50)}...
-                <button
-                  onClick={() =>
-                    setAttachedFiles((prev) => prev.filter((_, j) => j !== i))
-                  }
-                  className="text-hacker-error ml-1"
-                >
-                  ×
-                </button>
+                <button onClick={() => setAttachedFiles((prev) => prev.filter((_, j) => j !== i))}
+                  className="text-hacker-error ml-1">×</button>
               </div>
             ))}
           </div>
         )}
 
         <div className="flex gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+          <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
-            className="input-hacker flex-1 resize-none"
-            rows={2}
-            disabled={!activeProject}
-          />
+            className="input-hacker flex-1 resize-none" rows={2} />
           <div className="flex flex-col gap-1">
-            <button
-              onClick={handleSend}
-              className="btn-hacker flex-1 px-4"
-              disabled={!input.trim() && attachedImages.length === 0 && attachedFiles.length === 0}
-            >
-              SEND
-            </button>
+            <button onClick={handleSend} className="btn-hacker flex-1 px-4"
+              disabled={!input.trim() && attachedImages.length === 0 && attachedFiles.length === 0}>SEND</button>
             {isStreaming && (
-              <button onClick={handleAbort} className="btn-hacker danger px-4 text-xs">
-                ABORT
-              </button>
+              <button onClick={() => send({ type: "pi_abort" })} className="btn-hacker danger px-4 text-xs">ABORT</button>
             )}
           </div>
         </div>
-
         <div className="text-hacker-text-dim text-[10px] mt-1 flex justify-between">
-          <span>
-            Drag & drop images/files · Ctrl+V to paste images
-          </span>
-          <span>
-            {activeProject?.git?.branch && `git:${activeProject.git.branch}`}
-          </span>
+          <span>Drag & drop · Ctrl+V paste images</span>
+          <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
         </div>
       </div>
     </div>
@@ -462,25 +328,13 @@ export function ChatView({ send, on, activeProject, isStreaming }: Props) {
 }
 
 // ── Message Bubble ─────────────────────────────────────
-function MessageBubble({
-  message,
-  showThinking,
-  toggleThinking,
-}: {
-  message: DisplayMessage;
-  showThinking: boolean;
-  toggleThinking: () => void;
+function MessageBubble({ message, showThinking, toggleThinking }: {
+  message: DisplayMessage; showThinking: boolean; toggleThinking: () => void;
 }) {
   const isUser = message.role === "user";
-
   return (
     <div className={`mb-4 ${isUser ? "ml-8" : "mr-8"}`}>
-      {/* Header */}
-      <div
-        className={`text-xs mb-1 px-1 ${
-          isUser ? "text-hacker-info text-right" : "text-hacker-accent"
-        }`}
-      >
+      <div className={`text-xs mb-1 px-1 ${isUser ? "text-hacker-info text-right" : "text-hacker-accent"}`}>
         {isUser ? "▸ YOU" : "▹ ASSISTANT"}
         {message.usage && (
           <span className="text-hacker-text-dim ml-2">
@@ -489,13 +343,9 @@ function MessageBubble({
         )}
       </div>
 
-      {/* Thinking */}
       {message.thinking && (
         <div className="mb-2">
-          <button
-            onClick={toggleThinking}
-            className="text-xs text-hacker-warn mb-1 hover:underline"
-          >
+          <button onClick={toggleThinking} className="text-xs text-hacker-warn mb-1 hover:underline">
             {showThinking ? "▼" : "▶"} THINKING
           </button>
           {showThinking && (
@@ -506,87 +356,33 @@ function MessageBubble({
         </div>
       )}
 
-      {/* Content */}
       {message.content && (
         <div className="text-sm leading-relaxed">
           {isUser ? (
-            <span className="text-hacker-text-bright">{message.content}</span>
+            <span className="text-hacker-text-bright whitespace-pre-wrap">{message.content}</span>
           ) : (
-            <ReactMarkdown
-              components={{
-                code({ node, className, children, ...props }) {
-                  const match = /language-(\w+)/.exec(className || "");
-                  const inline = !match;
-                  return !inline ? (
-                    <div className="chat-code-block my-2">
-                      <div className="text-[10px] text-hacker-text-dim px-3 pt-2">
-                        {match[1]}
-                      </div>
-                      <SyntaxHighlighter
-                        style={vscDarkPlus}
-                        language={match[1]}
-                        PreTag="div"
-                        customStyle={{
-                          margin: 0,
-                          background: "transparent",
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        {String(children).replace(/\n$/, "")}
-                      </SyntaxHighlighter>
-                    </div>
-                  ) : (
-                    <code
-                      className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs"
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+            <MarkdownRenderer content={message.content} />
           )}
         </div>
       )}
 
-      {/* Tool Calls */}
-      {message.toolCalls.map((tc) => (
-        <ToolCallCard key={tc.id} toolCall={tc} />
-      ))}
+      {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} />)}
     </div>
   );
 }
 
 // ── Streaming Bubble ───────────────────────────────────
-function StreamingBubble({
-  content,
-  thinking,
-  toolCalls,
-  showThinking,
-  toggleThinking,
-}: {
-  content: string;
-  thinking: string;
-  toolCalls: ToolCallInfo[];
-  showThinking: boolean;
-  toggleThinking: () => void;
+function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThinking }: {
+  content: string; thinking: string; toolCalls: ToolCallInfo[]; showThinking: boolean; toggleThinking: () => void;
 }) {
   return (
     <div className="mb-4 mr-8">
       <div className="text-xs mb-1 px-1 text-hacker-accent">
-        <span className="animate-blink">▹</span> ASSISTANT{" "}
-        <span className="cursor-blink" />
+        <span className="animate-blink">▹</span> ASSISTANT <span className="cursor-blink" />
       </div>
-
       {thinking && (
         <div className="mb-2">
-          <button
-            onClick={toggleThinking}
-            className="text-xs text-hacker-warn mb-1 hover:underline"
-          >
+          <button onClick={toggleThinking} className="text-xs text-hacker-warn mb-1 hover:underline">
             {showThinking ? "▼" : "▶"} THINKING
           </button>
           {showThinking && (
@@ -596,89 +392,69 @@ function StreamingBubble({
           )}
         </div>
       )}
-
       {content && (
-        <div className="text-sm leading-relaxed">
-          <ReactMarkdown
-            components={{
-              code({ node, className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || "");
-                const inline = !match;
-                return !inline ? (
-                  <div className="chat-code-block my-2">
-                    <SyntaxHighlighter
-                      style={vscDarkPlus}
-                      language={match[1]}
-                      PreTag="div"
-                      customStyle={{
-                        margin: 0,
-                        background: "transparent",
-                        fontSize: "0.8rem",
-                      }}
-                    >
-                      {String(children).replace(/\n$/, "")}
-                    </SyntaxHighlighter>
-                  </div>
-                ) : (
-                  <code
-                    className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs"
-                    {...props}
-                  >
-                    {children}
-                  </code>
-                );
-              },
-            }}
-          >
-            {content}
-          </ReactMarkdown>
-        </div>
+        <div className="text-sm leading-relaxed"><MarkdownRenderer content={content} /></div>
       )}
-
-      {toolCalls.map((tc) => (
-        <ToolCallCard key={tc.id} toolCall={tc} />
-      ))}
+      {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} />)}
     </div>
+  );
+}
+
+// ── Shared Markdown Renderer ───────────────────────────
+function MarkdownRenderer({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code({ node, className, children, ...props }: any) {
+          const match = /language-(\w+)/.exec(className || "");
+          const codeStr = String(children).replace(/\n$/, "");
+          if (!match) {
+            return <code className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs" {...props}>{children}</code>;
+          }
+          return (
+            <div className="chat-code-block my-2">
+              <div className="flex items-center justify-between text-[10px] text-hacker-text-dim px-3 pt-2">
+                <span>{match[1]}</span>
+                <button onClick={() => navigator.clipboard.writeText(codeStr)}
+                  className="hover:text-hacker-accent">📋 copy</button>
+              </div>
+              <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div"
+                customStyle={{ margin: 0, background: "transparent", fontSize: "0.8rem" }}>
+                {codeStr}
+              </SyntaxHighlighter>
+            </div>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   );
 }
 
 // ── Tool Call Card ─────────────────────────────────────
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(true);
-
   return (
     <div className="mt-2 border border-hacker-border bg-hacker-bg/50 overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-hacker-info hover:bg-hacker-border/50"
-      >
+      <button onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-hacker-info hover:bg-hacker-border/50">
         <span>{expanded ? "▼" : "▶"}</span>
         <span className="font-bold">{toolCall.name}</span>
-        {toolCall.isStreaming && (
-          <span className="text-hacker-accent animate-pulse">▶ running...</span>
-        )}
-        {toolCall.isError && (
-          <span className="text-hacker-error">✕ error</span>
-        )}
-        {!toolCall.isStreaming && !toolCall.isError && toolCall.output && (
-          <span className="text-hacker-text-dim">✓ done</span>
-        )}
+        {toolCall.isStreaming && <span className="text-hacker-accent animate-pulse">▶ running...</span>}
+        {toolCall.isError && <span className="text-hacker-error">✕ error</span>}
+        {!toolCall.isStreaming && !toolCall.isError && toolCall.output && <span className="text-hacker-text-dim">✓ done</span>}
       </button>
-
       {expanded && (
         <div>
-          {/* Args */}
           {toolCall.args && Object.keys(toolCall.args).length > 0 && (
             <div className="px-3 py-1 text-[10px] text-hacker-text-dim">
               {JSON.stringify(toolCall.args, null, 2)}
             </div>
           )}
-
-          {/* Output */}
           {toolCall.output && (
-            <div className={`tool-output ${toolCall.isError ? "text-hacker-error" : ""}`}>
-              {toolCall.output}
-            </div>
+            <div className={`tool-output ${toolCall.isError ? "text-hacker-error" : ""}`}>{toolCall.output}</div>
           )}
         </div>
       )}

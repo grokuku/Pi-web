@@ -85,7 +85,12 @@ export function createProject(
 ): Project {
   const projects = loadProjects();
 
-  // Check name uniqueness
+  if (!name || !type || !cwd) {
+    throw new Error("name, type, and cwd are required");
+  }
+  if (!["local", "ssh", "smb"].includes(type)) {
+    throw new Error(`Invalid project type: ${type}`);
+  }
   if (projects.some((p) => p.name === name)) {
     throw new Error(`Project "${name}" already exists`);
   }

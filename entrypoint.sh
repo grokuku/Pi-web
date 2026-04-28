@@ -8,7 +8,7 @@ echo "╚═══════════════════════�
 # ─── Backend ──────────────────────────────────
 cd /app/backend
 
-if [ ! -d "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
+if [ ! -f "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
   echo "[PI-WEB] Installing backend dependencies..."
   npm install --prefer-offline --no-audit --no-fund
   touch node_modules/.package-lock.json
@@ -22,7 +22,7 @@ npm run build
 # ─── Frontend ─────────────────────────────────
 cd /app/frontend
 
-if [ ! -d "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
+if [ ! -f "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
   echo "[PI-WEB] Installing frontend dependencies..."
   npm install --prefer-offline --no-audit --no-fund
   touch node_modules/.package-lock.json

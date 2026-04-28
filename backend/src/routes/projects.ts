@@ -2,7 +2,6 @@ import { Router, type Request, type Response } from "express";
 import {
   getAllProjects,
   getProject,
-  getProjectByName,
   createProject,
   updateProject,
   deleteProject,

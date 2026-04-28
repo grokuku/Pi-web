@@ -7,9 +7,10 @@ services:
     ports:
       - "3005:3000"
     volumes:
-      - /mnt/user/appdata-ssd/Pi-web/data/pi-data:/home/node/.pi
+      - /mnt/user/appdata-ssd/Pi-web/data/pi-data:/root/.pi
       - /mnt/user/appdata-ssd/Pi-web/data/pi-projects:/projects
       - /mnt/user/appdata-ssd/Pi-web/data/pi-sessions:/sessions
+      - /mnt/user/appdata-ssd/Pi-web/data/pi-appdata:/app/.data
     environment:
       - NODE_ENV=development
     stdin_open: true

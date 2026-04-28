@@ -21,10 +21,11 @@ import {
   writeToTerminal,
   resizeTerminal,
   killTerminal,
+  killAllTerminals,
   terminalEvents,
 } from "./terminal/pty.js";
 import { getProject } from "./projects/manager.js";
-import { detectGit, syncGitInfo } from "./projects/git.js";
+import { syncGitInfo } from "./projects/git.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
@@ -86,6 +87,10 @@ wss.on("connection", (ws: ExtendedWS) => {
 
   ws.on("close", () => {
     console.log("WebSocket client disconnected");
+    unsub();
+    terminalEvents.off("data", onTermData);
+    terminalEvents.off("exit", onTermExit);
+    killAllTerminals();
   });
 
   // Send initial state
@@ -127,12 +132,6 @@ wss.on("connection", (ws: ExtendedWS) => {
 
   terminalEvents.on("data", onTermData);
   terminalEvents.on("exit", onTermExit);
-
-  ws.on("close", () => {
-    unsub();
-    terminalEvents.off("data", onTermData);
-    terminalEvents.off("exit", onTermExit);
-  });
 });
 
 // Keep-alive interval
@@ -241,6 +240,7 @@ httpServer.listen(PORT, () => {
 // Graceful shutdown
 process.on("SIGTERM", async () => {
   console.log("Shutting down...");
+  killAllTerminals();
   wss.close();
   httpServer.close();
   process.exit(0);

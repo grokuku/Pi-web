@@ -20,8 +20,12 @@ let currentSession: PiSessionState = {
   unsubscribe: null,
 };
 
+// Shared instances - reused across sessions
+let sharedAuthStorage = AuthStorage.create();
+let sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
+
 type EventCallback = (event: AgentSessionEvent) => void;
-let eventCallbacks: EventCallback[] = [];
+let eventCallbacks = new Set<EventCallback>();
 
 // Track active tool executions
 const activeToolCalls: Map<
@@ -39,19 +43,13 @@ export function getActiveToolCalls() {
 }
 
 export function subscribeToEvents(callback: EventCallback): () => void {
-  eventCallbacks.push(callback);
-  return () => {
-    eventCallbacks = eventCallbacks.filter((cb) => cb !== callback);
-  };
+  eventCallbacks.add(callback);
+  return () => { eventCallbacks.delete(callback); };
 }
 
 function emitToSubscribers(event: AgentSessionEvent) {
   for (const cb of eventCallbacks) {
-    try {
-      cb(event);
-    } catch (e) {
-      console.error("Event callback error:", e);
-    }
+    try { cb(event); } catch (e) { console.error("Event callback error:", e); }
   }
 }
 
@@ -62,8 +60,8 @@ export async function createPiSession(cwd: string): Promise<PiSessionState> {
     await currentSession.session.dispose();
   }
 
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const authStorage = sharedAuthStorage;
+  const modelRegistry = sharedModelRegistry;
   const sessionManager = SessionManager.create(cwd);
 
   try {
@@ -173,13 +171,7 @@ export async function setModel(
   const { session } = currentSession;
   if (!session) throw new Error("No active Pi session");
 
-  const { ModelRegistry, AuthStorage } = await import(
-    "@mariozechner/pi-coding-agent"
-  );
-  const authStorage = AuthStorage.create();
-  const registry = ModelRegistry.create(authStorage);
-  const model = registry.find(provider, modelId);
-
+  const model = sharedModelRegistry.find(provider, modelId);
   if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
   await session.setModel(model);
 }

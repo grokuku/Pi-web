@@ -43,6 +43,12 @@ export default function App() {
       const res = await fetch("/api/projects");
       const data = await res.json();
       setProjects(data);
+      // Restore last active project from localStorage
+      const savedId = localStorage.getItem("pi-web-active-project");
+      if (savedId && !activeProject) {
+        const saved = data.find((p: Project) => p.id === savedId);
+        if (saved) activateProject(saved);
+      }
     } catch (e) {
       console.error("Failed to load projects:", e);
     }
@@ -71,7 +77,7 @@ export default function App() {
               tokens: (prev?.tokens || 0) + (u.input || 0) + (u.output || 0),
               cost: (prev?.cost || 0) + (u.cost?.total || 0),
               contextPercent: Math.round(
-                ((u.input || 0) / (evt.message.model?.contextWindow || 200000)) * 100
+                ((u.input || 0) / (200000)) * 100
               ),
             }));
           }
@@ -107,6 +113,7 @@ export default function App() {
 
   const activateProject = (project: Project) => {
     setActiveProject(project);
+    localStorage.setItem("pi-web-active-project", project.id);
     send({ type: "pi_start", projectId: project.id });
     setStats(null);
   };
@@ -135,16 +142,18 @@ export default function App() {
     activateProject(project);
   };
 
-  // ── Session info polling ──
+  // ── Session info (polling) ──
   useEffect(() => {
     if (!activeProject) return;
-    const interval = setInterval(async () => {
+    const fetchSession = async () => {
       try {
         const res = await fetch("/api/settings/session");
         const data = await res.json();
         setSession(data);
       } catch {}
-    }, 2000);
+    };
+    fetchSession();
+    const interval = setInterval(fetchSession, 5000);
     return () => clearInterval(interval);
   }, [activeProject]);
 

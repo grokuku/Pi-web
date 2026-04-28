@@ -1,0 +1,28 @@
+# Build context
+node_modules/
+dist/
+*.tsbuildinfo
+.git/
+
+# Data at runtime
+backend/.data/
+backend/.pi-agent/
+.data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
