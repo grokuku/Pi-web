@@ -27,7 +27,6 @@ import { detectGit, syncGitInfo } from "./projects/git.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
-const WS_PORT = 3001;
 
 // ─── Express App ───────────────────────────────────────
 const app = express();
@@ -55,8 +54,8 @@ app.get("/api/health", (_req, res) => {
 // ─── HTTP Server ───────────────────────────────────────
 const httpServer = createServer(app);
 
-// ─── WebSocket Server ──────────────────────────────────
-const wss = new WebSocketServer({ port: WS_PORT });
+// ─── WebSocket Server (same HTTP port) ──────────────
+const wss = new WebSocketServer({ server: httpServer });
 
 interface ExtendedWS extends WebSocket {
   isAlive: boolean;
@@ -234,8 +233,7 @@ httpServer.listen(PORT, () => {
   ╔══════════════════════════════════════════╗
   ║  ⚡ PI-WEB  ███▓▓▒▒░░  v1.0  ░░▒▒▓▓███  ║
   ╠══════════════════════════════════════════╣
-  ║  HTTP  → http://localhost:${PORT}           ║
-  ║  WS    → ws://localhost:${WS_PORT}             ║
+  ║  HTTP+WS → http://localhost:${PORT}                  ║
   ║  Mode  → ${process.env.NODE_ENV || "development"}                     ║
   ╚══════════════════════════════════════════╝
   `);

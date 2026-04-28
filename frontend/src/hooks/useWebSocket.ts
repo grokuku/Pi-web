@@ -15,8 +15,8 @@ export function useWebSocket() {
   const connect = useCallback(() => {
     const wsUrl =
       import.meta.env.MODE === "development"
-        ? "ws://localhost:3001"
-        : `ws://${window.location.hostname}:3001`;
+        ? "ws://localhost:3000"
+        : `ws://${window.location.host}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
