@@ -1,17 +1,15 @@
 FROM node:20-slim
 
-# ─── System packages ──────────────────────────
+# ─── System packages (light) ─────────────────
 RUN apt-get update && apt-get install -y \
-    git curl openssh-client smbclient cifs-utils \
+    git curl openssh-client \
     nano mc procps \
+    build-essential python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /home/node/.pi/agent && \
-    mkdir -p /projects && mkdir -p /sessions
+RUN mkdir -p /projects /sessions
 
 WORKDIR /app
-
-# ─── Copy source ──────────────────────────────
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY entrypoint.sh ./
