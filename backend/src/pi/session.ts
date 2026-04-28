@@ -168,20 +168,20 @@ export async function sendPrompt(
     throw new Error("No active Pi session");
   }
 
+  // Convert to Pi SDK ImageContent format
+  const imageAttachments = images?.map((img) => ({
+    type: "image" as const,
+    data: img.data,
+    mimeType: img.mimeType,
+  }));
+
   if (isStreaming) {
     // Queue as steer message
-    await session.steer(message);
+    await session.steer(message, imageAttachments);
   } else {
     const options: any = {};
-    if (images && images.length > 0) {
-      options.images = images.map((img) => ({
-        type: "image",
-        source: {
-          type: "base64",
-          mediaType: img.mimeType,
-          data: img.data,
-        },
-      }));
+    if (imageAttachments && imageAttachments.length > 0) {
+      options.images = imageAttachments;
     }
 
     await session.prompt(message, options);

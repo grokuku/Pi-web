@@ -3,8 +3,80 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import type { PiEvent, ToolCallInfo } from "../../types";
+import { Paperclip, X, Image, FileText, File, AlertTriangle } from "lucide-react";
+import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
 import type { Project } from "../../types";
+
+// ── File type helpers ───────────────────────────────────
+
+const TEXT_MIME_TYPES = new Set([
+  "text/plain", "text/csv", "text/markdown", "text/html", "text/css",
+  "text/xml", "text/yaml", "text/x-yaml", "application/json",
+  "application/xml", "application/yaml", "application/x-yaml",
+  "application/javascript", "application/typescript",
+  "application/x-shellscript",
+]);
+
+const CODE_EXTENSIONS: Record<string, string> = {
+  js: "javascript", ts: "typescript", tsx: "typescript", jsx: "javascript",
+  py: "python", rb: "ruby", rs: "rust", go: "go", java: "java",
+  kt: "kotlin", swift: "swift", c: "c", cpp: "cpp", h: "c",
+  hpp: "cpp", cs: "csharp", php: "php", sh: "bash", bash: "bash",
+  zsh: "bash", sql: "sql", r: "r", scala: "scala", vim: "vim",
+  dockerfile: "dockerfile", yaml: "yaml", yml: "yaml",
+  json: "json", xml: "xml", html: "html", css: "css", scss: "scss",
+  less: "less", md: "markdown", txt: "text", log: "text",
+  env: "text", gitignore: "text", dockerignore: "text",
+  toml: "toml", ini: "ini", cfg: "ini", conf: "nginx",
+};
+
+function categorizeFile(mimeType: string, fileName: string): Attachment["category"] {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+
+  if (mimeType.startsWith("text/") || TEXT_MIME_TYPES.has(mimeType)) return "text";
+
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  if (CODE_EXTENSIONS[ext]) return "text";
+
+  // Common binary formats that should not be read as text
+  const binaryExts = new Set([
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "zip", "tar", "gz", "bz2", "7z", "rar",
+    "exe", "dll", "so", "dylib", "o", "a",
+    "mp4", "avi", "mkv", "mov", "wmv", "flv",
+    "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a",
+    "sqlite", "db", "iso", "dmg", "deb", "rpm",
+  ]);
+  if (binaryExts.has(ext)) return "binary";
+
+  // Default: try to read as text
+  return "text";
+}
+
+function getLanguageTag(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  return CODE_EXTENSIONS[ext] || "text";
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getFileExtensionIcon(category: Attachment["category"], fileName: string) {
+  switch (category) {
+    case "image": return <Image size={14} />;
+    case "text": return <FileText size={14} />;
+    case "audio": return <AlertTriangle size={14} />;
+    case "binary": return <File size={14} />;
+  }
+}
+
+// ── Max file sizes ──────────────────────────────────────
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_TEXT_SIZE = 2 * 1024 * 1024;    // 2 MB
 
 interface Props {
   send: (msg: any) => void;
@@ -30,14 +102,14 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
   const [streamingThinking, setStreamingThinking] = useState("");
   const [currentToolCalls, setCurrentToolCalls] = useState<ToolCallInfo[]>([]);
   const [input, setInput] = useState("");
-  const [attachedImages, setAttachedImages] = useState<{ data: string; mimeType: string; name: string }[]>([]);
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
   const [error, setError] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
 
   // Refs to avoid stale closures in WS handler
@@ -57,7 +129,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  // ── Pi event handling (subscribed once, uses refs) ──
+  // ── Pi event handling ──
   useEffect(() => {
     const unsub = on("pi_event", (msg: any) => {
       const evt: PiEvent = msg.event;
@@ -82,10 +154,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
             setStreamingThinking((prev) => prev + delta.delta);
           }
           if (delta.type === "toolcall_start") {
-            // Extract just the actual arguments (not the full envelope)
             const startArgs = extractToolArgs(delta.args);
             setCurrentToolCalls((prev) => {
-              // Dedup: don't add if same ID already exists
               if (prev.some((tc) => tc.id === delta.toolCallId)) return prev;
               return [...prev, {
                 id: delta.toolCallId, name: delta.toolName,
@@ -130,16 +200,13 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
 
         case "message_end": {
           if (evt.message?.role === "assistant") {
-            // Read from refs to get latest values safely
             const sc = streamingContentRef.current;
             const st = streamingThinkingRef.current;
             const ct = currentToolCallsRef.current;
-
             const msgId = currentAssistantIdRef.current || Date.now().toString();
 
             // Dedup: don't add if a message with this ID already exists
             if (messagesRef.current.some((m) => m.id === msgId)) {
-              // Still clear streaming state
               setStreamingContent("");
               setStreamingThinking("");
               setCurrentToolCalls([]);
@@ -179,39 +246,141 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     });
 
     return () => unsub();
-  }, [on]); // Only re-subscribe if `on` reference changes
+  }, [on]);
+
+  // ── File processing ──────────────────────────────────
+
+  const processFile = useCallback((file: File) => {
+    if (attachments.length >= 10) {
+      setError("Maximum 10 files per message");
+      return;
+    }
+
+    const category = categorizeFile(file.type || "application/octet-stream", file.name);
+
+    // Size limits
+    if (category === "image" && file.size > MAX_IMAGE_SIZE) {
+      setError(`Image too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_IMAGE_SIZE)}.`);
+      return;
+    }
+    if (category === "text" && file.size > MAX_TEXT_SIZE) {
+      setError(`Text file too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_TEXT_SIZE)}.`);
+      return;
+    }
+    if (category === "binary") {
+      setError(`Cannot attach binary file: ${file.name}. Only images, text, and code files are supported.`);
+      return;
+    }
+
+    const reader = new FileReader();
+
+    if (category === "image") {
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        const attachment: Attachment = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: file.name,
+          mimeType: file.type,
+          size: file.size,
+          category,
+          data: base64,
+          preview: reader.result as string, // data URL for thumbnail
+        };
+        setAttachments((prev) => [...prev, attachment]);
+      };
+      reader.readAsDataURL(file);
+    } else if (category === "audio") {
+      // Read as base64 but warn user
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        const attachment: Attachment = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: file.name,
+          mimeType: file.type,
+          size: file.size,
+          category,
+          data: base64,
+        };
+        setAttachments((prev) => [...prev, attachment]);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // Text / code file — read as text
+      reader.onload = () => {
+        const text = reader.result as string;
+        const lang = getLanguageTag(file.name);
+        // Build a formatted snippet for the preview
+        const previewLines = text.split("\n").slice(0, 3).join("\n");
+        const attachment: Attachment = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: file.name,
+          mimeType: file.type || "text/plain",
+          size: file.size,
+          category,
+          data: `\n\n📄 **${file.name}**\n\`\`\`${lang}\n${text}\n\`\`\`\n`,
+          preview: previewLines.length > 200 ? previewLines.slice(0, 200) + "..." : previewLines,
+        };
+        setAttachments((prev) => [...prev, attachment]);
+      };
+      reader.readAsText(file);
+    }
+  }, [attachments.length]);
 
   // ── Send message ──
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text && attachedImages.length === 0 && attachedFiles.length === 0) return;
-    setError("");
 
-    let fullMessage = text;
-    if (attachedFiles.length > 0) {
-      fullMessage = `${attachedFiles.join("\n")}\n\n${text}`;
+    // Collect image attachments for the SDK
+    const imageAttachments = attachments
+      .filter((a) => a.category === "image")
+      .map((a) => ({ data: a.data, mimeType: a.mimeType }));
+
+    // Audio attachments — warn but still send text
+    const audioAttachments = attachments.filter((a) => a.category === "audio");
+    if (audioAttachments.length > 0) {
+      setError(`Audio files are not supported by most AI models. They will be skipped.`);
+      // Remove audio attachments
+      setAttachments((prev) => prev.filter((a) => a.category !== "audio"));
+      return;
     }
 
+    // Build final message: user text + text/code file contents
+    let fullMessage = text;
+    const textAttachments = attachments.filter((a) => a.category === "text");
+    if (textAttachments.length > 0) {
+      // Append text file contents to the message
+      const filesContent = textAttachments.map((a) => a.data).join("");
+      if (text.trim()) {
+        fullMessage = `${filesContent}\n\n${text}`;
+      } else {
+        fullMessage = filesContent;
+      }
+    }
+
+    if (!fullMessage && imageAttachments.length === 0) return;
+    setError("");
+
+    // Add user message to chat (show image thumbnails and file names)
+    const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "[images]");
     setMessages((prev) => [...prev, {
       id: Date.now().toString(),
       role: "user",
-      content: text || "[attachments]",
+      content: displayContent,
       thinking: "",
       toolCalls: [],
       timestamp: Date.now(),
+      // Store image previews for rendering
     }]);
 
-    const images = attachedImages.map((img) => ({ data: img.data, mimeType: img.mimeType }));
     send({
       type: "pi_prompt",
       message: fullMessage,
-      images: images.length > 0 ? images : undefined,
+      images: imageAttachments.length > 0 ? imageAttachments : undefined,
     });
 
     setInput("");
-    setAttachedImages([]);
-    setAttachedFiles([]);
-  }, [input, attachedImages, attachedFiles, send]);
+    setAttachments([]);
+  }, [input, attachments, send]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -220,25 +389,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     }
   };
 
-  // ── File handling ──
-  const handleDrop = async (e: React.DragEvent) => {
+  // ── Drag & drop ──
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
     for (const file of Array.from(e.dataTransfer.files)) {
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = (reader.result as string).split(",")[1];
-          setAttachedImages((prev) => [...prev, { data: base64, mimeType: file.type, name: file.name }]);
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setAttachedFiles((prev) => [...prev, `File: ${file.name}\n\`\`\`\n${reader.result as string}\n\`\`\``]);
-        };
-        reader.readAsText(file);
-      }
+      processFile(file);
     }
   };
 
@@ -246,16 +402,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     for (const item of e.clipboardData.items) {
       if (item.type.startsWith("image/")) {
         const blob = item.getAsFile();
-        if (blob) {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(",")[1];
-            setAttachedImages((prev) => [...prev, { data: base64, mimeType: blob.type, name: "pasted-image.png" }]);
-          };
-          reader.readAsDataURL(blob);
-        }
+        if (blob) processFile(blob);
       }
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      for (const file of Array.from(e.target.files)) {
+        processFile(file);
+      }
+    }
+    // Reset the input so the same file can be selected again
+    e.target.value = "";
   };
 
   if (!activeProject) {
@@ -270,7 +429,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     );
   }
 
-  // No messages yet — show welcome
   const hasContent = messages.length > 0 || streamingContent || streamingThinking || currentToolCalls.length > 0;
 
   return (
@@ -320,22 +478,24 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
         </div>
       )}
 
-      {/* Input */}
+      {/* Input area */}
       <div className="border-t border-hacker-border-bright bg-hacker-surface p-3">
-        {(attachedImages.length > 0 || attachedFiles.length > 0) && (
+        {/* Attachment previews */}
+        {attachments.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
-            {attachedImages.map((img, i) => (
-              <div key={i} className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1">
-                🖼 {img.name}
-                <button onClick={() => setAttachedImages((prev) => prev.filter((_, j) => j !== i))}
-                  className="text-hacker-error ml-1">×</button>
-              </div>
-            ))}
-            {attachedFiles.map((f, i) => (
-              <div key={i} className="flex items-center gap-1 text-xs bg-hacker-border px-2 py-1">
-                📄 {f.slice(6, 50)}...
-                <button onClick={() => setAttachedFiles((prev) => prev.filter((_, j) => j !== i))}
-                  className="text-hacker-error ml-1">×</button>
+            {attachments.map((att) => (
+              <div key={att.id} className="flex items-center gap-1.5 text-xs bg-hacker-border/40 border border-hacker-border px-2 py-1.5 rounded group">
+                {att.category === "image" && att.preview ? (
+                  <img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />
+                ) : (
+                  <span className="text-hacker-accent">{getFileExtensionIcon(att.category, att.name)}</span>
+                )}
+                <span className="truncate max-w-[120px]">{att.name}</span>
+                <span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>
+                <button onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  className="text-hacker-text-dim hover:text-hacker-error ml-1">
+                  <X size={12} />
+                </button>
               </div>
             ))}
           </div>
@@ -346,19 +506,36 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
             onKeyDown={handleKeyDown}
             placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
             className="input-hacker flex-1 resize-none" rows={2} />
+
           <div className="flex flex-col gap-1">
             <button onClick={handleSend} className="btn-hacker flex-1 px-4"
-              disabled={!input.trim() && attachedImages.length === 0 && attachedFiles.length === 0}>SEND</button>
-            {isStreaming && (
-              <button onClick={() => send({ type: "pi_abort" })} className="btn-hacker danger px-4 text-xs">ABORT</button>
-            )}
+              disabled={!input.trim() && attachments.length === 0}>SEND</button>
+            <div className="flex gap-1">
+              <button onClick={() => fileInputRef.current?.click()}
+                className="btn-hacker px-2 text-xs" title="Attach file">
+                <Paperclip size={14} />
+              </button>
+              {isStreaming && (
+                <button onClick={() => send({ type: "pi_abort" })} className="btn-hacker danger px-4 text-xs">ABORT</button>
+              )}
+            </div>
           </div>
         </div>
         <div className="text-hacker-text-dim text-[10px] mt-1 flex justify-between">
-          <span>Drag & drop · Ctrl+V paste images</span>
+          <span>📎 Attach files · Drag & drop · Ctrl+V paste images</span>
           <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
         </div>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*,text/*,application/json,application/xml,application/javascript,application/x-shellscript,.js,.ts,.tsx,.jsx,.py,.rb,.rs,.go,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.sh,.bash,.sql,.yaml,.yml,.toml,.ini,.cfg,.env,.md,.txt,.log,.css,.scss,.less,.html,.svg"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
     </div>
   );
 }
@@ -472,9 +649,6 @@ function MarkdownRenderer({ content }: { content: string }) {
 // ── Tool Call Card ─────────────────────────────────────
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(true);
-
-  // Extract the actual arguments from a wrapped tool call envelope.
-  // The Pi SDK may send { type, id, name, arguments: {...} } instead of just { command: "..." }.
   const displayArgs = extractToolArgs(toolCall.args);
 
   return (
@@ -489,7 +663,7 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
       </button>
       {expanded && (
         <div>
-          {displayArgs && Object.keys(displayArgs).length > 0 && (
+          {displayArgs && typeof displayArgs === "object" && Object.keys(displayArgs).length > 0 && (
             <div className="px-3 py-1 text-[10px] text-hacker-text-dim">
               {JSON.stringify(displayArgs, null, 2)}
             </div>
@@ -503,21 +677,11 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   );
 }
 
-/** Extract the actual arguments from a potentially-wrapped tool call object.
- *  Some SDKs send: { type: "toolCall", id: "...", name: "bash", arguments: { command: "..." } }
- *  We want just the inner arguments for display.
- */
+/** Extract the actual arguments from a potentially-wrapped tool call object. */
 function extractToolArgs(args: any): any {
   if (!args || typeof args !== "object") return args;
-  // If the object has an "arguments" key (and optionally type/id/name), extract it
-  if ("arguments" in args && typeof args.arguments === "object") {
-    return args.arguments;
-  }
-  // If the object has an "input" key (Claude API style)
-  if ("input" in args && typeof args.input === "object") {
-    return args.input;
-  }
-  // Otherwise strip known envelope keys
+  if ("arguments" in args && typeof args.arguments === "object") return args.arguments;
+  if ("input" in args && typeof args.input === "object") return args.input;
   const { type, id, name, ...rest } = args;
   if (Object.keys(rest).length > 0) return rest;
   return args;

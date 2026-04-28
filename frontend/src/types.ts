@@ -31,6 +31,16 @@ export interface PiEvent {
   [key: string]: any;
 }
 
+export interface Attachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  category: "image" | "text" | "audio" | "binary";
+  data: string; // base64 for images/binary, text content for text/code
+  preview?: string; // data URL for images, first lines for text
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
