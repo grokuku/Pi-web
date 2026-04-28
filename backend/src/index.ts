@@ -79,8 +79,9 @@ wss.on("connection", (ws: ExtendedWS) => {
       await handleWsMessage(ws, msg);
     } catch (e) {
       console.error("WS message error:", e);
+      const errorMessage = e instanceof Error ? e.message : "Unknown error";
       ws.send(
-        JSON.stringify({ type: "error", error: "Invalid message format" })
+        JSON.stringify({ type: "error", error: errorMessage })
       );
     }
   });
@@ -154,32 +155,47 @@ async function handleWsMessage(ws: WebSocket, msg: any) {
       const { projectId } = msg;
       const project = getProject(projectId);
       const cwd = project?.cwd || process.cwd();
-      await createPiSession(cwd);
+      try {
+        await createPiSession(cwd);
 
-      // Sync git info
-      if (project) {
-        try {
-          await syncGitInfo(project);
-        } catch {}
+        // Sync git info
+        if (project) {
+          try {
+            await syncGitInfo(project);
+          } catch {}
+        }
+
+        ws.send(
+          JSON.stringify({
+            type: "pi_started",
+            data: { cwd, projectId },
+          })
+        );
+      } catch (e: any) {
+        console.error("Failed to create Pi session:", e);
+        ws.send(
+          JSON.stringify({ type: "error", error: `Failed to start Pi session: ${e.message}` })
+        );
       }
-
-      ws.send(
-        JSON.stringify({
-          type: "pi_started",
-          data: { cwd, projectId },
-        })
-      );
       break;
     }
 
     case "pi_prompt": {
       const { message, images } = msg;
-      await sendPrompt(message, images);
+      try {
+        await sendPrompt(message, images);
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
       break;
     }
 
     case "pi_abort": {
-      await abortPi();
+      try {
+        await abortPi();
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
       break;
     }
 

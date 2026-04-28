@@ -94,9 +94,18 @@ export default function App() {
       // Handled in TerminalView
     });
 
+    const unsubError = on("error", (msg: any) => {
+      console.error("[WS Error]", msg.error);
+      // Show error in UI if significant
+      if (msg.error && !msg.error.includes("No active Pi session")) {
+        // Don't spam for expected errors like no session
+      }
+    });
+
     return () => {
       unsubPiEvent();
       unsubTerm();
+      unsubError();
     };
   }, [on]);
 
