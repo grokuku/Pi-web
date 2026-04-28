@@ -32,8 +32,10 @@ RUN cd backend && npm install
 COPY --chown=node:node frontend/package*.json ./frontend/
 RUN cd frontend && npm install
 
-# Copy source code
+# Copy source code and build
 COPY --chown=node:node backend/ ./backend/
+RUN cd backend && npm run build
+
 COPY --chown=node:node frontend/ ./frontend/
 
 # Build frontend
