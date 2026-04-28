@@ -2,9 +2,10 @@ services:
   pi-web:
     build: .
     container_name: pi-web
+    cap_add:
+      - SYS_PTRACE
     ports:
       - "3005:3000"
-      - "3006:3001"
     volumes:
       - /mnt/user/appdata-ssd/Pi-web/data/pi-data:/home/node/.pi
       - /mnt/user/appdata-ssd/Pi-web/data/pi-projects:/projects

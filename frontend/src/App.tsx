@@ -271,12 +271,13 @@ export default function App() {
 
         {/* Content */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-hidden">
-            {activeTab === "pi" ? (
+          <div className="flex-1 overflow-hidden relative">
+            <div className={activeTab === "pi" ? "" : "hidden"} style={{ height: "100%" }}>
               <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} />
-            ) : (
+            </div>
+            <div className={activeTab === "terminal" ? "" : "hidden"} style={{ height: "100%" }}>
               <TerminalView send={send} on={on} activeProject={activeProject} />
-            )}
+            </div>
           </div>
 
           <StatusBar

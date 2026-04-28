@@ -157,9 +157,6 @@ async function handleWsMessage(ws: WebSocket, msg: any) {
       const cwd = project?.cwd || process.cwd();
       await createPiSession(cwd);
 
-      // Also create terminal for this project
-      createTerminal(projectId, cwd);
-
       // Sync git info
       if (project) {
         try {
