@@ -78,3 +78,28 @@ export interface ToolCallInfo {
   isError: boolean;
   isStreaming: boolean;
 }
+
+// ── Model Library ──────────────────────────────────────
+
+export type AgentMode = "code" | "review" | "plan";
+
+export interface ModelEntry {
+  id: string;
+  provider: string;
+  modelId: string;
+  name: string;
+  thinkingLevel: string;
+}
+
+export interface ModeConfig {
+  enabled: boolean;
+  activeModelId: string | null;
+  models: ModelEntry[];
+  instructions: string;
+  tools: string[];
+  readOnly: boolean;
+}
+
+export interface ModelLibrary {
+  modes: Record<AgentMode, ModeConfig>;
+}

@@ -9,10 +9,12 @@ import { existsSync, mkdirSync } from "fs";
 import projectsRouter from "./routes/projects.js";
 import settingsRouter from "./routes/settings.js";
 import ollamaRouter from "./routes/ollama.js";
+import modelLibraryRouter from "./routes/model-library.js";
 import {
   createPiSession,
   subscribeToEvents,
   sendPrompt,
+  steerPrompt,
   abortPi,
   getCurrentSession,
 } from "./pi/session.js";
@@ -39,6 +41,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/ollama", ollamaRouter);
+app.use("/api/model-library", modelLibraryRouter);
 
 // Serve frontend in production
 const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
@@ -193,6 +196,16 @@ async function handleWsMessage(ws: WebSocket, msg: any) {
     case "pi_abort": {
       try {
         await abortPi();
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+      break;
+    }
+
+    case "pi_steer": {
+      const { message } = msg;
+      try {
+        await steerPrompt(message || "");
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }

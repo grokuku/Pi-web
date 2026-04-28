@@ -59,6 +59,16 @@ router.post("/thinking", async (req: Request, res: Response) => {
   }
 });
 
+// GET current thinking level
+router.get("/thinking", (_req: Request, res: Response) => {
+  try {
+    const info = getSessionInfo();
+    res.json({ level: info?.thinkingLevel || "medium" });
+  } catch {
+    res.json({ level: "medium" });
+  }
+});
+
 // POST new session
 router.post("/session/new", async (_req: Request, res: Response) => {
   try {

@@ -188,6 +188,14 @@ export async function sendPrompt(
   }
 }
 
+export async function steerPrompt(message: string): Promise<void> {
+  const { session } = currentSession;
+  if (!session) {
+    throw new Error("No active Pi session");
+  }
+  await session.steer(message);
+}
+
 export async function abortPi(): Promise<void> {
   const { session } = currentSession;
   if (session) {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
@@ -6,7 +6,8 @@ import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
-import { SettingsModal } from "./components/Modals/SettingsModal";
+import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
+import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import type { Project } from "./types";
 
 type Tab = "pi" | "terminal";
@@ -27,7 +28,10 @@ export default function App() {
   const [showProjectSwitch, setShowProjectSwitch] = useState(false);
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showModelLibrary, setShowModelLibrary] = useState(false);
+
+  // Keyboard shortcut state
+  const abortRef = useRef<() => void>(() => {});
 
   // ── Theme ──
   useEffect(() => {
@@ -36,6 +40,41 @@ export default function App() {
   }, [theme]);
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+
+  // ── Global keyboard shortcuts (Pi CLI compatible) ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      const alt = e.altKey;
+
+      // Escape → app.interrupt (abort streaming)
+      if (e.key === "Escape" && !mod && !shift && !alt) {
+        if (isStreaming) {
+          e.preventDefault();
+          send({ type: "pi_abort" });
+        }
+        // Close any open modal
+        if (showModelLibrary) { e.preventDefault(); setShowModelLibrary(false); }
+        else if (showAddProject) { e.preventDefault(); setShowAddProject(false); }
+        else if (showProjectSwitch) { e.preventDefault(); setShowProjectSwitch(false); }
+        return;
+      }
+
+      // Ctrl+L → app.model.select (open settings)
+      if (mod && e.key === "l") {
+        e.preventDefault();
+        setShowModelLibrary(true);
+        return;
+      }
+
+      // Ctrl+O → app.tools.expand (toggle tool call expansion — delegate to ChatView)
+      // Handled within ChatView via a custom event / state lift
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [isStreaming, send, showModelLibrary, showAddProject, showProjectSwitch]);
 
   // ── Load projects ──
   const loadProjects = useCallback(async () => {
@@ -228,12 +267,10 @@ export default function App() {
 
         <div className="w-px h-5 bg-hacker-border-bright" />
 
-        {/* Session info */}
-        {session && (
-          <span className="text-hacker-text-dim text-xs">
-            #{session.sessionId?.slice(0, 8)} · {session.model?.name || "?"}
-          </span>
-        )}
+        {/* Model quick switch */}
+        <ModelQuickSwitch onModelApplied={() => {
+          fetch("/api/settings/session").then(r => r.json()).then(setSession).catch(() => {});
+        }} />
 
         <div className="w-px h-5 bg-hacker-border-bright" />
 
@@ -266,7 +303,7 @@ export default function App() {
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <button
-          onClick={() => setShowSettings(true)}
+          onClick={() => setShowModelLibrary(true)}
           className="btn-hacker text-xs px-2 py-1"
         >
           ⚙
@@ -324,11 +361,13 @@ export default function App() {
         />
       )}
 
-      {showSettings && (
-        <SettingsModal
-          onClose={() => setShowSettings(false)}
-          send={send}
+      {showModelLibrary && (
+        <ModelLibraryModal
+          onClose={() => setShowModelLibrary(false)}
           session={session}
+          onModelApplied={() => {
+            fetch("/api/settings/session").then(r => r.json()).then(setSession).catch(() => {});
+          }}
         />
       )}
     </div>

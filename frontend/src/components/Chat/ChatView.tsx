@@ -105,6 +105,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
+  const [expandTools, setExpandTools] = useState(true);
+  const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
+  const [thinkingToast, setThinkingToast] = useState("");
   const [error, setError] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -122,6 +125,56 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
   useEffect(() => { streamingContentRef.current = streamingContent; }, [streamingContent]);
   useEffect(() => { streamingThinkingRef.current = streamingThinking; }, [streamingThinking]);
   useEffect(() => { currentToolCallsRef.current = currentToolCalls; }, [currentToolCalls]);
+
+  // ── Keyboard shortcuts (Pi CLI compatible) ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      const tag = (e.target as HTMLElement).tagName;
+      const inInput = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
+
+      // Ctrl+T → app.thinking.toggle (collapse/expand thinking blocks)
+      if (mod && e.key === "t" && !shift) {
+        e.preventDefault();
+        setShowThinking((prev) => !prev);
+        return;
+      }
+
+      // Ctrl+O → app.tools.expand (collapse/expand all tool outputs)
+      if (mod && e.key === "o" && !shift) {
+        e.preventDefault();
+        setExpandTools((prev) => !prev);
+        return;
+      }
+
+      // Shift+Tab → app.thinking.cycle (only outside input fields)
+      if (shift && e.key === "Tab" && !mod && !inInput) {
+        e.preventDefault();
+        const levels = ["off", "minimal", "low", "medium", "high"];
+        fetch("/api/settings/thinking")
+          .then((r) => r.json())
+          .then((data) => {
+            const current = data.level || "medium";
+            const idx = levels.indexOf(current);
+            const next = levels[(idx + 1) % levels.length];
+            setThinkingLevel(next);
+            setThinkingToast(`THINKING: ${next.toUpperCase()}`);
+            setTimeout(() => setThinkingToast(""), 1500);
+            return fetch("/api/settings/thinking", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ level: next }),
+            });
+          })
+          .catch(() => {});
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   // Auto scroll
@@ -452,15 +505,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
           <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>
         )}
 
+        {thinkingToast && (
+          <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5">⚡ {thinkingToast}</div>
+        )}
+
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)} />
+            toggleThinking={() => setShowThinking((t) => !t)} expandTools={expandTools} />
         ))}
 
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
           <StreamingBubble content={streamingContent} thinking={streamingThinking}
             toolCalls={currentToolCalls} showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)} />
+            toggleThinking={() => setShowThinking((t) => !t)} expandTools={expandTools} />
         )}
 
         <div ref={chatEndRef} />
@@ -522,7 +579,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
           </div>
         </div>
         <div className="text-hacker-text-dim text-[10px] mt-1 flex justify-between">
-          <span>📎 Attach files · Drag & drop · Ctrl+V paste images</span>
+          <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
           <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
         </div>
       </div>
@@ -541,8 +598,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
 }
 
 // ── Message Bubble ─────────────────────────────────────
-function MessageBubble({ message, showThinking, toggleThinking }: {
-  message: DisplayMessage; showThinking: boolean; toggleThinking: () => void;
+function MessageBubble({ message, showThinking, toggleThinking, expandTools }: {
+  message: DisplayMessage; expandTools: boolean; showThinking: boolean; toggleThinking: () => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -579,14 +636,14 @@ function MessageBubble({ message, showThinking, toggleThinking }: {
         </div>
       )}
 
-      {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} />)}
+      {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
     </div>
   );
 }
 
 // ── Streaming Bubble ───────────────────────────────────
-function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThinking }: {
-  content: string; thinking: string; toolCalls: ToolCallInfo[]; showThinking: boolean; toggleThinking: () => void;
+function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThinking, expandTools }: {
+  content: string; thinking: string; toolCalls: ToolCallInfo[]; showThinking: boolean; toggleThinking: () => void; expandTools: boolean;
 }) {
   return (
     <div className="mb-4 mr-8">
@@ -608,7 +665,7 @@ function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThi
       {content && (
         <div className="text-sm leading-relaxed"><MarkdownRenderer content={content} /></div>
       )}
-      {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} />)}
+      {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
     </div>
   );
 }
@@ -647,8 +704,11 @@ function MarkdownRenderer({ content }: { content: string }) {
 }
 
 // ── Tool Call Card ─────────────────────────────────────
-function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
-  const [expanded, setExpanded] = useState(true);
+function ToolCallCard({ toolCall, defaultExpanded = true }: { toolCall: ToolCallInfo; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  // Sync with global toggle
+  useEffect(() => { setExpanded(defaultExpanded); }, [defaultExpanded]);
   const displayArgs = extractToolArgs(toolCall.args);
 
   return (
