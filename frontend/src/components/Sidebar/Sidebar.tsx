@@ -1,12 +1,11 @@
 import {
-  FolderGit,
   Plus,
   Power,
-  Terminal,
   FolderOpen,
   RefreshCw,
   FileText,
 } from "lucide-react";
+import { GitPanel } from "./GitPanel";
 import type { Project } from "../../types";
 
 interface Props {
@@ -110,17 +109,9 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Git info */}
-      {activeProject?.git?.remote && (
-        <div className="p-2 border-b border-hacker-border">
-          <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
-            🗃 GIT
-          </div>
-          <div className="space-y-1">
-            <StatRow label="Remote" value={truncate(activeProject.git.remote, 20)} />
-            <StatRow label="Branch" value={activeProject.git.branch} />
-          </div>
-        </div>
+      {/* Git panel */}
+      {activeProject && activeProject.git?.remote && (
+        <GitPanel project={activeProject} />
       )}
 
       {/* Quick actions */}
@@ -218,7 +209,3 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return "..." + s.slice(-max);
-}

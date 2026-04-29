@@ -92,6 +92,57 @@ export async function gitCheckout(
   }
 }
 
+export async function getGitStatus(cwd: string): Promise<{
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: string[];
+  modified: string[];
+  deleted: string[];
+  created: string[];
+  conflict: string[];
+  files: Array<{ path: string; status: string }>;
+  isClean: boolean;
+}> {
+  const git: SimpleGit = simpleGit(cwd);
+  const status = await git.status();
+
+  const staged: string[] = [];
+  const modified: string[] = [];
+  const deleted: string[] = [];
+  const created: string[] = [];
+  const conflict: string[] = [];
+  const files: Array<{ path: string; status: string }> = [];
+
+  for (const f of status.files) {
+    const ws = f.working_dir;
+    const idx = f.index;
+    files.push({ path: f.path, status: `${idx}${ws}`.trim() || "?" });
+
+    if (ws === "D" || idx === "D") deleted.push(f.path);
+    else if (ws === "?" && idx === "?") created.push(f.path);
+    else if (idx !== " " && idx !== "?") staged.push(f.path);
+    else if (ws !== " ") modified.push(f.path);
+
+    if (ws === "U" || idx === "U") conflict.push(f.path);
+  }
+
+  const unique = (arr: string[]) => [...new Set(arr)];
+
+  return {
+    branch: status.current || "unknown",
+    ahead: status.ahead || 0,
+    behind: status.behind || 0,
+    staged: unique(staged),
+    modified: unique(modified),
+    deleted: unique(deleted),
+    created: unique(created),
+    conflict: unique(conflict),
+    files,
+    isClean: status.isClean(),
+  };
+}
+
 export async function syncGitInfo(project: Project): Promise<Project> {
   const info = await detectGit(project);
   if (info.hasGit) {

@@ -6,7 +6,7 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus } from "../projects/git.js";
 
 const router = Router();
 
@@ -140,6 +140,20 @@ router.post("/:id/git/checkout", async (req: Request, res: Response) => {
     res.json({ result });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// GET git status
+router.get("/:id/git/status", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const status = await getGitStatus(project.cwd);
+    res.json(status);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
