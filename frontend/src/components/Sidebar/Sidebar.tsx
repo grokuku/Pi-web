@@ -50,7 +50,7 @@ export function Sidebar({
               }`}
             >
               <span className="text-[10px]">
-                {p.type === "ssh" ? "🔗" : p.type === "smb" ? "💾" : "📁"}
+                {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
               </span>
               <span className="truncate">{p.name}</span>
               {p.git?.branch && (

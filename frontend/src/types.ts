@@ -1,7 +1,8 @@
 export interface Project {
   id: string;
   name: string;
-  type: "local" | "ssh" | "smb";
+  storage: "local" | "ssh" | "smb";
+  versioning: "git" | "standalone";
   cwd: string;
   ssh?: {
     host: string;
@@ -20,6 +21,8 @@ export interface Project {
   git?: {
     remote: string;
     branch: string;
+    provider?: "github" | "gitlab" | "other";
+    autoSync?: boolean;
     lastSync: string | null;
   };
   createdAt: string;

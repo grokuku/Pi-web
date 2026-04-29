@@ -6,18 +6,23 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
 
-export type ProjectType = "local" | "ssh" | "smb";
+export type StorageType = "local" | "ssh" | "smb";
+export type VersioningType = "git" | "standalone";
+export type GitProvider = "github" | "gitlab" | "other";
 
 export interface GitInfo {
   remote: string;
   branch: string;
+  provider?: GitProvider;
+  autoSync?: boolean;
   lastSync: string | null;
 }
 
 export interface Project {
   id: string;
   name: string;
-  type: ProjectType;
+  storage: StorageType;
+  versioning: VersioningType;
   cwd: string;
   // SSH config
   ssh?: {
@@ -47,11 +52,38 @@ function ensureDataDir(): void {
   }
 }
 
+function migrateProject(p: any): Project {
+  // Migrate from legacy "type" field to "storage"
+  if (!p.storage && p.type) {
+    p.storage = p.type;
+    delete p.type;
+  }
+  // Add default versioning if missing
+  if (!p.versioning) {
+    p.versioning = p.git?.remote ? "git" : "standalone";
+  }
+  // Add default git provider if missing
+  if (p.versioning === "git" && p.git && !p.git.provider) {
+    const remote = p.git.remote || "";
+    if (remote.includes("github.com")) p.git.provider = "github";
+    else if (remote.includes("gitlab.com") || remote.includes("gitlab.")) p.git.provider = "gitlab";
+    else p.git.provider = "other";
+  }
+  // Default autoSync
+  if (p.git && p.git.autoSync === undefined) {
+    p.git.autoSync = false;
+  }
+  return p as Project;
+}
+
 function loadProjects(): Project[] {
   ensureDataDir();
   try {
     if (existsSync(PROJECTS_FILE)) {
-      return JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
+      const raw = JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
+      if (Array.isArray(raw)) {
+        return raw.map(migrateProject);
+      }
     }
   } catch {
     console.error("Failed to load projects file, starting fresh");
@@ -78,31 +110,53 @@ export function getProjectByName(name: string): Project | undefined {
 
 export function createProject(
   name: string,
-  type: ProjectType,
+  storage: StorageType,
   cwd: string,
+  versioning: VersioningType = "standalone",
+  git?: Partial<GitInfo>,
   ssh?: Project["ssh"],
   smb?: Project["smb"]
 ): Project {
   const projects = loadProjects();
 
-  if (!name || !type || !cwd) {
-    throw new Error("name, type, and cwd are required");
+  if (!name || !storage || !cwd) {
+    throw new Error("name, storage, and cwd are required");
   }
-  if (!["local", "ssh", "smb"].includes(type)) {
-    throw new Error(`Invalid project type: ${type}`);
+  if (!["local", "ssh", "smb"].includes(storage)) {
+    throw new Error(`Invalid storage type: ${storage}`);
+  }
+  if (!["git", "standalone"].includes(versioning)) {
+    throw new Error(`Invalid versioning type: ${versioning}`);
   }
   if (projects.some((p) => p.name === name)) {
     throw new Error(`Project "${name}" already exists`);
+  }
+
+  // Auto-detect git provider from remote URL
+  let gitProvider: GitProvider | undefined;
+  if (git?.remote) {
+    const r = git.remote.toLowerCase();
+    if (r.includes("github.com")) gitProvider = "github";
+    else if (r.includes("gitlab.com") || r.includes("gitlab.")) gitProvider = "gitlab";
+    else gitProvider = git?.provider || "other";
   }
 
   const now = new Date().toISOString();
   const project: Project = {
     id: uuid(),
     name,
-    type,
+    storage,
+    versioning,
     cwd,
     ssh,
     smb,
+    git: versioning === "git" ? {
+      remote: git?.remote || "",
+      branch: git?.branch || "main",
+      provider: gitProvider,
+      autoSync: git?.autoSync ?? false,
+      lastSync: git?.lastSync || null,
+    } : undefined,
     createdAt: now,
     updatedAt: now,
   };

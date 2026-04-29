@@ -237,7 +237,7 @@ export default function App() {
             </option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.type === "ssh" ? "🔗" : p.type === "smb" ? "💾" : "📁"} {p.name}
+                {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"} {p.name}
               </option>
             ))}
           </select>

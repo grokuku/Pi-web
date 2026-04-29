@@ -19,7 +19,7 @@ export function StatusBar({
       {activeProject ? (
         <>
           <span className="text-hacker-accent">
-            {activeProject.type === "ssh" ? "🔗" : activeProject.type === "smb" ? "💾" : "📁"}{" "}
+            {activeProject.storage === "ssh" ? "🔗" : activeProject.storage === "smb" ? "💾" : "📁"}{" "}
             {activeProject.name}
           </span>
           <span className="text-hacker-text-dim">|</span>

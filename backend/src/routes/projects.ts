@@ -36,11 +36,11 @@ router.get("/:id", (req: Request, res: Response) => {
 // POST create project
 router.post("/", (req: Request, res: Response) => {
   try {
-    const { name, type, cwd, ssh, smb } = req.body;
-    if (!name || !type || !cwd) {
-      return res.status(400).json({ error: "name, type, and cwd are required" });
+    const { name, storage, cwd, ssh, smb, versioning, git } = req.body;
+    if (!name || !storage || !cwd) {
+      return res.status(400).json({ error: "name, storage, and cwd are required" });
     }
-    const project = createProject(name, type, cwd, ssh, smb);
+    const project = createProject(name, storage, cwd, versioning || "standalone", git, ssh, smb);
     res.status(201).json(project);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
