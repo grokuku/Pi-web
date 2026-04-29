@@ -2,7 +2,7 @@ import { writeFileSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Mutex } from "../utils/mutex.js";
+import { Mutex } from "./utils/mutex.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(homedir(), ".pi", "agent");
