@@ -61,16 +61,14 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
       const newPath = currentPath.endsWith("/")
         ? `${currentPath}${entry.name}`
         : `${currentPath}/${entry.name}`;
+      onSelect(newPath);
       browse(newPath);
     }
   };
 
   const handleBreadcrumbClick = (targetPath: string) => {
+    onSelect(targetPath);
     browse(targetPath);
-  };
-
-  const handleSelect = () => {
-    onSelect(currentPath);
   };
 
   const handleCreateFolder = async () => {
@@ -241,17 +239,16 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
 
         <div className="flex-1" />
 
-        <button
-          onClick={handleSelect}
-          className={`flex items-center gap-1 px-2 py-0.5 border text-xs transition-colors ${
+        <div
+          className={`flex items-center gap-1 px-2 py-0.5 border text-xs ${
             isSelected
               ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-              : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent"
+              : "border-transparent text-hacker-text-dim"
           }`}
         >
           <Check size={12} />
-          {isSelected ? "Selected" : "Select"}
-        </button>
+          {isSelected ? "Selected" : "Navigate to pick"}
+        </div>
       </div>
     </div>
   );
