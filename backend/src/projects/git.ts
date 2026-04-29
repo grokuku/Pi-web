@@ -1,8 +1,43 @@
 import { simpleGit, type SimpleGit, type LogResult } from "simple-git";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import path from "path";
 import type { Project } from "./manager.js";
 import { updateProjectGit } from "./manager.js";
+
+// ── Types ──────────────────────────────────────────────
+
+export interface GitStatusFull {
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: string[];
+  modified: string[];
+  deleted: string[];
+  created: string[];
+  conflict: string[];
+  files: Array<{ path: string; status: string }>;
+  isClean: boolean;
+}
+
+export interface GitStatusNotRepo {
+  notRepo: true;
+  isEmpty: boolean;
+}
+
+export type GitStatusResult = GitStatusFull | GitStatusNotRepo;
+
+// ── Helpers ────────────────────────────────────────────
+
+function isEmptyDir(dirPath: string): boolean {
+  try {
+    const entries = readdirSync(dirPath);
+    return entries.filter((e: string) => !e.startsWith(".")).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+// ── Git operations ─────────────────────────────────────
 
 export async function detectGit(project: Project): Promise<{
   hasGit: boolean;
@@ -92,55 +127,81 @@ export async function gitCheckout(
   }
 }
 
-export async function getGitStatus(cwd: string): Promise<{
-  branch: string;
-  ahead: number;
-  behind: number;
-  staged: string[];
-  modified: string[];
-  deleted: string[];
-  created: string[];
-  conflict: string[];
-  files: Array<{ path: string; status: string }>;
-  isClean: boolean;
-}> {
+export async function gitClone(
+  cwd: string,
+  remote: string,
+  branch: string = "main"
+): Promise<string> {
+  const parentDir = path.dirname(cwd);
+  const repoName = path.basename(cwd);
+  const git: SimpleGit = simpleGit(parentDir);
+  try {
+    await git.clone(remote, repoName, ["--branch", branch]);
+    return `Cloned ${remote} (${branch})`;
+  } catch (error: any) {
+    throw new Error(`Git clone failed: ${error.message}`);
+  }
+}
+
+export async function gitInit(cwd: string, remote: string, branch: string = "main"): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
-  const status = await git.status();
+  try {
+    await git.init();
+    await git.addRemote("origin", remote);
+    await git.checkoutLocalBranch(branch);
+    return `Initialized repo, remote set to ${remote}`;
+  } catch (error: any) {
+    throw new Error(`Git init failed: ${error.message}`);
+  }
+}
 
-  const staged: string[] = [];
-  const modified: string[] = [];
-  const deleted: string[] = [];
-  const created: string[] = [];
-  const conflict: string[] = [];
-  const files: Array<{ path: string; status: string }> = [];
-
-  for (const f of status.files) {
-    const ws = f.working_dir;
-    const idx = f.index;
-    files.push({ path: f.path, status: `${idx}${ws}`.trim() || "?" });
-
-    if (ws === "D" || idx === "D") deleted.push(f.path);
-    else if (ws === "?" && idx === "?") created.push(f.path);
-    else if (idx !== " " && idx !== "?") staged.push(f.path);
-    else if (ws !== " ") modified.push(f.path);
-
-    if (ws === "U" || idx === "U") conflict.push(f.path);
+export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
+  const gitPath = path.join(cwd, ".git");
+  if (!existsSync(gitPath)) {
+    return { notRepo: true, isEmpty: isEmptyDir(cwd) };
   }
 
-  const unique = (arr: string[]) => [...new Set(arr)];
+  try {
+    const git: SimpleGit = simpleGit(cwd);
+    const status = await git.status();
 
-  return {
-    branch: status.current || "unknown",
-    ahead: status.ahead || 0,
-    behind: status.behind || 0,
-    staged: unique(staged),
-    modified: unique(modified),
-    deleted: unique(deleted),
-    created: unique(created),
-    conflict: unique(conflict),
-    files,
-    isClean: status.isClean(),
-  };
+    const staged: string[] = [];
+    const modified: string[] = [];
+    const deleted: string[] = [];
+    const created: string[] = [];
+    const conflict: string[] = [];
+    const files: Array<{ path: string; status: string }> = [];
+
+    for (const f of status.files) {
+      const ws = f.working_dir;
+      const idx = f.index;
+      files.push({ path: f.path, status: `${idx}${ws}`.trim() || "?" });
+
+      if (ws === "D" || idx === "D") deleted.push(f.path);
+      else if (ws === "?" && idx === "?") created.push(f.path);
+      else if (idx !== " " && idx !== "?") staged.push(f.path);
+      else if (ws !== " ") modified.push(f.path);
+
+      if (ws === "U" || idx === "U") conflict.push(f.path);
+    }
+
+    const unique = (arr: string[]) => [...new Set(arr)];
+
+    return {
+      branch: status.current || "unknown",
+      ahead: status.ahead || 0,
+      behind: status.behind || 0,
+      staged: unique(staged),
+      modified: unique(modified),
+      deleted: unique(deleted),
+      created: unique(created),
+      conflict: unique(conflict),
+      files,
+      isClean: status.isClean(),
+    };
+  } catch {
+    return { notRepo: true, isEmpty: false };
+  }
 }
 
 export async function syncGitInfo(project: Project): Promise<Project> {

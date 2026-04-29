@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { GitBranch, GitPullRequest, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock } from "lucide-react";
+import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, Download, PlusSquare } from "lucide-react";
 import type { Project } from "../../types";
 
-interface GitStatus {
+interface GitStatusFull {
   branch: string;
   ahead: number;
   behind: number;
@@ -15,6 +15,15 @@ interface GitStatus {
   isClean: boolean;
 }
 
+interface GitStatusNotRepo {
+  notRepo: true;
+  isEmpty: boolean;
+}
+
+type GitStatus = GitStatusFull | GitStatusNotRepo;
+
+type ActionType = "pull" | "push" | "clone" | "init";
+
 interface Props {
   project: Project;
 }
@@ -22,7 +31,7 @@ interface Props {
 export function GitPanel({ project }: Props) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"pull" | "push" | null>(null);
+  const [actionLoading, setActionLoading] = useState<ActionType | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -47,43 +56,22 @@ export function GitPanel({ project }: Props) {
 
   useEffect(() => {
     fetchStatus();
-    // Auto-refresh every 30s
     const interval = setInterval(fetchStatus, 30_000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
 
-  const handlePull = async () => {
-    setActionLoading("pull");
+  const doAction = async (action: ActionType, url: string) => {
+    setActionLoading(action);
     setError("");
     setMessage("");
     try {
-      const res = await fetch(`/api/projects/${project.id}/git/pull`, { method: "POST" });
+      const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Pull failed");
+        throw new Error(data.error || `${action} failed`);
       }
       const data = await res.json();
-      setMessage(data.result || "Pull successful");
-      await fetchStatus();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handlePush = async () => {
-    setActionLoading("push");
-    setError("");
-    setMessage("");
-    try {
-      const res = await fetch(`/api/projects/${project.id}/git/push`, { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Push failed");
-      }
-      const data = await res.json();
-      setMessage(data.result || "Push successful");
+      setMessage(data.result || `${action} successful`);
       await fetchStatus();
     } catch (err: any) {
       setError(err.message);
@@ -94,8 +82,14 @@ export function GitPanel({ project }: Props) {
 
   if (!project.git?.remote) return null;
 
-  const totalChanges = status
-    ? status.staged.length + status.modified.length + status.deleted.length + status.created.length
+  // ── notRepo state ──
+  const isNotRepo = status && "notRepo" in status;
+  const dirIsEmpty = status && "notRepo" in status && status.isEmpty;
+
+  // ── Normal state ──
+  const normalStatus = isNotRepo ? null : (status as GitStatusFull);
+  const totalChanges = normalStatus
+    ? normalStatus.staged.length + normalStatus.modified.length + normalStatus.deleted.length + normalStatus.created.length
     : 0;
 
   const providerIcon = project.git.provider === "github" ? "🐙" : project.git.provider === "gitlab" ? "🦊" : "📦";
@@ -114,7 +108,6 @@ export function GitPanel({ project }: Props) {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="text-hacker-error text-[10px] mb-1.5 flex items-center gap-1">
           <AlertTriangle size={10} />
@@ -122,7 +115,6 @@ export function GitPanel({ project }: Props) {
         </div>
       )}
 
-      {/* Success message */}
       {message && (
         <div className="text-hacker-accent text-[10px] mb-1.5 flex items-center gap-1">
           <Check size={10} />
@@ -130,15 +122,9 @@ export function GitPanel({ project }: Props) {
         </div>
       )}
 
-      {status && (
-        <div className="space-y-1.5">
-          {/* Branch */}
-          <div className="flex justify-between">
-            <span className="text-hacker-text-dim">Branch</span>
-            <span className="text-hacker-info">{status.branch}</span>
-          </div>
-
-          {/* Remote indicator */}
+      {/* ── Not a repo yet ── */}
+      {isNotRepo && (
+        <div className="space-y-2">
           <div className="flex justify-between">
             <span className="text-hacker-text-dim">Remote</span>
             <span className="text-hacker-text-bright text-[9px] truncate max-w-[100px] text-right">
@@ -146,68 +132,126 @@ export function GitPanel({ project }: Props) {
             </span>
           </div>
 
-          {/* Ahead / Behind */}
-          {(status.ahead > 0 || status.behind > 0) && (
+          <div className="flex justify-between">
+            <span className="text-hacker-text-dim">Branch</span>
+            <span className="text-hacker-info">{project.git.branch || "main"}</span>
+          </div>
+
+          {dirIsEmpty ? (
+            <>
+              <div className="text-hacker-text-dim text-[10px] flex items-center gap-1">
+                <Download size={10} />
+                Directory is empty — ready to clone
+              </div>
+              <button
+                onClick={() => doAction("clone", `/api/projects/${project.id}/git/clone`)}
+                disabled={actionLoading !== null}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-hacker-accent text-[10px] hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
+              >
+                {actionLoading === "clone" ? (
+                  <RefreshCw size={10} className="animate-spin" />
+                ) : (
+                  <Download size={12} />
+                )}
+                Clone Repository
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="text-hacker-warn text-[10px] flex items-start gap-1 bg-hacker-bg/30 border border-hacker-warn/20 p-1.5">
+                <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                <span>Directory not empty — cannot clone. Initialize git + add remote instead.</span>
+              </div>
+              <button
+                onClick={() => doAction("init", `/api/projects/${project.id}/git/init`)}
+                disabled={actionLoading !== null}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent text-[10px] transition-colors disabled:opacity-40"
+              >
+                {actionLoading === "init" ? (
+                  <RefreshCw size={10} className="animate-spin" />
+                ) : (
+                  <PlusSquare size={12} />
+                )}
+                git init + Add Remote
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Normal repo ── */}
+      {normalStatus && (
+        <div className="space-y-1.5">
+          <div className="flex justify-between">
+            <span className="text-hacker-text-dim">Branch</span>
+            <span className="text-hacker-info">{normalStatus.branch}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-hacker-text-dim">Remote</span>
+            <span className="text-hacker-text-bright text-[9px] truncate max-w-[100px] text-right">
+              {project.git.remote.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
+            </span>
+          </div>
+
+          {(normalStatus.ahead > 0 || normalStatus.behind > 0) && (
             <div className="flex items-center gap-2">
-              {status.behind > 0 && (
+              {normalStatus.behind > 0 && (
                 <span className="flex items-center gap-0.5 text-hacker-warn text-[10px]">
                   <ArrowDown size={10} />
-                  {status.behind} behind
+                  {normalStatus.behind} behind
                 </span>
               )}
-              {status.ahead > 0 && (
+              {normalStatus.ahead > 0 && (
                 <span className="flex items-center gap-0.5 text-hacker-info text-[10px]">
                   <ArrowUp size={10} />
-                  {status.ahead} ahead
+                  {normalStatus.ahead} ahead
                 </span>
               )}
             </div>
           )}
 
-          {/* File changes */}
-          {!status.isClean && (
+          {!normalStatus.isClean && (
             <div className="text-[10px] space-y-0.5 bg-hacker-bg/30 border border-hacker-border p-1.5">
-              {status.staged.length > 0 && (
-                <div className="text-hacker-accent">✓ {status.staged.length} staged</div>
+              {normalStatus.staged.length > 0 && (
+                <div className="text-hacker-accent">✓ {normalStatus.staged.length} staged</div>
               )}
-              {status.modified.length > 0 && (
-                <div className="text-hacker-warn">~ {status.modified.length} modified</div>
+              {normalStatus.modified.length > 0 && (
+                <div className="text-hacker-warn">~ {normalStatus.modified.length} modified</div>
               )}
-              {status.created.length > 0 && (
-                <div className="text-hacker-info">+ {status.created.length} new</div>
+              {normalStatus.created.length > 0 && (
+                <div className="text-hacker-info">+ {normalStatus.created.length} new</div>
               )}
-              {status.deleted.length > 0 && (
-                <div className="text-hacker-error">- {status.deleted.length} deleted</div>
+              {normalStatus.deleted.length > 0 && (
+                <div className="text-hacker-error">- {normalStatus.deleted.length} deleted</div>
               )}
-              {status.conflict.length > 0 && (
-                <div className="text-hacker-error font-bold">! {status.conflict.length} conflicts</div>
+              {normalStatus.conflict.length > 0 && (
+                <div className="text-hacker-error font-bold">! {normalStatus.conflict.length} conflicts</div>
               )}
 
-              {/* File list (collapsed, max 5) */}
               <div className="mt-1 max-h-[60px] overflow-y-auto">
-                {status.files.slice(0, 5).map((f) => (
+                {normalStatus.files.slice(0, 5).map((f) => (
                   <div key={f.path} className="flex gap-1 text-hacker-text-dim/70 truncate">
                     <span className="text-hacker-accent text-[9px] w-5 shrink-0">{f.status}</span>
                     <span className="truncate">{f.path}</span>
                   </div>
                 ))}
-                {status.files.length > 5 && (
+                {normalStatus.files.length > 5 && (
                   <div className="text-hacker-text-dim/50">
-                    +{status.files.length - 5} more files
+                    +{normalStatus.files.length - 5} more files
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {status.isClean && totalChanges === 0 && !status.ahead && !status.behind && (
+          {normalStatus.isClean && totalChanges === 0 && !normalStatus.ahead && !normalStatus.behind && (
             <div className="text-hacker-text-dim text-[10px] flex items-center gap-1">
               <Check size={10} className="text-hacker-accent" />
               Up to date
             </div>
           )}
 
-          {/* Last sync */}
           {project.git.lastSync && (
             <div className="text-hacker-text-dim text-[9px] flex items-center gap-1">
               <Clock size={9} />
@@ -215,10 +259,9 @@ export function GitPanel({ project }: Props) {
             </div>
           )}
 
-          {/* Action buttons */}
           <div className="flex gap-1 pt-1">
             <button
-              onClick={handlePull}
+              onClick={() => doAction("pull", `/api/projects/${project.id}/git/pull`)}
               disabled={actionLoading !== null}
               className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[10px] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
               title="git pull"
@@ -231,7 +274,7 @@ export function GitPanel({ project }: Props) {
               Pull
             </button>
             <button
-              onClick={handlePush}
+              onClick={() => doAction("push", `/api/projects/${project.id}/git/push`)}
               disabled={actionLoading !== null}
               className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[10px] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
               title="git push"

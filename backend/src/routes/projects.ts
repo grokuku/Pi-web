@@ -6,7 +6,7 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit } from "../projects/git.js";
 
 const router = Router();
 
@@ -154,6 +154,44 @@ router.get("/:id/git/status", async (req: Request, res: Response) => {
     res.json(status);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// POST git clone
+router.post("/:id/git/clone", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    if (!project.git?.remote) {
+      return res.status(400).json({ error: "No git remote configured for this project" });
+    }
+    const branch = project.git.branch || "main";
+    const result = await gitClone(project.cwd, project.git.remote, branch);
+    await syncGitInfo(project);
+    res.json({ result });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// POST git init (init repo + add remote for non-empty dir)
+router.post("/:id/git/init", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    if (!project.git?.remote) {
+      return res.status(400).json({ error: "No git remote configured for this project" });
+    }
+    const branch = project.git.branch || "main";
+    const result = await gitInit(project.cwd, project.git.remote, branch);
+    await syncGitInfo(project);
+    res.json({ result });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
 });
 
