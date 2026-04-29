@@ -114,6 +114,156 @@ export async function gitPush(cwd: string): Promise<string> {
   }
 }
 
+// ── Commit message generation ─────────────────────────
+
+function generateCommitMessage(status: GitStatusFull): { subject: string; body: string } {
+  const { created, modified, deleted, staged, files } = status;
+
+  const allChanged = [...new Set([...staged, ...modified, ...created, ...deleted])];
+  if (allChanged.length === 0) {
+    return { subject: "chore: no changes", body: "No changes to commit." };
+  }
+
+  // ── Build changelog body ──
+  const lines: string[] = [];
+  if (created.length > 0) {
+    lines.push("Added:");
+    for (const f of created) lines.push(`  + ${f}`);
+  }
+  if (modified.length > 0 || staged.length > 0) {
+    lines.push("Modified:");
+    for (const f of [...new Set([...staged, ...modified])]) lines.push(`  ~ ${f}`);
+  }
+  if (deleted.length > 0) {
+    lines.push("Removed:");
+    for (const f of deleted) lines.push(`  - ${f}`);
+  }
+
+  const body = lines.join("\n");
+
+  // ── Generate short subject ──
+  // Heuristic: find common directory prefix of changed files
+  const allFiles = files.map((f) => f.path);
+  const dirs = allFiles
+    .map((f) => {
+      const parts = f.split("/");
+      return parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+    })
+    .filter((d, i, arr) => arr.indexOf(d) === i);
+
+  // Derive a concise area name
+  const area =
+    dirs.length === 1 && dirs[0] !== "."
+      ? dirs[0].split("/").pop()!
+      : dirs.length <= 2
+        ? dirs.map((d) => d === "." ? "root" : d.split("/").pop()).join(", ")
+        : `${allFiles.length} files across ${dirs.length} dirs`;
+
+  // Choose action verb
+  let verb: string;
+  if (created.length > 0 && modified.length === 0 && deleted.length === 0) {
+    verb = "Add";
+  } else if (deleted.length > 0 && modified.length === 0 && created.length === 0) {
+    verb = "Remove";
+  } else {
+    verb = "Update";
+  }
+
+  const total = allChanged.length;
+  const subject =
+    total === 1
+      ? `${verb} ${area}: ${allChanged[0].split("/").pop()}`
+      : `${verb} ${area}: ${total} changes`;
+
+  return { subject: subject.slice(0, 72), body };
+}
+
+export async function gitAddAll(cwd: string): Promise<number> {
+  const git: SimpleGit = simpleGit(cwd);
+  await git.add("-A");
+  const status = await git.status();
+  return status.staged.length || status.files.length;
+}
+
+export async function gitCommit(
+  cwd: string,
+  subject: string,
+  body?: string
+): Promise<string> {
+  const git: SimpleGit = simpleGit(cwd);
+  const message = body ? `${subject}\n\n${body}` : subject;
+  try {
+    const result = await git.commit(message);
+    if (result.commit === null || result.summary.changes === 0) {
+      return "Nothing to commit";
+    }
+    return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
+  } catch (error: any) {
+    throw new Error(`Git commit failed: ${error.message}`);
+  }
+}
+
+export interface CommitPushResult {
+  staged: number;
+  commitResult?: string;
+  pushResult?: string;
+  commitMessage?: { subject: string; body: string };
+}
+
+export async function gitCommitAndPush(
+  cwd: string
+): Promise<CommitPushResult> {
+  const result: CommitPushResult = { staged: 0 };
+
+  // 1. Get current status
+  const status = await getGitStatus(cwd);
+  if ("notRepo" in status) {
+    throw new Error("Not a git repository");
+  }
+
+  // 2. If clean, just try to push existing commits
+  if (status.isClean && status.staged.length === 0 &&
+      status.modified.length === 0 && status.created.length === 0 &&
+      status.deleted.length === 0) {
+    // Nothing to commit, but maybe we have unpushed commits
+    if (status.ahead > 0) {
+      const pushResult = await gitPush(cwd);
+      result.pushResult = pushResult;
+      return result;
+    }
+    result.commitResult = "Nothing to commit";
+    return result;
+  }
+
+  // 3. Stage all changes
+  const stagedCount = await gitAddAll(cwd);
+  result.staged = stagedCount;
+
+  // 4. Re-read status after staging (now files are in the index)
+  const statusAfterStaging = await getGitStatus(cwd);
+  if ("notRepo" in statusAfterStaging) {
+    throw new Error("Not a git repository");
+  }
+
+  // 5. Generate commit message
+  const msg = generateCommitMessage(statusAfterStaging);
+  result.commitMessage = msg;
+
+  // 6. Commit
+  const commitResult = await gitCommit(cwd, msg.subject, msg.body);
+  result.commitResult = commitResult;
+
+  // 7. Push
+  try {
+    const pushResult = await gitPush(cwd);
+    result.pushResult = pushResult;
+  } catch (error: any) {
+    result.pushResult = `Push failed: ${error.message}`;
+  }
+
+  return result;
+}
+
 export async function gitCheckout(
   cwd: string,
   ref: string
@@ -207,7 +357,7 @@ export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
 export async function syncGitInfo(project: Project): Promise<Project> {
   const info = await detectGit(project);
   if (info.hasGit) {
-    return updateProjectGit(project.id, {
+    return await updateProjectGit(project.id, {
       remote: info.remote,
       branch: info.branch,
       lastSync: new Date().toISOString(),

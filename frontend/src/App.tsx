@@ -122,6 +122,10 @@ export default function App() {
           }
           break;
         }
+        case "session_update": {
+          if (evt.session) setSession(evt.session);
+          break;
+        }
         case "queue_update": {
           // Could show pending messages
           break;
@@ -190,20 +194,8 @@ export default function App() {
     activateProject(project);
   };
 
-  // ── Session info (polling) ──
-  useEffect(() => {
-    if (!activeProject) return;
-    const fetchSession = async () => {
-      try {
-        const res = await fetch("/api/settings/session");
-        const data = await res.json();
-        setSession(data);
-      } catch {}
-    };
-    fetchSession();
-    const interval = setInterval(fetchSession, 5000);
-    return () => clearInterval(interval);
-  }, [activeProject]);
+  // ── Session info (via WebSocket) ──
+  // Handled inside the pi_event listener below (session_update events)
 
   return (
     <div className="h-screen flex flex-col scanlines">

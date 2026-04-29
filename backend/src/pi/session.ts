@@ -61,6 +61,17 @@ function emitToSubscribers(event: AgentSessionEvent) {
   }
 }
 
+function emitSessionUpdate() {
+  const info = getSessionInfo();
+  for (const cb of eventCallbacks) {
+    try {
+      cb({ type: "session_update", session: info } as any);
+    } catch (e) {
+      console.error("Session update callback error:", e);
+    }
+  }
+}
+
 export async function createPiSession(cwd: string): Promise<PiSessionState> {
   // Dispose previous session
   if (currentSession.session) {
@@ -107,10 +118,12 @@ export async function createPiSession(cwd: string): Promise<PiSessionState> {
         }
       } else if (event.type === "agent_start") {
         currentSession.isStreaming = true;
+        emitSessionUpdate();
       } else if (event.type === "agent_end") {
         currentSession.isStreaming = false;
         // Clean up old tool calls
         activeToolCalls.clear();
+        emitSessionUpdate();
       }
 
       // Forward to WebSocket subscribers
@@ -147,6 +160,7 @@ export async function createPiSession(cwd: string): Promise<PiSessionState> {
       pendingThinkingLevel = null;
     }
 
+    emitSessionUpdate();
     return currentSession;
   } catch (error) {
     console.error("Failed to create Pi session:", error);
@@ -216,6 +230,7 @@ export async function setModel(
   const { session } = currentSession;
   if (session) {
     await session.setModel(model);
+    emitSessionUpdate();
     return false; // applied immediately
   }
 
@@ -239,6 +254,7 @@ export async function setThinkingLevel(level: string): Promise<boolean> {
   const { session } = currentSession;
   if (session) {
     session.setThinkingLevel(level as any);
+    emitSessionUpdate();
     return false; // applied immediately
   }
 
@@ -255,6 +271,7 @@ export async function newSession(): Promise<void> {
     await session.dispose();
   }
   await createPiSession(currentSession.cwd);
+  emitSessionUpdate();
 }
 
 export async function compactSession(
@@ -262,7 +279,9 @@ export async function compactSession(
 ): Promise<any> {
   const { session } = currentSession;
   if (!session) throw new Error("No active Pi session");
-  return await session.compact(customInstructions);
+  const result = await session.compact(customInstructions);
+  emitSessionUpdate();
+  return result;
 }
 
 export function getSessionInfo() {

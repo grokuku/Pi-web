@@ -2,6 +2,7 @@ import { writeFileSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { Mutex } from "../utils/mutex.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(homedir(), ".pi", "agent");
@@ -9,6 +10,7 @@ const AGENT_DIR = path.join(homedir(), ".pi", "agent");
 // Our own config
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
 const OLLAMA_CONFIG_FILE = path.join(DATA_DIR, "ollama-config.json");
+const modelsJsonMutex = new Mutex();
 
 export interface OllamaConfig {
   url: string;
@@ -32,7 +34,7 @@ export function getOllamaConfig(): OllamaConfig {
       return JSON.parse(readFileSync(OLLAMA_CONFIG_FILE, "utf-8"));
     }
   } catch {}
-  return { url: "http://172.17.0.1:11434", enabled: false };
+  return { url: process.env.OLLAMA_URL || "http://host.docker.internal:11434", enabled: false };
 }
 
 export function saveOllamaConfig(config: OllamaConfig): void {
@@ -50,10 +52,11 @@ export async function fetchOllamaModels(baseUrl: string): Promise<OllamaModel[]>
   return data.models || [];
 }
 
-export function writeOllamaModelsJson(
+export async function writeOllamaModelsJson(
   models: OllamaModel[],
   baseUrl: string
-): void {
+): Promise<void> {
+  await modelsJsonMutex.run(() => {
   const cleanUrl = baseUrl.replace(/\/+$/, "");
   
   // Better vision/reasoning detection (checks full model details from Ollama)
@@ -94,4 +97,5 @@ export function writeOllamaModelsJson(
 
   if (!existsSync(AGENT_DIR)) mkdirSync(AGENT_DIR, { recursive: true });
   writeFileSync(existingPath, JSON.stringify(existing, null, 2));
+  });
 }

@@ -30,6 +30,14 @@ function validateMode(mode: string): AgentMode {
   return mode as AgentMode;
 }
 
+function safeDecodeURIComponent(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded; // return as-is if malformed
+  }
+}
+
 async function applyModeToSession(mode: AgentMode): Promise<void> {
   const library = loadModelLibrary();
   const cfg = library.modes[mode];
@@ -175,7 +183,7 @@ router.post("/modes/:mode/models", async (req: Request, res: Response) => {
 router.delete("/modes/:mode/models/:entryId", (req: Request, res: Response) => {
   try {
     const mode = validateMode(req.params.mode);
-    const entryId = decodeURIComponent(req.params.entryId);
+    const entryId = safeDecodeURIComponent(req.params.entryId);
     const library = removeModelFromMode(mode, entryId);
     res.json(library);
   } catch (e: any) {
@@ -209,7 +217,7 @@ router.put("/modes/:mode/active", async (req: Request, res: Response) => {
 router.put("/modes/:mode/models/:entryId/thinking", (req: Request, res: Response) => {
   try {
     const mode = validateMode(req.params.mode);
-    const entryId = decodeURIComponent(req.params.entryId);
+    const entryId = safeDecodeURIComponent(req.params.entryId);
     const { thinkingLevel } = req.body;
     if (!thinkingLevel) {
       return res.status(400).json({ error: "thinkingLevel required" });

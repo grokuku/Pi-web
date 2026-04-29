@@ -47,7 +47,7 @@ router.post("/connect", async (req: Request, res: Response) => {
     const models = await fetchOllamaModels(url);
 
     // Write models.json for Pi
-    writeOllamaModelsJson(models, url);
+    await writeOllamaModelsJson(models, url);
 
     // Reload model registry so newly discovered models are available
     reloadModelRegistry();
@@ -67,7 +67,7 @@ router.post("/refresh", async (_req: Request, res: Response) => {
     }
 
     const models = await fetchOllamaModels(config.url);
-    writeOllamaModelsJson(models, config.url);
+    await writeOllamaModelsJson(models, config.url);
 
     // Reload model registry so newly discovered models are available
     reloadModelRegistry();

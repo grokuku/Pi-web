@@ -22,7 +22,7 @@ interface GitStatusNotRepo {
 
 type GitStatus = GitStatusFull | GitStatusNotRepo;
 
-type ActionType = "pull" | "push" | "clone" | "init";
+type ActionType = "pull" | "push" | "commit-push" | "clone" | "init";
 
 interface Props {
   project: Project;
@@ -34,6 +34,7 @@ export function GitPanel({ project }: Props) {
   const [actionLoading, setActionLoading] = useState<ActionType | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [commitMessage, setCommitMessage] = useState<{ subject: string; body: string } | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (!project.git?.remote) return;
@@ -64,6 +65,7 @@ export function GitPanel({ project }: Props) {
     setActionLoading(action);
     setError("");
     setMessage("");
+    setCommitMessage(null);
     try {
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
@@ -71,7 +73,21 @@ export function GitPanel({ project }: Props) {
         throw new Error(data.error || `${action} failed`);
       }
       const data = await res.json();
-      setMessage(data.result || `${action} successful`);
+
+      if (action === "commit-push") {
+        // commit-push returns a structured result
+        if (data.commitMessage) {
+          setCommitMessage(data.commitMessage);
+        }
+        const parts: string[] = [];
+        if (data.staged) parts.push(`${data.staged} staged`);
+        if (data.commitResult) parts.push(data.commitResult);
+        if (data.pushResult) parts.push(data.pushResult);
+        setMessage(parts.join(" → ") || "Done");
+      } else {
+        setMessage(data.result || `${action} successful`);
+      }
+
       await fetchStatus();
     } catch (err: any) {
       setError(err.message);
@@ -259,6 +275,16 @@ export function GitPanel({ project }: Props) {
             </div>
           )}
 
+          {/* Commit message preview */}
+          {commitMessage && (
+            <div className="mt-1 text-[9px] bg-hacker-bg/30 border border-hacker-accent/20 p-1.5">
+              <div className="text-hacker-accent font-bold mb-0.5">🚀 {commitMessage.subject}</div>
+              {commitMessage.body && (
+                <div className="text-hacker-text-dim whitespace-pre-wrap mt-0.5">{commitMessage.body}</div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-1 pt-1">
             <button
               onClick={() => doAction("pull", `/api/projects/${project.id}/git/pull`)}
@@ -274,17 +300,17 @@ export function GitPanel({ project }: Props) {
               Pull
             </button>
             <button
-              onClick={() => doAction("push", `/api/projects/${project.id}/git/push`)}
+              onClick={() => doAction("commit-push", `/api/projects/${project.id}/git/commit-push`)}
               disabled={actionLoading !== null}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[10px] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
-              title="git push"
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[10px] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
+              title="git add -A → commit → push"
             >
-              {actionLoading === "push" ? (
+              {actionLoading === "commit-push" ? (
                 <RefreshCw size={10} className="animate-spin" />
               ) : (
                 <ArrowUp size={10} />
               )}
-              Push
+              Commit \u0026 Push
             </button>
           </div>
         </div>

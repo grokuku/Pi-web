@@ -71,6 +71,7 @@ interface ExtendedWS extends WebSocket {
 
 wss.on("connection", (ws: ExtendedWS) => {
   ws.isAlive = true;
+  let cleanedUp = false;
   console.log("WebSocket client connected");
 
   // Ping/pong to keep alive
@@ -78,49 +79,14 @@ wss.on("connection", (ws: ExtendedWS) => {
     ws.isAlive = true;
   });
 
-  ws.on("message", async (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString());
-      await handleWsMessage(ws, msg);
-    } catch (e) {
-      console.error("WS message error:", e);
-      const errorMessage = e instanceof Error ? e.message : "Unknown error";
-      ws.send(
-        JSON.stringify({ type: "error", error: errorMessage })
-      );
-    }
-  });
-
-  ws.on("close", () => {
-    console.log("WebSocket client disconnected");
-    unsub();
-    terminalEvents.off("data", onTermData);
-    terminalEvents.off("exit", onTermExit);
-    killAllTerminals();
-  });
-
-  // Send initial state
-  ws.send(
-    JSON.stringify({
-      type: "connected",
-      data: getCurrentSession().session
-        ? {
-            sessionId: getCurrentSession()!.session!.sessionId,
-            isStreaming: getCurrentSession().isStreaming,
-            cwd: getCurrentSession().cwd,
-          }
-        : null,
-    })
-  );
-
-  // Subscribe to Pi events
+  // ── Subscribe to Pi events ──
   const unsub = subscribeToEvents((event) => {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ type: "pi_event", event }));
     }
   });
 
-  // Subscribe to terminal events
+  // ── Subscribe to terminal events ──
   const onTermData = (data: { projectId: string; data: string }) => {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ type: "terminal_data", ...data }));
@@ -138,6 +104,49 @@ wss.on("connection", (ws: ExtendedWS) => {
 
   terminalEvents.on("data", onTermData);
   terminalEvents.on("exit", onTermExit);
+
+  // ── Send initial state ──
+  ws.send(
+    JSON.stringify({
+      type: "connected",
+      data: getCurrentSession().session
+        ? {
+            sessionId: getCurrentSession()!.session!.sessionId,
+            isStreaming: getCurrentSession().isStreaming,
+            cwd: getCurrentSession().cwd,
+          }
+        : null,
+    })
+  );
+
+  // ── Cleanup helper (idempotent) ──
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    console.log("WebSocket client disconnected");
+    unsub();
+    terminalEvents.off("data", onTermData);
+    terminalEvents.off("exit", onTermExit);
+    killAllTerminals();
+  };
+
+  // ── Message handler ──
+  ws.on("message", async (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      await handleWsMessage(ws, msg);
+    } catch (e) {
+      console.error("WS message error:", e);
+      const errorMessage = e instanceof Error ? e.message : "Unknown error";
+      ws.send(
+        JSON.stringify({ type: "error", error: errorMessage })
+      );
+    }
+  });
+
+  // ── Close handler ──
+  ws.on("close", cleanup);
+  ws.on("error", cleanup);
 });
 
 // Keep-alive interval
@@ -206,8 +215,9 @@ async function handleWsMessage(ws: WebSocket, msg: any) {
 
     case "pi_steer": {
       const { message } = msg;
+      if (!message) break;  // ignore empty steer
       try {
-        await steerPrompt(message || "");
+        await steerPrompt(message);
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }
@@ -269,10 +279,14 @@ httpServer.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on("SIGTERM", async () => {
+const shutdown = async () => {
   console.log("Shutting down...");
+  clearInterval(interval);
   killAllTerminals();
   wss.close();
   httpServer.close();
   process.exit(0);
-});
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

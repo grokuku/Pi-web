@@ -2,9 +2,11 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
+import { Mutex } from "../utils/mutex.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
+const projectsMutex = new Mutex();
 
 export type StorageType = "local" | "ssh" | "smb";
 export type VersioningType = "git" | "standalone";
@@ -108,7 +110,7 @@ export function getProjectByName(name: string): Project | undefined {
   return loadProjects().find((p) => p.name === name);
 }
 
-export function createProject(
+export async function createProject(
   name: string,
   storage: StorageType,
   cwd: string,
@@ -116,8 +118,9 @@ export function createProject(
   git?: Partial<GitInfo>,
   ssh?: Project["ssh"],
   smb?: Project["smb"]
-): Project {
-  const projects = loadProjects();
+): Promise<Project> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
 
   if (!name || !storage || !cwd) {
     throw new Error("name, storage, and cwd are required");
@@ -164,55 +167,62 @@ export function createProject(
   projects.push(project);
   saveProjects(projects);
   return project;
+  });
 }
 
-export function updateProject(
+export async function updateProject(
   id: string,
   updates: Partial<Omit<Project, "id" | "createdAt">>
-): Project {
-  const projects = loadProjects();
-  const index = projects.findIndex((p) => p.id === id);
+): Promise<Project> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const index = projects.findIndex((p) => p.id === id);
 
-  if (index === -1) throw new Error(`Project not found: ${id}`);
+    if (index === -1) throw new Error(`Project not found: ${id}`);
 
-  projects[index] = {
-    ...projects[index],
-    ...updates,
-    id: projects[index].id,
-    createdAt: projects[index].createdAt,
-    updatedAt: new Date().toISOString(),
-  };
+    projects[index] = {
+      ...projects[index],
+      ...updates,
+      id: projects[index].id,
+      createdAt: projects[index].createdAt,
+      updatedAt: new Date().toISOString(),
+    };
 
-  saveProjects(projects);
-  return projects[index];
+    saveProjects(projects);
+    return projects[index];
+  });
 }
 
-export function deleteProject(id: string): void {
-  const projects = loadProjects();
-  const filtered = projects.filter((p) => p.id !== id);
-  if (filtered.length === projects.length) {
-    throw new Error(`Project not found: ${id}`);
-  }
-  saveProjects(filtered);
+export async function deleteProject(id: string): Promise<void> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const filtered = projects.filter((p) => p.id !== id);
+    if (filtered.length === projects.length) {
+      throw new Error(`Project not found: ${id}`);
+    }
+    saveProjects(filtered);
+  });
 }
 
-export function updateProjectGit(
+export async function updateProjectGit(
   id: string,
   gitInfo: Partial<GitInfo>
-): Project {
-  const projects = loadProjects();
-  const index = projects.findIndex((p) => p.id === id);
-  if (index === -1) throw new Error(`Project not found: ${id}`);
+): Promise<Project> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const index = projects.findIndex((p) => p.id === id);
+    if (index === -1) throw new Error(`Project not found: ${id}`);
 
-  projects[index].git = {
-    ...projects[index].git,
-    ...gitInfo,
-    remote: gitInfo.remote || projects[index].git?.remote || "",
-    branch: gitInfo.branch || projects[index].git?.branch || "main",
-    lastSync: gitInfo.lastSync !== undefined ? gitInfo.lastSync : projects[index].git?.lastSync || null,
-  };
-  projects[index].updatedAt = new Date().toISOString();
+    projects[index].git = {
+      ...projects[index].git,
+      ...gitInfo,
+      remote: gitInfo.remote || projects[index].git?.remote || "",
+      branch: gitInfo.branch || projects[index].git?.branch || "main",
+      lastSync: gitInfo.lastSync !== undefined ? gitInfo.lastSync : projects[index].git?.lastSync || null,
+    };
+    projects[index].updatedAt = new Date().toISOString();
 
-  saveProjects(projects);
-  return projects[index];
+    saveProjects(projects);
+    return projects[index];
+  });
 }

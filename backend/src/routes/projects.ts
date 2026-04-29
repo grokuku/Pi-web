@@ -6,7 +6,7 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush } from "../projects/git.js";
 
 const router = Router();
 
@@ -34,13 +34,13 @@ router.get("/:id", (req: Request, res: Response) => {
 });
 
 // POST create project
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   try {
     const { name, storage, cwd, ssh, smb, versioning, git } = req.body;
     if (!name || !storage || !cwd) {
       return res.status(400).json({ error: "name, storage, and cwd are required" });
     }
-    const project = createProject(name, storage, cwd, versioning || "standalone", git, ssh, smb);
+    const project = await createProject(name, storage, cwd, versioning || "standalone", git, ssh, smb);
     res.status(201).json(project);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -48,9 +48,9 @@ router.post("/", (req: Request, res: Response) => {
 });
 
 // PUT update project
-router.put("/:id", (req: Request, res: Response) => {
+router.put("/:id", async (req: Request, res: Response) => {
   try {
-    const project = updateProject(req.params.id, req.body);
+    const project = await updateProject(req.params.id, req.body);
     res.json(project);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -58,9 +58,9 @@ router.put("/:id", (req: Request, res: Response) => {
 });
 
 // DELETE project
-router.delete("/:id", (req: Request, res: Response) => {
+router.delete("/:id", async (req: Request, res: Response) => {
   try {
-    deleteProject(req.params.id);
+    await deleteProject(req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -110,7 +110,7 @@ router.post("/:id/git/pull", async (req: Request, res: Response) => {
   }
 });
 
-// POST git push
+// POST git push (raw push, no staging/commit)
 router.post("/:id/git/push", async (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
@@ -119,6 +119,21 @@ router.post("/:id/git/push", async (req: Request, res: Response) => {
     }
     const result = await gitPush(project.cwd);
     res.json({ result });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// POST git commit and push (stage all → commit → push)
+router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const result = await gitCommitAndPush(project.cwd);
+    await syncGitInfo(project);
+    res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
