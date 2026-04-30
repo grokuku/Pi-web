@@ -108,7 +108,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
             </p>
           )}
           <p className="text-hacker-text-dim/70 text-[10px]">
-            Credentials are stored locally via git credential-store and are never sent to our servers.
+            Credentials are stored in memory only and never written to disk permanently.
           </p>
         </div>
 

@@ -7,7 +7,8 @@ RUN apt-get update && apt-get install -y \
     build-essential python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /projects /sessions
+RUN mkdir -p /projects /sessions && \
+    git config --system --add safe.directory '*'
 
 WORKDIR /app
 COPY backend/ ./backend/

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && cp src/projects/git-askpass.sh dist/projects/git-askpass.sh",
     "start": "node dist/index.js"
   },
   "dependencies": {

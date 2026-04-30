@@ -1,8 +1,9 @@
 import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from "fs";
 import path from "path";
 import type { Project } from "./manager.js";
 import { updateProjectGit } from "./manager.js";
+import { credentialStore } from "./credential-store.js";
 
 // Prevent git from prompting for credentials on stdin (which would hang indefinitely
 // since simple-git has no interactive terminal). With this env var, git fails immediately
@@ -114,7 +115,7 @@ export async function getGitHistory(
 }
 
 export async function gitPull(cwd: string): Promise<string> {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = await gitWithAuth(cwd);
   try {
     const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull");
     return result.summary.changes
@@ -130,7 +131,7 @@ export async function gitPull(cwd: string): Promise<string> {
 }
 
 export async function gitPush(cwd: string): Promise<string> {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = await gitWithAuth(cwd);
   try {
     const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push");
     return result.pushed
@@ -245,7 +246,7 @@ function isAuthError(msg: string): boolean {
 /**
  * Extract the hostname from the git remote URL.
  */
-async function getRemoteHost(cwd: string): Promise<string> {
+export async function getRemoteHost(cwd: string): Promise<string> {
   try {
     const git: SimpleGit = simpleGit(cwd);
     const remotes = await git.getRemotes(true);
@@ -267,47 +268,64 @@ async function getRemoteHost(cwd: string): Promise<string> {
 }
 
 /**
- * Store git credentials for HTTPS auth using git credential-store.
- * This writes the credentials to ~/.git-credentials so subsequent
- * push/pull operations succeed without prompting.
+ * Ensure the ASKPASS helper script exists on disk and is executable.
+ * The script source is read from git-askpass.sh (bundled with the app).
+ */
+function ensureAskpassScript(): string {
+  const scriptPath = credentialStore.askpassScript;
+  if (!existsSync(scriptPath)) {
+    const srcPath = path.join(__dirname, "git-askpass.sh");
+    const scriptContent = readFileSync(srcPath, "utf-8");
+    // Ensure the creds directory exists
+    const dir = path.dirname(scriptPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
+    chmodSync(scriptPath, 0o700);
+  }
+  return scriptPath;
+}
+
+/**
+ * Create a simple-git instance configured with GIT_ASKPASS for the given host.
+ * If credentials exist for the host, the ASKPASS helper is set up so git
+ * can authenticate without prompting (which would hang the process).
+ */
+async function gitWithAuth(cwd: string): Promise<SimpleGit> {
+  const host = await getRemoteHost(cwd);
+  const askpass = ensureAskpassScript();
+
+  if (credentialStore.has(host)) {
+    return simpleGit(cwd).env({
+      GIT_ASKPASS: askpass,
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  }
+
+  // No credentials stored — use default (will fail on auth-required remotes)
+  return simpleGit(cwd);
+}
+
+/**
+ * Store git credentials for HTTPS auth in memory (not on disk).
+ * Credentials are written to a per-host temp file (0600) that the
+ * GIT_ASKPASS helper reads during git operations. These temp files
+ * are cleaned up when credentials are removed or on process exit.
+ *
+ * No credential.helper store or ~/.git-credentials is used — this avoids
+ * the allowUnsafeCredentialHelper restriction entirely.
  */
 export async function setGitCredentials(
   cwd: string,
   username: string,
   password: string
 ): Promise<void> {
-  const git: SimpleGit = simpleGit(cwd);
-
-  // 1. Enable credential.helper store locally
-  await git.raw(["config", "--local", "credential.helper", "store"]);
-
-  // 2. Determine the host from the remote URL
   const host = await getRemoteHost(cwd);
+  credentialStore.set(host, username, password);
 
-  // 3. Write the credential entry to ~/.git-credentials
-  const os = await import("os");
-  const credPath = path.join(os.homedir(), ".git-credentials");
-  const entry = `https://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}`;
-
-  let existing = "";
-  try {
-    existing = await import("fs").then((fs) => fs.readFileSync(credPath, "utf-8"));
-  } catch {
-    // file doesn't exist yet
-  }
-
-  // Remove any existing entries for the same host
-  const lines = existing.split("\n").filter((l: string) => {
-    try {
-      return new URL(l).hostname !== host;
-    } catch {
-      return true; // keep non-URL lines
-    }
-  });
-  lines.push(entry);
-
-  const { writeFileSync } = await import("fs");
-  writeFileSync(credPath, lines.join("\n") + "\n");
+  // Ensure the ASKPASS script is ready
+  ensureAskpassScript();
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
@@ -464,12 +482,31 @@ export async function gitClone(
 ): Promise<string> {
   const parentDir = path.dirname(cwd);
   const repoName = path.basename(cwd);
-  const git: SimpleGit = simpleGit(parentDir);
+
+  // Extract host from remote URL to check for stored credentials
+  let host = "github.com";
+  try {
+    const sshMatch = remote.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
+    if (sshMatch) host = sshMatch[1];
+    else host = new URL(remote).hostname;
+  } catch {}
+
+  const askpass = ensureAskpassScript();
+  const git: SimpleGit = credentialStore.has(host)
+    ? simpleGit(parentDir).env({
+        GIT_ASKPASS: askpass,
+        GIT_TERMINAL_PROMPT: "0",
+      })
+    : simpleGit(parentDir);
   try {
     await withTimeout(git.clone(remote, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
-    throw new Error(`Git clone failed: ${error.message}`);
+    const msg = error.message || "";
+    if (isAuthError(msg)) {
+      throw new GitAuthError(`Git clone authentication failed: ${msg}`);
+    }
+    throw new Error(`Git clone failed: ${msg}`);
   }
 }
 

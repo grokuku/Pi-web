@@ -6,7 +6,8 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost } from "../projects/git.js";
+import { credentialStore } from "../projects/credential-store.js";
 
 const router = Router();
 
@@ -301,6 +302,21 @@ router.post("/:id/git/credentials", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "username and password/token are required" });
     }
     await setGitCredentials(project.cwd, username, password);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE git credentials (remove from memory)
+router.delete("/:id/git/credentials", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const host = await getRemoteHost(project.cwd);
+    credentialStore.delete(host);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
