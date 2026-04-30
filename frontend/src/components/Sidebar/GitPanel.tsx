@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, Download, PlusSquare } from "lucide-react";
 import type { Project } from "../../types";
+import { CommitPushModal } from "../Modals/CommitPushModal";
 
 interface GitStatusFull {
   branch: string;
@@ -35,6 +36,7 @@ export function GitPanel({ project }: Props) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [commitMessage, setCommitMessage] = useState<{ subject: string; body: string } | null>(null);
+  const [showPushModal, setShowPushModal] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     if (!project.git?.remote) return;
@@ -300,20 +302,32 @@ export function GitPanel({ project }: Props) {
               Pull
             </button>
             <button
-              onClick={() => doAction("commit-push", `/api/projects/${project.id}/git/commit-push`)}
+              onClick={() => setShowPushModal(true)}
               disabled={actionLoading !== null}
               className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[10px] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
-              title="git add -A → commit → push"
+              title="Stage all → commit → push"
             >
               {actionLoading === "commit-push" ? (
                 <RefreshCw size={10} className="animate-spin" />
               ) : (
                 <ArrowUp size={10} />
               )}
-              Commit \u0026 Push
+              Push
             </button>
           </div>
         </div>
+      )}
+
+      {/* ── Push modal ── */}
+      {showPushModal && (
+        <CommitPushModal
+          project={project}
+          onClose={() => setShowPushModal(false)}
+          onDone={() => {
+            fetchStatus();
+            setTimeout(() => setShowPushModal(false), 1200);
+          }}
+        />
       )}
     </div>
   );

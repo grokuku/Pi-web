@@ -1,4 +1,4 @@
-import { simpleGit, type SimpleGit, type LogResult } from "simple-git";
+import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
 import { existsSync, readdirSync } from "fs";
 import path from "path";
 import type { Project } from "./manager.js";
@@ -185,6 +185,31 @@ export async function gitAddAll(cwd: string): Promise<number> {
   return status.staged.length || status.files.length;
 }
 
+export class GitIdentityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitIdentityError";
+  }
+}
+
+export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
+  const git: SimpleGit = simpleGit(cwd);
+  try {
+    const name = (await git.raw(["config", "user.name"])).trim();
+    const email = (await git.raw(["config", "user.email"])).trim();
+    if (!name || !email) return null;
+    return { name, email };
+  } catch {
+    return null;
+  }
+}
+
+export async function setGitIdentity(cwd: string, name: string, email: string): Promise<void> {
+  const git: SimpleGit = simpleGit(cwd);
+  await git.raw(["config", "user.name", name]);
+  await git.raw(["config", "user.email", email]);
+}
+
 export async function gitCommit(
   cwd: string,
   subject: string,
@@ -199,7 +224,11 @@ export async function gitCommit(
     }
     return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
   } catch (error: any) {
-    throw new Error(`Git commit failed: ${error.message}`);
+    const msg = error.message || "";
+    if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
+      throw new GitIdentityError(msg);
+    }
+    throw new Error(`Git commit failed: ${msg}`);
   }
 }
 
@@ -210,8 +239,35 @@ export interface CommitPushResult {
   commitMessage?: { subject: string; body: string };
 }
 
-export async function gitCommitAndPush(
+export async function gitCommitPushPreview(
   cwd: string
+): Promise<{ status: GitStatusFull; proposedMessage: { subject: string; body: string } }> {
+  const status = await getGitStatus(cwd);
+  if ("notRepo" in status) {
+    throw new Error("Not a git repository");
+  }
+
+  // If clean, re-read to get accurate staged state
+  let effectiveStatus = status;
+  if (!status.isClean && (status.modified.length > 0 || status.created.length > 0 || status.deleted.length > 0)) {
+    // Temporarily stage to generate accurate message
+    const git: SimpleGit = simpleGit(cwd);
+    await git.add("-A");
+    const stagedStatus = await getGitStatus(cwd);
+    await git.reset(ResetMode.MIXED);
+    if (!("notRepo" in stagedStatus)) {
+      effectiveStatus = stagedStatus;
+    }
+  }
+
+  const proposedMessage = generateCommitMessage(effectiveStatus);
+  return { status: effectiveStatus, proposedMessage };
+}
+
+export async function gitCommitAndPush(
+  cwd: string,
+  subject?: string,
+  body?: string
 ): Promise<CommitPushResult> {
   const result: CommitPushResult = { staged: 0 };
 
@@ -245,12 +301,14 @@ export async function gitCommitAndPush(
     throw new Error("Not a git repository");
   }
 
-  // 5. Generate commit message
-  const msg = generateCommitMessage(statusAfterStaging);
+  // 5. Generate commit message (use custom if provided)
+  const msg = subject
+    ? { subject, body: body || "" }
+    : generateCommitMessage(statusAfterStaging);
   result.commitMessage = msg;
 
   // 6. Commit
-  const commitResult = await gitCommit(cwd, msg.subject, msg.body);
+  const commitResult = await gitCommit(cwd, msg.subject, msg.body || undefined);
   result.commitResult = commitResult;
 
   // 7. Push

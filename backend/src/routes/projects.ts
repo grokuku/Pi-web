@@ -6,7 +6,7 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError } from "../projects/git.js";
 
 const router = Router();
 
@@ -131,9 +131,28 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
-    const result = await gitCommitAndPush(project.cwd);
+    const { subject, body } = req.body || {};
+    const result = await gitCommitAndPush(project.cwd, subject, body);
     await syncGitInfo(project);
     res.json(result);
+  } catch (error: any) {
+    if (error instanceof GitIdentityError) {
+      res.status(400).json({ error: error.message, code: "GIT_IDENTITY_REQUIRED" });
+    } else {
+      res.status(400).json({ error: error.message });
+    }
+  }
+});
+
+// POST git commit-push preview (generate message without executing)
+router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const preview = await gitCommitPushPreview(project.cwd);
+    res.json(preview);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -219,6 +238,38 @@ router.post("/:id/git/sync", async (req: Request, res: Response) => {
     }
     const updated = await syncGitInfo(project);
     res.json(updated);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET git identity
+router.get("/:id/git/identity", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const identity = await getGitIdentity(project.cwd);
+    res.json(identity || { name: "", email: "" });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST set git identity
+router.post("/:id/git/identity", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const { name, email } = req.body;
+    if (!name || !email) {
+      return res.status(400).json({ error: "name and email are required" });
+    }
+    await setGitIdentity(project.cwd, name, email);
+    res.json({ name, email });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
