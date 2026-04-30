@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
+import { GitAuthModal } from "./GitAuthModal";
 
 interface Preview {
   status: {
@@ -37,6 +38,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
   const [done, setDone] = useState(false);
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   const fetchPreview = useCallback(async () => {
     setLoading("preview");
@@ -85,6 +87,11 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
         // Check if git identity is missing
         if (data.code === "GIT_IDENTITY_REQUIRED") {
           setShowIdentityModal(true);
+          return;
+        }
+        // Check if git authentication is missing
+        if (data.code === "GIT_AUTH_REQUIRED") {
+          setShowAuthModal(true);
           return;
         }
         throw new Error(data.error || "Push failed");
@@ -259,6 +266,19 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
             setShowIdentityModal(false);
             setError("");
             // Retry the push after identity is configured
+            handlePush();
+          }}
+        />
+      )}
+      {/* Auth modal */}
+      {showAuthModal && (
+        <GitAuthModal
+          project={project}
+          onClose={() => setShowAuthModal(false)}
+          onConfigured={() => {
+            setShowAuthModal(false);
+            setError("");
+            // Retry the push after credentials are configured
             handlePush();
           }}
         />

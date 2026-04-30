@@ -6,7 +6,7 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials } from "../projects/git.js";
 
 const router = Router();
 
@@ -106,7 +106,11 @@ router.post("/:id/git/pull", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    if (error instanceof GitAuthError) {
+      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
+    } else {
+      res.status(400).json({ error: error.message });
+    }
   }
 });
 
@@ -120,7 +124,11 @@ router.post("/:id/git/push", async (req: Request, res: Response) => {
     const result = await gitPush(project.cwd);
     res.json({ result });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    if (error instanceof GitAuthError) {
+      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
+    } else {
+      res.status(400).json({ error: error.message });
+    }
   }
 });
 
@@ -138,6 +146,8 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error instanceof GitIdentityError) {
       res.status(400).json({ error: error.message, code: "GIT_IDENTITY_REQUIRED" });
+    } else if (error instanceof GitAuthError) {
+      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
     } else {
       res.status(400).json({ error: error.message });
     }
@@ -206,7 +216,11 @@ router.post("/:id/git/clone", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    if (error instanceof GitAuthError) {
+      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
+    } else {
+      res.status(400).json({ error: error.message });
+    }
   }
 });
 
@@ -270,6 +284,24 @@ router.post("/:id/git/identity", async (req: Request, res: Response) => {
     }
     await setGitIdentity(project.cwd, name, email);
     res.json({ name, email });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST set git credentials (for HTTPS auth)
+router.post("/:id/git/credentials", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "username and password/token are required" });
+    }
+    await setGitCredentials(project.cwd, username, password);
+    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

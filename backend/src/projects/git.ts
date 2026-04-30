@@ -4,6 +4,29 @@ import path from "path";
 import type { Project } from "./manager.js";
 import { updateProjectGit } from "./manager.js";
 
+// Prevent git from prompting for credentials on stdin (which would hang indefinitely
+// since simple-git has no interactive terminal). With this env var, git fails immediately
+// with an error instead of prompting.
+process.env.GIT_TERMINAL_PROMPT = "0";
+
+// Default timeout for git operations that may hang (push, pull, clone, etc.)
+const GIT_NETWORK_TIMEOUT_MS = 30_000;
+
+/**
+ * Wrap a promise with a timeout that rejects with a clear error message.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms / 1000}s — this usually means authentication is required or the remote is unreachable`)),
+      ms,
+    );
+    promise
+      .then((v) => { clearTimeout(timer); resolve(v); })
+      .catch((e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 // ── Types ──────────────────────────────────────────────
 
 export interface GitStatusFull {
@@ -93,24 +116,32 @@ export async function getGitHistory(
 export async function gitPull(cwd: string): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
   try {
-    const result = await git.pull();
+    const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull");
     return result.summary.changes
       ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
       : "Already up to date";
   } catch (error: any) {
-    throw new Error(`Git pull failed: ${error.message}`);
+    const msg = error.message || "";
+    if (isAuthError(msg)) {
+      throw new GitAuthError(`Git pull authentication failed: ${msg}`);
+    }
+    throw new Error(`Git pull failed: ${msg}`);
   }
 }
 
 export async function gitPush(cwd: string): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
   try {
-    const result = await git.push();
+    const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push");
     return result.pushed
       ? `Pushed ${result.pushed.length} ref(s)`
       : "Nothing to push";
   } catch (error: any) {
-    throw new Error(`Git push failed: ${error.message}`);
+    const msg = error.message || "";
+    if (isAuthError(msg)) {
+      throw new GitAuthError(`Git push authentication failed: ${msg}`);
+    }
+    throw new Error(`Git push failed: ${msg}`);
   }
 }
 
@@ -190,6 +221,93 @@ export class GitIdentityError extends Error {
     super(message);
     this.name = "GitIdentityError";
   }
+}
+
+export class GitAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitAuthError";
+  }
+}
+
+function isAuthError(msg: string): boolean {
+  return (
+    msg.includes("could not read Username") ||
+    msg.includes("Authentication failed") ||
+    msg.includes("403") ||
+    msg.includes("credential") ||
+    msg.includes("Permission denied") ||
+    msg.includes("fatal: could not read") ||
+    msg.includes("timed out") // timeout often means auth needed
+  );
+}
+
+/**
+ * Extract the hostname from the git remote URL.
+ */
+async function getRemoteHost(cwd: string): Promise<string> {
+  try {
+    const git: SimpleGit = simpleGit(cwd);
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find((r) => r.name === "origin");
+    if (!origin?.refs?.fetch) return "github.com";
+    const url = origin.refs.fetch;
+    // SSH: git@host:path or ssh://git@host/path
+    const sshMatch = url.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
+    if (sshMatch) return sshMatch[1];
+    // HTTPS: https://host/path
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "github.com";
+    }
+  } catch {
+    return "github.com";
+  }
+}
+
+/**
+ * Store git credentials for HTTPS auth using git credential-store.
+ * This writes the credentials to ~/.git-credentials so subsequent
+ * push/pull operations succeed without prompting.
+ */
+export async function setGitCredentials(
+  cwd: string,
+  username: string,
+  password: string
+): Promise<void> {
+  const git: SimpleGit = simpleGit(cwd);
+
+  // 1. Enable credential.helper store locally
+  await git.raw(["config", "--local", "credential.helper", "store"]);
+
+  // 2. Determine the host from the remote URL
+  const host = await getRemoteHost(cwd);
+
+  // 3. Write the credential entry to ~/.git-credentials
+  const os = await import("os");
+  const credPath = path.join(os.homedir(), ".git-credentials");
+  const entry = `https://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}`;
+
+  let existing = "";
+  try {
+    existing = await import("fs").then((fs) => fs.readFileSync(credPath, "utf-8"));
+  } catch {
+    // file doesn't exist yet
+  }
+
+  // Remove any existing entries for the same host
+  const lines = existing.split("\n").filter((l: string) => {
+    try {
+      return new URL(l).hostname !== host;
+    } catch {
+      return true; // keep non-URL lines
+    }
+  });
+  lines.push(entry);
+
+  const { writeFileSync } = await import("fs");
+  writeFileSync(credPath, lines.join("\n") + "\n");
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
@@ -316,6 +434,10 @@ export async function gitCommitAndPush(
     const pushResult = await gitPush(cwd);
     result.pushResult = pushResult;
   } catch (error: any) {
+    // If it's an auth error, propagate it so the caller can ask for credentials
+    if (error instanceof GitAuthError) {
+      throw error;
+    }
     result.pushResult = `Push failed: ${error.message}`;
   }
 
@@ -344,7 +466,7 @@ export async function gitClone(
   const repoName = path.basename(cwd);
   const git: SimpleGit = simpleGit(parentDir);
   try {
-    await git.clone(remote, repoName, ["--branch", branch]);
+    await withTimeout(git.clone(remote, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
     throw new Error(`Git clone failed: ${error.message}`);

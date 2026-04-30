@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, Download, PlusSquare } from "lucide-react";
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
+import { GitAuthModal } from "../Modals/GitAuthModal";
 
 interface GitStatusFull {
   branch: string;
@@ -37,6 +38,7 @@ export function GitPanel({ project }: Props) {
   const [message, setMessage] = useState("");
   const [commitMessage, setCommitMessage] = useState<{ subject: string; body: string } | null>(null);
   const [showPushModal, setShowPushModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     if (!project.git?.remote) return;
@@ -72,6 +74,12 @@ export function GitPanel({ project }: Props) {
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const data = await res.json();
+        // Auth required → show the credentials modal
+        if (data.code === "GIT_AUTH_REQUIRED") {
+          setShowAuthModal(true);
+          setActionLoading(null);
+          return;
+        }
         throw new Error(data.error || `${action} failed`);
       }
       const data = await res.json();
@@ -326,6 +334,19 @@ export function GitPanel({ project }: Props) {
           onDone={() => {
             fetchStatus();
             setTimeout(() => setShowPushModal(false), 1200);
+          }}
+        />
+      )}
+
+      {/* ── Auth modal ── */}
+      {showAuthModal && (
+        <GitAuthModal
+          project={project}
+          onClose={() => setShowAuthModal(false)}
+          onConfigured={() => {
+            setShowAuthModal(false);
+            setError("");
+            fetchStatus();
           }}
         />
       )}
