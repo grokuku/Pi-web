@@ -3,7 +3,7 @@ import type { Project } from "../../types";
 interface Props {
   activeProject: Project | null;
   isStreaming: boolean;
-  stats: { tokens: number; cost: number; contextPercent: number } | null;
+  stats: { tokens: number; contextPercent: number } | null;
   session: any;
   connected: boolean;
 }
@@ -15,6 +15,9 @@ export function StatusBar({
   session,
   connected,
 }: Props) {
+  // Show zero stats when a session exists but stats haven't been populated yet
+  const displayStats = stats || (session ? { tokens: 0, contextPercent: 0 } : null);
+
   return (
     <div className="h-7 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[10px] shrink-0">
       {/* Project info */}
@@ -74,32 +77,28 @@ export function StatusBar({
       )}
 
       {/* Stats */}
-      {stats && (
+      {displayStats && (
         <>
           {/* Token count with context bar */}
           <span className="text-hacker-text-dim">
-            {(stats.tokens / 1000).toFixed(1)}K tok
-          </span>
-          <span className="text-hacker-border-bright">│</span>
-          <span className="text-hacker-text-dim">
-            ${stats.cost.toFixed(4)}
+            {(displayStats.tokens / 1000).toFixed(1)}K tok
           </span>
           <span className="text-hacker-border-bright">│</span>
           <div className="flex items-center gap-1.5">
             <div className="w-16 h-1.5 bg-hacker-border rounded-sm overflow-hidden">
               <div
                 className={`h-full transition-all ${
-                  stats.contextPercent > 80
+                  displayStats.contextPercent > 80
                     ? "bg-hacker-warn"
-                    : stats.contextPercent > 60
+                    : displayStats.contextPercent > 60
                     ? "bg-hacker-info"
                     : "bg-hacker-accent"
                 }`}
-                style={{ width: `${Math.min(stats.contextPercent, 100)}%` }}
+                style={{ width: `${Math.min(displayStats.contextPercent, 100)}%` }}
               />
             </div>
             <span className="text-hacker-text-dim min-w-[27px]">
-              {stats.contextPercent}%
+              {displayStats.contextPercent}%
             </span>
           </div>
           <span className="text-hacker-border-bright">│</span>

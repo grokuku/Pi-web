@@ -16,7 +16,7 @@ type Tab = "pi" | "terminal";
 interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
-  stats: { tokens: number; cost: number; contextPercent: number } | null;
+  stats: { tokens: number; contextPercent: number } | null;
 }
 
 export default function App() {
@@ -142,13 +142,12 @@ export default function App() {
           if (evt.message?.usage) {
             const u = evt.message.usage;
             const state = getProjectSession(projectId);
-            const prevStats = state.stats;
+            const prevStats = state.stats || { tokens: 0, contextPercent: 0 };
+            const totalTokens = prevStats.tokens + (u.input || 0) + (u.output || 0);
+            const contextWindow = state.session?.model?.contextWindow || 200000;
             const newStats = {
-              tokens: (prevStats?.tokens || 0) + (u.input || 0) + (u.output || 0),
-              cost: (prevStats?.cost || 0) + (u.cost?.total || 0),
-              contextPercent: Math.round(
-                ((u.input || 0) / ((state.session?.model?.contextWindow) || 200000)) * 100
-              ),
+              tokens: totalTokens,
+              contextPercent: Math.round((totalTokens / contextWindow) * 100),
             };
             updateProjectSession(projectId, { stats: newStats });
           }
@@ -156,6 +155,11 @@ export default function App() {
         }
         case "session_update": {
           if (evt.session) {
+            // Initialize stats to zero when session is first created
+            const state = getProjectSession(projectId);
+            if (!state.stats) {
+              state.stats = { tokens: 0, contextPercent: 0 };
+            }
             updateProjectSession(projectId, { session: evt.session });
           }
           break;
@@ -264,11 +268,17 @@ export default function App() {
     <div className="h-screen flex flex-col scanlines">
       <div className="matrix-bg" />
 
-      {/* ── HEADER (compact, no project selector) ── */}
+      {/* ── HEADER ── */}
       <header className="h-8 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
-        {/* Logo */}
+        {/* Logo + connection */}
         <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
         <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
+        <span
+          className={`text-[9px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`}
+          title={connected ? "Connected" : "Offline"}
+        >
+          {connected ? "◉" : "◌"}
+        </span>
 
         <div className="w-px h-4 bg-hacker-border-bright" />
 
@@ -315,13 +325,6 @@ export default function App() {
           [TERM]
         </button>
 
-        <div className="w-px h-4 bg-hacker-border-bright" />
-
-        {/* WS status */}
-        <span className={`text-[10px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`} title={connected ? "Connected" : "Offline"}>
-          {connected ? "◉" : "◌"}
-        </span>
-
         <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
           {theme === "dark" ? "☀" : "☾"}
         </button>
@@ -336,7 +339,6 @@ export default function App() {
         <Sidebar
           projects={projects}
           activeProject={activeProject}
-          isStreaming={isStreaming}
           onSelectProject={handleSelectProject}
           onAddProject={handleAddProject}
           onDeleteProject={handleDeleteProject}

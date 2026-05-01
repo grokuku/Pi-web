@@ -4,6 +4,7 @@ import type { ModelLibrary, AgentMode, ModelEntry } from "../../types";
 
 const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string }> = {
   code: { icon: "⚡", label: "CODE", color: "text-hacker-accent" },
+  commit: { icon: "📝", label: "COMMIT", color: "text-hacker-text" },
   plan: { icon: "🗺", label: "PLAN", color: "text-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn" },
 };

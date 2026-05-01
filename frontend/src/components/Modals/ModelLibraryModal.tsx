@@ -28,6 +28,7 @@ const PROVIDERS: ProviderDef[] = [
 
 const MODE_LABELS: Record<AgentMode, { icon: string; label: string; desc: string }> = {
   code: { icon: "⚡", label: "CODE", desc: "Coding assistant" },
+  commit: { icon: "📝", label: "COMMIT", desc: "Git commit messages" },
   review: { icon: "📋", label: "REVIEW", desc: "Code review" },
   plan: { icon: "🗺", label: "PLAN", desc: "Architecture & planning" },
 };

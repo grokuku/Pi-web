@@ -8,7 +8,7 @@ const LIBRARY_FILE = path.join(DATA_DIR, "model-library.json");
 
 // ── Types ────────────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "plan";
+export type AgentMode = "code" | "review" | "plan" | "commit";
 
 export interface ModelEntry {
   id: string;             // unique ID (provider/modelId slug)
@@ -33,8 +33,34 @@ export interface ModelLibrary {
 
 // ── Default mode instructions (inspired by Pi presets) ──
 
-const DEFAULT_INSTRUCTIONS: Record<AgentMode, string> = {
+export const DEFAULT_INSTRUCTIONS: Record<AgentMode, string> = {
   code: "",
+  commit: `You generate commit messages from git diffs. You must be concise, specific, and descriptive.
+
+Rules:
+- First line: type(scope): short description (max 72 chars)
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Body: 2-4 bullet points explaining WHAT changed and WHY
+- Describe the INTENT of the change, not just list file names
+- Use verb infinitive ("add", "fix", "refactor") not gerundive ("adding", "fixing")
+- No markdown, no code blocks, plain text only
+- If the diff is unclear, focus on the most significant change
+
+Examples:
+feat(chat): add streaming indicator to chat input area
+- Move streaming status from sidebar to bottom of chat zone
+- Show pulsing dot + "generating…" label near input field
+- Keep git branch display in the same line for context
+
+fix(git): remove stale index.lock before git operations
+- Auto-detect and delete lock files older than 30 seconds
+- Retry git operations once after lock cleanup
+- Return clear GIT_LOCKED error code to frontend for user feedback
+
+refactor(session): switch from singleton to per-project session map
+- Store sessions by project ID instead of global singleton
+- Allow parallel sessions across different projects
+- Preserve terminal buffers across WebSocket reconnections`,
   review: `You are in REVIEW mode. Your job is to review code and provide feedback.
 
 Rules:
@@ -69,12 +95,14 @@ Do NOT attempt to make changes — just describe what you would do.`,
 
 const DEFAULT_TOOLS: Record<AgentMode, string[]> = {
   code: [],  // all tools
+  commit: [],
   review: ["read", "bash", "grep", "find", "ls"],
   plan: ["read", "bash", "grep", "find", "ls"],
 };
 
 const DEFAULT_READONLY: Record<AgentMode, boolean> = {
   code: false,
+  commit: true,
   review: true,
   plan: true,
 };
@@ -100,7 +128,8 @@ function getDefaultLibrary(): ModelLibrary {
   return {
     modes: {
       code: createDefaultMode("code"),
-      review: createDefaultMode("review"),
+      commit: createDefaultMode("commit"),
+  review: createDefaultMode("review"),
       plan: createDefaultMode("plan"),
     },
   };

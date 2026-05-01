@@ -3,6 +3,7 @@ import { completeSimple } from "@mariozechner/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
+import { loadModelLibrary, DEFAULT_INSTRUCTIONS } from "./model-library.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -481,59 +482,65 @@ export async function generateAiCommitMessage(
   diff: string,
   projectId: string
 ): Promise<{ subject: string; body: string } | null> {
-  // 1. Try to get the model from the active session
-  const state = sessionsByProject.get(projectId);
-  let model: any = state?.session?.model || null;
+  // 1. Try the dedicated commit model from the library
+  const library = loadModelLibrary();
+  const commitMode = library.modes.commit;
+  let model: any = null;
   let apiKey: string | undefined;
 
-  // 2. If no session model, try to find a default model from the registry
-  if (!model?.id || !model?.provider || !model?.api) {
-    console.log("[session] No active session model, searching registry for default...");
+  if (commitMode.enabled && commitMode.activeModelId) {
+    const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
+    if (entry) {
+      const reg = sharedModelRegistry;
+      // Build a model object from the entry
+      model = {
+        id: entry.id,
+        provider: entry.provider,
+        api: entry.provider, // provider = api source
+        modelId: entry.modelId,
+      };
+      const auth = await reg.getApiKeyAndHeaders(model);
+      if (auth.ok) apiKey = auth.apiKey;
+    }
+  }
+
+  // 2. Fallback: use the session model (if available)
+  if (!model?.id) {
+    console.log("[commit] No commit model configured, falling back to session model");
+    const state = sessionsByProject.get(projectId);
+    model = state?.session?.model || null;
+    if (model) {
+      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
+      if (auth.ok) apiKey = auth.apiKey;
+    }
+  }
+
+  // 3. Last resort: first available model from the registry
+  if (!model?.id) {
+    console.log("[commit] No session model, searching registry...");
     const availableModels = sharedModelRegistry.getAvailable();
-    // Pick the first available model
     if (availableModels.length > 0) {
       model = availableModels[0];
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) {
-        apiKey = auth.apiKey;
-      } else {
-        console.warn(`[session] Auth failed for model ${model.id}: ${auth.error}`);
-      }
-    }
-    if (!model) {
-      console.warn("[session] No available model for commit message generation");
-      return null;
-    }
-  } else {
-    const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-    if (auth.ok) {
-      apiKey = auth.apiKey;
-    } else {
-      console.warn(`[session] Auth failed for session model ${model.id}: ${auth.error}`);
+      if (auth.ok) apiKey = auth.apiKey;
     }
   }
 
   if (!model) {
-    console.warn("[session] No available model for commit message generation");
+    console.warn("[commit] No model available");
     return null;
   }
 
-  const systemPrompt = `You are a commit message generator for a coding project. Your task is to analyze a git diff and produce a concise, descriptive commit message following the conventional commits format.
+  console.log(`[commit] Using model: ${model.id || model.modelId}`);
 
-Rules:
-- Subject line: type(scope): description (max 72 chars)
-- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
-- Body: explain WHAT changed and WHY in 2-5 bullet points
-- Be specific and technical, not vague
-- Output format: plain text, first line is the subject, rest is the body
-- No markdown, no code blocks, just the message`;
+  const systemPrompt = commitMode.instructions || DEFAULT_INSTRUCTIONS.commit;
 
   const context = {
     systemPrompt,
     messages: [
       {
         role: "user" as const,
-        content: `Generate a commit message for this diff:\n\n${diff.slice(0, 6000)}`,
+        content: `Here is the git diff for this commit:\n\n${diff.slice(0, 8000)}`,
         timestamp: Date.now(),
       },
     ],
@@ -541,11 +548,11 @@ Rules:
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout
+    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s timeout (lighter model)
 
     const response = await completeSimple(model, context, {
-      temperature: 0.3,
-      maxTokens: 300,
+      temperature: 0.2,
+      maxTokens: 400,
       apiKey,
       signal: controller.signal,
     });

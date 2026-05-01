@@ -12,7 +12,6 @@ import type { Project } from "../../types";
 interface Props {
   projects: Project[];
   activeProject: Project | null;
-  isStreaming: boolean;
   onSelectProject: (p: Project) => void;
   onAddProject: () => void;
   onDeleteProject: (p: Project) => void;
@@ -24,7 +23,6 @@ interface Props {
 export function Sidebar({
   projects,
   activeProject,
-  isStreaming,
   onSelectProject,
   onAddProject,
   onDeleteProject,
@@ -36,8 +34,15 @@ export function Sidebar({
     <aside className="w-48 border-r-2 border-hacker-accent/20 sidebar-zone sidebar-stripe flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
       <div className="p-2 border-b border-hacker-border">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">
-          PROJECTS
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-hacker-accent text-[10px] tracking-widest">PROJECTS</span>
+          <button
+            onClick={onAddProject}
+            className="text-hacker-text-dim hover:text-hacker-accent text-[10px] leading-none"
+            title="Add project"
+          >
+            <Plus size={10} />
+          </button>
         </div>
 
         <div className="space-y-0.5 max-h-[180px] overflow-y-auto">
@@ -80,22 +85,7 @@ export function Sidebar({
             );
           })}
         </div>
-
-        <button
-          onClick={onAddProject}
-          className="w-full mt-1.5 btn-hacker text-[10px] py-0.5 flex items-center justify-center gap-1"
-        >
-          <Plus size={10} /> NEW
-        </button>
       </div>
-
-      {/* ── Streaming indicator (active project) ── */}
-      {isStreaming && (
-        <div className="px-2 py-1.5 border-b border-hacker-border bg-hacker-accent/5 flex items-center gap-1.5">
-          <span className="pulse-dot w-2 h-2 bg-hacker-accent" />
-          <span className="text-hacker-accent text-[10px]">streaming...</span>
-        </div>
-      )}
 
       {/* ── Git panel ── */}
       {activeProject && activeProject.git?.remote && (

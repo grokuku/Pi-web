@@ -87,7 +87,7 @@ export interface ToolCallInfo {
 
 // ── Model Library ──────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "plan";
+export type AgentMode = "code" | "review" | "plan" | "commit";
 
 export interface ModelEntry {
   id: string;

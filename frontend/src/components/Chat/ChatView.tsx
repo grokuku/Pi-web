@@ -616,7 +616,14 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
         <div className="text-hacker-text-dim text-[10px] mb-1 flex justify-between">
           <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
-          <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
+          <span className="flex items-center gap-2">
+            {activeProject?.git?.branch && <span>git:{activeProject.git.branch}</span>}
+            {isStreaming && (
+              <span className="text-hacker-accent flex items-center gap-1">
+                <span className="pulse-dot w-1.5 h-1.5" /> generating…
+              </span>
+            )}
+          </span>
         </div>
 
         <div className="flex gap-2">
