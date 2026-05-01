@@ -72,8 +72,11 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
     }
   }
 
+  console.log(`[history] First pass: ${pendingToolResults.size} tool results collected`);
+
   // Second pass: build display messages
   let currentAssistantId: string | null = null;
+  let totalToolCallsFound = 0;
 
   for (const msg of history) {
     // ── User messages ──
@@ -114,19 +117,27 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         .join("\n");
 
       // Extract tool calls, merging with their results from pendingToolResults
+      // Accept multiple block type names (SDK might store as "toolCall", "tool_use", or "function")
       const toolCalls: ToolCallInfo[] = [];
       for (const block of contentBlocks) {
-        if (block.type === "toolCall") {
+        if (block.type === "toolCall" || block.type === "tool_use" || block.type === "function") {
           const toolResult = pendingToolResults.get(block.id);
           toolCalls.push({
             id: block.id,
-            name: block.name,
-            args: block.arguments || {},
+            name: block.name || block.toolName || "unknown",
+            args: block.arguments || block.input || block.args || {},
             output: toolResult?.output || "",
             isError: toolResult?.isError || false,
             isStreaming: false,
           });
+          totalToolCallsFound++;
         }
+      }
+
+      // Debug: log block types when no tool calls found but we have content blocks
+      if (toolCalls.length === 0 && contentBlocks.length > 0) {
+        const types = contentBlocks.map((b: any) => b.type);
+        console.log(`[history] Assistant msg has ${contentBlocks.length} blocks, types: ${types.join(", ")} — no toolCall/tool_use/function found`);
       }
 
       // Skip empty assistant messages (can happen during streaming)
@@ -221,6 +232,7 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
     }
   }
 
+  console.log(`[history] Converted ${history.length} raw messages → ${displayMessages.length} display messages, ${totalToolCallsFound} tool calls found`);
   return displayMessages;
 }
 

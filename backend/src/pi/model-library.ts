@@ -137,13 +137,30 @@ function getDefaultLibrary(): ModelLibrary {
 
 function migrateModeConfig(mode: AgentMode, config: any): ModeConfig {
   const defaults = createDefaultMode(mode);
+  const rawModels = config.models ?? defaults.models;
+  const migratedModels = rawModels.map((entry: any) => migrateModelEntry(entry));
   return {
     enabled: config.enabled ?? defaults.enabled,
     activeModelId: config.activeModelId ?? defaults.activeModelId,
-    models: config.models ?? defaults.models,
+    models: migratedModels,
     instructions: config.instructions ?? defaults.instructions,
     tools: config.tools ?? defaults.tools,
     readOnly: config.readOnly ?? defaults.readOnly,
+  };
+}
+
+function migrateModelEntry(entry: any): ModelEntry {
+  // Extract modelId from id if missing (id format: provider__modelId)
+  const id = entry.id || "";
+  const provider = entry.provider || "ollama";
+  const modelId = entry.modelId || entry.name || id.split("__").slice(1).join("__") || "";
+  const name = entry.name || modelId || "";
+  return {
+    id,
+    provider,
+    modelId,
+    name,
+    thinkingLevel: entry.thinkingLevel || "medium",
   };
 }
 
@@ -153,12 +170,21 @@ export function loadModelLibrary(): ModelLibrary {
     if (existsSync(LIBRARY_FILE)) {
       const data = JSON.parse(readFileSync(LIBRARY_FILE, "utf-8"));
       const defaults = getDefaultLibrary();
+      let migrated = false;
       for (const mode of Object.keys(defaults.modes) as AgentMode[]) {
         if (!data.modes[mode]) {
           data.modes[mode] = defaults.modes[mode];
+          migrated = true;
         } else {
           data.modes[mode] = migrateModeConfig(mode, data.modes[mode]);
         }
+      }
+      // Persist any migrations (e.g., missing modelId fields on entries)
+      if (migrated || !data.modes.commit?.models?.length) {
+        saveModelLibrary(data as ModelLibrary);
+      } else {
+        // Always save to ensure migrations are persisted
+        saveModelLibrary(data as ModelLibrary);
       }
       return data as ModelLibrary;
     }

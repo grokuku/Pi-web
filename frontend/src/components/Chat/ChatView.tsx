@@ -741,23 +741,25 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
 
   const mergedThinking = allThinking.join("\n\n---\n\n");
   const hasThinking = allThinking.length > 0;
+  const hasTools = allTools.length > 0;
+
+  // Build a combined label for the collapsible zone
+  const collapsibleLabel = [
+    hasThinking ? `THINKING (${allThinking.length})` : null,
+    hasTools ? `TOOLS (${allTools.length})` : null,
+  ].filter(Boolean).join(" · ");
 
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
         {/* Thinking + Tools — collapsible zone (the "internal reasoning" block) */}
-        {(hasThinking || allTools.length > 0) && (
+        {(hasThinking || hasTools) && (
           <div className="px-3 pt-2 pb-1">
-            {hasThinking && (
+            {/* Single toggle button that mentions both thinking and tools */}
+            {collapsibleLabel && (
               <button onClick={() => setLocalShow(!localShow)}
                 className="text-[10px] text-hacker-warn hover:underline mb-1">
-                {localShow ? "▼" : "▶"} THINKING ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
-              </button>
-            )}
-            {!hasThinking && allTools.length > 0 && (
-              <button onClick={() => setLocalShow(!localShow)}
-                className="text-[10px] text-hacker-warn hover:underline mb-1">
-                {localShow ? "▼" : "▶"} TOOL CALLS ({allTools.length})
+                {localShow ? "▼" : "▶"} {collapsibleLabel}
               </button>
             )}
             {localShow && (
@@ -767,7 +769,7 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
                     {mergedThinking}
                   </pre>
                 )}
-                {allTools.length > 0 && (
+                {hasTools && (
                   <div className="space-y-1">
                     {allTools.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
                   </div>
@@ -808,24 +810,35 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
   const [localShow, setLocalShow] = useState(showAllThinking);
   useEffect(() => { setLocalShow(showAllThinking); }, [showAllThinking]);
 
+  const hasThinking = !!thinking;
+  const hasTools = toolCalls.length > 0;
+
+  // Combined label
+  const collapsibleLabel = [
+    hasThinking ? "THINKING" : null,
+    hasTools ? `TOOLS (${toolCalls.length})` : null,
+  ].filter(Boolean).join(" · ");
+
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
         {/* Thinking + Tool calls — collapsible zone */}
-        {(thinking || toolCalls.length > 0) && (
+        {(hasThinking || hasTools) && (
           <div className="px-3 pt-2 pb-1">
-            <button onClick={() => setLocalShow(!localShow)}
-              className="text-[10px] text-hacker-warn hover:underline mb-1">
-              {localShow ? "▼" : "▶"} {thinking ? "THINKING" : `TOOL CALLS (${toolCalls.length})`}
-            </button>
+            {collapsibleLabel && (
+              <button onClick={() => setLocalShow(!localShow)}
+                className="text-[10px] text-hacker-warn hover:underline mb-1">
+                {localShow ? "▼" : "▶"} {collapsibleLabel}
+              </button>
+            )}
             {localShow && (
               <>
-                {thinking && (
+                {hasThinking && (
                   <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
                     {thinking}
                   </pre>
                 )}
-                {toolCalls.length > 0 && (
+                {hasTools && (
                   <div className="space-y-1">
                     {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
                   </div>

@@ -259,12 +259,28 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
                 // UserMessage: content can be string or content block array
                 base.content = m.content;
               } else if (m.role === "assistant") {
-                // AssistantMessage: content is array of blocks (text, thinking, toolCall)
-                base.content = m.content;
+                // AssistantMessage: content is array of blocks (text, thinking, tool_use, toolCall, etc.)
+                // Normalize content blocks so the frontend always gets a consistent format
+                const rawContent = Array.isArray(m.content) ? m.content : m.content;
+                base.content = Array.isArray(rawContent)
+                  ? rawContent.map((b: any) => {
+                      // Normalize tool call blocks: "tool_use" → "toolCall"
+                      if (b.type === "tool_use" || b.type === "function") {
+                        return {
+                          ...b,
+                          type: "toolCall",
+                          // Normalize property names: input → arguments, toolName → name
+                          name: b.name || b.toolName || "unknown",
+                          arguments: b.arguments || b.input || b.args || {},
+                        };
+                      }
+                      return b;
+                    })
+                  : rawContent;
                 base.usage = m.usage;
                 // Extract thinking from content blocks
-                base.thinking = Array.isArray(m.content)
-                  ? m.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
+                base.thinking = Array.isArray(base.content)
+                  ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
                   : undefined;
               } else if (m.role === "toolResult") {
                 // ToolResultMessage
@@ -317,11 +333,25 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
             if (m.role === "user") {
               base.content = m.content;
             } else if (m.role === "assistant") {
-              base.content = m.content;
-              base.usage = m.usage;
-              base.thinking = Array.isArray(m.content)
-                ? m.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
-                : undefined;
+                // Normalize content blocks: "tool_use"/"function" → "toolCall"
+                const rawContent2 = Array.isArray(m.content) ? m.content : m.content;
+                base.content = Array.isArray(rawContent2)
+                  ? rawContent2.map((b: any) => {
+                      if (b.type === "tool_use" || b.type === "function") {
+                        return {
+                          ...b,
+                          type: "toolCall",
+                          name: b.name || b.toolName || "unknown",
+                          arguments: b.arguments || b.input || b.args || {},
+                        };
+                      }
+                      return b;
+                    })
+                  : rawContent2;
+                base.usage = m.usage;
+                base.thinking = Array.isArray(base.content)
+                  ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
+                  : undefined;
             } else if (m.role === "toolResult") {
               base.toolCallId = m.toolCallId;
               base.toolName = m.toolName;

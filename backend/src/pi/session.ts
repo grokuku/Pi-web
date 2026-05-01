@@ -553,7 +553,7 @@ export async function generateAiCommitMessage(
 
   if (commitMode.enabled && commitMode.activeModelId) {
     const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
-    console.log(`[commit] Found commit entry: ${entry ? entry.name : "NONE"}`);
+    console.log(`[commit] Found commit entry: ${entry ? JSON.stringify({id: entry.id, provider: entry.provider, modelId: entry.modelId, name: entry.name}) : "NONE"}`);
     if (entry) {
       // Use registry.find for a proper model object (has all expected fields)
       model = sharedModelRegistry.find(entry.provider, entry.modelId);
