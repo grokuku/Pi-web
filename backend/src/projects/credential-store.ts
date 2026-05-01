@@ -40,9 +40,17 @@ class CredentialStore {
       mkdirSync(this.tmpDir, { recursive: true, mode: 0o700 });
     }
 
+    console.log(`[CredentialStore] DATA_DIR=${DATA_DIR}, tmpDir=${this.tmpDir}`);
+
     // Load or generate master key, then decrypt any persisted credentials
     this.initializeMasterKey();
     this.loadPersistedCredentials();
+    
+    if (this.masterKey) {
+      console.log(`[CredentialStore] Master key loaded (${this.masterKey.length} bytes), ${this.entries.size} credentials`);
+    } else {
+      console.warn("[CredentialStore] No master key — credentials will NOT be persisted!");
+    }
   }
 
   // ─── Master Key Management ─────────────────────────
@@ -176,6 +184,7 @@ class CredentialStore {
     this.entries.set(hostname, { username, password });
     this.writeTempFile(hostname, username, password);
     this.persistToDisk();
+    console.log(`[CredentialStore] Stored credentials for ${hostname} (persisted=${!!this.masterKey})`);
   }
 
   /**

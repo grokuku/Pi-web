@@ -116,7 +116,7 @@ export function getProjectByName(name: string): Project | undefined {
 export async function createProject(
   name: string,
   storage: StorageType,
-  parentCwd: string,
+  cwd: string,
   versioning: VersioningType = "standalone",
   git?: Partial<GitInfo>,
   ssh?: Project["ssh"],
@@ -125,8 +125,8 @@ export async function createProject(
   return projectsMutex.run(() => {
     const projects = loadProjects();
 
-  if (!name || !storage || !parentCwd) {
-    throw new Error("name, storage, and parentCwd are required");
+  if (!name || !storage || !cwd) {
+    throw new Error("name, storage, and cwd are required");
   }
   if (!/^[a-zA-Z0-9_\-. ]+$/.test(name)) {
     throw new Error("Project name can only contain letters, numbers, spaces, hyphens, underscores, and dots");
@@ -141,8 +141,7 @@ export async function createProject(
     throw new Error(`Project "${name}" already exists`);
   }
 
-  // Create the project subdirectory inside the parent directory
-  const cwd = path.join(parentCwd, name);
+  // cwd is the full path (frontend already includes the project name as subfolder)
   if (!existsSync(cwd)) {
     mkdirSync(cwd, { recursive: true });
     console.log(`[Projects] Created project directory: ${cwd}`);

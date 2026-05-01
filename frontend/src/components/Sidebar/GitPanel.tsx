@@ -37,6 +37,7 @@ export function GitPanel({ project }: Props) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [commitMessage, setCommitMessage] = useState<{ subject: string; body: string } | null>(null);
+  const [pendingAuthAction, setPendingAuthAction] = useState<{ url: string; action: ActionType } | null>(null);
   const [showPushModal, setShowPushModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
 
@@ -74,8 +75,9 @@ export function GitPanel({ project }: Props) {
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const data = await res.json();
-        // Auth required → show the credentials modal
+        // Auth required → show the credentials modal, remember what we were doing
         if (data.code === "GIT_AUTH_REQUIRED") {
+          setPendingAuthAction({ url, action });
           setShowAuthModal(true);
           setActionLoading(null);
           return;
@@ -346,7 +348,14 @@ export function GitPanel({ project }: Props) {
           onConfigured={() => {
             setShowAuthModal(false);
             setError("");
-            fetchStatus();
+            // Retry the pending git operation that required auth
+            if (pendingAuthAction) {
+              const { url, action } = pendingAuthAction;
+              setPendingAuthAction(null);
+              doAction(action, url);
+            } else {
+              fetchStatus();
+            }
           }}
         />
       )}
