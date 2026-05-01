@@ -41,7 +41,7 @@ export function Sidebar({
     }
   };
   return (
-    <aside className="w-48 border-r-2 border-hacker-accent/20 sidebar-zone sidebar-stripe flex flex-col shrink-0 text-xs">
+    <aside className="w-48 border-r border-hacker-border-bright sidebar-zone flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
       <div className="p-2 border-b border-hacker-border">
         <div className="flex items-center justify-between mb-1.5">

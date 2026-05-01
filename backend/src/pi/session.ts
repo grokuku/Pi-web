@@ -4,6 +4,7 @@ import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-ag
 import { fileURLToPath } from "url";
 import path from "path";
 import { loadModelLibrary, DEFAULT_INSTRUCTIONS } from "./model-library.js";
+import type { AgentMode } from "./model-library.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -486,6 +487,9 @@ export async function generateAiCommitMessage(
   console.log(`[commit] diff length: ${diff?.length || 0}`);
   console.log(`[commit] projectId: ${projectId}`);
 
+  // Ensure registry is loaded — might not be loaded yet if no session started
+  reloadModelRegistry();
+
   // 1. Try the dedicated commit model from the library
   const library = loadModelLibrary();
   const commitMode = library.modes.commit;
@@ -498,12 +502,18 @@ export async function generateAiCommitMessage(
     const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
     console.log(`[commit] Found commit entry: ${entry ? entry.name : "NONE"}`);
     if (entry) {
-      model = {
-        id: entry.id,
-        provider: entry.provider,
-        api: entry.provider,
-        modelId: entry.modelId,
-      };
+      // Use registry.find for a proper model object (has all expected fields)
+      model = sharedModelRegistry.find(entry.provider, entry.modelId);
+      if (!model) {
+        // Fallback: build manually
+        model = {
+          id: entry.id,
+          provider: entry.provider,
+          api: entry.provider,
+          modelId: entry.modelId,
+        };
+      }
+      console.log(`[commit] Commit model resolved: ${model.provider}/${model.modelId}`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
       console.log(`[commit] Commit model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
@@ -537,6 +547,25 @@ export async function generateAiCommitMessage(
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
       console.log(`[commit] Registry model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
+    }
+  }
+
+  // 4. Absolute last resort: scan all library modes for any model entry
+  if (!model?.id) {
+    console.log("[commit] Registry empty, scanning all library modes...");
+    for (const mode of ["code", "plan", "review"] as AgentMode[]) {
+      const cfg = library.modes[mode];
+      if (cfg.models.length > 0) {
+        const entry = cfg.models[0];
+        model = sharedModelRegistry.find(entry.provider, entry.modelId);
+        if (!model) {
+          model = { id: entry.id, provider: entry.provider, api: entry.provider, modelId: entry.modelId };
+        }
+        console.log(`[commit] Found model from mode ${mode}: ${model.provider}/${model.modelId}`);
+        const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
+        if (auth.ok) apiKey = (auth as any).apiKey;
+        break;
+      }
     }
   }
 

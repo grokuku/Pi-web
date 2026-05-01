@@ -350,22 +350,7 @@ body {
 
 /* ─── Sidebar accent stripe ────────────────── */
 .sidebar-stripe {
-  position: relative;
-}
-.sidebar-stripe::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: linear-gradient(
-    180deg,
-    var(--accent) 0%,
-    transparent 50%,
-    var(--accent-dim) 100%
-  );
-  opacity: 0.4;
+  /* No more green accent line — uniform border used instead */
 }
 
 /* ─── Section dividers with glow ───────────── */
@@ -380,23 +365,28 @@ body {
   );
 }
 
-/* ─── Header glow line ─────────────────────── */
+/* ─── Uniform zone separator (header bottom, sidebar right, status bar top, chat top) ─── */
+.zone-sep {
+  border-color: var(--border-bright);
+}
+
+/* ─── Header bottom separator ──────────────── */
 .header-glow {
-  border-bottom: 2px solid var(--accent-dim);
-  box-shadow: 0 2px 12px rgba(0, 255, 65, 0.12), 0 1px 0 rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid var(--border-bright);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2);
   background-image: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface) 100%);
 }
 
-/* ─── Status bar accent ─────────────────────── */
+/* ─── Status bar top separator ─────────────── */
 .status-glow {
-  border-top: 2px solid var(--accent-dim);
-  box-shadow: 0 -2px 10px rgba(0, 255, 65, 0.08), 0 -1px 0 rgba(0, 0, 0, 0.3);
+  border-top: 1px solid var(--border-bright);
+  box-shadow: 0 -1px 6px rgba(0, 0, 0, 0.2);
   background-image: linear-gradient(0deg, var(--surface-raised) 0%, var(--surface) 100%);
 }
 
 /* ─── Sidebar zone styling ─────────────────── */
 .sidebar-zone {
-  background-image: linear-gradient(135deg, var(--surface) 0%, var(--bg) 100%);
+  background: var(--surface);
 }
 
 /* ─── Mode chip styling ─────────────────────── */
