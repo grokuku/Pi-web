@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
-import { existsSync, readdirSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from "fs";
+import { existsSync, readdirSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
@@ -130,6 +130,8 @@ export async function gitPull(cwd: string): Promise<string> {
       throw new GitAuthError(`Git pull authentication failed: ${msg}`);
     }
     throw new Error(`Git pull failed: ${msg}`);
+  } finally {
+    await restoreRemoteUrl(cwd).catch(() => {});
   }
 }
 
@@ -146,6 +148,8 @@ export async function gitPush(cwd: string): Promise<string> {
       throw new GitAuthError(`Git push authentication failed: ${msg}`);
     }
     throw new Error(`Git push failed: ${msg}`);
+  } finally {
+    await restoreRemoteUrl(cwd).catch(() => {});
   }
 }
 
@@ -271,43 +275,106 @@ export async function getRemoteHost(cwd: string): Promise<string> {
 }
 
 /**
- * Ensure the ASKPASS helper script exists on disk and is executable.
- * The script source is read from git-askpass.sh (bundled with the app).
- */
-function ensureAskpassScript(): string {
-  const scriptPath = credentialStore.askpassScript;
-  if (!existsSync(scriptPath)) {
-    const srcPath = path.join(__dirname, "git-askpass.sh");
-    const scriptContent = readFileSync(srcPath, "utf-8");
-    // Ensure the creds directory exists
-    const dir = path.dirname(scriptPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
-    writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
-    chmodSync(scriptPath, 0o700);
-  }
-  return scriptPath;
-}
-
-/**
- * Create a simple-git instance configured with GIT_ASKPASS for the given host.
- * If credentials exist for the host, the ASKPASS helper is set up so git
- * can authenticate without prompting (which would hang the process).
+ * Create a simple-git instance with credentials embedded in the remote URL.
+ *
+ * Instead of GIT_ASKPASS (blocked by git >=2.36 unless allowUnsafeAskPass
+ * is set), we rewrite the remote URL to include the token:
+ *
+ *   https://x-access-token:TOKEN@github.com/user/repo.git
+ *
+ * This works with GitHub, GitLab, Bitbucket personal access tokens.
  */
 async function gitWithAuth(cwd: string): Promise<SimpleGit> {
-  const host = await getRemoteHost(cwd);
-  const askpass = ensureAskpassScript();
+  const git = simpleGit(cwd);
 
-  if (credentialStore.has(host)) {
-    return simpleGit(cwd).env({
-      GIT_ASKPASS: askpass,
-      GIT_TERMINAL_PROMPT: "0",
-    });
+  try {
+    const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
+    const host = extractHost(remoteUrl);
+
+    if (host && credentialStore.has(host)) {
+      const creds = credentialStore.get(host)!;
+      const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
+      // Temporarily set the remote URL with credentials for this operation
+      await git.raw(["remote", "set-url", "origin", authUrl]);
+      // Return a proxy that restores the URL after operations
+      return git;
+    }
+  } catch {
+    // Not a git repo or no remote — proceed without auth
   }
 
   // No credentials stored — use default (will fail on auth-required remotes)
-  return simpleGit(cwd);
+  return git;
+}
+
+/**
+ * Extract hostname from a git remote URL.
+ * Handles both HTTPS and SSH URLs.
+ */
+function extractHost(url: string): string | null {
+  // HTTPS: https://github.com/user/repo.git
+  const httpsMatch = url.match(/^https?:\/\/([^/]+)/);
+  if (httpsMatch) return httpsMatch[1];
+
+  // SSH: git@github.com:user/repo.git
+  const sshMatch = url.match(/^git@([^:]+):/);
+  if (sshMatch) return sshMatch[1];
+
+  // ssh://git@github.com/user/repo.git
+  const sshUrlMatch = url.match(/^ssh:\/\/git@([^/]+)/);
+  if (sshUrlMatch) return sshUrlMatch[1];
+
+  return null;
+}
+
+/**
+ * Inject credentials into a git remote URL.
+ *
+ * For GitHub tokens, the username is typically "x-access-token" or the actual username,
+ * and the password/token goes in the password field.
+ *
+ * Examples:
+ *   https://github.com/user/repo.git → https://x-access-token:TOKEN@github.com/user/repo.git
+ *   https://user@github.com/user/repo.git → https://user:TOKEN@github.com/user/repo.git
+ */
+function injectCredentialsInUrl(url: string, username: string, password: string): string {
+  // Already has credentials — replace them
+  const withCredsReplaced = url.replace(
+    /^(https?:\/\/)([^@]+@)?(.+)/,
+    (_, protocol, _oldCreds, rest) => {
+      const encodedPassword = encodeURIComponent(password);
+      return `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`;
+    }
+  );
+  if (withCredsReplaced !== url) return withCredsReplaced;
+
+  // No existing credentials — inject them
+  const encodedPassword = encodeURIComponent(password);
+  return url.replace(
+    /^(https?:\/\/)(.+)/,
+    (_, protocol, rest) => `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`
+  );
+}
+
+/**
+ * Remove credentials from a git remote URL (restore original).
+ * Call this after any authenticated git operation.
+ */
+export async function restoreRemoteUrl(cwd: string): Promise<void> {
+  const git = simpleGit(cwd);
+  try {
+    const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
+    // Strip credentials: https://user:pass@host → https://host
+    const cleanUrl = remoteUrl.replace(
+      /^(https?:\/\/)([^@]+@)?(.+)/,
+      (_, protocol, _creds, rest) => `${protocol}${rest}`
+    );
+    if (cleanUrl !== remoteUrl) {
+      await git.raw(["remote", "set-url", "origin", cleanUrl]);
+    }
+  } catch {
+    // Not a git repo — ignore
+  }
 }
 
 /**
@@ -326,9 +393,8 @@ export async function setGitCredentials(
 ): Promise<void> {
   const host = await getRemoteHost(cwd);
   credentialStore.set(host, username, password);
-
-  // Ensure the ASKPASS script is ready
-  ensureAskpassScript();
+  // Credentials are now injected into remote URLs at operation time
+  // (no ASKPASS script needed with git >= 2.36)
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
@@ -494,13 +560,25 @@ export async function gitClone(
     else host = new URL(remote).hostname;
   } catch {}
 
-  const askpass = ensureAskpassScript();
-  const git: SimpleGit = credentialStore.has(host)
-    ? simpleGit(parentDir).env({
-        GIT_ASKPASS: askpass,
-        GIT_TERMINAL_PROMPT: "0",
-      })
-    : simpleGit(parentDir);
+  const git: SimpleGit = simpleGit(parentDir);
+
+  // Inject credentials into remote URL if available
+  if (host && credentialStore.has(host)) {
+    const creds = credentialStore.get(host)!;
+    const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
+    try {
+      await withTimeout(git.clone(authUrl, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
+      return `Cloned ${remote} (${branch})`;
+    } catch (error: any) {
+      const msg = error.message || "";
+      if (isAuthError(msg)) {
+        throw new GitAuthError(`Git clone authentication failed: ${msg}`);
+      }
+      throw new Error(`Git clone failed: ${msg}`);
+    }
+  }
+
+  // No credentials — try without auth
   try {
     await withTimeout(git.clone(remote, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
     return `Cloned ${remote} (${branch})`;
