@@ -127,6 +127,91 @@ body {
   border-radius: 4px;
 }
 
+/* ─── ReactMarkdown prose (assistant final responses) ─── */
+.prose-hacker {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-bright);
+}
+.prose-hacker p {
+  margin-bottom: 0.5em;
+}
+.prose-hacker ul, .prose-hacker ol {
+  margin: 0.25em 0 0.5em 1.5em;
+  list-style-position: outside;
+}
+.prose-hacker li {
+  margin-bottom: 0.15em;
+}
+.prose-hacker code {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--accent);
+}
+.prose-hacker pre {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin: 0.5em 0;
+}
+.prose-hacker pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+}
+.prose-hacker a {
+  color: var(--info);
+  text-decoration: underline;
+}
+.prose-hacker strong {
+  color: var(--text-bright);
+  font-weight: 600;
+}
+.prose-hacker blockquote {
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 10px;
+  margin: 0.5em 0;
+  color: var(--text-dim);
+}
+.prose-hacker h1, .prose-hacker h2, .prose-hacker h3,
+.prose-hacker h4, .prose-hacker h5, .prose-hacker h6 {
+  color: var(--accent);
+  font-weight: 600;
+  margin: 0.75em 0 0.25em;
+}
+.prose-hacker h1 { font-size: 1.1rem; }
+.prose-hacker h2 { font-size: 1rem; }
+.prose-hacker h3 { font-size: 0.9rem; }
+.prose-hacker hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75em 0;
+}
+.prose-hacker table {
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  margin: 0.5em 0;
+}
+.prose-hacker th, .prose-hacker td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+}
+.prose-hacker th {
+  background: rgba(0, 255, 65, 0.05);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ─── Button styles ─────────────────────────── */
 .btn-hacker {
   background: transparent;

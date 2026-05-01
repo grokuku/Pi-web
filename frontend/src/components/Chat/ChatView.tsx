@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle } from "lucide-react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
 import type { Project } from "../../types";
 import { useChatHistory } from "../../hooks/useChatHistory";
@@ -102,8 +104,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [showThinking, setShowThinking] = useState(true);
   const [expandTools, setExpandTools] = useState(true);
+  const [showAllThinking, setShowAllThinking] = useState(false);
+  const toggleAllThinking = () => setShowAllThinking((t) => !t);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [thinkingToast, setThinkingToast] = useState("");
   const [error, setError] = useState("");
@@ -172,10 +175,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       const tag = (e.target as HTMLElement).tagName;
       const inInput = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
 
-      // Ctrl+T → app.thinking.toggle (collapse/expand thinking blocks)
+      // Ctrl+T → toggle all thinking blocks
       if (mod && e.key === "t" && !shift) {
         e.preventDefault();
-        setShowThinking((prev) => !prev);
+        toggleAllThinking();
         return;
       }
 
@@ -550,15 +553,27 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5">⚡ {thinkingToast}</div>
         )}
 
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)} expandTools={expandTools} />
-        ))}
+        {/* Global thinking toggle */}
+        {messages.some((m) => m.thinking) && (
+          <div className="flex justify-end mb-2">
+            <button onClick={toggleAllThinking}
+              className="flex items-center gap-1 text-[10px] text-hacker-text-dim hover:text-hacker-text border border-hacker-border px-2 py-0.5"
+            >
+              {showAllThinking ? <EyeOff size={10} /> : <Eye size={10} />}
+              {showAllThinking ? "Hide all thinking" : "Show all thinking"}
+            </button>
+          </div>
+        )}
 
+        {/* Messages — grouped: consecutive assistants are merged into one block */}
+        <GroupedMessages messages={messages} showAllThinking={showAllThinking}
+          expandTools={expandTools} />
+
+        {/* Streaming block */}
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
-          <StreamingBubble content={streamingContent} thinking={streamingThinking}
-            toolCalls={currentToolCalls} showThinking={showThinking}
-            toggleThinking={() => setShowThinking((t) => !t)} expandTools={expandTools} />
+          <StreamingBlock content={streamingContent} thinking={streamingThinking}
+            toolCalls={currentToolCalls} showAllThinking={showAllThinking}
+            expandTools={expandTools} />
         )}
 
         <div ref={chatEndRef} />
@@ -638,62 +653,125 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   );
 }
 
-// ── Message Bubble ─────────────────────────────────────
-// Modern chat-style rendering with clear visual distinction:
-// - USER:     right-aligned, colored background, compact
-// - ASSISTANT: left-aligned, full-width for code/content
-function MessageBubble({ message, showThinking, toggleThinking, expandTools }: {
-  message: DisplayMessage; expandTools: boolean; showThinking: boolean; toggleThinking: () => void;
+// ── Grouped Messages ───────────────────────────────────
+// Consecutive assistant messages are merged into one cohesive block.
+
+interface AssistantMsg {
+  id: string;
+  content: string;
+  thinking: string;
+  toolCalls: ToolCallInfo[];
+  usage?: { input: number; output: number; cost: { total: number } };
+}
+
+function GroupedMessages({ messages, showAllThinking, expandTools }: {
+  messages: DisplayMessage[];
+  showAllThinking: boolean;
+  expandTools: boolean;
 }) {
-  const isUser = message.role === "user";
+  const groups: DisplayMessage[][] = [];
+  for (const msg of messages) {
+    if (msg.role === "user" || groups.length === 0 || groups[groups.length - 1][0].role === "user") {
+      groups.push([msg]);
+    } else {
+      groups[groups.length - 1].push(msg);
+    }
+  }
+
+  return <>
+    {groups.map((group) => {
+      const first = group[0];
+      if (first.role === "user") {
+        return <UserBubble key={first.id} message={first} />;
+      }
+      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]}
+        showAllThinking={showAllThinking} expandTools={expandTools} />;
+    })}
+  </>;
+}
+
+function UserBubble({ message }: { message: DisplayMessage }) {
+  return (
+    <div className="flex justify-end mb-3">
+      <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2 flex items-center gap-2">
+        <span className="text-hacker-text-bright whitespace-pre-wrap text-sm text-right flex-1">{message.content}</span>
+        {message.usage && (
+          <span className="text-[9px] text-hacker-text-dim shrink-0">
+            {message.usage.input + message.usage.output}t · ${message.usage.cost.total.toFixed(4)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantGroup({ messages, showAllThinking, expandTools }: {
+  messages: AssistantMsg[];
+  showAllThinking: boolean;
+  expandTools: boolean;
+}) {
+  const [localShow, setLocalShow] = useState(showAllThinking);
+  useEffect(() => { setLocalShow(showAllThinking); }, [showAllThinking]);
+
+  // Collect all thinking, all tool calls, and the last meaningful text content
+  const allThinking: string[] = [];
+  const allTools: ToolCallInfo[] = [];
+  let finalText = "";
+  let totalUsage: { input: number; output: number; cost: { total: number } } | undefined;
+
+  for (const msg of messages) {
+    if (msg.thinking) allThinking.push(msg.thinking);
+    allTools.push(...msg.toolCalls);
+    if (msg.content) finalText = msg.content;
+    if (msg.usage) {
+      totalUsage = totalUsage
+        ? { input: totalUsage.input + msg.usage.input, output: totalUsage.output + msg.usage.output,
+            cost: { total: totalUsage.cost.total + msg.usage.cost.total } }
+        : msg.usage;
+    }
+  }
+
+  const mergedThinking = allThinking.join("\n\n---\n\n");
+  const hasThinking = allThinking.length > 0;
 
   return (
-    <div className={`flex mb-3 ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`${isUser
-        ? "max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg"
-        : "max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg"
-      }`}>
-        {/* Header */}
-        <div className={`flex items-center gap-2 px-3 pt-2 pb-1 border-b ${isUser ? "border-hacker-accent/20 justify-end" : "border-hacker-border justify-start"}`}>
-          <span className={`text-[10px] font-bold tracking-wider uppercase ${isUser ? "text-hacker-info" : "text-hacker-accent"}`}>
-            {isUser ? "YOU" : "ASSISTANT"}
-          </span>
-          {message.usage && (
-            <span className="text-[9px] text-hacker-text-dim">
-              {message.usage.input + message.usage.output} tok · ${message.usage.cost.total.toFixed(4)}
-            </span>
-          )}
-        </div>
-
-        {/* Thinking section */}
-        {message.thinking && (
-          <div className="px-3 pt-2">
-            <button onClick={toggleThinking} className="text-[10px] text-hacker-warn hover:underline mb-1">
-              {showThinking ? "▼" : "▶"} THINKING
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
+        {/* Thinking — merged, collapsible */}
+        {hasThinking && (
+          <div className="px-3 pt-2 pb-1">
+            <button onClick={() => setLocalShow(!localShow)}
+              className="text-[10px] text-hacker-warn hover:underline mb-1">
+              {localShow ? "▼" : "▶"} THINKING ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
             </button>
-            {showThinking && (
-              <div className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto rounded-sm">
-                {message.thinking}
-              </div>
+            {localShow && (
+              <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono">
+                {mergedThinking}
+              </pre>
             )}
           </div>
         )}
 
-        {/* Content */}
-        {message.content && (
-          <div className={`px-3 py-2 ${isUser ? "text-right" : "text-left"}`}>
-            {isUser ? (
-              <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>
-            ) : (
-              <MarkdownRenderer content={message.content} />
-            )}
-          </div>
-        )}
-
-        {/* Tool calls */}
-        {message.toolCalls.length > 0 && (
+        {/* Tool calls — inline, always visible */}
+        {allTools.length > 0 && (
           <div className="px-3 pb-2">
-            {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+            {allTools.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+          </div>
+        )}
+
+        {/* Final text — ReactMarkdown for formatting, <pre> for code blocks */}
+        {finalText && (
+          <div className="px-3 py-2 prose-hacker">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {finalText}
+            </ReactMarkdown>
+          </div>
+        )}
+
+        {/* Usage footer */}
+        {totalUsage && (
+          <div className="px-3 pb-2 text-[9px] text-hacker-text-dim border-t border-hacker-border pt-1.5">
+            {totalUsage.input + totalUsage.output} tok · ${totalUsage.cost.total.toFixed(4)}
           </div>
         )}
       </div>
@@ -701,38 +779,32 @@ function MessageBubble({ message, showThinking, toggleThinking, expandTools }: {
   );
 }
 
-// ── Streaming Bubble ───────────────────────────────────
-// Matches the Assistant message style but with a blinking cursor
-function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThinking, expandTools }: {
-  content: string; thinking: string; toolCalls: ToolCallInfo[]; showThinking: boolean; toggleThinking: () => void; expandTools: boolean;
+// ── Streaming Block ────────────────────────────────────
+function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools }: {
+  content: string;
+  thinking: string;
+  toolCalls: ToolCallInfo[];
+  showAllThinking: boolean;
+  expandTools: boolean;
 }) {
+  const [localShow, setLocalShow] = useState(showAllThinking);
+  useEffect(() => { setLocalShow(showAllThinking); }, [showAllThinking]);
+
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
-        {/* Header with streaming indicator */}
-        <div className="flex items-center gap-2 px-3 pt-2 pb-1 border-b border-hacker-border">
-          <span className="text-[10px] font-bold tracking-wider uppercase text-hacker-accent">ASSISTANT</span>
-          <span className="cursor-blink text-hacker-accent text-xs" />
-        </div>
-
         {/* Thinking */}
         {thinking && (
-          <div className="px-3 pt-2">
-            <button onClick={toggleThinking} className="text-[10px] text-hacker-warn hover:underline mb-1">
-              {showThinking ? "▼" : "▶"} THINKING
+          <div className="px-3 pt-2 pb-1">
+            <button onClick={() => setLocalShow(!localShow)}
+              className="text-[10px] text-hacker-warn hover:underline mb-1">
+              {localShow ? "▼" : "▶"} THINKING
             </button>
-            {showThinking && (
-              <div className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto rounded-sm">
+            {localShow && (
+              <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono">
                 {thinking}
-              </div>
+              </pre>
             )}
-          </div>
-        )}
-
-        {/* Streaming content */}
-        {content && (
-          <div className="px-3 py-2">
-            <MarkdownRenderer content={content} />
           </div>
         )}
 
@@ -742,24 +814,22 @@ function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThi
             {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
           </div>
         )}
+
+        {/* Streaming content with blinking cursor */}
+        {content ? (
+          <div className="px-3 py-2 prose-hacker">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {content}
+            </ReactMarkdown>
+            <span className="cursor-blink" />
+          </div>
+        ) : (thinking || toolCalls.length > 0) ? (
+          <div className="px-3 pb-2">
+            <span className="cursor-blink" />
+          </div>
+        ) : null}
       </div>
     </div>
-  );
-}
-
-// ── Shared Markdown Renderer ───────────────────────────
-// ASSISTANT messages: render in <pre> to preserve ALL whitespace.
-// ReactMarkdown (CommonMark) normalizes spaces, tabs, and consecutive
-// newlines, which breaks manual ASCII tables, diffs, and box-drawing.
-// <pre> with pre-wrap is the only way to guarantee alignment for code content.
-//
-// We keep ReactMarkdown only for USER messages (they're short and rarely
-// need precise alignment).
-function MarkdownRenderer({ content }: { content: string }) {
-  return (
-    <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-transparent border-0 p-0 m-0 text-hacker-text-bright">
-      {content}
-    </pre>
   );
 }
 
