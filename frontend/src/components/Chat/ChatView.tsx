@@ -614,6 +614,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           </div>
         )}
 
+        <div className="text-hacker-text-dim text-[10px] mb-1 flex justify-between">
+          <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
+          <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
+        </div>
+
         <div className="flex gap-2">
           <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -633,10 +638,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
               )}
             </div>
           </div>
-        </div>
-        <div className="text-hacker-text-dim text-[10px] mt-1 flex justify-between">
-          <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
-          <span>{activeProject?.git?.branch && `git:${activeProject.git.branch}`}</span>
         </div>
       </div>
 

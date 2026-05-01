@@ -76,6 +76,7 @@ export function StatusBar({
       {/* Stats */}
       {stats && (
         <>
+          {/* Token count with context bar */}
           <span className="text-hacker-text-dim">
             {(stats.tokens / 1000).toFixed(1)}K tok
           </span>
@@ -84,8 +85,8 @@ export function StatusBar({
             ${stats.cost.toFixed(4)}
           </span>
           <span className="text-hacker-border-bright">│</span>
-          <div className="flex items-center gap-1">
-            <div className="w-12 h-1.5 bg-hacker-border">
+          <div className="flex items-center gap-1.5">
+            <div className="w-16 h-1.5 bg-hacker-border rounded-sm overflow-hidden">
               <div
                 className={`h-full transition-all ${
                   stats.contextPercent > 80
@@ -97,7 +98,7 @@ export function StatusBar({
                 style={{ width: `${Math.min(stats.contextPercent, 100)}%` }}
               />
             </div>
-            <span className="text-hacker-text-dim">
+            <span className="text-hacker-text-dim min-w-[27px]">
               {stats.contextPercent}%
             </span>
           </div>
