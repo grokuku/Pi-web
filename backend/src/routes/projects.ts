@@ -8,7 +8,7 @@ import {
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
-import { generateAiCommitMessage } from "../pi/session.js";
+import { generateAiCommitMessage, getCommitModelInfo } from "../pi/session.js";
 
 const router = Router();
 
@@ -182,7 +182,8 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
   }
 });
 
-// POST git commit-push preview (generate message without executing)
+// POST git commit-push preview (get changes + commit model info)
+// Pass ?ai=true to also generate an AI commit message on demand
 router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
@@ -191,23 +192,27 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     }
     const preview = await gitCommitPushPreview(project.cwd);
 
-    // Try AI-generated commit message
+    // Gather commit model info (shown in UI) without calling the AI yet
+    const commitModelInfo = getCommitModelInfo();
+
+    // Only generate AI message when explicitly requested
     let aiMessage: { subject: string; body: string } | null = null;
-    try {
-      const diff = await getGitDiff(project.cwd);
-      console.log(`[commit-push] Got diff for preview (${diff.length} chars), calling AI...`);
-      aiMessage = await generateAiCommitMessage(diff, project.id);
-      if (aiMessage) {
-        console.log(`[commit-push] AI message: "${aiMessage.subject}"`);
-      } else {
-        console.warn("[commit-push] AI message generation returned null");
+    if (req.query.ai === "true") {
+      try {
+        const diff = await getGitDiff(project.cwd);
+        console.log(`[commit-push] Got diff for preview (${diff.length} chars), calling AI...`);
+        aiMessage = await generateAiCommitMessage(diff, project.id);
+        if (aiMessage) {
+          console.log(`[commit-push] AI message: "${aiMessage.subject}"`);
+        } else {
+          console.warn("[commit-push] AI message generation returned null");
+        }
+      } catch (err: any) {
+        console.error("[commit-push] AI generation failed:", err?.message || err);
       }
-    } catch (err: any) {
-      console.error("[commit-push] AI generation failed:", err?.message || err);
-      // AI generation is optional, fall back to heuristic
     }
 
-    res.json({ ...preview, aiMessage, diff: undefined });
+    res.json({ ...preview, aiMessage, commitModelInfo, diff: undefined });
   } catch (error: any) {
     const msg = error?.message || String(error || "Unknown error");
     if (msg.includes("index.lock") || msg.includes("lock persisted")) {

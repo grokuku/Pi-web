@@ -1,10 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit,
+  X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu,
 } from "lucide-react";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
 import { GitAuthModal } from "./GitAuthModal";
+
+interface CommitModelInfo {
+  provider: string;
+  modelId: string;
+  source: "commit-mode" | "session" | "registry" | "none";
+  thinkingLevel?: string;
+}
 
 interface Preview {
   status: {
@@ -21,11 +28,11 @@ interface Preview {
     subject: string;
     body: string;
   };
-  // AI-generated message (from Pi model) — preferred when available
   aiMessage?: {
     subject: string;
     body: string;
   } | null;
+  commitModelInfo?: CommitModelInfo;
 }
 
 interface Props {
@@ -38,15 +45,15 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [loading, setLoading] = useState<"preview" | "push" | "ai-gen" | null>(null);
+  const [loading, setLoading] = useState<"preview" | "push" | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
-  const [usingAi, setUsingAi] = useState(true); // Prefer AI message
-  const [regenerating, setRegenerating] = useState(false);
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
 
+  // ── Fetch preview (no AI by default) ──
   const fetchPreview = useCallback(async () => {
     setLoading("preview");
     setError("");
@@ -60,16 +67,9 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       }
       const data: Preview = await res.json();
       setPreview(data);
-      // Prefer AI message, fall back to heuristic
-      if (data.aiMessage?.subject) {
-        setSubject(data.aiMessage.subject);
-        setBody(data.aiMessage.body);
-        setUsingAi(true);
-      } else {
-        setSubject(data.proposedMessage.subject);
-        setBody(data.proposedMessage.body);
-        setUsingAi(false);
-      }
+      // Always start with the heuristic message
+      setSubject(data.proposedMessage.subject);
+      setBody(data.proposedMessage.body);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -81,6 +81,34 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
     fetchPreview();
   }, [fetchPreview]);
 
+  // ── Generate AI message on demand ──
+  const handleGenerateAi = async () => {
+    setAiLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview?ai=true`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to generate AI message");
+      }
+      const data: Preview = await res.json();
+      setPreview(data);
+      if (data.aiMessage?.subject) {
+        setSubject(data.aiMessage.subject);
+        setBody(data.aiMessage.body);
+      } else {
+        setError("AI could not generate a message. Using default.");
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // ── Push ──
   const handlePush = async () => {
     if (!subject.trim()) {
       setError("Subject is required");
@@ -99,17 +127,14 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       });
       if (!res.ok) {
         const data = await res.json();
-        // Check if git identity is missing
         if (data.code === "GIT_IDENTITY_REQUIRED") {
           setShowIdentityModal(true);
           return;
         }
-        // Check if git authentication is missing
         if (data.code === "GIT_AUTH_REQUIRED") {
           setShowAuthModal(true);
           return;
         }
-        // Check if git is locked
         if (data.code === "GIT_LOCKED") {
           setLoading(null);
           setError(data.error);
@@ -126,54 +151,14 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
     }
   };
 
-  // ── Regenerate AI message ──
-  const handleRegenerate = async () => {
-    setRegenerating(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to regenerate");
-      }
-      const data: Preview = await res.json();
-      setPreview(data);
-      if (data.aiMessage?.subject) {
-        setSubject(data.aiMessage.subject);
-        setBody(data.aiMessage.body);
-        setUsingAi(true);
-      } else {
-        setError("AI could not generate a message. Using default.");
-        setSubject(data.proposedMessage.subject);
-        setBody(data.proposedMessage.body);
-        setUsingAi(false);
-      }
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  // ── Toggle between AI and heuristic message ──
-  const toggleMessageSource = () => {
-    if (!preview) return;
-    if (usingAi) {
-      setSubject(preview.proposedMessage.subject);
-      setBody(preview.proposedMessage.body);
-      setUsingAi(false);
-    } else if (preview.aiMessage?.subject) {
-      setSubject(preview.aiMessage.subject);
-      setBody(preview.aiMessage.body);
-      setUsingAi(true);
-    }
-  };
   const stats = preview?.status;
   const totalChanges = stats
     ? stats.staged.length + stats.modified.length + stats.created.length + stats.deleted.length
     : 0;
+
+  const modelInfo = preview?.commitModelInfo;
+  const hasAiResult = !!(preview?.aiMessage?.subject);
+  const canGenerateAi = modelInfo && modelInfo.source !== "none";
 
   return (
     <div className="modal-overlay">
@@ -256,51 +241,78 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
               </div>
             </div>
 
-            {/* Commit message form */}
-            <div className="space-y-3">
-              {/* Message source indicator — always visible */}
-            <div className="flex items-center gap-2">
-              {preview.aiMessage?.subject ? (
-                <>
+            {/* ── AI Generation block ── */}
+            <div className="border border-hacker-border bg-hacker-bg/20 p-3 space-y-2">
+              {/* AI button + model info */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={toggleMessageSource}
-                    disabled={regenerating}
-                    className={`text-[9px] px-2 py-0.5 border flex items-center gap-1 ${
-                      usingAi
+                    onClick={handleGenerateAi}
+                    disabled={aiLoading || !canGenerateAi}
+                    className={`text-[10px] px-2.5 py-1 border flex items-center gap-1.5 transition-colors ${
+                      hasAiResult
                         ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
-                        : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-text-dim/40"
+                        : canGenerateAi
+                          ? "border-hacker-accent/50 text-hacker-accent hover:bg-hacker-accent/10"
+                          : "border-hacker-border text-hacker-text-dim/50 cursor-not-allowed"
                     }`}
+                    title={!canGenerateAi ? "No AI model configured" : "Generate commit message with AI"}
                   >
-                    <span className={usingAi ? "text-hacker-accent" : ""}>🤖</span>
-                    AI generated
+                    {aiLoading ? (
+                      <RefreshCw size={10} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={10} />
+                    )}
+                    {hasAiResult ? "✓ AI generated" : "Generate with AI"}
                   </button>
-                  <button
-                    onClick={toggleMessageSource}
-                    disabled={regenerating}
-                    className={`text-[9px] px-2 py-0.5 border ${
-                      !usingAi
-                        ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
-                        : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-text-dim/40"
-                    }`}
-                  >
-                    Default
-                  </button>
-                </>
-              ) : (
-                <span className="text-[9px] text-hacker-text-dim italic">
-                  No AI message generated — using default
-                </span>
+
+                  {/* Model info badges */}
+                  {modelInfo && modelInfo.source !== "none" && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] text-hacker-text-dim flex items-center gap-1">
+                        <Cpu size={8} />
+                        <span className="text-hacker-text">{modelInfo.provider}</span>
+                        <span className="text-hacker-text-dim">/</span>
+                        <span className="text-hacker-info font-mono">{modelInfo.modelId}</span>
+                      </span>
+                      {modelInfo.thinkingLevel && modelInfo.thinkingLevel !== "off" && (
+                        <span className="text-[9px] text-hacker-text-dim flex items-center gap-1">
+                          <Brain size={8} />
+                          <span className="text-hacker-warn">{modelInfo.thinkingLevel}</span>
+                        </span>
+                      )}
+                      <span
+                        className={`text-[8px] px-1 py-0.5 border ${
+                          modelInfo.source === "commit-mode"
+                            ? "border-hacker-accent/30 text-hacker-accent"
+                            : "border-hacker-border/50 text-hacker-text-dim"
+                        }`}
+                      >
+                        {modelInfo.source === "commit-mode" ? "commit mode" :
+                         modelInfo.source === "session" ? "session" : "registry"}
+                      </span>
+                    </div>
+                  )}
+
+                  {modelInfo && modelInfo.source === "none" && (
+                    <span className="text-[9px] text-hacker-text-dim italic">
+                      No model configured — add one in Model Library
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* AI loading indicator */}
+              {aiLoading && (
+                <div className="text-[10px] text-hacker-text-dim flex items-center gap-2">
+                  <RefreshCw size={10} className="animate-spin text-hacker-accent" />
+                  Generating commit message with {modelInfo?.provider}/{modelInfo?.modelId}...
+                </div>
               )}
-              <button
-                onClick={handleRegenerate}
-                disabled={regenerating}
-                className="text-[9px] px-2 py-0.5 border border-hacker-border text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-accent/40 flex items-center gap-1 disabled:opacity-40"
-                title="Re-generate commit message with AI"
-              >
-                <RefreshCw size={8} className={regenerating ? "animate-spin" : ""} />
-                Regenerate
-              </button>
             </div>
+
+            {/* ── Commit message form ── */}
+            <div className="space-y-3">
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
                   <FileText size={10} />
@@ -364,6 +376,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           </div>
         )}
       </div>
+
       {/* Identity modal */}
       {showIdentityModal && (
         <GitIdentityModal
@@ -372,11 +385,11 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           onConfigured={() => {
             setShowIdentityModal(false);
             setError("");
-            // Retry the push after identity is configured
             handlePush();
           }}
         />
       )}
+
       {/* Auth modal */}
       {showAuthModal && (
         <GitAuthModal
@@ -385,7 +398,6 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           onConfigured={() => {
             setShowAuthModal(false);
             setError("");
-            // Retry the push after credentials are configured
             handlePush();
           }}
         />

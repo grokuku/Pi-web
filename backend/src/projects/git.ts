@@ -338,18 +338,28 @@ export async function getRemoteHost(cwd: string): Promise<string> {
     const git: SimpleGit = simpleGit(cwd);
     const remotes = await git.getRemotes(true);
     const origin = remotes.find((r) => r.name === "origin");
-    if (!origin?.refs?.fetch) return "github.com";
+    if (!origin?.refs?.fetch) {
+      console.log(`[git] getRemoteHost: no origin remote, defaulting to github.com`);
+      return "github.com";
+    }
     const url = origin.refs.fetch;
     // SSH: git@host:path or ssh://git@host/path
     const sshMatch = url.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
-    if (sshMatch) return sshMatch[1];
+    if (sshMatch) {
+      console.log(`[git] getRemoteHost: SSH host=${sshMatch[1]}`);
+      return sshMatch[1];
+    }
     // HTTPS: https://host/path
     try {
-      return new URL(url).hostname;
+      const hostname = new URL(url).hostname;
+      console.log(`[git] getRemoteHost: HTTPS host=${hostname}`);
+      return hostname;
     } catch {
+      console.log(`[git] getRemoteHost: could not parse URL, defaulting to github.com`);
       return "github.com";
     }
   } catch {
+    console.log(`[git] getRemoteHost: not a git repo (no .git), defaulting to github.com`);
     return "github.com";
   }
 }
@@ -370,16 +380,25 @@ async function gitWithAuth(cwd: string): Promise<SimpleGit> {
   try {
     const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
     const host = extractHost(remoteUrl);
+    console.log(`[git] gitWithAuth: remoteUrl=${remoteUrl.replace(/:[^@]+@/, ":****@")}, host=${host}, hasCreds=${host ? credentialStore.has(host) : false}`);
 
     if (host && credentialStore.has(host)) {
       const creds = credentialStore.get(host)!;
       const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
+      console.log(`[git] gitWithAuth: injecting credentials, result=${authUrl.replace(/:[^@]+@/, ":****@")}`);
       // Temporarily set the remote URL with credentials for this operation
       await git.raw(["remote", "set-url", "origin", authUrl]);
-      // Return a proxy that restores the URL after operations
+      // Git 2.38+ may reject credentials in URLs — explicitly allow it
+      try {
+        await git.raw(["config", "transfer.credentialsInUrl", "allow"]);
+      } catch {
+        // config may not support this option (older git), ignore
+      }
+      // Return the git instance (caller will use it for pull/push/etc)
       return git;
     }
-  } catch {
+  } catch (e: any) {
+    console.log(`[git] gitWithAuth: error (will proceed without auth): ${e?.message || e}`);
     // Not a git repo or no remote — proceed without auth
   }
 
@@ -472,6 +491,7 @@ export async function setGitCredentials(
   password: string
 ): Promise<void> {
   const host = await getRemoteHost(cwd);
+  console.log(`[git] setGitCredentials: host=${host}, username=${username}, password=${password.length} chars`);
   credentialStore.set(host, username, password);
   // Credentials are now injected into remote URLs at operation time
   // (no ASKPASS script needed with git >= 2.36)
@@ -662,25 +682,41 @@ export async function gitClone(
   const parentDir = path.dirname(cwd);
   const repoName = path.basename(cwd);
 
+  console.log(`[git-clone] cwd=${cwd}, parentDir=${parentDir}, repoName=${repoName}`);
+  console.log(`[git-clone] remote=${remote}, branch=${branch}`);
+
   // Extract host from remote URL to check for stored credentials
   let host = "github.com";
   try {
     const sshMatch = remote.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
     if (sshMatch) host = sshMatch[1];
     else host = new URL(remote).hostname;
-  } catch {}
+  } catch (e) {
+    console.log(`[git-clone] Could not parse remote URL: ${e}`);
+  }
+
+  console.log(`[git-clone] Extracted host: ${host}, hasCredentials: ${credentialStore.has(host)}`);
 
   const git: SimpleGit = simpleGit(parentDir);
 
   // Inject credentials into remote URL if available
   if (host && credentialStore.has(host)) {
     const creds = credentialStore.get(host)!;
+    console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
     const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
+    console.log(`[git-clone] Auth URL (redacted): ${authUrl.replace(/:[^@]+@/, ":****@")}`);
     try {
-      await withTimeout(git.clone(authUrl, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
+      // Git 2.38+ may reject credentials in URLs — explicitly allow it
+      await withTimeout(
+        git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]),
+        GIT_NETWORK_TIMEOUT_MS,
+        "git clone"
+      );
+      console.log(`[git-clone] Clone succeeded!`);
       return `Cloned ${remote} (${branch})`;
     } catch (error: any) {
       const msg = error.message || "";
+      console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
       if (isAuthError(msg)) {
         throw new GitAuthError(`Git clone authentication failed: ${msg}`);
       }
@@ -689,11 +725,14 @@ export async function gitClone(
   }
 
   // No credentials — try without auth
+  console.log(`[git-clone] No credentials for ${host}, trying without auth...`);
   try {
     await withTimeout(git.clone(remote, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
+    console.log(`[git-clone] Clone succeeded (no auth)!`);
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
     const msg = error.message || "";
+    console.error(`[git-clone] Clone WITHOUT auth FAILED: ${msg}`);
     if (isAuthError(msg)) {
       throw new GitAuthError(`Git clone authentication failed: ${msg}`);
     }

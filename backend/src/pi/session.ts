@@ -472,6 +472,59 @@ export function getSessionMessages(projectId: string): any[] {
 }
 
 /**
+ * Return info about which model would be used for commit AI generation,
+ * without actually calling the model. Used by the UI to display model details.
+ */
+export function getCommitModelInfo(): {
+  provider: string;
+  modelId: string;
+  source: "commit-mode" | "session" | "registry" | "none";
+  thinkingLevel?: string;
+} {
+  const library = loadModelLibrary();
+  const commitMode = library.modes.commit;
+
+  // 1. Dedicated commit mode
+  if (commitMode.enabled && commitMode.activeModelId) {
+    const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
+    if (entry) {
+      return {
+        provider: entry.provider,
+        modelId: entry.modelId,
+        source: "commit-mode",
+        thinkingLevel: entry.thinkingLevel || "off",
+      };
+    }
+  }
+
+  // 2. Any session model
+  for (const [, state] of sessionsByProject) {
+    if (state?.session?.model) {
+      const m = state.session.model as any;
+      return {
+        provider: m.provider || "unknown",
+        modelId: m.modelId || "unknown",
+        source: "session" as const,
+      };
+    }
+  }
+
+  // 3. Registry
+  reloadModelRegistry();
+  const availableModels = sharedModelRegistry.getAvailable();
+  if (availableModels.length > 0) {
+    const m = availableModels[0];
+    return {
+      provider: (m as any).provider || "unknown",
+      modelId: (m as any).modelId || "unknown",
+      source: "registry",
+    };
+  }
+
+  return { provider: "none", modelId: "none", source: "none" };
+}
+
+/**
  * Generate a descriptive commit message using the current Pi model.
  *
  * Works even WITHOUT an active Pi session: falls back to the last used
