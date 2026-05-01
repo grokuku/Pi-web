@@ -488,6 +488,10 @@ export async function generateAiCommitMessage(
   if (!state?.session?.model) return null;
 
   const model = state.session.model as any;
+  if (!model?.id || !model?.provider || !model?.api) {
+    console.warn("[session] Invalid model for AI commit message generation");
+    return null;
+  }
   const apiKey = await sharedAuthStorage.getApiKey(model.provider);
 
   const systemPrompt = `You are a commit message generator for a coding project. Your task is to analyze a git diff and produce a concise, descriptive commit message following the conventional commits format.
@@ -505,7 +509,7 @@ Rules:
     messages: [
       {
         role: "user" as const,
-        content: `Generate a commit message for this diff:\n\n${diff}`,
+        content: `Generate a commit message for this diff:\n\n${diff.slice(0, 6000)}`,
         timestamp: Date.now(),
       },
     ],

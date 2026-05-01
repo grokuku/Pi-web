@@ -163,12 +163,13 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json(result);
   } catch (error: any) {
+    const msg = error?.message || String(error || "Unknown error");
     if (error instanceof GitIdentityError) {
-      res.status(400).json({ error: error.message, code: "GIT_IDENTITY_REQUIRED" });
+      res.status(400).json({ error: msg, code: "GIT_IDENTITY_REQUIRED" });
     } else if (error instanceof GitAuthError) {
-      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
+      res.status(401).json({ error: msg, code: "GIT_AUTH_REQUIRED" });
     } else {
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: msg });
     }
   }
 });
@@ -195,7 +196,8 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
 
     res.json({ ...preview, aiMessage, diff: undefined });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    const msg = error?.message || String(error || "Unknown error");
+    res.status(400).json({ error: msg });
   }
 });
 

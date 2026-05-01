@@ -458,6 +458,13 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
   }
 }
 
+// ─── Global error handler (catch unhandled errors) ────────
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[Express] Unhandled error:", err);
+  const message = err?.message || (typeof err === "string" ? err : "Internal server error");
+  res.status(500).json({ error: message });
+});
+
 // ─── Start Server ──────────────────────────────────────
 httpServer.listen(PORT, () => {
   // Re-create temp files for any persisted credentials (needed by GIT_ASKPASS)
