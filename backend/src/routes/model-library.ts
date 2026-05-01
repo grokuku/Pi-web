@@ -21,7 +21,7 @@ const router = Router();
 
 // ── Helpers ──────────────────────────────────────────────
 
-const VALID_MODES: AgentMode[] = ["code", "review", "plan"];
+const VALID_MODES: AgentMode[] = ["code", "commit", "review", "plan"];
 
 function validateMode(mode: string): AgentMode {
   if (!VALID_MODES.includes(mode as AgentMode)) {
@@ -39,6 +39,9 @@ function safeDecodeURIComponent(encoded: string): string {
 }
 
 async function applyModeToSession(mode: AgentMode): Promise<void> {
+  // Commit mode is only used for commit messages, not the interactive session
+  if (mode === "commit") return;
+
   const library = loadModelLibrary();
   const cfg = library.modes[mode];
   if (!cfg.activeModelId || !cfg.enabled) return;

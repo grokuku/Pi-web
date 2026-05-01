@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Component, type ReactNode } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
@@ -12,6 +12,27 @@ import type { Project } from "./types";
 
 type Tab = "pi" | "terminal";
 
+// ── Error boundary to prevent white/dark screen of death ──
+class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
+  state = { hasError: false, error: "" };
+  static getDerivedStateFromError(e: Error) { return { hasError: true, error: e.message }; }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen w-screen bg-gray-900 text-green-400 flex flex-col items-center justify-center gap-4 p-8 font-mono text-sm">
+          <div className="text-4xl">⚠</div>
+          <div className="text-hacker-accent font-bold">RENDER ERROR</div>
+          <pre className="text-red-400 text-xs max-w-[600px] overflow-auto whitespace-pre-wrap">{this.state.error}</pre>
+          <button onClick={() => this.setState({hasError: false, error: ""})} className="bg-green-900 hover:bg-green-800 px-4 py-2 rounded border border-green-700">
+            RETRY
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Per-project session state ──────────────────────
 interface ProjectSessionState {
   isStreaming: boolean;
@@ -19,7 +40,7 @@ interface ProjectSessionState {
   stats: { tokens: number; contextPercent: number } | null;
 }
 
-export default function App() {
+function App() {
   const { connected, send, on } = useWebSocket();
 
   // ── State ──
@@ -415,4 +436,9 @@ export default function App() {
       )}
     </div>
   );
+}
+
+// Wrap with ErrorBoundary to prevent dark screen of death
+export default function AppWithBoundary() {
+  return <ErrorBoundary><App /></ErrorBoundary>;
 }

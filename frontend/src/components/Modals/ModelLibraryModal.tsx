@@ -158,6 +158,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         `/api/model-library/modes/${activeMode}/models/${encodeURIComponent(entryId)}`,
         { method: "DELETE" }
       );
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
     } catch (e: any) {
@@ -175,6 +176,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entryId }),
       });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
       setStatus("✓ Model activated");
@@ -194,6 +196,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
     } catch (e: any) {
@@ -212,6 +215,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
           body: JSON.stringify({ thinkingLevel }),
         }
       );
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
     } catch (e: any) {
@@ -227,6 +231,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ instructions: editInstructions }),
       });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
       setShowInstructions(false);
@@ -244,6 +249,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ readOnly }),
       });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
       const data = await res.json();
       setLibrary(data);
     } catch (e: any) {
@@ -261,7 +267,14 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
     );
   }
 
-  const modeConfig = library.modes[activeMode];
+  const modeConfig = library.modes[activeMode] || {
+    enabled: false,
+    activeModelId: null,
+    models: [],
+    instructions: "",
+    tools: [],
+    readOnly: true,
+  };
   const activeEntry = modeConfig.models.find(
     (m) => m.id === modeConfig.activeModelId
   );
