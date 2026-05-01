@@ -50,10 +50,11 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entryId }),
       });
+      if (!res.ok) { console.error("Failed to set active model:", await res.text()); return; }
       const data = await res.json();
       setLibrary(data);
       onModelApplied?.();
-    } catch {}
+    } catch (e) { console.error("handleSelectModel error:", e); }
     setOpenMode(null);
   };
 
@@ -65,9 +66,12 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
+      if (!res.ok) { console.error("Failed to toggle mode:", await res.text()); return; }
       const data = await res.json();
       setLibrary(data);
-    } catch {}
+      // Refresh session so the header shows the updated model
+      onModelApplied?.();
+    } catch (e) { console.error("handleToggleMode error:", e); }
   };
 
   const getActiveModelName = (mode: AgentMode): string => {

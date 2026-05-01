@@ -256,10 +256,10 @@ function App() {
     setShowAddProject(true);
   };
 
-  const handleDeleteProject = async (project: Project) => {
-    if (!confirm(`Delete project "${project.name}"?\nThis only removes it from Pi-Web. Files on disk are NOT deleted.`)) return;
+  const handleDeleteProject = async (project: Project, deleteFiles: boolean) => {
     try {
-      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      const queryParam = deleteFiles ? "?deleteFiles=true" : "";
+      const res = await fetch(`/api/projects/${project.id}${queryParam}`, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to delete project");
@@ -271,6 +271,7 @@ function App() {
       await loadProjects();
     } catch (e: any) {
       console.error("Failed to delete project:", e.message);
+      alert("Failed to delete project: " + e.message);
     }
   };
 

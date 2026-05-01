@@ -6,7 +6,9 @@ import {
   FileText,
   Trash2,
 } from "lucide-react";
+import { useState } from "react";
 import { GitPanel } from "./GitPanel";
+import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import type { Project } from "../../types";
 
 interface Props {
@@ -14,7 +16,7 @@ interface Props {
   activeProject: Project | null;
   onSelectProject: (p: Project) => void;
   onAddProject: () => void;
-  onDeleteProject: (p: Project) => void;
+  onDeleteProject: (p: Project, deleteFiles: boolean) => void;
   send: (msg: any) => void;
   session: any;
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
@@ -30,6 +32,14 @@ export function Sidebar({
   session,
   projectSessions,
 }: Props) {
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+
+  const handleDeleteConfirm = (deleteFiles: boolean) => {
+    if (projectToDelete) {
+      onDeleteProject(projectToDelete, deleteFiles);
+      setProjectToDelete(null);
+    }
+  };
   return (
     <aside className="w-48 border-r-2 border-hacker-accent/20 sidebar-zone sidebar-stripe flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
@@ -75,7 +85,7 @@ export function Sidebar({
                   )}
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onDeleteProject(p); }}
+                  onClick={(e) => { e.stopPropagation(); setProjectToDelete(p); }}
                   className="px-1 py-1 text-hacker-text-dim/0 group-hover:text-hacker-error/70 hover:!text-hacker-error transition-colors"
                   title="Delete project"
                 >
@@ -130,6 +140,13 @@ export function Sidebar({
           />
         </div>
       </div>
+
+      {/* ── Delete project modal ── */}
+      <DeleteProjectModal
+        project={projectToDelete}
+        onClose={() => setProjectToDelete(null)}
+        onConfirm={handleDeleteConfirm}
+      />
     </aside>
   );
 }

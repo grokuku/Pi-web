@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "fs";
 import path from "path";
 import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
@@ -204,14 +204,39 @@ export async function updateProject(
   });
 }
 
-export async function deleteProject(id: string): Promise<void> {
+export async function deleteProject(id: string, deleteFiles: boolean = false): Promise<void> {
   return projectsMutex.run(() => {
     const projects = loadProjects();
-    const filtered = projects.filter((p) => p.id !== id);
-    if (filtered.length === projects.length) {
+    const project = projects.find((p) => p.id === id);
+    if (!project) {
       throw new Error(`Project not found: ${id}`);
     }
+
+    const cwd = project.cwd;
+    const storage = project.storage;
+
+    // Remove from projects list
+    const filtered = projects.filter((p) => p.id !== id);
     saveProjects(filtered);
+
+    // Delete files only if requested AND it's a local project
+    if (deleteFiles && storage === "local" && cwd) {
+      try {
+        // Check if directory exists and is a project directory (safety check)
+        if (existsSync(cwd)) {
+          console.log(`[Projects] Deleting project directory: ${cwd}`);
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      } catch (e: any) {
+        console.error(`[Projects] Failed to delete directory ${cwd}:`, e.message);
+        // Don't throw - project is already removed from list
+      }
+    }
+
+    // For remote projects (ssh/smb), we NEVER delete remote content
+    if (deleteFiles && (storage === "ssh" || storage === "smb")) {
+      console.log(`[Projects] Skipping remote file deletion for ${storage} project: ${project.name}`);
+    }
   });
 }
 

@@ -62,7 +62,9 @@ router.put("/:id", async (req: Request, res: Response) => {
 // DELETE project
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
-    await deleteProject(req.params.id);
+    const { deleteFiles } = req.query;
+    const shouldDeleteFiles = deleteFiles === "true";
+    await deleteProject(req.params.id, shouldDeleteFiles);
     res.json({ success: true });
   } catch (error: any) {
     res.status(400).json({ error: error.message });

@@ -482,36 +482,47 @@ export async function generateAiCommitMessage(
   diff: string,
   projectId: string
 ): Promise<{ subject: string; body: string } | null> {
+  console.log(`[commit] === Starting commit message generation ===`);
+  console.log(`[commit] diff length: ${diff?.length || 0}`);
+  console.log(`[commit] projectId: ${projectId}`);
+
   // 1. Try the dedicated commit model from the library
   const library = loadModelLibrary();
   const commitMode = library.modes.commit;
+  console.log(`[commit] commitMode.enabled=${commitMode.enabled}, activeModelId=${commitMode.activeModelId}, models=${commitMode.models.length}`);
+
   let model: any = null;
   let apiKey: string | undefined;
 
   if (commitMode.enabled && commitMode.activeModelId) {
     const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
+    console.log(`[commit] Found commit entry: ${entry ? entry.name : "NONE"}`);
     if (entry) {
-      const reg = sharedModelRegistry;
-      // Build a model object from the entry
       model = {
         id: entry.id,
         provider: entry.provider,
-        api: entry.provider, // provider = api source
+        api: entry.provider,
         modelId: entry.modelId,
       };
-      const auth = await reg.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = auth.apiKey;
+      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
+      console.log(`[commit] Commit model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
+      if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
   // 2. Fallback: use the session model (if available)
   if (!model?.id) {
-    console.log("[commit] No commit model configured, falling back to session model");
+    console.log("[commit] No commit model, falling back to session model");
     const state = sessionsByProject.get(projectId);
-    model = state?.session?.model || null;
-    if (model) {
+    console.log(`[commit] Session state: ${state ? "found" : "NOT FOUND"}`);
+    if (state?.session?.model) {
+      model = state.session.model;
+      console.log(`[commit] Session model: ${model.provider}/${model.modelId}`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = auth.apiKey;
+      console.log(`[commit] Session model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
+      if (auth.ok) apiKey = (auth as any).apiKey;
+    } else {
+      console.log("[commit] No session model available");
     }
   }
 
@@ -519,21 +530,28 @@ export async function generateAiCommitMessage(
   if (!model?.id) {
     console.log("[commit] No session model, searching registry...");
     const availableModels = sharedModelRegistry.getAvailable();
+    console.log(`[commit] Registry has ${availableModels.length} available models`);
     if (availableModels.length > 0) {
       model = availableModels[0];
+      console.log(`[commit] Using registry model: ${model.provider}/${model.modelId}`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = auth.apiKey;
+      console.log(`[commit] Registry model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
+      if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
-  if (!model) {
-    console.warn("[commit] No model available");
+  if (!model?.id) {
+    console.warn("[commit] === No model available at all ===");
     return null;
   }
 
-  console.log(`[commit] Using model: ${model.id || model.modelId}`);
+  console.log(`[commit] === Using model: ${model.provider}/${model.modelId} (apiKey=${apiKey ? "present" : "MISSING"}) ===`);
 
-  const systemPrompt = commitMode.instructions || DEFAULT_INSTRUCTIONS.commit;
+  const systemPrompt = (commitMode.instructions && commitMode.instructions.trim())
+    ? commitMode.instructions
+    : DEFAULT_INSTRUCTIONS.commit;
+
+  console.log(`[commit] systemPrompt length: ${systemPrompt.length}`);
 
   const context = {
     systemPrompt,
@@ -548,33 +566,41 @@ export async function generateAiCommitMessage(
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s timeout (lighter model)
+    const timeout = setTimeout(() => controller.abort(), 20_000);
 
+    console.log("[commit] Calling completeSimple...");
     const response = await completeSimple(model, context, {
       temperature: 0.2,
       maxTokens: 400,
       apiKey,
       signal: controller.signal,
     });
-
     clearTimeout(timeout);
 
+    console.log(`[commit] completeSimple returned, content items: ${response.content?.length || 0}`);
+
     const text = response.content
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text || "")
-      .join("\n")
-      .trim();
+      ?.filter((c: any) => c.type === "text")
+      ?.map((c: any) => c.text || "")
+      ?.join("\n")
+      ?.trim() || "";
 
-    if (!text) return null;
+    console.log(`[commit] Extracted text length: ${text.length}`);
+    console.log(`[commit] Text preview: ${text.slice(0, 200)}`);
 
-    // Parse: first line = subject, rest = body
+    if (!text) {
+      console.warn("[commit] Empty response from model");
+      return null;
+    }
+
     const lines = text.split("\n");
     const subject = lines[0].trim();
     const body = lines.slice(1).join("\n").trim();
 
+    console.log(`[commit] === Success: subject="${subject}", body=${body.length} chars ===`);
     return { subject: subject || text, body };
-  } catch (error) {
-    console.error("AI commit message generation failed:", error);
+  } catch (error: any) {
+    console.error("[commit] === completeSimple FAILED ===", error?.message || error);
     return null;
   }
 }

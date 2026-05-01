@@ -44,19 +44,39 @@ async function applyModeToSession(mode: AgentMode): Promise<void> {
 
   const library = loadModelLibrary();
   const cfg = library.modes[mode];
-  if (!cfg.activeModelId || !cfg.enabled) return;
+  if (!cfg.activeModelId || !cfg.enabled) {
+    console.log(`[mode] Not applying ${mode}: enabled=${cfg.enabled}, activeModelId=${cfg.activeModelId}`);
+    return;
+  }
 
   const entry = getActiveModelForMode(mode);
-  if (!entry) return;
+  if (!entry) {
+    console.warn(`[mode] No active entry found for ${mode}`);
+    return;
+  }
 
   try {
+    console.log(`[mode] Applying ${mode} → ${entry.provider}/${entry.modelId}`);
     reloadModelRegistry();
     await setModel(entry.provider, entry.modelId);
     await setThinkingLevel(entry.thinkingLevel);
+    console.log(`[mode] Applied ${mode} successfully`);
   } catch (e: any) {
-    // Model might not be available yet
-    console.error(`Failed to apply mode ${mode}: ${e.message}`);
+    console.error(`[mode] Failed to apply ${mode}: ${e.message}`);
   }
+}
+
+/** When disabling a mode, find the next enabled mode and apply it */
+async function applyNextEnabledMode(): Promise<void> {
+  const library = loadModelLibrary();
+  const modes: AgentMode[] = ["code", "review", "plan"]; // priority order (skip commit)
+  for (const mode of modes) {
+    if (library.modes[mode].enabled && library.modes[mode].activeModelId) {
+      await applyModeToSession(mode);
+      return;
+    }
+  }
+  console.log("[mode] No enabled modes with models found");
 }
 
 // ── GET full library ─────────────────────────────────────
@@ -100,6 +120,9 @@ router.put("/modes/:mode/enabled", async (req: Request, res: Response) => {
 
     if (enabled) {
       await applyModeToSession(mode);
+    } else {
+      // Mode was disabled — restore the next enabled mode's model
+      await applyNextEnabledMode();
     }
 
     res.json(library);
@@ -194,7 +217,7 @@ router.delete("/modes/:mode/models/:entryId", (req: Request, res: Response) => {
   }
 });
 
-// ── PUT set active model for mode (also applies to session) ──
+// ── PUT set active model for mode (also applies to session if mode is enabled) ──
 
 router.put("/modes/:mode/active", async (req: Request, res: Response) => {
   try {
@@ -206,8 +229,12 @@ router.put("/modes/:mode/active", async (req: Request, res: Response) => {
 
     const library = setActiveModel(mode, entryId);
 
-    // Apply to the active Pi session
-    await applyModeToSession(mode);
+    // Only apply to session if this mode is currently enabled
+    if (library.modes[mode].enabled) {
+      await applyModeToSession(mode);
+    } else {
+      console.log(`[mode] Mode ${mode} is disabled, not applying to session`);
+    }
 
     res.json(library);
   } catch (e: any) {
