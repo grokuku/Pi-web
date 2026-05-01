@@ -23,6 +23,10 @@ Thumbs.db
 .env
 .env.local
 
+# Encrypted credentials (persisted in Docker volume, not in git)
+.data/credentials.enc
+.data/.secret-key
+
 # Logs
 *.log
 

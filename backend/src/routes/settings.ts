@@ -7,52 +7,58 @@ import {
   compactSession,
   newSession,
   reloadModelRegistry,
+  getSession,
 } from "../pi/session.js";
 
 const router = Router();
 
-// GET session info
-router.get("/session", (_req: Request, res: Response) => {
+// GET session info (optionally for a specific project)
+router.get("/session", (req: Request, res: Response) => {
   try {
-    const info = getSessionInfo();
+    const projectId = req.query.projectId as string | undefined;
+    const info = getSessionInfo(projectId);
     res.json(info);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// POST set model
+// POST set model (optionally for a specific project)
 router.post("/model", async (req: Request, res: Response) => {
   try {
-    const { provider, modelId } = req.body;
+    const { provider, modelId, projectId } = req.body;
     if (!provider || !modelId) {
       return res.status(400).json({ error: "provider and modelId required" });
     }
-    const queued = await setModel(provider, modelId);
+    const queued = await setModel(provider, modelId, projectId);
     res.json({ success: true, queued });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// POST cycle model
-router.post("/model/cycle", async (_req: Request, res: Response) => {
+// POST cycle model (for a specific project)
+router.post("/model/cycle", async (req: Request, res: Response) => {
   try {
-    const result = await cycleModel();
+    const { projectId } = req.body;
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId required" });
+    }
+    const result = await cycleModel(projectId);
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// POST set thinking level
+// POST set thinking level (optionally for a specific project)
 router.post("/thinking", async (req: Request, res: Response) => {
   try {
-    const { level } = req.body;
+    const { level, projectId } = req.body;
     if (!level) {
       return res.status(400).json({ error: "level is required" });
     }
-    const queued = await setThinkingLevel(level);
+    const queued = await setThinkingLevel(level, projectId);
     res.json({ success: true, queued });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -60,19 +66,24 @@ router.post("/thinking", async (req: Request, res: Response) => {
 });
 
 // GET current thinking level
-router.get("/thinking", (_req: Request, res: Response) => {
+router.get("/thinking", (req: Request, res: Response) => {
   try {
-    const info = getSessionInfo();
+    const projectId = req.query.projectId as string | undefined;
+    const info = getSessionInfo(projectId);
     res.json({ level: info?.thinkingLevel || "medium" });
   } catch {
     res.json({ level: "medium" });
   }
 });
 
-// POST new session
-router.post("/session/new", async (_req: Request, res: Response) => {
+// POST new session (for a specific project)
+router.post("/session/new", async (req: Request, res: Response) => {
   try {
-    await newSession();
+    const { projectId } = req.body;
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId required" });
+    }
+    await newSession(projectId);
     res.json({ success: true });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -82,15 +93,18 @@ router.post("/session/new", async (_req: Request, res: Response) => {
 // POST compact session
 router.post("/session/compact", async (req: Request, res: Response) => {
   try {
-    const { customInstructions } = req.body;
-    const result = await compactSession(customInstructions);
+    const { projectId, customInstructions } = req.body;
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId required" });
+    }
+    const result = await compactSession(projectId, customInstructions);
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// POST reload model registry (useful after Ollama config changes)
+// POST reload model registry
 router.post("/models/reload", (_req: Request, res: Response) => {
   try {
     reloadModelRegistry();

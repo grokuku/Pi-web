@@ -6,6 +6,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Paperclip, X, Image, FileText, File, AlertTriangle } from "lucide-react";
 import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
 import type { Project } from "../../types";
+import { useChatHistory } from "../../hooks/useChatHistory";
 
 // ── File type helpers ───────────────────────────────────
 
@@ -84,6 +85,7 @@ interface Props {
   activeProject: Project | null;
   isStreaming: boolean;
   session: any;
+  projectId: string;
 }
 
 interface DisplayMessage {
@@ -96,7 +98,7 @@ interface DisplayMessage {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-export function ChatView({ send, on, activeProject, isStreaming, session }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, session, projectId }: Props) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
@@ -121,10 +123,50 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
   const currentToolCallsRef = useRef<ToolCallInfo[]>([]);
   const messagesRef = useRef<DisplayMessage[]>([]);
 
+  // ── Per-project chat history (persists across project switches) ──
+  const chatHistory = useChatHistory(projectId);
+
+  // ── Restore / reset messages when projectId changes ──
+  useEffect(() => {
+    // Load previously stored messages for this project
+    const stored = chatHistory.getMessages();
+    if (stored.length > 0) {
+      setMessages(stored);
+    } else {
+      setMessages([]);
+    }
+    setStreamingContent("");
+    setStreamingThinking("");
+    setCurrentToolCalls([]);
+    setError("");
+    currentAssistantIdRef.current = null;
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sync messages to per-project store whenever they change ──
+  useEffect(() => {
+    chatHistory.saveMessages(messages);
+    messagesRef.current = messages;
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Keep refs in sync
   useEffect(() => { streamingContentRef.current = streamingContent; }, [streamingContent]);
   useEffect(() => { streamingThinkingRef.current = streamingThinking; }, [streamingThinking]);
   useEffect(() => { currentToolCallsRef.current = currentToolCalls; }, [currentToolCalls]);
+
+  // ── Handle pi_history (session restoration) ──
+  useEffect(() => {
+    const unsub = on("pi_history", (msg: any) => {
+      // Only process history for this project's chat
+      if (msg.projectId && msg.projectId !== projectId) return;
+
+      if (msg.messages && Array.isArray(msg.messages) && msg.messages.length > 0) {
+        console.log(`[ChatView] Restored ${msg.messages.length} messages from session history for project ${projectId}`);
+        const restored = chatHistory.handleHistory(msg.messages);
+        setMessages(restored);
+      }
+    });
+    return () => unsub();
+  }, [on, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Keyboard shortcuts (Pi CLI compatible) ──
   useEffect(() => {
@@ -182,9 +224,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  // ── Pi event handling ──
+  // ── Pi event handling (filtered by projectId) ──
   useEffect(() => {
     const unsub = on("pi_event", (msg: any) => {
+      // Only process events for this project's chat
+      if (msg.projectId && msg.projectId !== projectId) return;
+
       const evt: PiEvent = msg.event;
 
       switch (evt.type) {
@@ -299,7 +344,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session }: Prop
     });
 
     return () => unsub();
-  }, [on]);
+  }, [on, projectId]);
 
   // ── File processing ──────────────────────────────────
 
@@ -671,35 +716,90 @@ function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThi
 }
 
 // ── Shared Markdown Renderer ───────────────────────────
+// All assistant message content uses monospace font for proper
+// alignment of code, diffs, tool output, tables, etc.
 function MarkdownRenderer({ content }: { content: string }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code({ node, className, children, ...props }: any) {
-          const match = /language-(\w+)/.exec(className || "");
-          const codeStr = String(children).replace(/\n$/, "");
-          if (!match) {
-            return <code className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs" {...props}>{children}</code>;
-          }
-          return (
-            <div className="chat-code-block my-2">
-              <div className="flex items-center justify-between text-[10px] text-hacker-text-dim px-3 pt-2">
-                <span>{match[1]}</span>
-                <button onClick={() => navigator.clipboard.writeText(codeStr)}
-                  className="hover:text-hacker-accent">📋 copy</button>
+    <div className="markdown-chat font-mono whitespace-pre-wrap break-words text-sm leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // ── Paragraphs: no extra margin, keep monospace ──
+          p({ children, ...props }: any) {
+            return <p className="mb-2 last:mb-0" {...props}>{children}</p>;
+          },
+          // ── Inline code: monospace already, just style it ──
+          code({ node, className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || "");
+            const codeStr = String(children).replace(/\n$/, "");
+            if (!match) {
+              return <code className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs rounded-sm" {...props}>{children}</code>;
+            }
+            return (
+              <div className="chat-code-block my-2">
+                <div className="flex items-center justify-between text-[10px] text-hacker-text-dim px-3 pt-2">
+                  <span>{match[1]}</span>
+                  <button onClick={() => navigator.clipboard.writeText(codeStr)}
+                    className="hover:text-hacker-accent">📋 copy</button>
+                </div>
+                <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div"
+                  customStyle={{ margin: 0, background: "transparent", fontSize: "0.8rem" }}>
+                  {codeStr}
+                </SyntaxHighlighter>
               </div>
-              <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div"
-                customStyle={{ margin: 0, background: "transparent", fontSize: "0.8rem" }}>
-                {codeStr}
-              </SyntaxHighlighter>
-            </div>
-          );
-        },
-      }}
-    >
-      {content}
-    </ReactMarkdown>
+            );
+          },
+          // ── Tables: monospace, compact, aligned columns ──
+          table({ children, ...props }: any) {
+            return (
+              <div className="overflow-x-auto my-2">
+                <table className="text-xs border-collapse border border-hacker-border" {...props}>{children}</table>
+              </div>
+            );
+          },
+          th({ children, ...props }: any) {
+            return <th className="border border-hacker-border px-2 py-1 text-left text-hacker-accent bg-hacker-surface" {...props}>{children}</th>;
+          },
+          td({ children, ...props }: any) {
+            return <td className="border border-hacker-border px-2 py-1" {...props}>{children}</td>;
+          },
+          // ── Lists: compact ──
+          ul({ children, ...props }: any) {
+            return <ul className="ml-4 list-disc mb-2" {...props}>{children}</ul>;
+          },
+          ol({ children, ...props }: any) {
+            return <ol className="ml-4 list-decimal mb-2" {...props}>{children}</ol>;
+          },
+          li({ children, ...props }: any) {
+            return <li className="mb-0.5" {...props}>{children}</li>;
+          },
+          // ── Headings: monospace, styled ──
+          h1({ children, ...props }: any) {
+            return <h1 className="text-hacker-accent text-base font-bold mt-3 mb-1" {...props}>{children}</h1>;
+          },
+          h2({ children, ...props }: any) {
+            return <h2 className="text-hacker-accent text-sm font-bold mt-2 mb-1" {...props}>{children}</h2>;
+          },
+          h3({ children, ...props }: any) {
+            return <h3 className="text-hacker-accent text-xs font-bold mt-2 mb-1" {...props}>{children}</h3>;
+          },
+          // ── Blockquotes ──
+          blockquote({ children, ...props }: any) {
+            return <blockquote className="border-l-2 border-hacker-accent-dim pl-3 my-2 text-hacker-text-dim italic" {...props}>{children}</blockquote>;
+          },
+          // ── Horizontal rules ──
+          hr({ ...props }: any) {
+            return <hr className="divider-glow my-3" {...props} />;
+          },
+          // ── Links ──
+          a({ href, children, ...props }: any) {
+            return <a href={href} className="text-hacker-info hover:text-hacker-accent underline" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 }
 

@@ -43,6 +43,9 @@ export interface Project {
     domain?: string;
   };
   git?: GitInfo;
+  // Session persistence
+  lastSessionId?: string;  // Resume this Pi session on reconnect
+  lastActiveAt?: string;    // When the project was last active
   createdAt: string;
   updatedAt: string;
 }

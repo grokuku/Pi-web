@@ -250,6 +250,19 @@ body {
   background: var(--bg);
 }
 
+/* ── Markdown chat content ─────────────────── */
+.markdown-chat {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fix ReactMarkdown's default paragraph spacing inside pre-wrap */
+.markdown-chat p {
+  margin: 0;
+}
+.markdown-chat p + p {
+  margin-top: 0.5rem;
+}
+
 /* ─── Sidebar accent stripe ────────────────── */
 .sidebar-stripe {
   position: relative;

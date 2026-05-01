@@ -25,6 +25,9 @@ export interface Project {
     autoSync?: boolean;
     lastSync: string | null;
   };
+  // Session persistence
+  lastSessionId?: string;
+  lastActiveAt?: string;
   createdAt: string;
   updatedAt: string;
 }

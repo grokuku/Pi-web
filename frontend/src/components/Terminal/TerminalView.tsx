@@ -100,11 +100,18 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
     const resizeObserver = new ResizeObserver(() => handleResize());
     resizeObserver.observe(containerRef.current);
 
-    // Request terminal creation
+    // ── Request terminal create or reconnect ──
+    // The backend will send existing buffer if terminal already exists
     send({
       type: "terminal_create",
       projectId: activeProject.id,
       cwd: activeProject.cwd,
+    });
+
+    // ── Also request existing buffer for reconnection ──
+    send({
+      type: "terminal_buffer",
+      projectId: activeProject.id,
     });
 
     // Listen for terminal output from backend
@@ -127,9 +134,9 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
       unsub();
       unsubExit();
       resizeObserver.disconnect();
-      if (projectIdRef.current) {
-        send({ type: "terminal_kill", projectId: projectIdRef.current });
-      }
+      // Don't kill the remote terminal on unmount! Only dispose local UI.
+      // The terminal on the server persists across reconnections.
+      // send({ type: "terminal_kill", projectId: projectIdRef.current }); <-- REMOVED
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;

@@ -17,6 +17,7 @@ interface Props {
   onAddProject: () => void;
   send: (msg: any) => void;
   session: any;
+  projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
 }
 
 export function Sidebar({
@@ -28,6 +29,7 @@ export function Sidebar({
   onAddProject,
   send,
   session,
+  projectSessions,
 }: Props) {
   return (
     <aside className="w-52 border-r border-hacker-border-bright bg-hacker-surface sidebar-stripe flex flex-col shrink-0 text-xs">
@@ -38,25 +40,35 @@ export function Sidebar({
         </div>
 
         <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => onSelectProject(p)}
-              className={`w-full text-left px-2 py-1 flex items-center gap-1.5 ${
-                activeProject?.id === p.id
-                  ? "bg-hacker-accent/10 border border-hacker-accent/30 text-hacker-accent"
-                  : "hover:bg-hacker-border/50 text-hacker-text-dim"
-              }`}
-            >
-              <span className="text-[10px]">
-                {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
-              </span>
-              <span className="truncate">{p.name}</span>
-              {p.git?.branch && (
-                <span className="text-[8px] text-hacker-info ml-auto">git</span>
-              )}
-            </button>
-          ))}
+          {projects.map((p) => {
+            const pState = projectSessions?.get(p.id);
+            const isThisStreaming = pState?.isStreaming ?? false;
+            const hasSession = !!pState?.session;
+            return (
+              <button
+                key={p.id}
+                onClick={() => onSelectProject(p)}
+                className={`w-full text-left px-2 py-1 flex items-center gap-1.5 group ${
+                  activeProject?.id === p.id
+                    ? "bg-hacker-accent/10 border border-hacker-accent/30 text-hacker-accent"
+                    : "hover:bg-hacker-border/50 text-hacker-text-dim"
+                }`}>
+                <span className="text-[10px]">
+                  {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
+                </span>
+                <span className="truncate flex-1">{p.name}</span>
+                {isThisStreaming && (
+                  <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming in background" />
+                )}
+                {hasSession && !isThisStreaming && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />
+                )}
+                {p.git?.branch && (
+                  <span className="text-[8px] text-hacker-info ml-auto">git</span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <button

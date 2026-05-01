@@ -13,6 +13,7 @@ export function useWebSocket() {
   );
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDestroyedRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
 
   const connect = useCallback(() => {
     // Clear any pending reconnect timer
@@ -45,6 +46,7 @@ export function useWebSocket() {
     ws.onopen = () => {
       console.log("[WS] Connected");
       setConnected(true);
+      reconnectAttemptsRef.current = 0;
     };
 
     ws.onmessage = (event) => {
@@ -67,10 +69,12 @@ export function useWebSocket() {
     ws.onclose = () => {
       wsRef.current = null;
       setConnected(false);
-      // Only reconnect if component is still alive
+      // Exponential backoff: 1s, 2s, 4s, 8s... max 30s
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+      reconnectAttemptsRef.current++;
       if (!isDestroyedRef.current) {
-        console.log("[WS] Disconnected, reconnecting in 2s...");
-        reconnectTimerRef.current = setTimeout(connect, 2000);
+        console.log(`[WS] Disconnected, reconnecting in ${delay}ms...`);
+        reconnectTimerRef.current = setTimeout(connect, delay);
       }
     };
 
