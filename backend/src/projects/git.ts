@@ -117,6 +117,27 @@ export async function getGitHistory(
   }
 }
 
+/**
+ * Get unified diff of all changes (staged + unstaged).
+ * Used for AI commit message generation. Truncated to ~8KB.
+ */
+export async function getGitDiff(cwd: string): Promise<string> {
+  const git: SimpleGit = simpleGit(cwd);
+  try {
+    const staged = await git.diff(["--staged"]);
+    const unstaged = await git.diff();
+    let combined = "";
+    if (staged) combined += "Staged changes:\n" + staged + "\n";
+    if (unstaged) combined += "Unstaged changes:\n" + unstaged;
+    if (combined.length > 8000) {
+      combined = combined.slice(0, 8000) + "\n... (truncated)";
+    }
+    return combined || "No changes detected";
+  } catch {
+    return "";
+  }
+}
+
 export async function gitPull(cwd: string): Promise<string> {
   const git: SimpleGit = await gitWithAuth(cwd);
   try {

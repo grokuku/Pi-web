@@ -21,6 +21,11 @@ interface Preview {
     subject: string;
     body: string;
   };
+  // AI-generated message (from Pi model) — preferred when available
+  aiMessage?: {
+    subject: string;
+    body: string;
+  } | null;
 }
 
 interface Props {
@@ -33,9 +38,10 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [loading, setLoading] = useState<"preview" | "push" | null>(null);
+  const [loading, setLoading] = useState<"preview" | "push" | "ai-gen" | null>(null);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  const [usingAi, setUsingAi] = useState(true); // Prefer AI message
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -53,8 +59,16 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       }
       const data: Preview = await res.json();
       setPreview(data);
-      setSubject(data.proposedMessage.subject);
-      setBody(data.proposedMessage.body);
+      // Prefer AI message, fall back to heuristic
+      if (data.aiMessage?.subject) {
+        setSubject(data.aiMessage.subject);
+        setBody(data.aiMessage.body);
+        setUsingAi(true);
+      } else {
+        setSubject(data.proposedMessage.subject);
+        setBody(data.proposedMessage.body);
+        setUsingAi(false);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -105,7 +119,19 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
     }
   };
 
-  // ── Summary stats ──
+  // ── Toggle between AI and heuristic message ──
+  const toggleMessageSource = () => {
+    if (!preview) return;
+    if (usingAi) {
+      setSubject(preview.proposedMessage.subject);
+      setBody(preview.proposedMessage.body);
+      setUsingAi(false);
+    } else if (preview.aiMessage?.subject) {
+      setSubject(preview.aiMessage.subject);
+      setBody(preview.aiMessage.body);
+      setUsingAi(true);
+    }
+  };
   const stats = preview?.status;
   const totalChanges = stats
     ? stats.staged.length + stats.modified.length + stats.created.length + stats.deleted.length
@@ -194,6 +220,34 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
 
             {/* Commit message form */}
             <div className="space-y-3">
+              {/* Message source indicator */}
+              {preview.aiMessage?.subject && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleMessageSource}
+                    disabled={loading === "ai-gen"}
+                    className={`text-[9px] px-2 py-0.5 border flex items-center gap-1 ${
+                      usingAi
+                        ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
+                        : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-text-dim/40"
+                    }`}
+                  >
+                    <span className={usingAi ? "text-hacker-accent" : ""}>🤖</span>
+                    AI generated
+                  </button>
+                  <button
+                    onClick={toggleMessageSource}
+                    disabled={loading === "ai-gen"}
+                    className={`text-[9px] px-2 py-0.5 border ${
+                      !usingAi
+                        ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
+                        : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-text-dim/40"
+                    }`}
+                  >
+                    Default
+                  </button>
+                </div>
+              )}
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
                   <FileText size={10} />

@@ -1,8 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Paperclip, X, Image, FileText, File, AlertTriangle } from "lucide-react";
 import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
 import type { Project } from "../../types";
@@ -643,163 +639,127 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 }
 
 // ── Message Bubble ─────────────────────────────────────
+// Modern chat-style rendering with clear visual distinction:
+// - USER:     right-aligned, colored background, compact
+// - ASSISTANT: left-aligned, full-width for code/content
 function MessageBubble({ message, showThinking, toggleThinking, expandTools }: {
   message: DisplayMessage; expandTools: boolean; showThinking: boolean; toggleThinking: () => void;
 }) {
   const isUser = message.role === "user";
+
   return (
-    <div className={`mb-4 ${isUser ? "ml-8" : "mr-8"}`}>
-      <div className={`text-xs mb-1 px-1 ${isUser ? "text-hacker-info text-right" : "text-hacker-accent"}`}>
-        {isUser ? "▸ YOU" : "▹ ASSISTANT"}
-        {message.usage && (
-          <span className="text-hacker-text-dim ml-2">
-            [{message.usage.input + message.usage.output} tok · ${message.usage.cost.total.toFixed(4)}]
+    <div className={`flex mb-3 ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`${isUser
+        ? "max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg"
+        : "max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg"
+      }`}>
+        {/* Header */}
+        <div className={`flex items-center gap-2 px-3 pt-2 pb-1 border-b ${isUser ? "border-hacker-accent/20 justify-end" : "border-hacker-border justify-start"}`}>
+          <span className={`text-[10px] font-bold tracking-wider uppercase ${isUser ? "text-hacker-info" : "text-hacker-accent"}`}>
+            {isUser ? "YOU" : "ASSISTANT"}
           </span>
+          {message.usage && (
+            <span className="text-[9px] text-hacker-text-dim">
+              {message.usage.input + message.usage.output} tok · ${message.usage.cost.total.toFixed(4)}
+            </span>
+          )}
+        </div>
+
+        {/* Thinking section */}
+        {message.thinking && (
+          <div className="px-3 pt-2">
+            <button onClick={toggleThinking} className="text-[10px] text-hacker-warn hover:underline mb-1">
+              {showThinking ? "▼" : "▶"} THINKING
+            </button>
+            {showThinking && (
+              <div className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto rounded-sm">
+                {message.thinking}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Content */}
+        {message.content && (
+          <div className={`px-3 py-2 ${isUser ? "text-right" : "text-left"}`}>
+            {isUser ? (
+              <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>
+            ) : (
+              <MarkdownRenderer content={message.content} />
+            )}
+          </div>
+        )}
+
+        {/* Tool calls */}
+        {message.toolCalls.length > 0 && (
+          <div className="px-3 pb-2">
+            {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+          </div>
         )}
       </div>
-
-      {message.thinking && (
-        <div className="mb-2">
-          <button onClick={toggleThinking} className="text-xs text-hacker-warn mb-1 hover:underline">
-            {showThinking ? "▼" : "▶"} THINKING
-          </button>
-          {showThinking && (
-            <div className="text-hacker-text-dim text-xs bg-hacker-bg/50 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto">
-              {message.thinking}
-            </div>
-          )}
-        </div>
-      )}
-
-      {message.content && (
-        <div className="text-sm leading-relaxed">
-          {isUser ? (
-            <span className="text-hacker-text-bright whitespace-pre-wrap">{message.content}</span>
-          ) : (
-            <MarkdownRenderer content={message.content} />
-          )}
-        </div>
-      )}
-
-      {message.toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
     </div>
   );
 }
 
 // ── Streaming Bubble ───────────────────────────────────
+// Matches the Assistant message style but with a blinking cursor
 function StreamingBubble({ content, thinking, toolCalls, showThinking, toggleThinking, expandTools }: {
   content: string; thinking: string; toolCalls: ToolCallInfo[]; showThinking: boolean; toggleThinking: () => void; expandTools: boolean;
 }) {
   return (
-    <div className="mb-4 mr-8">
-      <div className="text-xs mb-1 px-1 text-hacker-accent">
-        <span className="animate-blink">▹</span> ASSISTANT <span className="cursor-blink" />
-      </div>
-      {thinking && (
-        <div className="mb-2">
-          <button onClick={toggleThinking} className="text-xs text-hacker-warn mb-1 hover:underline">
-            {showThinking ? "▼" : "▶"} THINKING
-          </button>
-          {showThinking && (
-            <div className="text-hacker-text-dim text-xs bg-hacker-bg/50 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto">
-              {thinking}
-            </div>
-          )}
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
+        {/* Header with streaming indicator */}
+        <div className="flex items-center gap-2 px-3 pt-2 pb-1 border-b border-hacker-border">
+          <span className="text-[10px] font-bold tracking-wider uppercase text-hacker-accent">ASSISTANT</span>
+          <span className="cursor-blink text-hacker-accent text-xs" />
         </div>
-      )}
-      {content && (
-        <div className="text-sm leading-relaxed"><MarkdownRenderer content={content} /></div>
-      )}
-      {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+
+        {/* Thinking */}
+        {thinking && (
+          <div className="px-3 pt-2">
+            <button onClick={toggleThinking} className="text-[10px] text-hacker-warn hover:underline mb-1">
+              {showThinking ? "▼" : "▶"} THINKING
+            </button>
+            {showThinking && (
+              <div className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-40 overflow-y-auto rounded-sm">
+                {thinking}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Streaming content */}
+        {content && (
+          <div className="px-3 py-2">
+            <MarkdownRenderer content={content} />
+          </div>
+        )}
+
+        {/* Tool calls */}
+        {toolCalls.length > 0 && (
+          <div className="px-3 pb-2">
+            {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 // ── Shared Markdown Renderer ───────────────────────────
-// All assistant message content uses monospace font for proper
-// alignment of code, diffs, tool output, tables, etc.
+// ASSISTANT messages: render in <pre> to preserve ALL whitespace.
+// ReactMarkdown (CommonMark) normalizes spaces, tabs, and consecutive
+// newlines, which breaks manual ASCII tables, diffs, and box-drawing.
+// <pre> with pre-wrap is the only way to guarantee alignment for code content.
+//
+// We keep ReactMarkdown only for USER messages (they're short and rarely
+// need precise alignment).
 function MarkdownRenderer({ content }: { content: string }) {
   return (
-    <div className="markdown-chat font-mono whitespace-pre-wrap break-words text-sm leading-relaxed">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          // ── Paragraphs: no extra margin, keep monospace ──
-          p({ children, ...props }: any) {
-            return <p className="mb-2 last:mb-0" {...props}>{children}</p>;
-          },
-          // ── Inline code: monospace already, just style it ──
-          code({ node, className, children, ...props }: any) {
-            const match = /language-(\w+)/.exec(className || "");
-            const codeStr = String(children).replace(/\n$/, "");
-            if (!match) {
-              return <code className="bg-hacker-border px-1 py-0.5 text-hacker-accent text-xs rounded-sm" {...props}>{children}</code>;
-            }
-            return (
-              <div className="chat-code-block my-2">
-                <div className="flex items-center justify-between text-[10px] text-hacker-text-dim px-3 pt-2">
-                  <span>{match[1]}</span>
-                  <button onClick={() => navigator.clipboard.writeText(codeStr)}
-                    className="hover:text-hacker-accent">📋 copy</button>
-                </div>
-                <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div"
-                  customStyle={{ margin: 0, background: "transparent", fontSize: "0.8rem" }}>
-                  {codeStr}
-                </SyntaxHighlighter>
-              </div>
-            );
-          },
-          // ── Tables: monospace, compact, aligned columns ──
-          table({ children, ...props }: any) {
-            return (
-              <div className="overflow-x-auto my-2">
-                <table className="text-xs border-collapse border border-hacker-border" {...props}>{children}</table>
-              </div>
-            );
-          },
-          th({ children, ...props }: any) {
-            return <th className="border border-hacker-border px-2 py-1 text-left text-hacker-accent bg-hacker-surface" {...props}>{children}</th>;
-          },
-          td({ children, ...props }: any) {
-            return <td className="border border-hacker-border px-2 py-1" {...props}>{children}</td>;
-          },
-          // ── Lists: compact ──
-          ul({ children, ...props }: any) {
-            return <ul className="ml-4 list-disc mb-2" {...props}>{children}</ul>;
-          },
-          ol({ children, ...props }: any) {
-            return <ol className="ml-4 list-decimal mb-2" {...props}>{children}</ol>;
-          },
-          li({ children, ...props }: any) {
-            return <li className="mb-0.5" {...props}>{children}</li>;
-          },
-          // ── Headings: monospace, styled ──
-          h1({ children, ...props }: any) {
-            return <h1 className="text-hacker-accent text-base font-bold mt-3 mb-1" {...props}>{children}</h1>;
-          },
-          h2({ children, ...props }: any) {
-            return <h2 className="text-hacker-accent text-sm font-bold mt-2 mb-1" {...props}>{children}</h2>;
-          },
-          h3({ children, ...props }: any) {
-            return <h3 className="text-hacker-accent text-xs font-bold mt-2 mb-1" {...props}>{children}</h3>;
-          },
-          // ── Blockquotes ──
-          blockquote({ children, ...props }: any) {
-            return <blockquote className="border-l-2 border-hacker-accent-dim pl-3 my-2 text-hacker-text-dim italic" {...props}>{children}</blockquote>;
-          },
-          // ── Horizontal rules ──
-          hr({ ...props }: any) {
-            return <hr className="divider-glow my-3" {...props} />;
-          },
-          // ── Links ──
-          a({ href, children, ...props }: any) {
-            return <a href={href} className="text-hacker-info hover:text-hacker-accent underline" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
+    <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-transparent border-0 p-0 m-0 text-hacker-text-bright">
+      {content}
+    </pre>
   );
 }
 

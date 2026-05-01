@@ -1,4 +1,5 @@
 import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
+import { completeSimple } from "@mariozechner/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -466,4 +467,79 @@ export function getSessionMessages(projectId: string): any[] {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) return [];
   return state.session.messages || [];
+}
+
+/**
+ * Generate a descriptive commit message using the current Pi model.
+ *
+ * Takes the git diff (or a summary of changed files) and uses the LLM
+ * to produce a conventional commit message with a concise subject and
+ * a detailed body explaining what was changed and why.
+ *
+ * Returns { subject, body } or null if no model is active.
+ *
+ * This is a standalone completion — it does NOT affect the chat history.
+ */
+export async function generateAiCommitMessage(
+  diff: string,
+  projectId: string
+): Promise<{ subject: string; body: string } | null> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session?.model) return null;
+
+  const model = state.session.model as any;
+  const apiKey = await sharedAuthStorage.getApiKey(model.provider);
+
+  const systemPrompt = `You are a commit message generator for a coding project. Your task is to analyze a git diff and produce a concise, descriptive commit message following the conventional commits format.
+
+Rules:
+- Subject line: type(scope): description (max 72 chars)
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Body: explain WHAT changed and WHY in 2-5 bullet points
+- Be specific and technical, not vague
+- Output format: plain text, first line is the subject, rest is the body
+- No markdown, no code blocks, just the message`;
+
+  const context = {
+    systemPrompt,
+    messages: [
+      {
+        role: "user" as const,
+        content: `Generate a commit message for this diff:\n\n${diff}`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout
+
+    const response = await completeSimple(model, context, {
+      temperature: 0.3,
+      maxTokens: 300,
+      apiKey,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const text = response.content
+      .filter((c: any) => c.type === "text")
+      .map((c: any) => c.text || "")
+      .join("\n")
+      .trim();
+
+    if (!text) return null;
+
+    // Parse: first line = subject, rest = body
+    const lines = text.split("\n");
+    const subject = lines[0].trim();
+    const body = lines.slice(1).join("\n").trim();
+
+    return { subject: subject || text, body };
+  } catch (error) {
+    console.error("AI commit message generation failed:", error);
+    return null;
+  }
 }

@@ -6,8 +6,9 @@ import {
   updateProject,
   deleteProject,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
+import { generateAiCommitMessage } from "../pi/session.js";
 
 const router = Router();
 
@@ -140,7 +141,24 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
-    const { subject, body } = req.body || {};
+    let { subject, body } = req.body || {};
+
+    // If no custom message, try AI generation
+    if (!subject) {
+      try {
+        const diff = await getGitDiff(project.cwd);
+        if (diff) {
+          const aiMsg = await generateAiCommitMessage(diff, project.id);
+          if (aiMsg) {
+            subject = aiMsg.subject;
+            body = aiMsg.body;
+          }
+        }
+      } catch {
+        // Fall back to heuristic inside gitCommitAndPush
+      }
+    }
+
     const result = await gitCommitAndPush(project.cwd, subject, body);
     await syncGitInfo(project);
     res.json(result);
@@ -163,7 +181,19 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
       return res.status(404).json({ error: "Project not found" });
     }
     const preview = await gitCommitPushPreview(project.cwd);
-    res.json(preview);
+
+    // Try AI-generated commit message
+    let aiMessage: { subject: string; body: string } | null = null;
+    try {
+      const diff = await getGitDiff(project.cwd);
+      if (diff) {
+        aiMessage = await generateAiCommitMessage(diff, project.id);
+      }
+    } catch {
+      // AI generation is optional, fall back to heuristic
+    }
+
+    res.json({ ...preview, aiMessage, diff: undefined });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
