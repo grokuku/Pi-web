@@ -264,38 +264,25 @@ export default function App() {
     <div className="h-screen flex flex-col scanlines">
       <div className="matrix-bg" />
 
-      {/* ── HEADER (ultra-compact) ── */}
+      {/* ── HEADER (compact, no project selector) ── */}
       <header className="h-8 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo */}
         <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
-        <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI-WEB</span>
+        <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
 
         <div className="w-px h-4 bg-hacker-border-bright" />
 
-        {/* Project selector */}
-        <select
-          className="select-hacker text-xs min-w-[140px] max-w-[220px]"
-          value={activeProject?.id || ""}
-          onChange={(e) => {
-            const p = projects.find((p) => p.id === e.target.value);
-            if (p) handleSelectProject(p);
-          }}
-        >
-          <option value="" disabled>-- project --</option>
-          {projects.map((p) => {
-            const pState = projectSessionsRef.current.get(p.id);
-            const suffix = pState?.isStreaming ? " ⚡" : pState?.session ? " ●" : "";
-            return (
-              <option key={p.id} value={p.id}>
-                {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"} {p.name}{suffix}
-              </option>
-            );
-          })}
-        </select>
+        {/* Background streaming count */}
+        {backgroundStreamingProjects.length > 0 && (
+          <>
+            <span className="text-[10px] text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
+            <div className="w-px h-4 bg-hacker-border-bright" />
+          </>
+        )}
 
-        <div className="w-px h-4 bg-hacker-border-bright" />
+        <div className="flex-1" />
 
-        {/* Model quick switch */}
+        {/* Mode chips — CODE / PLAN / REVIEW */}
         <ModelQuickSwitch onModelApplied={() => {
           if (activeProject) {
             fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
@@ -304,34 +291,24 @@ export default function App() {
           }
         }} />
 
-        {/* Background streaming count */}
-        {backgroundStreamingProjects.length > 0 && (
-          <>
-            <div className="w-px h-4 bg-hacker-border-bright" />
-            <span className="text-[10px] text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
-          </>
-        )}
+        <div className="w-px h-4 bg-hacker-border-bright" />
 
-        <div className="flex-1" />
-
-        {/* WS status — minimal */}
-        <span className={`text-[10px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`}>
+        {/* WS status */}
+        <span className={`text-[10px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`} title={connected ? "Connected" : "Offline"}>
           {connected ? "◉" : "◌"}
         </span>
-
-        <div className="w-px h-4 bg-hacker-border-bright" />
 
         <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
           {theme === "dark" ? "☀" : "☾"}
         </button>
-        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-1.5 py-0.5">
+        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-1.5 py-0.5" title="Model library (Ctrl+L)">
           ⚙
         </button>
       </header>
 
       {/* ── MAIN BODY ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar — now owns the PI/TERMINAL tabs */}
+        {/* Sidebar with tabs + project list */}
         <Sidebar
           projects={projects}
           activeProject={activeProject}
@@ -364,7 +341,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* StatusBar — single consolidated info bar */}
+          {/* StatusBar */}
           <StatusBar
             activeProject={activeProject}
             isStreaming={isStreaming}

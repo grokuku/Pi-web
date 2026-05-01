@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ChevronDown, Zap, Power } from "lucide-react";
+import { ChevronDown, Power, Zap } from "lucide-react";
 import type { ModelLibrary, AgentMode, ModelEntry } from "../../types";
 
-const MODE_LABELS: Record<AgentMode, { icon: string; label: string }> = {
-  code: { icon: "⚡", label: "CODE" },
-  review: { icon: "📋", label: "REVIEW" },
-  plan: { icon: "🗺", label: "PLAN" },
+const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string }> = {
+  code: { icon: "⚡", label: "CODE", color: "text-hacker-accent" },
+  plan: { icon: "🗺", label: "PLAN", color: "text-hacker-info" },
+  review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn" },
 };
 
 interface Props {
@@ -13,11 +13,11 @@ interface Props {
 }
 
 export function ModelQuickSwitch({ onModelApplied }: Props) {
-  const [open, setOpen] = useState(false);
+  const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Load library when dropdown opens
+  // Load library
   const loadLibrary = useCallback(async () => {
     try {
       const res = await fetch("/api/model-library");
@@ -27,36 +27,21 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
   }, []);
 
   useEffect(() => {
-    if (open) loadLibrary();
-  }, [open, loadLibrary]);
+    loadLibrary();
+  }, [loadLibrary]);
 
   // Close on click outside
   useEffect(() => {
-    if (!open) return;
+    if (!openMode) return;
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
+        setOpenMode(null);
       }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
+  }, [openMode]);
 
-  // ── Get current mode + model for display ──
-  const getCurrentDisplay = (): string => {
-    if (!library) return "No model";
-    for (const mode of Object.keys(library.modes) as AgentMode[]) {
-      const cfg = library.modes[mode];
-      if (!cfg.enabled || !cfg.activeModelId) continue;
-      const entry = cfg.models.find((m) => m.id === cfg.activeModelId);
-      if (entry) {
-        return `${MODE_LABELS[mode].icon} ${entry.name}`;
-      }
-    }
-    return "No model";
-  };
-
-  // ── Switch active model ──
   const handleSelectModel = async (mode: AgentMode, entryId: string) => {
     try {
       const res = await fetch(`/api/model-library/modes/${mode}/active`, {
@@ -68,10 +53,9 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
       setLibrary(data);
       onModelApplied?.();
     } catch {}
-    setOpen(false);
+    setOpenMode(null);
   };
 
-  // ── Toggle mode ──
   const handleToggleMode = async (e: React.MouseEvent, mode: AgentMode, enabled: boolean) => {
     e.stopPropagation();
     try {
@@ -85,44 +69,62 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
     } catch {}
   };
 
-  // ── Find the first enabled mode with an active model ──
-  const activeMode = library
-    ? (Object.keys(library.modes) as AgentMode[]).find(
-        (m) => library.modes[m].enabled && library.modes[m].activeModelId
-      ) || "code"
-    : "code";
+  const getActiveModelName = (mode: AgentMode): string => {
+    const cfg = library?.modes[mode];
+    if (!cfg?.activeModelId || !cfg?.models) return "—";
+    const entry = cfg.models.find((m) => m.id === cfg.activeModelId);
+    // Shorten model name for chip display
+    if (!entry) return "—";
+    const name = entry.name;
+    // Abbreviate common model names
+    if (name.includes("claude")) return name.replace("Claude ", "C").replace("claude-", "c");
+    if (name.includes("GPT")) return name.replace("GPT-", "G");
+    if (name.includes("o1")) return name.replace("o1-", "o1");
+    return name.length > 10 ? name.slice(0, 10) + "…" : name;
+  };
+
+  const modes: AgentMode[] = ["code", "plan", "review"];
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-xs text-hacker-text-dim hover:text-hacker-text px-2 py-1 border border-hacker-border-bright hover:border-hacker-accent/50 transition-colors"
-      >
-        <span className="text-hacker-accent truncate max-w-[160px]">{getCurrentDisplay()}</span>
-        <ChevronDown size={10} className={`transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+    <div ref={ref} className="flex items-center gap-1.5">
+      {modes.map((mode) => {
+        const cfg = library?.modes[mode];
+        const isEnabled = cfg?.enabled ?? false;
+        const hasModel = !!(cfg?.activeModelId);
+        const isActive = isEnabled && hasModel;
+        const cfg2 = MODE_CONFIG[mode];
+        const isDropdownOpen = openMode === mode;
 
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-[240px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50 animate-in fade-in slide-in-from-top-1">
-          {(Object.keys(MODE_LABELS) as AgentMode[]).map((mode) => {
-            const cfg = library?.modes[mode];
-            const isActive = cfg?.enabled && !!cfg?.activeModelId;
-            const label = MODE_LABELS[mode];
+        return (
+          <div key={mode} className="relative">
+            <button
+              onClick={() => setOpenMode(isDropdownOpen ? null : mode)}
+              className={`mode-chip flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-sm ${
+                isActive ? "active" : isEnabled ? "" : "disabled"
+              }`}
+            >
+              <span className="mode-chip-toggle" />
+              <span className={`mode-chip-label font-bold tracking-wide ${isActive ? cfg2.color : "text-hacker-text-dim"}`}>
+                {cfg2.icon}
+              </span>
+              <span className={`mode-chip-label ${isActive ? "" : "text-hacker-text-dim"}`}>
+                {isActive ? getActiveModelName(mode) : cfg2.label}
+              </span>
+              <ChevronDown size={8} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
+            </button>
 
-            return (
-              <div key={mode} className="border-b border-hacker-border/50 last:border-0">
-                {/* Mode header */}
-                <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50">
-                  <span className={`text-[10px] font-bold tracking-wider ${
-                    isActive ? "text-hacker-accent" : "text-hacker-text-dim"
-                  }`}>
-                    {label.icon} {label.label}
+            {isDropdownOpen && (
+              <div className="absolute top-full right-0 mt-1 w-[200px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
+                {/* Mode header with toggle */}
+                <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
+                  <span className={`text-[10px] font-bold tracking-wider ${isActive ? cfg2.color : "text-hacker-text-dim"}`}>
+                    {cfg2.icon} {cfg2.label}
                   </span>
                   <button
-                    onClick={(e) => handleToggleMode(e, mode, !cfg?.enabled)}
+                    onClick={(e) => handleToggleMode(e, mode, !isEnabled)}
                     className={`text-[9px] px-1.5 py-0.5 border ${
-                      cfg?.enabled
-                        ? "border-hacker-accent/50 text-hacker-accent"
+                      isEnabled
+                        ? "border-hacker-accent/50 text-hacker-accent bg-hacker-accent/10"
                         : "border-hacker-border text-hacker-text-dim"
                     }`}
                   >
@@ -130,8 +132,8 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
                   </button>
                 </div>
 
-                {/* Models for this mode */}
-                {cfg?.enabled && cfg.models.length > 0 ? (
+                {/* Models list */}
+                {isEnabled && cfg?.models && cfg.models.length > 0 ? (
                   cfg.models.map((entry) => {
                     const isModelActive = entry.id === cfg.activeModelId;
                     return (
@@ -152,25 +154,14 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
                   })
                 ) : (
                   <div className="px-3 py-1.5 text-[9px] text-hacker-text-dim italic">
-                    {cfg?.models.length === 0 ? "No models" : "Disabled"}
+                    {!isEnabled ? "Disabled" : "No models"}
                   </div>
                 )}
               </div>
-            );
-          })}
-
-          {/* Open settings link */}
-          <div className="px-3 py-2 border-t border-hacker-border-bright">
-            <button
-              onClick={() => { setOpen(false); }}
-              className="text-[9px] text-hacker-text-dim hover:text-hacker-accent w-full text-center"
-              title="Open Settings (Ctrl+L)"
-            >
-              ⚙ Manage models...
-            </button>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }

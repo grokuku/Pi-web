@@ -39,7 +39,7 @@ export function Sidebar({
   projectSessions,
 }: Props) {
   return (
-    <aside className="w-48 border-r border-hacker-border-bright bg-hacker-surface sidebar-stripe flex flex-col shrink-0 text-xs">
+    <aside className="w-48 border-r-2 border-hacker-accent/20 sidebar-zone sidebar-stripe flex flex-col shrink-0 text-xs">
       {/* ── Tab switcher [PI] [TERM] ── */}
       <div className="flex border-b border-hacker-border-bright">
         <button
