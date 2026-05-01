@@ -737,25 +737,35 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
-        {/* Thinking — merged, collapsible */}
-        {hasThinking && (
+        {/* Thinking + Tools — collapsible zone (the "internal reasoning" block) */}
+        {(hasThinking || allTools.length > 0) && (
           <div className="px-3 pt-2 pb-1">
-            <button onClick={() => setLocalShow(!localShow)}
-              className="text-[10px] text-hacker-warn hover:underline mb-1">
-              {localShow ? "▼" : "▶"} THINKING ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
-            </button>
-            {localShow && (
-              <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono">
-                {mergedThinking}
-              </pre>
+            {hasThinking && (
+              <button onClick={() => setLocalShow(!localShow)}
+                className="text-[10px] text-hacker-warn hover:underline mb-1">
+                {localShow ? "▼" : "▶"} THINKING ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
+              </button>
             )}
-          </div>
-        )}
-
-        {/* Tool calls — inline, always visible */}
-        {allTools.length > 0 && (
-          <div className="px-3 pb-2">
-            {allTools.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+            {!hasThinking && allTools.length > 0 && (
+              <button onClick={() => setLocalShow(!localShow)}
+                className="text-[10px] text-hacker-warn hover:underline mb-1">
+                {localShow ? "▼" : "▶"} TOOL CALLS ({allTools.length})
+              </button>
+            )}
+            {localShow && (
+              <>
+                {hasThinking && (
+                  <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
+                    {mergedThinking}
+                  </pre>
+                )}
+                {allTools.length > 0 && (
+                  <div className="space-y-1">
+                    {allTools.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -793,25 +803,27 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
-        {/* Thinking */}
-        {thinking && (
+        {/* Thinking + Tool calls — collapsible zone */}
+        {(thinking || toolCalls.length > 0) && (
           <div className="px-3 pt-2 pb-1">
             <button onClick={() => setLocalShow(!localShow)}
               className="text-[10px] text-hacker-warn hover:underline mb-1">
-              {localShow ? "▼" : "▶"} THINKING
+              {localShow ? "▼" : "▶"} {thinking ? "THINKING" : `TOOL CALLS (${toolCalls.length})`}
             </button>
             {localShow && (
-              <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono">
-                {thinking}
-              </pre>
+              <>
+                {thinking && (
+                  <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
+                    {thinking}
+                  </pre>
+                )}
+                {toolCalls.length > 0 && (
+                  <div className="space-y-1">
+                    {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
+                  </div>
+                )}
+              </>
             )}
-          </div>
-        )}
-
-        {/* Tool calls */}
-        {toolCalls.length > 0 && (
-          <div className="px-3 pb-2">
-            {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
           </div>
         )}
 
@@ -834,22 +846,59 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
 }
 
 // ── Tool Call Card ─────────────────────────────────────
-function ToolCallCard({ toolCall, defaultExpanded = true }: { toolCall: ToolCallInfo; defaultExpanded?: boolean }) {
+// Two modes:
+// - "badge" (default for completed tools): tiny inline pill like  ✓ bash  ✓ edit src/file.ts
+// - "detail" (for streaming or when user clicks): full card with args/output
+function ToolCallCard({ toolCall, defaultExpanded = true, forceBadge = false }: {
+  toolCall: ToolCallInfo;
+  defaultExpanded?: boolean;
+  forceBadge?: boolean;
+}) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
-  // Sync with global toggle
-  useEffect(() => { setExpanded(defaultExpanded); }, [defaultExpanded]);
-  const displayArgs = extractToolArgs(toolCall.args);
+  // Auto-collapse when tool finishes running (isStreaming goes from true → false)
+  const wasStreaming = useRef(toolCall.isStreaming);
+  useEffect(() => {
+    if (wasStreaming.current && !toolCall.isStreaming) {
+      // Tool just finished — collapse it
+      setExpanded(false);
+    }
+    wasStreaming.current = toolCall.isStreaming;
+  }, [toolCall.isStreaming]);
 
+  // Sync with global toggle (only expand, never force-collapse)
+  useEffect(() => { if (defaultExpanded) setExpanded(true); }, [defaultExpanded]);
+
+  const displayArgs = extractToolArgs(toolCall.args);
+  const isRunning = toolCall.isStreaming;
+  const isDone = !isRunning && (toolCall.output || !toolCall.isError);
+  const shortLabel = getToolShortLabel(toolCall.name, displayArgs);
+
+  // Badge mode: compact pill for completed tools
+  if (!isRunning && !expanded && (isDone || toolCall.isError)) {
+    return (
+      <button onClick={() => setExpanded(true)}
+        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm border mr-1 mb-1 ${
+          toolCall.isError
+            ? "border-hacker-error/40 text-hacker-error bg-hacker-error/5"
+            : "border-hacker-border text-hacker-text-dim bg-hacker-bg/50 hover:bg-hacker-border/30"
+        }`}
+        title={toolCall.output ? toolCall.output.slice(0, 200) : undefined}>
+        {toolCall.isError ? "✕" : "✓"} {shortLabel}
+      </button>
+    );
+  }
+
+  // Detail mode: full card
   return (
     <div className="mt-2 border border-hacker-border bg-hacker-bg/50 overflow-hidden">
       <button onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-hacker-info hover:bg-hacker-border/50">
         <span>{expanded ? "▼" : "▶"}</span>
         <span className="font-bold">{toolCall.name}</span>
-        {toolCall.isStreaming && <span className="text-hacker-accent animate-pulse">▶ running...</span>}
+        {isRunning && <span className="text-hacker-accent">⟳</span>}
         {toolCall.isError && <span className="text-hacker-error">✕ error</span>}
-        {!toolCall.isStreaming && !toolCall.isError && toolCall.output && <span className="text-hacker-text-dim">✓ done</span>}
+        {!isRunning && !toolCall.isError && toolCall.output && <span className="text-hacker-text-dim">✓</span>}
       </button>
       {expanded && (
         <div>
@@ -865,6 +914,31 @@ function ToolCallCard({ toolCall, defaultExpanded = true }: { toolCall: ToolCall
       )}
     </div>
   );
+}
+
+/** Short label for a tool call badge, e.g. "bash", "edit src/app.tsx", "read README.md" */
+function getToolShortLabel(name: string, args: any): string {
+  if (!args || typeof args !== "object") return name;
+  // Try to find a filename-like argument
+  const fileKeys = ["file_path", "filePath", "path", "filename", "file", "directory", "dir"];
+  for (const key of fileKeys) {
+    if (args[key] && typeof args[key] === "string") {
+      const f = args[key] as string;
+      // Show just the basename
+      const base = f.split("/").pop() || f;
+      return `${name} ${base}`;
+    }
+  }
+  // Try command
+  if (args.command && typeof args.command === "string") {
+    const cmd = (args.command as string).slice(0, 30);
+    return `${name} ${cmd}${(args.command as string).length > 30 ? "…" : ""}`;
+  }
+  // Try query/pattern
+  if (args.pattern && typeof args.pattern === "string") {
+    return `${name} ${args.pattern}`;
+  }
+  return name;
 }
 
 /** Extract the actual arguments from a potentially-wrapped tool call object. */

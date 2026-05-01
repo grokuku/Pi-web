@@ -40,7 +40,7 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     const { name, storage, cwd, ssh, smb, versioning, git } = req.body;
     if (!name || !storage || !cwd) {
-      return res.status(400).json({ error: "name, storage, and cwd are required" });
+      return res.status(400).json({ error: "name, storage, and cwd (parent directory) are required" });
     }
     const project = await createProject(name, storage, cwd, versioning || "standalone", git, ssh, smb);
     res.status(201).json(project);

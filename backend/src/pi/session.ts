@@ -472,27 +472,41 @@ export function getSessionMessages(projectId: string): any[] {
 /**
  * Generate a descriptive commit message using the current Pi model.
  *
- * Takes the git diff (or a summary of changed files) and uses the LLM
- * to produce a conventional commit message with a concise subject and
- * a detailed body explaining what was changed and why.
+ * Works even WITHOUT an active Pi session: falls back to the last used
+ * model from ModelRegistry + AuthStorage.
  *
- * Returns { subject, body } or null if no model is active.
- *
- * This is a standalone completion — it does NOT affect the chat history.
+ * Returns { subject, body } or null if no model/API key is available.
  */
 export async function generateAiCommitMessage(
   diff: string,
   projectId: string
 ): Promise<{ subject: string; body: string } | null> {
+  // 1. Try to get the model from the active session
   const state = sessionsByProject.get(projectId);
-  if (!state?.session?.model) return null;
+  let model: any = state?.session?.model || null;
+  let apiKey: string | undefined;
 
-  const model = state.session.model as any;
+  // 2. If no session model, try to find a default model from the registry
   if (!model?.id || !model?.provider || !model?.api) {
-    console.warn("[session] Invalid model for AI commit message generation");
+    console.log("[session] No active session model, searching registry for default...");
+    const availableModels = sharedModelRegistry.getAvailable();
+    // Pick the first available model
+    if (availableModels.length > 0) {
+      model = availableModels[0];
+      apiKey = await sharedAuthStorage.getApiKey(model.provider);
+    }
+    if (!model) {
+      console.warn("[session] No available model for commit message generation");
+      return null;
+    }
+  } else {
+    apiKey = await sharedAuthStorage.getApiKey(model.provider);
+  }
+
+  if (!apiKey) {
+    console.warn(`[session] No API key for provider ${model.provider}`);
     return null;
   }
-  const apiKey = await sharedAuthStorage.getApiKey(model.provider);
 
   const systemPrompt = `You are a commit message generator for a coding project. Your task is to analyze a git diff and produce a concise, descriptive commit message following the conventional commits format.
 

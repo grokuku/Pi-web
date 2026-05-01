@@ -46,7 +46,9 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
   const [warning, setWarning] = useState("");
 
   // ── Derived state ──
-  const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : cwd;
+  // For local storage: cwd is the PARENT directory; we create a subfolder with the project name.
+  // For SSH/SMB: the path logic stays the same.
+  const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : (cwd && name ? `${cwd}/${name}`.replace(/\/+/g, "/") : cwd);
 
   // ── Handlers ──
 
@@ -58,7 +60,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
         return;
       }
       if (storage === "local" && !cwd) {
-        setError("Working directory is required");
+        setError("Parent directory is required");
         return;
       }
       if (storage === "ssh" && !sshRemotePath) {
@@ -262,11 +264,11 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
               </div>
             </div>
 
-            {/* Working directory */}
+            {/* Parent directory (project folder will be created inside) */}
             {storage === "local" && (
               <div>
                 <label className="text-hacker-text-dim text-xs block mb-1.5">
-                  Working Directory
+                  Parent Directory
                 </label>
                 <FileBrowser
                   initialPath={cwd || "/projects"}
@@ -274,9 +276,14 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   onSelect={(path) => setCwd(path)}
                   selectedPath={cwd}
                 />
-                {cwd && (
+                {cwd && name && (
                   <div className="text-hacker-accent text-[10px] mt-1">
-                    Selected: {cwd}
+                    Will create: {cwd}/{name}
+                  </div>
+                )}
+                {cwd && !name && (
+                  <div className="text-hacker-text-dim text-[10px] mt-1">
+                    Selected parent: {cwd}
                   </div>
                 )}
               </div>

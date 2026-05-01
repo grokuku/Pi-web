@@ -13,8 +13,6 @@ import type { Project } from "./types";
 type Tab = "pi" | "terminal";
 
 // ── Per-project session state ──────────────────────
-// This allows multiple projects to stream in parallel,
-// each maintaining its own chat history, streaming state, etc.
 interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
@@ -30,14 +28,10 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
 
-  // ── Per-project sessions (keyed by project ID) ──
-  // This map persists across project switches, so background
-  // projects continue to receive events and accumulate messages.
   const projectSessionsRef = useRef<Map<string, ProjectSessionState>>(new Map());
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => n + 1);
 
-  // Get the active project's session state (for backward-compat props)
   const activeSessionState = activeProject
     ? projectSessionsRef.current.get(activeProject.id)
     : undefined;
@@ -51,7 +45,7 @@ export default function App() {
   const [showAddProject, setShowAddProject] = useState(false);
   const [showModelLibrary, setShowModelLibrary] = useState(false);
 
-  // ── Helpers for per-project state ──
+  // ── Helpers ──
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
     let state = projectSessionsRef.current.get(projectId);
     if (!state) {
@@ -65,7 +59,6 @@ export default function App() {
     (projectId: string, update: Partial<ProjectSessionState>) => {
       const state = getProjectSession(projectId);
       Object.assign(state, update);
-      // Only re-render if this is the active project
       if (activeProject?.id === projectId) {
         rerender();
       }
@@ -88,7 +81,6 @@ export default function App() {
       const shift = e.shiftKey;
       const alt = e.altKey;
 
-      // Escape → abort streaming of the ACTIVE project
       if (e.key === "Escape" && !mod && !shift && !alt) {
         if (isStreaming && activeProject) {
           e.preventDefault();
@@ -100,7 +92,6 @@ export default function App() {
         return;
       }
 
-      // Ctrl+L → model settings
       if (mod && e.key === "l") {
         e.preventDefault();
         setShowModelLibrary(true);
@@ -132,7 +123,7 @@ export default function App() {
     loadProjects();
   }, [loadProjects]);
 
-  // ── WS event handler (routes events to the correct project) ──
+  // ── WS event handler ──
   useEffect(() => {
     const unsubPiEvent = on("pi_event", (msg: any) => {
       const evt = msg.event;
@@ -172,29 +163,23 @@ export default function App() {
       }
     });
 
-    const unsubTerm = on("terminal_data", (_msg: any) => {
-      // Handled in TerminalView
-    });
+    const unsubTerm = on("terminal_data", (_msg: any) => {});
 
     const unsubError = on("error", (msg: any) => {
       console.error("[WS Error]", msg.error);
     });
 
-    // ── Handle session history on reconnect ──
     const unsubHistory = on("pi_history", (msg: any) => {
       if (msg.messages && msg.messages.length > 0) {
         console.log(`[Pi] Restored ${msg.messages.length} messages for project ${msg.projectId}`);
-        // ChatView will handle this via its own subscriber
       }
     });
 
-    // ── Handle pi_started event (confirms session is ready) ──
     const unsubStarted = on("pi_started", (msg: any) => {
       const { projectId, resumed } = msg.data || {};
       if (projectId) {
         console.log(`[Pi] Session ${resumed ? "resumed" : "started"} for project ${projectId}`);
         if (resumed) {
-          // Update session state to reflect resumed session
           updateProjectSession(projectId, { isStreaming: false });
         }
       }
@@ -209,10 +194,9 @@ export default function App() {
     };
   }, [on, getProjectSession, updateProjectSession]);
 
-  // ── Handle project selection ──
-  // No confirmation modal needed — just switch! Background projects keep streaming.
+  // ── Project selection ──
   const handleSelectProject = (project: Project) => {
-    if (activeProject?.id === project.id) return; // Already active
+    if (activeProject?.id === project.id) return;
     activateProject(project);
   };
 
@@ -221,12 +205,9 @@ export default function App() {
       setActiveProject(project);
       localStorage.setItem("pi-web-active-project", project.id);
 
-      // Check if we already have an in-memory session for this project
       const state = getProjectSession(project.id);
 
       if (!state.session) {
-        // No in-memory session — request one from the backend.
-        // Handles: first activation, page refresh, session cleanup
         send({
           type: "pi_start",
           projectId: project.id,
@@ -234,8 +215,6 @@ export default function App() {
           sessionId: project.lastSessionId,
         });
       } else {
-        // Session already alive (streaming in background).
-        // Just switch UI — but request history refresh to catch up on missed events.
         send({
           type: "pi_history_request",
           projectId: project.id,
@@ -247,9 +226,27 @@ export default function App() {
     [send, getProjectSession]
   );
 
-  // ── Add project ──
+  // ── Add/delete project ──
   const handleAddProject = () => {
     setShowAddProject(true);
+  };
+
+  const handleDeleteProject = async (project: Project) => {
+    if (!confirm(`Delete project "${project.name}"?\nThis only removes it from Pi-Web. Files on disk are NOT deleted.`)) return;
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to delete project");
+      }
+      if (activeProject?.id === project.id) {
+        setActiveProject(null);
+        localStorage.removeItem("pi-web-active-project");
+      }
+      await loadProjects();
+    } catch (e: any) {
+      console.error("Failed to delete project:", e.message);
+    }
   };
 
   const handleProjectCreated = async (project: Project) => {
@@ -258,90 +255,45 @@ export default function App() {
     activateProject(project);
   };
 
-  // ── Compute which projects are streaming in background ──
+  // ── Background streaming ──
   const backgroundStreamingProjects = projects.filter(
     (p) => p.id !== activeProject?.id && projectSessionsRef.current.get(p.id)?.isStreaming
   );
 
   return (
     <div className="h-screen flex flex-col scanlines">
-      {/* Matrix background */}
       <div className="matrix-bg" />
 
-      {/* ── HEADER ── */}
-      <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-3 z-10 shrink-0">
+      {/* ── HEADER (ultra-compact) ── */}
+      <header className="h-8 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo */}
-        <div className="flex items-center gap-2">
-          <span className="text-hacker-accent text-lg glitch select-none">⚡</span>
-          <span className="text-hacker-accent text-sm font-bold tracking-widest select-none">
-            PI-WEB
-          </span>
-        </div>
+        <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
+        <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI-WEB</span>
 
-        <div className="w-px h-5 bg-hacker-border-bright" />
+        <div className="w-px h-4 bg-hacker-border-bright" />
 
-        {/* Project selector with background streaming indicators */}
-        <div className="flex items-center gap-2">
-          <select
-            className="select-hacker text-xs min-w-[160px]"
-            value={activeProject?.id || ""}
-            onChange={(e) => {
-              const p = projects.find((p) => p.id === e.target.value);
-              if (p) handleSelectProject(p);
-            }}
-          >
-            <option value="" disabled>
-              -- select project --
-            </option>
-            {projects.map((p) => {
-              const pState = projectSessionsRef.current.get(p.id);
-              const isThisStreaming = pState?.isStreaming ?? false;
-              const suffix = isThisStreaming ? " ⚡" : pState?.session ? " ●" : "";
-              return (
-                <option key={p.id} value={p.id}>
-                  {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"} {p.name}{suffix}
-                </option>
-              );
-            })}
-          </select>
-          <button onClick={handleAddProject} className="btn-hacker text-xs px-2 py-1">
-            +NEW
-          </button>
-        </div>
-
-        {activeProject && (
-          <>
-            <div className="w-px h-5 bg-hacker-border-bright" />
-            <span className="text-hacker-text-dim text-xs truncate max-w-[300px]">
-              {activeProject.cwd}
-            </span>
-          </>
-        )}
-
-        {/* Background streaming indicator */}
-        {backgroundStreamingProjects.length > 0 && (
-          <>
-            <div className="w-px h-5 bg-hacker-border-bright" />
-            <div className="flex items-center gap-1 text-xs animate-pulse">
-              <span className="text-hacker-accent">⚡</span>
-              <span className="text-hacker-warn">
-                {backgroundStreamingProjects.length} running{backgroundStreamingProjects.length > 1 ? "" : ""}
-              </span>
-            </div>
-          </>
-        )}
-
-        {/* Spacer */}
-        <div className="flex-1" />
-
-        {/* WS status */}
-        <span
-          className={`text-xs ${connected ? "text-hacker-accent" : "text-hacker-error"}`}
+        {/* Project selector */}
+        <select
+          className="select-hacker text-xs min-w-[140px] max-w-[220px]"
+          value={activeProject?.id || ""}
+          onChange={(e) => {
+            const p = projects.find((p) => p.id === e.target.value);
+            if (p) handleSelectProject(p);
+          }}
         >
-          {connected ? "◉ CONNECTED" : "◌ OFFLINE"}
-        </span>
+          <option value="" disabled>-- project --</option>
+          {projects.map((p) => {
+            const pState = projectSessionsRef.current.get(p.id);
+            const suffix = pState?.isStreaming ? " ⚡" : pState?.session ? " ●" : "";
+            return (
+              <option key={p.id} value={p.id}>
+                {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"} {p.name}{suffix}
+              </option>
+            );
+          })}
+        </select>
 
-        <div className="w-px h-5 bg-hacker-border-bright" />
+        <div className="w-px h-4 bg-hacker-border-bright" />
 
         {/* Model quick switch */}
         <ModelQuickSwitch onModelApplied={() => {
@@ -352,54 +304,43 @@ export default function App() {
           }
         }} />
 
-        <div className="w-px h-5 bg-hacker-border-bright" />
+        {/* Background streaming count */}
+        {backgroundStreamingProjects.length > 0 && (
+          <>
+            <div className="w-px h-4 bg-hacker-border-bright" />
+            <span className="text-[10px] text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
+          </>
+        )}
 
-        {/* Tab toggles */}
-        <button
-          onClick={() => setActiveTab("pi")}
-          className={`text-xs px-3 py-1 border ${
-            activeTab === "pi"
-              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/5"
-              : "border-transparent text-hacker-text-dim hover:text-hacker-text"
-          }`}
-        >
-          [PI]
-        </button>
-        <button
-          onClick={() => setActiveTab("terminal")}
-          className={`text-xs px-3 py-1 border ${
-            activeTab === "terminal"
-              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/5"
-              : "border-transparent text-hacker-text-dim hover:text-hacker-text"
-          }`}
-        >
-          [TERMINAL]
-        </button>
+        <div className="flex-1" />
 
-        <div className="w-px h-5 bg-hacker-border-bright" />
+        {/* WS status — minimal */}
+        <span className={`text-[10px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`}>
+          {connected ? "◉" : "◌"}
+        </span>
 
-        {/* Theme + Settings */}
-        <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
+        <div className="w-px h-4 bg-hacker-border-bright" />
+
+        <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
           {theme === "dark" ? "☀" : "☾"}
         </button>
-        <button
-          onClick={() => setShowModelLibrary(true)}
-          className="btn-hacker text-xs px-2 py-1"
-        >
+        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-1.5 py-0.5">
           ⚙
         </button>
       </header>
 
       {/* ── MAIN BODY ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar with per-project streaming state */}
+        {/* Sidebar — now owns the PI/TERMINAL tabs */}
         <Sidebar
           projects={projects}
           activeProject={activeProject}
-          stats={stats}
           isStreaming={isStreaming}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
           onSelectProject={handleSelectProject}
           onAddProject={handleAddProject}
+          onDeleteProject={handleDeleteProject}
           send={send}
           session={session}
           projectSessions={projectSessionsRef.current}
@@ -423,11 +364,13 @@ export default function App() {
             </div>
           </div>
 
+          {/* StatusBar — single consolidated info bar */}
           <StatusBar
             activeProject={activeProject}
             isStreaming={isStreaming}
             stats={stats}
             session={session}
+            connected={connected}
           />
         </div>
       </div>
@@ -438,8 +381,6 @@ export default function App() {
           fromProject={activeProject!}
           toProject={pendingProject}
           onConfirm={() => {
-            // No need for confirmation anymore — just switch!
-            // Background sessions continue running.
             activateProject(pendingProject);
             setShowProjectSwitch(false);
             setPendingProject(null);

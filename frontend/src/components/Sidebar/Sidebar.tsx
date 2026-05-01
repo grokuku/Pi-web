@@ -4,6 +4,9 @@ import {
   FolderOpen,
   RefreshCw,
   FileText,
+  Trash2,
+  Terminal,
+  MessageSquare,
 } from "lucide-react";
 import { GitPanel } from "./GitPanel";
 import type { Project } from "../../types";
@@ -11,10 +14,12 @@ import type { Project } from "../../types";
 interface Props {
   projects: Project[];
   activeProject: Project | null;
-  stats: { tokens: number; cost: number; contextPercent: number } | null;
   isStreaming: boolean;
+  activeTab: "pi" | "terminal";
+  onSelectTab: (tab: "pi" | "terminal") => void;
   onSelectProject: (p: Project) => void;
   onAddProject: () => void;
+  onDeleteProject: (p: Project) => void;
   send: (msg: any) => void;
   session: any;
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
@@ -23,131 +28,132 @@ interface Props {
 export function Sidebar({
   projects,
   activeProject,
-  stats,
   isStreaming,
+  activeTab,
+  onSelectTab,
   onSelectProject,
   onAddProject,
+  onDeleteProject,
   send,
   session,
   projectSessions,
 }: Props) {
   return (
-    <aside className="w-52 border-r border-hacker-border-bright bg-hacker-surface sidebar-stripe flex flex-col shrink-0 text-xs">
-      {/* Projects section */}
+    <aside className="w-48 border-r border-hacker-border-bright bg-hacker-surface sidebar-stripe flex flex-col shrink-0 text-xs">
+      {/* ── Tab switcher [PI] [TERM] ── */}
+      <div className="flex border-b border-hacker-border-bright">
+        <button
+          onClick={() => onSelectTab("pi")}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold tracking-wide transition-colors ${
+            activeTab === "pi"
+              ? "bg-hacker-accent/10 text-hacker-accent border-b-2 border-hacker-accent"
+              : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/30"
+          }`}
+        >
+          <MessageSquare size={12} />
+          PI
+        </button>
+        <button
+          onClick={() => onSelectTab("terminal")}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold tracking-wide transition-colors ${
+            activeTab === "terminal"
+              ? "bg-hacker-accent/10 text-hacker-accent border-b-2 border-hacker-accent"
+              : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/30"
+          }`}
+        >
+          <Terminal size={12} />
+          TERM
+        </button>
+      </div>
+
+      {/* ── Projects ── */}
       <div className="p-2 border-b border-hacker-border">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
-          ⚡ PROJECTS
+        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">
+          PROJECTS
         </div>
 
-        <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
+        <div className="space-y-0.5 max-h-[180px] overflow-y-auto">
           {projects.map((p) => {
             const pState = projectSessions?.get(p.id);
             const isThisStreaming = pState?.isStreaming ?? false;
             const hasSession = !!pState?.session;
             return (
-              <button
-                key={p.id}
-                onClick={() => onSelectProject(p)}
-                className={`w-full text-left px-2 py-1 flex items-center gap-1.5 group ${
-                  activeProject?.id === p.id
-                    ? "bg-hacker-accent/10 border border-hacker-accent/30 text-hacker-accent"
-                    : "hover:bg-hacker-border/50 text-hacker-text-dim"
-                }`}>
-                <span className="text-[10px]">
-                  {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
-                </span>
-                <span className="truncate flex-1">{p.name}</span>
-                {isThisStreaming && (
-                  <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming in background" />
-                )}
-                {hasSession && !isThisStreaming && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />
-                )}
-                {p.git?.branch && (
-                  <span className="text-[8px] text-hacker-info ml-auto">git</span>
-                )}
-              </button>
+              <div key={p.id} className={`flex items-center group ${
+                activeProject?.id === p.id
+                  ? "bg-hacker-accent/10 border border-hacker-accent/30"
+                  : "hover:bg-hacker-border/50"
+              }`}>
+                <button
+                  onClick={() => onSelectProject(p)}
+                  className={`flex-1 text-left px-2 py-1 flex items-center gap-1.5 ${
+                    activeProject?.id === p.id
+                      ? "text-hacker-accent"
+                      : "text-hacker-text-dim"
+                  }`}>
+                  <span className="text-[10px]">
+                    {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
+                  </span>
+                  <span className="truncate flex-1">{p.name}</span>
+                  {isThisStreaming && (
+                    <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming" />
+                  )}
+                  {hasSession && !isThisStreaming && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />
+                  )}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDeleteProject(p); }}
+                  className="px-1 py-1 text-hacker-text-dim/0 group-hover:text-hacker-error/70 hover:!text-hacker-error transition-colors"
+                  title="Delete project"
+                >
+                  <Trash2 size={10} />
+                </button>
+              </div>
             );
           })}
         </div>
 
         <button
           onClick={onAddProject}
-          className="w-full mt-2 btn-hacker text-[10px] py-1 flex items-center justify-center gap-1"
+          className="w-full mt-1.5 btn-hacker text-[10px] py-0.5 flex items-center justify-center gap-1"
         >
-          <Plus size={12} /> NEW PROJECT
+          <Plus size={10} /> NEW
         </button>
       </div>
 
-      {/* Session stats */}
-      <div className="p-2 border-b border-hacker-border">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
-          📊 STATS
+      {/* ── Streaming indicator (active project) ── */}
+      {isStreaming && (
+        <div className="px-2 py-1.5 border-b border-hacker-border bg-hacker-accent/5 flex items-center gap-1.5">
+          <span className="pulse-dot w-2 h-2 bg-hacker-accent" />
+          <span className="text-hacker-accent text-[10px]">streaming...</span>
         </div>
+      )}
 
-        {session ? (
-          <div className="space-y-1">
-            <StatRow label="Model" value={session.model?.name || "?"} />
-            <StatRow label="Thinking" value={session.thinkingLevel || "off"} />
-            <StatRow
-              label="Messages"
-              value={String(session.messageCount || 0)}
-            />
-            {stats && (
-              <>
-                <StatRow
-                  label="Tokens"
-                  value={formatTokens(stats.tokens)}
-                />
-                <StatRow label="Cost" value={`$${stats.cost.toFixed(4)}`} />
-                <StatRow
-                  label="Context"
-                  value={`${stats.contextPercent}%`}
-                  warn={stats.contextPercent > 80}
-                />
-              </>
-            )}
-            {isStreaming && (
-              <div className="flex items-center gap-1.5 text-hacker-accent">
-                <span className="pulse-dot w-2 h-2" />
-                <span>streaming...</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="text-hacker-text-dim italic text-[10px]">
-            No active session
-          </div>
-        )}
-      </div>
-
-      {/* Git panel */}
+      {/* ── Git panel ── */}
       {activeProject && activeProject.git?.remote && (
         <GitPanel project={activeProject} />
       )}
 
-      {/* Quick actions */}
+      {/* ── Quick actions ── */}
       <div className="p-2 mt-auto border-t border-hacker-border-bright">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
-          ⚡ ACTIONS
-        </div>
-        <div className="space-y-1">
+        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">ACTIONS</div>
+        <div className="space-y-0.5">
           <ActionBtn
-            icon={<RefreshCw size={12} />}
+            icon={<RefreshCw size={10} />}
             label="Restart Pi"
             onClick={() => {
               send({ type: "pi_start", projectId: activeProject?.id });
             }}
           />
           <ActionBtn
-            icon={<FileText size={12} />}
+            icon={<FileText size={10} />}
             label="New Session"
             onClick={async () => {
               await fetch("/api/settings/session/new", { method: "POST" });
             }}
           />
           <ActionBtn
-            icon={<FolderOpen size={12} />}
+            icon={<FolderOpen size={10} />}
             label="Explorer"
             onClick={() => {
               send({
@@ -157,7 +163,7 @@ export function Sidebar({
             }}
           />
           <ActionBtn
-            icon={<Power size={12} />}
+            icon={<Power size={10} />}
             label="Shutdown Pi"
             onClick={() => {
               send({ type: "pi_abort" });
@@ -167,25 +173,6 @@ export function Sidebar({
         </div>
       </div>
     </aside>
-  );
-}
-
-function StatRow({
-  label,
-  value,
-  warn,
-}: {
-  label: string;
-  value: string;
-  warn?: boolean;
-}) {
-  return (
-    <div className="flex justify-between">
-      <span className="text-hacker-text-dim">{label}</span>
-      <span className={warn ? "text-hacker-warn" : "text-hacker-text-bright"}>
-        {value}
-      </span>
-    </div>
   );
 }
 
@@ -203,7 +190,7 @@ function ActionBtn({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-1.5 px-2 py-1 text-left ${
+      className={`w-full flex items-center gap-1.5 px-2 py-0.5 text-left ${
         danger
           ? "text-hacker-error hover:bg-hacker-error/10 border border-transparent hover:border-hacker-error/30"
           : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/50"
@@ -214,10 +201,3 @@ function ActionBtn({
     </button>
   );
 }
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
