@@ -2,8 +2,9 @@ import { writeFileSync, readFileSync, unlinkSync, chmodSync, existsSync, mkdirSy
 import os from "os";
 import path from "path";
 import crypto from "crypto";
+import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
 const SECRET_KEY_PATH = path.join(DATA_DIR, ".secret-key");
 const ENCRYPTED_CREDENTIALS_PATH = path.join(DATA_DIR, "credentials.enc");

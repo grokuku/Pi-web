@@ -1,9 +1,12 @@
 import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
 import { existsSync, readdirSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
 import { updateProjectGit } from "./manager.js";
 import { credentialStore } from "./credential-store.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Prevent git from prompting for credentials on stdin (which would hang indefinitely
 // since simple-git has no interactive terminal). With this env var, git fails immediately
