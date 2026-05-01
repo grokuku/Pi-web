@@ -5,8 +5,6 @@ import {
   RefreshCw,
   FileText,
   Trash2,
-  Terminal,
-  MessageSquare,
 } from "lucide-react";
 import { GitPanel } from "./GitPanel";
 import type { Project } from "../../types";
@@ -15,8 +13,6 @@ interface Props {
   projects: Project[];
   activeProject: Project | null;
   isStreaming: boolean;
-  activeTab: "pi" | "terminal";
-  onSelectTab: (tab: "pi" | "terminal") => void;
   onSelectProject: (p: Project) => void;
   onAddProject: () => void;
   onDeleteProject: (p: Project) => void;
@@ -29,8 +25,6 @@ export function Sidebar({
   projects,
   activeProject,
   isStreaming,
-  activeTab,
-  onSelectTab,
   onSelectProject,
   onAddProject,
   onDeleteProject,
@@ -40,32 +34,6 @@ export function Sidebar({
 }: Props) {
   return (
     <aside className="w-48 border-r-2 border-hacker-accent/20 sidebar-zone sidebar-stripe flex flex-col shrink-0 text-xs">
-      {/* ── Tab switcher [PI] [TERM] ── */}
-      <div className="flex border-b border-hacker-border-bright">
-        <button
-          onClick={() => onSelectTab("pi")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold tracking-wide transition-colors ${
-            activeTab === "pi"
-              ? "bg-hacker-accent/10 text-hacker-accent border-b-2 border-hacker-accent"
-              : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/30"
-          }`}
-        >
-          <MessageSquare size={12} />
-          PI
-        </button>
-        <button
-          onClick={() => onSelectTab("terminal")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold tracking-wide transition-colors ${
-            activeTab === "terminal"
-              ? "bg-hacker-accent/10 text-hacker-accent border-b-2 border-hacker-accent"
-              : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/30"
-          }`}
-        >
-          <Terminal size={12} />
-          TERM
-        </button>
-      </div>
-
       {/* ── Projects ── */}
       <div className="p-2 border-b border-hacker-border">
         <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">

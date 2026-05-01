@@ -293,6 +293,30 @@ export default function App() {
 
         <div className="w-px h-4 bg-hacker-border-bright" />
 
+        {/* Tab toggles [PI] [TERM] */}
+        <button
+          onClick={() => setActiveTab("pi")}
+          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+            activeTab === "pi"
+              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
+          }`}
+        >
+          [PI]
+        </button>
+        <button
+          onClick={() => setActiveTab("terminal")}
+          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+            activeTab === "terminal"
+              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
+          }`}
+        >
+          [TERM]
+        </button>
+
+        <div className="w-px h-4 bg-hacker-border-bright" />
+
         {/* WS status */}
         <span className={`text-[10px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`} title={connected ? "Connected" : "Offline"}>
           {connected ? "◉" : "◌"}
@@ -313,8 +337,6 @@ export default function App() {
           projects={projects}
           activeProject={activeProject}
           isStreaming={isStreaming}
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
           onSelectProject={handleSelectProject}
           onAddProject={handleAddProject}
           onDeleteProject={handleDeleteProject}

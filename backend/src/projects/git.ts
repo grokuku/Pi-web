@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
-import { existsSync, readdirSync, mkdirSync } from "fs";
+import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
@@ -12,6 +12,36 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // since simple-git has no interactive terminal). With this env var, git fails immediately
 // with an error instead of prompting.
 process.env.GIT_TERMINAL_PROMPT = "0";
+
+// ── Lock file cleanup ──────────────────────────
+// If a git process crashes, it leaves a stale .git/index.lock.
+// This blocks all subsequent git operations. We detect and remove stale locks.
+const LOCK_MAX_AGE_MS = 30_000; // 30 seconds — if older, considered stale
+
+function cleanupGitLock(cwd: string): boolean {
+  const lockFile = path.join(cwd, ".git", "index.lock");
+  if (!existsSync(lockFile)) return false;
+  try {
+    const stat = statSync(lockFile);
+    const age = Date.now() - stat.mtimeMs;
+    if (age > LOCK_MAX_AGE_MS) {
+      unlinkSync(lockFile);
+      console.log(`[git] Removed stale lock file (${Math.round(age / 1000)}s old): ${lockFile}`);
+      return true;
+    }
+    // Lock is recent — another git process might be genuinely running
+    console.log(`[git] Lock file is recent (${Math.round(age / 1000)}s), leaving it`);
+  } catch {
+    // If we can't even stat it, it's probably corrupted
+    try { unlinkSync(lockFile); console.log(`[git] Removed corrupt lock file: ${lockFile}`); return true; } catch {}
+  }
+  return false;
+}
+
+/** Check if an error is a git lock conflict */
+function isLockError(msg: string): boolean {
+  return msg.includes("index.lock") || msg.includes("Unable to create");
+}
 
 // Default timeout for git operations that may hang (push, pull, clone, etc.)
 const GIT_NETWORK_TIMEOUT_MS = 30_000;
@@ -124,21 +154,48 @@ export async function getGitHistory(
 export async function getGitDiff(cwd: string): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
   try {
-    const staged = await git.diff(["--staged"]);
-    const unstaged = await git.diff();
+    // Get staged and unstaged diffs. Use HEAD for staged if there are commits.
+    let staged = "";
+    let unstaged = "";
+
+    // staged diff: git diff --staged (or --cached HEAD for newer repos)
+    try {
+      staged = await git.diff(["--staged"]);
+    } catch {
+      // Repo may not have any commits yet
+      try {
+        staged = await git.diff(["--cached"]);
+      } catch {
+        // silent — no staged changes
+      }
+    }
+
+    // unstaged working tree diff
+    try {
+      unstaged = await git.diff();
+    } catch {
+      // silent — no unstaged changes
+    }
+
     let combined = "";
-    if (staged) combined += "Staged changes:\n" + staged + "\n";
-    if (unstaged) combined += "Unstaged changes:\n" + unstaged;
+    if (staged && staged.trim()) combined += "Staged changes:\n" + staged + "\n";
+    if (unstaged && unstaged.trim()) combined += "Unstaged changes:\n" + unstaged;
+
+    if (!combined.trim()) {
+      return "No changes detected in the working tree.";
+    }
+
     if (combined.length > 8000) {
       combined = combined.slice(0, 8000) + "\n... (truncated)";
     }
-    return combined || "No changes detected";
+    return combined;
   } catch {
-    return "";
+    return "Unable to retrieve git diff (repository error).";
   }
 }
 
 export async function gitPull(cwd: string): Promise<string> {
+  cleanupGitLock(cwd);
   const git: SimpleGit = await gitWithAuth(cwd);
   try {
     const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull");
@@ -157,6 +214,7 @@ export async function gitPull(cwd: string): Promise<string> {
 }
 
 export async function gitPush(cwd: string): Promise<string> {
+  cleanupGitLock(cwd);
   const git: SimpleGit = await gitWithAuth(cwd);
   try {
     const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push");
@@ -239,6 +297,7 @@ function generateCommitMessage(status: GitStatusFull): { subject: string; body: 
 }
 
 export async function gitAddAll(cwd: string): Promise<number> {
+  cleanupGitLock(cwd);
   const git: SimpleGit = simpleGit(cwd);
   await git.add("-A");
   const status = await git.status();
@@ -441,6 +500,7 @@ export async function gitCommit(
   subject: string,
   body?: string
 ): Promise<string> {
+  cleanupGitLock(cwd);
   const git: SimpleGit = simpleGit(cwd);
   const message = body ? `${subject}\n\n${body}` : subject;
   try {
@@ -451,6 +511,16 @@ export async function gitCommit(
     return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
   } catch (error: any) {
     const msg = error.message || "";
+    if (isLockError(msg)) {
+      cleanupGitLock(cwd);
+      try {
+        const result = await git.commit(message);
+        if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
+        return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)} (lock cleared)`;
+      } catch (e2: any) {
+        throw new Error(`Git commit failed (lock persisted): ${e2.message || e2}`);
+      }
+    }
     if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
       throw new GitIdentityError(msg);
     }
@@ -468,6 +538,7 @@ export interface CommitPushResult {
 export async function gitCommitPushPreview(
   cwd: string
 ): Promise<{ status: GitStatusFull; proposedMessage: { subject: string; body: string } }> {
+  cleanupGitLock(cwd);
   const status = await getGitStatus(cwd);
   if ("notRepo" in status) {
     throw new Error("Not a git repository");
@@ -476,13 +547,30 @@ export async function gitCommitPushPreview(
   // If clean, re-read to get accurate staged state
   let effectiveStatus = status;
   if (!status.isClean && (status.modified.length > 0 || status.created.length > 0 || status.deleted.length > 0)) {
-    // Temporarily stage to generate accurate message
-    const git: SimpleGit = simpleGit(cwd);
-    await git.add("-A");
-    const stagedStatus = await getGitStatus(cwd);
-    await git.reset(ResetMode.MIXED);
-    if (!("notRepo" in stagedStatus)) {
-      effectiveStatus = stagedStatus;
+    try {
+      const git: SimpleGit = simpleGit(cwd);
+      await git.add("-A");
+      const stagedStatus = await getGitStatus(cwd);
+      await git.reset(ResetMode.MIXED);
+      if (!("notRepo" in stagedStatus)) {
+        effectiveStatus = stagedStatus;
+      }
+    } catch (err: any) {
+      if (isLockError(err?.message || "")) {
+        cleanupGitLock(cwd);
+        // Retry once after clearing lock
+        try {
+          const git: SimpleGit = simpleGit(cwd);
+          await git.add("-A");
+          const stagedStatus = await getGitStatus(cwd);
+          await git.reset(ResetMode.MIXED);
+          if (!("notRepo" in stagedStatus)) {
+            effectiveStatus = stagedStatus;
+          }
+        } catch {
+          // Still failed — use the original status as fallback
+        }
+      }
     }
   }
 
@@ -495,6 +583,7 @@ export async function gitCommitAndPush(
   subject?: string,
   body?: string
 ): Promise<CommitPushResult> {
+  cleanupGitLock(cwd);
   const result: CommitPushResult = { staged: 0 };
 
   // 1. Get current status

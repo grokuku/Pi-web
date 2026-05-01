@@ -147,14 +147,15 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     if (!subject) {
       try {
         const diff = await getGitDiff(project.cwd);
-        if (diff) {
-          const aiMsg = await generateAiCommitMessage(diff, project.id);
-          if (aiMsg) {
-            subject = aiMsg.subject;
-            body = aiMsg.body;
-          }
+        console.log(`[commit-push] No subject, got diff (${diff.length} chars), calling AI...`);
+        const aiMsg = await generateAiCommitMessage(diff, project.id);
+        if (aiMsg) {
+          console.log(`[commit-push] AI message: "${aiMsg.subject}"`);
+          subject = aiMsg.subject;
+          body = aiMsg.body;
         }
-      } catch {
+      } catch (err: any) {
+        console.error("[commit-push] AI generation failed:", err?.message || err);
         // Fall back to heuristic inside gitCommitAndPush
       }
     }
@@ -168,6 +169,11 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
       res.status(400).json({ error: msg, code: "GIT_IDENTITY_REQUIRED" });
     } else if (error instanceof GitAuthError) {
       res.status(401).json({ error: msg, code: "GIT_AUTH_REQUIRED" });
+    } else if (msg.includes("index.lock") || msg.includes("lock persisted")) {
+      res.status(409).json({
+        error: "Git is locked. Another operation may be in progress. Wait a moment and try again, or run: rm -f .git/index.lock",
+        code: "GIT_LOCKED",
+      });
     } else {
       res.status(400).json({ error: msg });
     }
@@ -187,17 +193,29 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     let aiMessage: { subject: string; body: string } | null = null;
     try {
       const diff = await getGitDiff(project.cwd);
-      if (diff) {
-        aiMessage = await generateAiCommitMessage(diff, project.id);
+      console.log(`[commit-push] Got diff for preview (${diff.length} chars), calling AI...`);
+      aiMessage = await generateAiCommitMessage(diff, project.id);
+      if (aiMessage) {
+        console.log(`[commit-push] AI message: "${aiMessage.subject}"`);
+      } else {
+        console.warn("[commit-push] AI message generation returned null");
       }
-    } catch {
+    } catch (err: any) {
+      console.error("[commit-push] AI generation failed:", err?.message || err);
       // AI generation is optional, fall back to heuristic
     }
 
     res.json({ ...preview, aiMessage, diff: undefined });
   } catch (error: any) {
     const msg = error?.message || String(error || "Unknown error");
-    res.status(400).json({ error: msg });
+    if (msg.includes("index.lock") || msg.includes("lock persisted")) {
+      res.status(409).json({
+        error: "Git is locked. Wait a moment then retry, or run: rm -f .git/index.lock",
+        code: "GIT_LOCKED",
+      });
+    } else {
+      res.status(400).json({ error: msg });
+    }
   }
 });
 

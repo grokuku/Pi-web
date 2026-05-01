@@ -493,18 +493,28 @@ export async function generateAiCommitMessage(
     // Pick the first available model
     if (availableModels.length > 0) {
       model = availableModels[0];
-      apiKey = await sharedAuthStorage.getApiKey(model.provider);
+      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
+      if (auth.ok) {
+        apiKey = auth.apiKey;
+      } else {
+        console.warn(`[session] Auth failed for model ${model.id}: ${auth.error}`);
+      }
     }
     if (!model) {
       console.warn("[session] No available model for commit message generation");
       return null;
     }
   } else {
-    apiKey = await sharedAuthStorage.getApiKey(model.provider);
+    const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
+    if (auth.ok) {
+      apiKey = auth.apiKey;
+    } else {
+      console.warn(`[session] Auth failed for session model ${model.id}: ${auth.error}`);
+    }
   }
 
-  if (!apiKey) {
-    console.warn(`[session] No API key for provider ${model.provider}`);
+  if (!model) {
+    console.warn("[session] No available model for commit message generation");
     return null;
   }
 

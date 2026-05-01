@@ -42,6 +42,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [usingAi, setUsingAi] = useState(true); // Prefer AI message
+  const [regenerating, setRegenerating] = useState(false);
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -108,6 +109,12 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           setShowAuthModal(true);
           return;
         }
+        // Check if git is locked
+        if (data.code === "GIT_LOCKED") {
+          setLoading(null);
+          setError(data.error);
+          return;
+        }
         throw new Error(data.error || "Push failed");
       }
       setDone(true);
@@ -116,6 +123,37 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       setError(err.message);
     } finally {
       setLoading(null);
+    }
+  };
+
+  // ── Regenerate AI message ──
+  const handleRegenerate = async () => {
+    setRegenerating(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to regenerate");
+      }
+      const data: Preview = await res.json();
+      setPreview(data);
+      if (data.aiMessage?.subject) {
+        setSubject(data.aiMessage.subject);
+        setBody(data.aiMessage.body);
+        setUsingAi(true);
+      } else {
+        setError("AI could not generate a message. Using default.");
+        setSubject(data.proposedMessage.subject);
+        setBody(data.proposedMessage.body);
+        setUsingAi(false);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -220,12 +258,13 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
 
             {/* Commit message form */}
             <div className="space-y-3">
-              {/* Message source indicator */}
-              {preview.aiMessage?.subject && (
-                <div className="flex items-center gap-2">
+              {/* Message source indicator — always visible */}
+            <div className="flex items-center gap-2">
+              {preview.aiMessage?.subject ? (
+                <>
                   <button
                     onClick={toggleMessageSource}
-                    disabled={loading === "ai-gen"}
+                    disabled={regenerating}
                     className={`text-[9px] px-2 py-0.5 border flex items-center gap-1 ${
                       usingAi
                         ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
@@ -237,7 +276,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
                   </button>
                   <button
                     onClick={toggleMessageSource}
-                    disabled={loading === "ai-gen"}
+                    disabled={regenerating}
                     className={`text-[9px] px-2 py-0.5 border ${
                       !usingAi
                         ? "border-hacker-accent/40 text-hacker-accent bg-hacker-accent/5"
@@ -246,8 +285,22 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
                   >
                     Default
                   </button>
-                </div>
+                </>
+              ) : (
+                <span className="text-[9px] text-hacker-text-dim italic">
+                  No AI message generated — using default
+                </span>
               )}
+              <button
+                onClick={handleRegenerate}
+                disabled={regenerating}
+                className="text-[9px] px-2 py-0.5 border border-hacker-border text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-accent/40 flex items-center gap-1 disabled:opacity-40"
+                title="Re-generate commit message with AI"
+              >
+                <RefreshCw size={8} className={regenerating ? "animate-spin" : ""} />
+                Regenerate
+              </button>
+            </div>
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
                   <FileText size={10} />
