@@ -20,6 +20,7 @@ interface Props {
   send: (msg: any) => void;
   session: any;
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
+  onSendCommand: (cmd: string) => void;
 }
 
 export function Sidebar({
@@ -31,6 +32,7 @@ export function Sidebar({
   send,
   session,
   projectSessions,
+  onSendCommand,
 }: Props) {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
 
@@ -41,7 +43,7 @@ export function Sidebar({
     }
   };
   return (
-    <aside className="w-48 border-r border-hacker-border-bright sidebar-zone flex flex-col shrink-0 text-xs">
+    <aside className="h-full border-r border-hacker-border-bright sidebar-zone flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
       <div className="p-2 border-b border-hacker-border">
         <div className="flex items-center justify-between mb-1.5">
@@ -101,6 +103,29 @@ export function Sidebar({
       {activeProject && activeProject.git?.remote && (
         <GitPanel project={activeProject} />
       )}
+
+      {/* ── Slash commands ── */}
+      <div className="p-2 border-t border-hacker-border-bright">
+        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">COMMANDS</div>
+        <div className="flex flex-wrap gap-1">
+          {[
+            { cmd: "/new", tip: "New session" },
+            { cmd: "/compact", tip: "Compact context" },
+            { cmd: "/model", tip: "List/switch model" },
+            { cmd: "/clear", tip: "Clear screen" },
+            { cmd: "/help", tip: "Show commands" },
+          ].map(({ cmd, tip }) => (
+            <button
+              key={cmd}
+              onClick={() => onSendCommand(cmd)}
+              className="text-[9px] text-hacker-text-dim border border-hacker-border px-1.5 py-0.5 hover:border-hacker-accent/50 hover:text-hacker-accent hover:bg-hacker-accent/5"
+              title={tip}
+            >
+              {cmd}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── Quick actions ── */}
       <div className="p-2 mt-auto border-t border-hacker-border-bright">

@@ -4,13 +4,14 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
+import { FileExplorer } from "./components/Files/FileExplorer";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import type { Project } from "./types";
 
-type Tab = "pi" | "terminal";
+type Tab = "pi" | "terminal" | "files";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -48,6 +49,15 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>("pi");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(() => {
+    const saved = localStorage.getItem("pi-web-zoom");
+    return saved ? parseFloat(saved) : 1;
+  });
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem("pi-web-sidebar-width");
+    return saved ? parseInt(saved) : 192;
+  });
+  const isResizingSidebar = useRef(false);
 
   const projectSessionsRef = useRef<Map<string, ProjectSessionState>>(new Map());
   const [, forceRender] = useState(0);
@@ -94,6 +104,40 @@ function App() {
   }, [theme]);
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+
+  // ── Zoom ──
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${zoomLevel * 100}%`;
+    localStorage.setItem("pi-web-zoom", String(zoomLevel));
+  }, [zoomLevel]);
+  const zoomIn = () => setZoomLevel((z) => Math.min(z + 0.1, 1.5));
+  const zoomOut = () => setZoomLevel((z) => Math.max(z - 0.1, 0.6));
+
+  // ── Sidebar resize ──
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingSidebar.current) return;
+      const newWidth = Math.max(140, Math.min(400, e.clientX));
+      setSidebarWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      if (isResizingSidebar.current) {
+        isResizingSidebar.current = false;
+        localStorage.setItem("pi-web-sidebar-width", String(sidebarWidth));
+      }
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [sidebarWidth]);
+
+  const startResizeSidebar = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingSidebar.current = true;
+  };
 
   // ── Global keyboard shortcuts ──
   useEffect(() => {
@@ -350,6 +394,23 @@ function App() {
         >
           [TERM]
         </button>
+        <button
+          onClick={() => setActiveTab("files")}
+          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+            activeTab === "files"
+              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
+          }`}
+        >
+          [FILES]
+        </button>
+
+        <div className="w-px h-4 bg-hacker-border-bright" />
+
+        {/* Zoom buttons */}
+        <button onClick={zoomOut} className="btn-hacker text-xs px-1 py-0.5" title="Zoom out">−</button>
+        <span className="text-[9px] text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
+        <button onClick={zoomIn} className="btn-hacker text-xs px-1 py-0.5" title="Zoom in">+</button>
 
         <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
           {theme === "dark" ? "☀" : "☾"}
@@ -362,16 +423,29 @@ function App() {
       {/* ── MAIN BODY ── */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar with tabs + project list */}
-        <Sidebar
-          projects={projects}
-          activeProject={activeProject}
-          onSelectProject={handleSelectProject}
-          onAddProject={handleAddProject}
-          onDeleteProject={handleDeleteProject}
-          send={send}
-          session={session}
-          projectSessions={projectSessionsRef.current}
-        />
+        <div style={{ width: sidebarWidth }} className="shrink-0 relative">
+          <Sidebar
+            projects={projects}
+            activeProject={activeProject}
+            onSelectProject={handleSelectProject}
+            onAddProject={handleAddProject}
+            onDeleteProject={handleDeleteProject}
+            send={send}
+            session={session}
+            projectSessions={projectSessionsRef.current}
+            onSendCommand={(cmd: string) => {
+              if (activeProject) {
+                send({ type: "pi_prompt", projectId: activeProject.id, message: cmd });
+              }
+            }}
+          />
+          {/* Resize handle */}
+          <div
+            onMouseDown={startResizeSidebar}
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors"
+            title="Resize sidebar"
+          />
+        </div>
 
         {/* Content */}
         <div className="flex-1 flex flex-col min-w-0">
@@ -388,6 +462,9 @@ function App() {
             </div>
             <div className={activeTab === "terminal" ? "absolute inset-0" : "hidden"}>
               <TerminalView send={send} on={on} activeProject={activeProject} isActive={activeTab === "terminal"} />
+            </div>
+            <div className={activeTab === "files" ? "absolute inset-0" : "hidden"}>
+              <FileExplorer project={activeProject} />
             </div>
           </div>
 

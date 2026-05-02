@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { readdirSync, statSync, mkdirSync, existsSync } from "fs";
+import { readdirSync, statSync, mkdirSync, existsSync, readFileSync } from "fs";
 import path from "path";
 
 const router = Router();
@@ -116,6 +116,79 @@ router.post("/mkdir", (req: Request, res: Response) => {
 
     mkdirSync(fullPath, { recursive: true });
     res.json({ path: path.join(parentPath, name), name });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Read file content ──
+const TEXT_EXTENSIONS = new Set([
+  ".txt", ".md", ".json", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
+  ".css", ".scss", ".less", ".html", ".xml", ".yaml", ".yml", ".toml",
+  ".ini", ".cfg", ".conf", ".sh", ".bash", ".zsh", ".fish",
+  ".py", ".rb", ".rs", ".go", ".java", ".kt", ".c", ".h", ".cpp", ".hpp",
+  ".cs", ".swift", ".dart", ".lua", ".r", ".sql", ".graphql",
+  ".dockerfile", ".gitignore", ".env", ".editorconfig",
+  ".makefile", ".cmake", ".gradle",
+  ".lock", ".log", ".csv", ".tsv",
+]);
+
+const IMAGE_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico",
+]);
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+
+router.get("/read", (req: Request, res: Response) => {
+  try {
+    const filePath = (req.query.path as string) || "";
+    const resolved = path.resolve(filePath);
+
+    if (!isPathAllowed(resolved)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    if (!existsSync(resolved)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const stat = statSync(resolved);
+    if (stat.isDirectory()) {
+      return res.status(400).json({ error: "Path is a directory" });
+    }
+
+    if (stat.size > MAX_FILE_SIZE) {
+      return res.status(413).json({ error: `File too large (${Math.round(stat.size / 1024)}KB). Max ${MAX_FILE_SIZE / 1024 / 1024}MB.` });
+    }
+
+    const ext = path.extname(resolved).toLowerCase();
+    const isImage = IMAGE_EXTENSIONS.has(ext);
+    const isText = TEXT_EXTENSIONS.has(ext) || ext === "" || stat.size < 100 * 1024;
+
+    if (isImage) {
+      const buffer = readFileSync(resolved);
+      const mimeType = ext === ".svg" ? "image/svg+xml" :
+        ext === ".png" ? "image/png" :
+        ext === ".gif" ? "image/gif" :
+        "image/jpeg";
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+      return;
+    }
+
+    if (isText) {
+      const content = readFileSync(resolved, "utf-8");
+      return res.json({
+        path: filePath,
+        name: path.basename(resolved),
+        ext,
+        size: stat.size,
+        content,
+      });
+    }
+
+    return res.status(415).json({ error: `Cannot preview file type: ${ext}` });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

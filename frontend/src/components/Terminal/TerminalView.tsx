@@ -127,6 +127,19 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
         terminalRef.current.writeln(
           `\r\n\x1b[33m[Process exited with code ${msg.exitCode}]\x1b[0m`
         );
+        // Auto-restart terminal after brief delay
+        setTimeout(() => {
+          if (terminalRef.current) {
+            terminalRef.current.writeln(
+              `\r\n\x1b[32m[Auto-restarting terminal...]\x1b[0m`
+            );
+            send({
+              type: "terminal_create",
+              projectId: activeProject.id,
+              cwd: activeProject.cwd,
+            });
+          }
+        }, 500);
       }
     });
 
