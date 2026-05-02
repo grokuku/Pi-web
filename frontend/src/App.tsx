@@ -37,7 +37,7 @@ class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean;
 interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
-  stats: { tokens: number; contextPercent: number } | null;
+  stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
 }
 
 function App() {
@@ -163,12 +163,16 @@ function App() {
           if (evt.message?.usage) {
             const u = evt.message.usage;
             const state = getProjectSession(projectId);
-            const prevStats = state.stats || { tokens: 0, contextPercent: 0 };
-            const totalTokens = prevStats.tokens + (u.input || 0) + (u.output || 0);
+            const prevStats = state.stats || { tokens: 0, contextPercent: 0, totalTokens: 0 };
+            // tokens = current context size (last input), totalTokens = cumulative
+            const lastInputTokens = u.input || 0;
+            const lastOutputTokens = u.output || 0;
             const contextWindow = state.session?.model?.contextWindow || 200000;
+            const contextPercent = Math.round((lastInputTokens / contextWindow) * 100);
             const newStats = {
-              tokens: totalTokens,
-              contextPercent: Math.round((totalTokens / contextWindow) * 100),
+              tokens: lastInputTokens, // Current context size (what fills the window)
+              contextPercent: Math.max(prevStats.contextPercent, contextPercent), // Only increase
+              totalTokens: prevStats.totalTokens + lastInputTokens + lastOutputTokens, // Cumulative for cost info
             };
             updateProjectSession(projectId, { stats: newStats });
           }
@@ -179,7 +183,7 @@ function App() {
             // Initialize stats to zero when session is first created
             const state = getProjectSession(projectId);
             if (!state.stats) {
-              state.stats = { tokens: 0, contextPercent: 0 };
+              state.stats = { tokens: 0, contextPercent: 0, totalTokens: 0 };
             }
             updateProjectSession(projectId, { session: evt.session });
           }

@@ -3,7 +3,7 @@ import type { Project } from "../../types";
 interface Props {
   activeProject: Project | null;
   isStreaming: boolean;
-  stats: { tokens: number; contextPercent: number } | null;
+  stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
   session: any;
   connected: boolean;
 }
@@ -16,7 +16,7 @@ export function StatusBar({
   connected,
 }: Props) {
   // Show zero stats when a session exists but stats haven't been populated yet
-  const displayStats = stats || (session ? { tokens: 0, contextPercent: 0 } : null);
+  const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
 
   return (
     <div className="h-7 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[10px] shrink-0">
@@ -79,9 +79,9 @@ export function StatusBar({
       {/* Stats */}
       {displayStats && (
         <>
-          {/* Token count with context bar */}
-          <span className="text-hacker-text-dim">
-            {(displayStats.tokens / 1000).toFixed(1)}K tok
+          {/* Current context: last prompt size */}
+          <span className="text-hacker-text-dim" title={`Context: ${displayStats.tokens.toLocaleString()} tokens\nTotal: ${displayStats.totalTokens.toLocaleString()} tokens`}>
+            ctx {(displayStats.tokens / 1000).toFixed(1)}K
           </span>
           <span className="text-hacker-border-bright">│</span>
           <div className="flex items-center gap-1.5">
