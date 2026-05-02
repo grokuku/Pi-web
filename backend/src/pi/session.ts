@@ -554,9 +554,6 @@ export async function generateAiCommitMessage(
   console.log(`[commit] diff length: ${diff?.length || 0}`);
   console.log(`[commit] projectId: ${projectId}`);
 
-  // Ensure registry is loaded — might not be loaded yet if no session started
-  reloadModelRegistry();
-
   // 1. Try the dedicated commit model from the library
   const library = loadModelLibrary();
   const commitMode = library.modes.commit;
@@ -565,22 +562,56 @@ export async function generateAiCommitMessage(
   let model: any = null;
   let apiKey: string | undefined;
 
+  // Ensure registry is loaded
+  reloadModelRegistry();
+  console.log(`[commit] Registry available models: ${sharedModelRegistry.getAvailable().length}`);
+  console.log(`[commit] Registry all models: ${sharedModelRegistry.getAll().length}`);
+  
+  // Log all available model info for debugging
+  const availModels = sharedModelRegistry.getAvailable();
+  if (availModels.length > 0) {
+    console.log(`[commit] Available models: ${availModels.slice(0, 5).map((m: any) => `${m.provider}/${m.id} (api=${m.api}, reasoning=${m.reasoning})`).join(', ')}`);
+  }
+  const allModels = sharedModelRegistry.getAll();
+  if (allModels.length > 0) {
+    console.log(`[commit] All models: ${allModels.slice(0, 5).map((m: any) => `${m.provider}/${m.id}`).join(', ')}`);
+  }
+
   if (commitMode.enabled && commitMode.activeModelId) {
     const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
-    console.log(`[commit] Found commit entry: ${entry ? JSON.stringify({id: entry.id, provider: entry.provider, modelId: entry.modelId, name: entry.name}) : "NONE"}`);
+    console.log(`[commit] Found commit entry: ${entry ? JSON.stringify({id: entry.id, provider: entry.provider, modelId: entry.modelId, name: entry.name, reasoning: entry.reasoning, contextWindow: entry.contextWindow}) : "NONE"}`);
     if (entry) {
       // Use registry.find for a proper model object (has all expected fields)
       model = sharedModelRegistry.find(entry.provider, entry.modelId);
+      console.log(`[commit] Registry.find("${entry.provider}", "${entry.modelId}") = ${model ? `found: ${model.provider}/${model.id} (api=${model.api})` : "NOT FOUND"}`);
       if (!model) {
-        // Fallback: build manually
+        // Fallback: build manually. Need to determine the correct api type.
+        const providerApiMap: Record<string, string> = {
+          ollama: "openai-completions",
+          openai: "openai-completions",
+          anthropic: "anthropic-messages",
+          google: "google-generative-ai",
+          deepseek: "openai-completions",
+          groq: "openai-completions",
+          xai: "openai-completions",
+          openrouter: "openai-completions",
+          mistral: "openai-completions",
+        };
+        const api = providerApiMap[entry.provider] || entry.provider;
         model = {
           id: entry.id,
           provider: entry.provider,
-          api: entry.provider,
+          api,
           modelId: entry.modelId,
+          name: entry.name || entry.modelId,
+          reasoning: entry.reasoning ?? false,
+          contextWindow: entry.contextWindow ?? 128000,
+          maxTokens: entry.maxTokens ?? 16384,
+          baseUrl: "",  // will need apiKey from registry
         };
+        console.log(`[commit] Built fallback model: ${model.provider}/${model.modelId} (api=${model.api})`);
       }
-      console.log(`[commit] Commit model resolved: ${model.provider}/${model.modelId}`);
+      console.log(`[commit] Commit model resolved: ${model.provider}/${model.modelId || model.id} (api=${model.api}, reasoning=${model.reasoning})`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
       console.log(`[commit] Commit model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
@@ -626,7 +657,19 @@ export async function generateAiCommitMessage(
         const entry = cfg.models[0];
         model = sharedModelRegistry.find(entry.provider, entry.modelId);
         if (!model) {
-          model = { id: entry.id, provider: entry.provider, api: entry.provider, modelId: entry.modelId };
+          const providerApiMap: Record<string, string> = {
+            ollama: "openai-completions",
+            openai: "openai-completions",
+            anthropic: "anthropic-messages",
+            google: "google-generative-ai",
+            deepseek: "openai-completions",
+            groq: "openai-completions",
+            xai: "openai-completions",
+            openrouter: "openai-completions",
+            mistral: "openai-completions",
+          };
+          const api = providerApiMap[entry.provider] || entry.provider;
+          model = { id: entry.id, provider: entry.provider, api, modelId: entry.modelId };
         }
         console.log(`[commit] Found model from mode ${mode}: ${model.provider}/${model.modelId}`);
         const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
@@ -641,7 +684,7 @@ export async function generateAiCommitMessage(
     return null;
   }
 
-  console.log(`[commit] === Using model: ${model.provider}/${model.modelId} (apiKey=${apiKey ? "present" : "MISSING"}) ===`);
+  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} (apiKey=${apiKey ? "present" : "MISSING"}, api=${model.api}, baseUrl=${model.baseUrl || "none"}) ===`);
 
   const systemPrompt = (commitMode.instructions && commitMode.instructions.trim())
     ? commitMode.instructions
@@ -673,7 +716,7 @@ export async function generateAiCommitMessage(
     });
     clearTimeout(timeout);
 
-    console.log(`[commit] completeSimple returned, content items: ${response.content?.length || 0}`);
+    console.log(`[commit] completeSimple returned, content items: ${response.content?.length || 0}, stopReason: ${response.stopReason}, error: ${response.errorMessage || "none"}`);
 
     const text = response.content
       ?.filter((c: any) => c.type === "text")
