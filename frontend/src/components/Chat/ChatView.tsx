@@ -94,6 +94,9 @@ interface DisplayMessage {
   toolCalls: ToolCallInfo[];
   timestamp: number;
   usage?: { input: number; output: number; cost: { total: number } };
+  // Custom message metadata (git_notification, etc.)
+  customType?: string;
+  display?: boolean;
 }
 
 export function ChatView({ send, on, activeProject, isStreaming, session, projectId }: Props) {
@@ -342,6 +345,29 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       }
     });
 
+    return () => unsub();
+  }, [on, projectId]);
+
+  // ── Pi custom message handling (git notifications, etc.) ──
+  useEffect(() => {
+    const unsub = on("pi_event", (msg: any) => {
+      if (msg.projectId && msg.projectId !== projectId) return;
+      const evt = msg.event;
+      // Handle custom messages (git_notification, etc.)
+      if (evt?.type === "message_start" && evt?.message?.role === "custom" && evt?.message?.display) {
+        const customMsg = evt.message;
+        setMessages((prev) => [...prev, {
+          id: customMsg.id || `custom-${Date.now()}`,
+          role: "user" as const,
+          content: customMsg.content || "",
+          thinking: "",
+          toolCalls: [],
+          timestamp: customMsg.timestamp || Date.now(),
+          customType: customMsg.customType,
+          display: customMsg.display,
+        }]);
+      }
+    });
     return () => unsub();
   }, [on, projectId]);
 
@@ -699,6 +725,16 @@ function GroupedMessages({ messages, showAllThinking, expandTools }: {
 }
 
 function UserBubble({ message }: { message: DisplayMessage }) {
+  // Git notification: system-level info bubble
+  if (message.customType === "git_notification") {
+    return (
+      <div className="flex justify-center mb-3">
+        <div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-center whitespace-pre-wrap">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex justify-end mb-3">
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2 flex items-center gap-2">

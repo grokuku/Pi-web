@@ -8,7 +8,7 @@ import {
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
-import { generateAiCommitMessage, getCommitModelInfo } from "../pi/session.js";
+import { generateAiCommitMessage, getCommitModelInfo, injectSessionNotification } from "../pi/session.js";
 
 const router = Router();
 
@@ -131,6 +131,7 @@ router.post("/:id/git/push", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Project not found" });
     }
     const result = await gitPush(project.cwd);
+    injectSessionNotification(project.id, "✅ Code pushed to remote repository. All local commits are now on the remote.");
     res.json({ result });
   } catch (error: any) {
     if (error instanceof GitAuthError) {
@@ -169,6 +170,24 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
 
     const result = await gitCommitAndPush(project.cwd, subject, body);
     await syncGitInfo(project);
+
+    // Notify the AI session that code was pushed to GitHub
+    if (result.commitResult || result.pushResult) {
+      const commitHash = result.commitHash || "";
+      const remoteUrl = result.remoteUrl || "";
+      const notification = `✅ Code successfully pushed to GitHub.
+Commit: ${subject}${body ? "\n" + body : ""}
+Hash: ${commitHash}
+Remote: ${remoteUrl || "origin"}
+
+All changes from this commit are now live on the remote repository. Do not suggest modifications to files that were part of this commit unless the user explicitly asks for further changes.`;
+      injectSessionNotification(project.id, notification, {
+        commitHash,
+        subject,
+        remote: remoteUrl,
+      });
+    }
+
     res.json(result);
   } catch (error: any) {
     const msg = error?.message || String(error || "Unknown error");

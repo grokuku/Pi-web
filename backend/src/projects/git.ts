@@ -553,6 +553,8 @@ export interface CommitPushResult {
   commitResult?: string;
   pushResult?: string;
   commitMessage?: { subject: string; body: string };
+  commitHash?: string;
+  remoteUrl?: string;
 }
 
 export async function gitCommitPushPreview(
@@ -645,6 +647,20 @@ export async function gitCommitAndPush(
   // 6. Commit
   const commitResult = await gitCommit(cwd, msg.subject, msg.body || undefined);
   result.commitResult = commitResult;
+
+  // 6b. Get commit hash and remote URL
+  try {
+    const git: SimpleGit = simpleGit(cwd);
+    const hashResult = await git.raw(["rev-parse", "--short", "HEAD"]);
+    result.commitHash = hashResult.trim();
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find((r: any) => r.name === "origin");
+    if (origin?.refs?.push) {
+      result.remoteUrl = origin.refs.push;
+    }
+  } catch {
+    // Non-critical
+  }
 
   // 7. Push
   try {

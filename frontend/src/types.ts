@@ -74,6 +74,9 @@ export interface DisplayMessage {
     output: number;
     cost: { total: number };
   };
+  // Custom message metadata (for git_notification, etc.)
+  customType?: string;
+  display?: boolean;
 }
 
 export interface ToolCallInfo {

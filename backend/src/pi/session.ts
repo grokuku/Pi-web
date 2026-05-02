@@ -417,6 +417,43 @@ export async function listSessions(cwd: string): Promise<any[]> {
   }
 }
 
+/**
+ * Inject a notification into the session context (e.g. git push success).
+ * The message is added as a CustomMessage visible to the LLM
+ * and displayed distinctly in the UI.
+ *
+ * Uses sendCustomMessage which handles both streaming and non-streaming cases.
+ * The message will be included in the next LLM turn without triggering one.
+ */
+export async function injectSessionNotification(
+  projectId: string,
+  notification: string,
+  details?: Record<string, unknown>
+): Promise<boolean> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) {
+    console.warn(`[injectNotification] No session for project ${projectId}`);
+    return false;
+  }
+
+  try {
+    await state.session.sendCustomMessage(
+      {
+        customType: "git_notification",
+        content: notification,
+        display: true,
+        details,
+      },
+      { triggerTurn: false }
+    );
+    console.log(`[injectNotification] Injected notification for ${projectId}: ${notification.slice(0, 80)}...`);
+    return true;
+  } catch (e: any) {
+    console.error(`[injectNotification] Failed for ${projectId}:`, e.message);
+    return false;
+  }
+}
+
 export function getSessionInfo(projectId?: string) {
   const state = projectId
     ? sessionsByProject.get(projectId)

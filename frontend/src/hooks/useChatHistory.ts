@@ -196,6 +196,8 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
           thinking: "",
           toolCalls: [],
           timestamp: msg.timestamp || Date.now(),
+          customType: (msg as any).customType,
+          display: (msg as any).display,
         });
       }
     }
