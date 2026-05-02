@@ -228,6 +228,25 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
     }
   };
 
+  // ── Update model properties (contextWindow, reasoning, maxTokens) ──
+  const handlePropertiesChange = async (entryId: string, props: { contextWindow?: number; reasoning?: boolean; maxTokens?: number }) => {
+    try {
+      const res = await fetch(
+        `/api/model-library/modes/${activeMode}/models/${encodeURIComponent(entryId)}/properties`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(props),
+        }
+      );
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
+      const data = await res.json();
+      setLibrary(data);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   // ── Update mode instructions ──
   const handleSaveInstructions = async () => {
     try {
@@ -445,6 +464,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
                   onSetActive={handleSetActive}
                   onRemove={handleRemoveModel}
                   onThinkingChange={handleThinkingChange}
+                  onPropertiesChange={handlePropertiesChange}
                 />
               );
             })}
@@ -511,6 +531,7 @@ function ProviderCard({
   onSetActive,
   onRemove,
   onThinkingChange,
+  onPropertiesChange,
 }: {
   providerId: string;
   providerDef?: ProviderDef;
@@ -519,6 +540,7 @@ function ProviderCard({
   onSetActive: (id: string) => void;
   onRemove: (id: string) => void;
   onThinkingChange: (id: string, level: string) => void;
+  onPropertiesChange: (id: string, props: { contextWindow?: number; reasoning?: boolean; maxTokens?: number }) => void;
 }) {
   const icon = providerDef?.icon || "☁";
   const name = providerDef?.name || providerId;
@@ -566,15 +588,34 @@ function ProviderCard({
               ))}
             </select>
 
-            {/* Capabilities badges */}
-            {entry.reasoning && (
-              <span className="text-[9px] text-hacker-warn border border-hacker-warn/30 px-1" title="Supports reasoning/thinking">🧠</span>
-            )}
-            {entry.contextWindow ? (
-              <span className="text-[9px] text-hacker-text-dim" title="Context window size">
-                {entry.contextWindow >= 1000000 ? `${(entry.contextWindow / 1000000).toFixed(0)}M` : `${(entry.contextWindow / 1000).toFixed(0)}K`}
-              </span>
-            ) : null}
+            {/* Capabilities: editable reasoning + context window */}
+            <button
+              onClick={(e) => { e.stopPropagation(); onPropertiesChange(entry.id, { reasoning: !entry.reasoning }); }}
+              className={`text-[9px] border px-1 cursor-pointer select-none ${
+                entry.reasoning
+                  ? "border-hacker-warn/50 text-hacker-warn bg-hacker-warn/10"
+                  : "border-hacker-border text-hacker-text-dim hover:text-hacker-text"
+              }`}
+              title={entry.reasoning ? "Reasoning ON — click to disable" : "Reasoning OFF — click to enable"}
+            >
+              🧠 {entry.reasoning ? "ON" : "OFF"}
+            </button>
+
+            <select
+              value={entry.contextWindow || 0}
+              onChange={(e) => { e.stopPropagation(); onPropertiesChange(entry.id, { contextWindow: Number(e.target.value) }); }}
+              className="select-hacker text-[9px] py-0 px-1 max-w-[48px]"
+              onClick={(e) => e.stopPropagation()}
+              title="Context window size"
+            >
+              <option value={0}>Auto</option>
+              <option value={8192}>8K</option>
+              <option value={32768}>32K</option>
+              <option value={65536}>64K</option>
+              <option value={128000}>128K</option>
+              <option value={200000}>200K</option>
+              <option value={1000000}>1M</option>
+            </select>
 
             {/* Actions */}
             {!isActive && (
