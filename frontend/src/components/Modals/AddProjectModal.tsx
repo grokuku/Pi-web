@@ -46,9 +46,9 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
   const [warning, setWarning] = useState("");
 
   // ── Derived state ──
-  // For local storage: cwd is the PARENT directory; we create a subfolder with the project name.
-  // For SSH/SMB: the path logic stays the same.
-  const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : (cwd && name ? `${cwd}/${name}`.replace(/\/+/g, "/") : cwd);
+  // For local storage: if no parent selected, default to /projects.
+  // The project folder is created as a subfolder with the project name.
+  const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : (cwd || "/projects") + (name ? `/${name}` : "").replace(/\/+/g, "/");
 
   // ── Handlers ──
 
@@ -57,10 +57,6 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
       // Validate Step 1
       if (!name.trim()) {
         setError("Project name is required");
-        return;
-      }
-      if (storage === "local" && !cwd) {
-        setError("Parent directory is required");
         return;
       }
       if (storage === "ssh" && !sshRemotePath) {
@@ -264,11 +260,12 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
               </div>
             </div>
 
-            {/* Parent directory (project folder will be created inside) */}
+            {/* Parent directory (optional — defaults to /projects) */}
             {storage === "local" && (
               <div>
                 <label className="text-hacker-text-dim text-xs block mb-1.5">
                   Parent Directory
+                  <span className="text-hacker-text-dim/50 ml-1">(optional — defaults to /projects)</span>
                 </label>
                 <FileBrowser
                   initialPath={cwd || "/projects"}
@@ -276,16 +273,9 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   onSelect={(path) => setCwd(path)}
                   selectedPath={cwd}
                 />
-                {cwd && name && (
-                  <div className="text-hacker-accent text-[10px] mt-1">
-                    Will create: {cwd}/{name}
-                  </div>
-                )}
-                {cwd && !name && (
-                  <div className="text-hacker-text-dim text-[10px] mt-1">
-                    Selected parent: {cwd}
-                  </div>
-                )}
+                <div className="text-hacker-accent text-[10px] mt-1">
+                  Will create: {cwd || "/projects"}/{name || "(name)"}
+                </div>
               </div>
             )}
 

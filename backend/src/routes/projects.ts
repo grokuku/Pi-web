@@ -39,10 +39,15 @@ router.get("/:id", (req: Request, res: Response) => {
 router.post("/", async (req: Request, res: Response) => {
   try {
     const { name, storage, cwd, ssh, smb, versioning, git } = req.body;
-    if (!name || !storage || !cwd) {
-      return res.status(400).json({ error: "name, storage, and cwd (parent directory) are required" });
+    if (!name || !storage) {
+      return res.status(400).json({ error: "name and storage are required" });
     }
-    const project = await createProject(name, storage, cwd, versioning || "standalone", git, ssh, smb);
+    // Default cwd to /projects/{name} for local storage if not provided
+    const effectiveCwd = storage === "local" ? (cwd || `/projects/${name}`) : cwd;
+    if (!effectiveCwd) {
+      return res.status(400).json({ error: "cwd is required for non-local storage" });
+    }
+    const project = await createProject(name, storage, effectiveCwd, versioning || "standalone", git, ssh, smb);
     res.status(201).json(project);
   } catch (error: any) {
     res.status(400).json({ error: error.message });

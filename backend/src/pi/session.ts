@@ -50,7 +50,14 @@ export function getActiveToolCalls() {
 }
 
 export function reloadModelRegistry(): void {
-  sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
+  // Refresh existing registry (keeps dynamically registered providers like Ollama)
+  // instead of creating a new empty one that would lose them.
+  try {
+    sharedModelRegistry.refresh();
+  } catch {
+    // If refresh fails, recreate from scratch
+    sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
+  }
 }
 
 export function subscribeToEvents(callback: EventCallback): () => void {
