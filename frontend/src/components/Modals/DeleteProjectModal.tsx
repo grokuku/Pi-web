@@ -16,7 +16,7 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal-box max-w-[480px]"
+        className="modal-box max-w-[30rem]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -9,6 +9,10 @@ import {
   Code,
   FileText,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
 
 interface FileEntry {
   name: string;
@@ -44,14 +48,35 @@ interface Props {
 
 // ── Helpers ──
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"]);
+const MARKDOWN_EXTS = new Set([".md", ".mdx", ".markdown"]);
 const CODE_EXTS = new Set([
   ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
   ".css", ".scss", ".less", ".html", ".xml",
   ".py", ".rb", ".rs", ".go", ".java", ".kt", ".c", ".h", ".cpp", ".hpp",
   ".cs", ".swift", ".dart", ".lua", ".r", ".sql", ".graphql",
   ".json", ".yaml", ".yml", ".toml", ".md",
-  ".sh", ".bash",
+  ".sh", ".bash", ".zsh", ".fish",
+  ".dockerfile", ".gitignore", ".env", ".editorconfig",
+  ".cmake", ".gradle", ".ini", ".cfg", ".conf", ".log", ".csv",
 ]);
+
+const EXT_TO_LANG: Record<string, string> = {
+  js: "javascript", jsx: "jsx", ts: "typescript", tsx: "tsx",
+  py: "python", rb: "ruby", rs: "rust", go: "go", java: "java", kt: "kotlin",
+  c: "c", h: "c", cpp: "cpp", hpp: "cpp", cs: "csharp",
+  swift: "swift", dart: "dart", lua: "lua", r: "r", sql: "sql",
+  html: "html", xml: "xml", css: "css", scss: "scss", less: "less",
+  json: "json", yaml: "yaml", yml: "yaml", toml: "toml", ini: "ini",
+  sh: "bash", bash: "bash", zsh: "bash", fish: "fish",
+  graphql: "graphql", md: "markdown", dockerfile: "dockerfile",
+  gitignore: "bash", env: "bash", makefile: "makefile",
+  vue: "html", svelte: "html",
+};
+
+function getLangFromExt(ext: string): string | undefined {
+  const key = ext.replace(".", "").toLowerCase();
+  return EXT_TO_LANG[key];
+}
 
 function getFileIcon(name: string) {
   const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : "";
@@ -409,9 +434,52 @@ export function FileExplorer({ project }: Props) {
               </span>
             </div>
             <div className="flex-1 overflow-auto">
-              <pre className="p-3 text-xs text-hacker-text-bright leading-relaxed font-mono whitespace-pre">
-                {fileContent.content}
-              </pre>
+              {MARKDOWN_EXTS.has(fileContent.ext) ? (
+                /* ── Markdown: rendered ── */
+                <div className="prose-hacker p-4">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || "");
+                        const codeStr = String(children).replace(/\n$/, "");
+                        if (match) {
+                          return (
+                            <SyntaxHighlighter
+                              style={atomOneDark}
+                              language={match[1]}
+                              PreTag="div"
+                              className="rounded-sm my-2 !bg-[#1d1f27] !text-xs"
+                            >
+                              {codeStr}
+                            </SyntaxHighlighter>
+                          );
+                        }
+                        return <code className={className} {...props}>{children}</code>;
+                      },
+                    }}
+                  >
+                    {fileContent.content}
+                  </ReactMarkdown>
+                </div>
+              ) : CODE_EXTS.has(fileContent.ext) || !fileContent.ext ? (
+                /* ── Code: syntax highlighted ── */
+                <SyntaxHighlighter
+                  style={atomOneDark}
+                  language={getLangFromExt(fileContent.ext) || "text"}
+                  showLineNumbers
+                  wrapLines
+                  PreTag="div"
+                  className="!bg-[#0a0a0a] !m-0 !rounded-none !text-xs !leading-relaxed"
+                >
+                  {fileContent.content}
+                </SyntaxHighlighter>
+              ) : (
+                /* ── Default: plain monospace ── */
+                <pre className="p-3 text-xs text-hacker-text-bright leading-relaxed font-mono whitespace-pre">
+                  {fileContent.content}
+                </pre>
+              )}
             </div>
           </div>
         ) : null}

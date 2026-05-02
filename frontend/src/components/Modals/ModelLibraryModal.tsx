@@ -308,7 +308,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
   return (
     <div className="modal-overlay">
-      <div className="modal-box max-w-[680px] max-h-[90vh] overflow-y-auto">
+      <div className="modal-box max-w-[42.5rem] max-h-[90vh] overflow-y-auto">
         {/* ── Header ── */}
         <div className="flex items-center justify-between mb-4">
           <span className="text-hacker-accent font-bold text-sm tracking-wider">

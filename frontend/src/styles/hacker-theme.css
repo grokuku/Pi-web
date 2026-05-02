@@ -302,9 +302,11 @@ body {
   background: var(--surface-raised);
   border: 1px solid var(--accent-dim);
   box-shadow: 0 0 30px rgba(0, 255, 65, 0.1), 0 0 10px rgba(0, 255, 65, 0.05);
-  max-width: 480px;
+  max-width: 30rem;
+  max-height: 85vh;
+  overflow-y: auto;
   width: 90%;
-  padding: 24px;
+  padding: 1.5rem;
 }
 
 /* ─── Matrix rain effect ────────────────────── */
