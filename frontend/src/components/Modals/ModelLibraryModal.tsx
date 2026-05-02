@@ -59,6 +59,8 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
   const [availableModels, setAvailableModels] = useState<{ name: string; size: number }[]>([]);
   const [selectedToAdd, setSelectedToAdd] = useState<Set<string>>(new Set());
   const [addThinkingLevel, setAddThinkingLevel] = useState("medium");
+  const [addContextWindow, setAddContextWindow] = useState(0); // 0 = auto
+  const [addReasoning, setAddReasoning] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [editInstructions, setEditInstructions] = useState("");
 
@@ -136,6 +138,9 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
             modelId: modelName,
             name: modelName,
             thinkingLevel: addThinkingLevel,
+            contextWindow: addContextWindow || undefined,
+            reasoning: addReasoning || undefined,
+            maxTokens: addReasoning ? 16384 : 4096,
           }),
         });
       }
@@ -477,6 +482,10 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
             setSelectedToAdd={setSelectedToAdd}
             thinkingLevel={addThinkingLevel}
             setThinkingLevel={setAddThinkingLevel}
+            contextWindow={addContextWindow}
+            setContextWindow={setAddContextWindow}
+            reasoning={addReasoning}
+            setReasoning={setAddReasoning}
             loading={loading}
             onFetch={handleFetchModels}
             onAdd={handleAddModels}
@@ -557,6 +566,16 @@ function ProviderCard({
               ))}
             </select>
 
+            {/* Capabilities badges */}
+            {entry.reasoning && (
+              <span className="text-[9px] text-hacker-warn border border-hacker-warn/30 px-1" title="Supports reasoning/thinking">🧠</span>
+            )}
+            {entry.contextWindow ? (
+              <span className="text-[9px] text-hacker-text-dim" title="Context window size">
+                {entry.contextWindow >= 1000000 ? `${(entry.contextWindow / 1000000).toFixed(0)}M` : `${(entry.contextWindow / 1000).toFixed(0)}K`}
+              </span>
+            ) : null}
+
             {/* Actions */}
             {!isActive && (
               <button
@@ -595,6 +614,10 @@ function AddModelPanel({
   setSelectedToAdd,
   thinkingLevel,
   setThinkingLevel,
+  contextWindow,
+  setContextWindow,
+  reasoning,
+  setReasoning,
   loading,
   onFetch,
   onAdd,
@@ -609,6 +632,10 @@ function AddModelPanel({
   setSelectedToAdd: (s: Set<string>) => void;
   thinkingLevel: string;
   setThinkingLevel: (l: string) => void;
+  contextWindow: number;
+  setContextWindow: (n: number) => void;
+  reasoning: boolean;
+  setReasoning: (b: boolean) => void;
   loading: boolean;
   onFetch: () => void;
   onAdd: () => void;
@@ -734,7 +761,7 @@ function AddModelPanel({
       </div>
 
       {/* Step 4: Default thinking */}
-      <div className="mb-3">
+      <div className="mb-2">
         <label className="text-hacker-accent text-[10px] block mb-1">4. DEFAULT THINKING</label>
         <select
           value={thinkingLevel}
@@ -745,6 +772,39 @@ function AddModelPanel({
             <option key={l} value={l}>{l}</option>
           ))}
         </select>
+      </div>
+
+      {/* Step 5: Model capabilities */}
+      <div className="mb-3 flex gap-3">
+        <div className="flex-1">
+          <label className="text-hacker-accent text-[10px] block mb-1">5. CONTEXT WINDOW</label>
+          <select
+            value={contextWindow}
+            onChange={(e) => setContextWindow(Number(e.target.value))}
+            className="select-hacker w-full text-xs"
+          >
+            <option value={0}>Auto</option>
+            <option value={8192}>8K</option>
+            <option value={32768}>32K</option>
+            <option value={65536}>64K</option>
+            <option value={128000}>128K</option>
+            <option value={200000}>200K</option>
+            <option value={1000000}>1M</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-hacker-accent text-[10px] block mb-1">REASONING</label>
+          <button
+            onClick={() => setReasoning(!reasoning)}
+            className={`flex items-center gap-1.5 px-3 py-[7px] border text-xs ${
+              reasoning
+                ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                : "border-hacker-border text-hacker-text-dim hover:text-hacker-text"
+            }`}
+          >
+            {reasoning ? "🧠 ON" : "○ OFF"}
+          </button>
+        </div>
       </div>
 
       {/* Actions */}

@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import {
   loadModelLibrary,
+  saveModelLibrary,
   setModeEnabled,
   setModeInstructions,
   setModeTools,
@@ -14,8 +15,9 @@ import {
   getActiveMode,
   type AgentMode,
   type ModelEntry,
+  inferReasoning,
 } from "../pi/model-library.js";
-import { setModel, setThinkingLevel, reloadModelRegistry } from "../pi/session.js";
+import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry } from "../pi/session.js";
 
 const router = Router();
 
@@ -58,6 +60,33 @@ async function applyModeToSession(mode: AgentMode): Promise<void> {
   try {
     console.log(`[mode] Applying ${mode} → ${entry.provider}/${entry.modelId}`);
     reloadModelRegistry();
+
+    // If the library entry has custom reasoning/contextWindow, register it as a provider override
+    // so the Pi SDK uses these values instead of the default from the registry.
+    if (entry.reasoning !== undefined || entry.contextWindow !== undefined) {
+      const registry = getModelRegistry();
+      const existingModel = registry.find(entry.provider, entry.modelId);
+      const needsOverride =
+        (entry.reasoning !== undefined && existingModel?.reasoning !== entry.reasoning) ||
+        (entry.contextWindow !== undefined && existingModel?.contextWindow !== entry.contextWindow);
+
+      if (needsOverride) {
+        console.log(`[mode] Registering provider override for ${entry.provider}/${entry.modelId}: reasoning=${entry.reasoning}, contextWindow=${entry.contextWindow}`);
+        registry.registerProvider(entry.provider, {
+          baseUrl: existingModel?.baseUrl,
+          models: [{
+            id: existingModel?.id || entry.modelId,
+            name: existingModel?.name || entry.name || entry.modelId,
+            reasoning: entry.reasoning ?? existingModel?.reasoning ?? false,
+            input: existingModel?.input || ["text"],
+            contextWindow: entry.contextWindow ?? existingModel?.contextWindow ?? 128000,
+            maxTokens: entry.maxTokens ?? existingModel?.maxTokens ?? 16384,
+            cost: existingModel?.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          }],
+        });
+      }
+    }
+
     await setModel(entry.provider, entry.modelId);
     await setThinkingLevel(entry.thinkingLevel);
     console.log(`[mode] Applied ${mode} successfully`);
@@ -184,7 +213,7 @@ router.put("/modes/:mode/readonly", (req: Request, res: Response) => {
 router.post("/modes/:mode/models", async (req: Request, res: Response) => {
   try {
     const mode = validateMode(req.params.mode);
-    const { provider, modelId, name, thinkingLevel } = req.body;
+    const { provider, modelId, name, thinkingLevel, contextWindow, reasoning, maxTokens } = req.body;
     if (!provider || !modelId) {
       return res.status(400).json({ error: "provider and modelId required" });
     }
@@ -195,6 +224,9 @@ router.post("/modes/:mode/models", async (req: Request, res: Response) => {
       modelId,
       name: name || modelId,
       thinkingLevel: thinkingLevel || "medium",
+      contextWindow: contextWindow || (reasoning ? 128000 : 32768),
+      reasoning: reasoning ?? inferReasoning(modelId),
+      maxTokens: maxTokens || (reasoning ? 16384 : 4096),
     };
 
     const library = addModelToMode(mode, entry);
@@ -244,7 +276,7 @@ router.put("/modes/:mode/active", async (req: Request, res: Response) => {
 
 // ── PUT update thinking level for a model in a mode ──────
 
-router.put("/modes/:mode/models/:entryId/thinking", (req: Request, res: Response) => {
+router.put("/modes/:mode/models/:entryId/thinking", async (req: Request, res: Response) => {
   try {
     const mode = validateMode(req.params.mode);
     const entryId = safeDecodeURIComponent(req.params.entryId);
@@ -254,10 +286,43 @@ router.put("/modes/:mode/models/:entryId/thinking", (req: Request, res: Response
     }
     const library = setModelThinkingLevel(mode, entryId, thinkingLevel);
 
-    // If this is the active model for the active mode, apply thinking level
+    // If this is the active model for an enabled mode, re-apply to session
+    // (this also updates the registry with reasoning if needed)
     const activeEntry = getActiveModelForMode(mode);
-    if (activeEntry && activeEntry.id === entryId) {
-      setThinkingLevel(thinkingLevel).catch(() => {});
+    if (activeEntry && activeEntry.id === entryId && library.modes[mode].enabled) {
+      await applyModeToSession(mode);
+    }
+
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── PUT update model properties (contextWindow, reasoning, etc.) ──
+
+router.put("/modes/:mode/models/:entryId/properties", async (req: Request, res: Response) => {
+  try {
+    const mode = validateMode(req.params.mode);
+    const entryId = safeDecodeURIComponent(req.params.entryId);
+    const { contextWindow, reasoning, maxTokens } = req.body;
+
+    const library = loadModelLibrary();
+    const entry = library.modes[mode].models.find((m) => m.id === entryId);
+    if (!entry) {
+      return res.status(404).json({ error: "Model not found" });
+    }
+
+    if (contextWindow !== undefined) entry.contextWindow = contextWindow;
+    if (reasoning !== undefined) entry.reasoning = reasoning;
+    if (maxTokens !== undefined) entry.maxTokens = maxTokens;
+
+    saveModelLibrary(library);
+
+    // Re-apply to session if this is the active model
+    const activeEntry = getActiveModelForMode(mode);
+    if (activeEntry && activeEntry.id === entryId && library.modes[mode].enabled) {
+      await applyModeToSession(mode);
     }
 
     res.json(library);

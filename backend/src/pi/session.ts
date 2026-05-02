@@ -60,6 +60,10 @@ export function reloadModelRegistry(): void {
   }
 }
 
+export function getModelRegistry(): ModelRegistry {
+  return sharedModelRegistry;
+}
+
 export function subscribeToEvents(callback: EventCallback): () => void {
   eventCallbacks.add(callback);
   return () => { eventCallbacks.delete(callback); };
@@ -432,6 +436,9 @@ export function getSessionInfo(projectId?: string) {
           id: (state.session.model as any).id,
           name: (state.session.model as any).name,
           provider: (state.session.model as any).provider,
+          modelId: (state.session.model as any).modelId,
+          contextWindow: (state.session.model as any).contextWindow,
+          reasoning: !!(state.session.model as any).reasoning,
         }
       : null,
     messageCount: state.session.messages?.length || 0,

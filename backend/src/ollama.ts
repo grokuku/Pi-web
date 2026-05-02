@@ -61,9 +61,10 @@ export async function writeOllamaModelsJson(
   
   // Better vision/reasoning detection (checks full model details from Ollama)
   const isVision = (name: string) => 
-    /llava|bakllava|moondream|minicpm|gemma|vision|cot|qwen2.*vl/i.test(name);
+    /llava|bakllava|moondream|minicpm-v|gemma.*vl|qwen2.*vl|vision/i.test(name);
   const isReasoning = (name: string) =>
-    /deepseek.*r1|qwq|qwen.*thinking|openthinker|deepscaler|marco-o1/i.test(name);
+    /deepseek.*r1|qwq|qwen.*think|qwen3\.5|qwen3-|openthinker|deepscaler|marco-o1|o1[-_]|o3[-_]|o4[-_]|reason|think|cot|r1[-_]|glm.*think/i.test(name) ||
+    /qwen3|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5.*pro|gemini.*think/i.test(name);
 
   const ollamaModels = models.map((m) => ({
     id: m.name,

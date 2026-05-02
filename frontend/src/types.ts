@@ -95,6 +95,9 @@ export interface ModelEntry {
   modelId: string;
   name: string;
   thinkingLevel: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  maxTokens?: number;
 }
 
 export interface ModeConfig {

@@ -16,6 +16,9 @@ export interface ModelEntry {
   modelId: string;        // e.g. "claude-sonnet-4-20250514" or "llama3.2:3b"
   name: string;           // display name
   thinkingLevel: string;  // default thinking level for this model in this mode
+  contextWindow?: number; // context window size in tokens (e.g. 128000)
+  reasoning?: boolean;    // whether this model supports reasoning/thinking
+  maxTokens?: number;     // max output tokens
 }
 
 export interface ModeConfig {
@@ -155,13 +158,25 @@ function migrateModelEntry(entry: any): ModelEntry {
   const provider = entry.provider || "ollama";
   const modelId = entry.modelId || entry.name || id.split("__").slice(1).join("__") || "";
   const name = entry.name || modelId || "";
+  const reasoning = entry.reasoning ?? inferReasoning(modelId);
+  const contextWindow = entry.contextWindow ?? (reasoning ? 128000 : 32768);
+  const maxTokens = entry.maxTokens ?? (reasoning ? 16384 : 4096);
   return {
     id,
     provider,
     modelId,
     name,
     thinkingLevel: entry.thinkingLevel || "medium",
+    contextWindow,
+    reasoning,
+    maxTokens,
   };
+}
+
+/** Infer reasoning capability from model name */
+export function inferReasoning(modelId: string): boolean {
+  const name = modelId.toLowerCase();
+  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|reason/i.test(name);
 }
 
 export function loadModelLibrary(): ModelLibrary {
