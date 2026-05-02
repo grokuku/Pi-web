@@ -128,15 +128,27 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   // ── Per-project chat history (persists across project switches) ──
   const chatHistory = useChatHistory(projectId);
 
-  // ── Restore / reset messages when projectId changes ──
+  // Ref to track previous projectId for saving on switch
+  const prevProjectIdRef = useRef(projectId);
+
+  // ── When switching projects: save old project's messages, then load new ──
   useEffect(() => {
-    // Load previously stored messages for this project
+    // Save messages for the project we're LEAVING
+    const prevId = prevProjectIdRef.current;
+    if (prevId && prevId !== projectId) {
+      // Persist current messages under the previous project before loading new ones
+      chatHistory.saveMessagesFor(messagesRef.current, prevId);
+    }
+    prevProjectIdRef.current = projectId;
+
+    // Load messages for the new project
     const stored = chatHistory.getMessages();
     if (stored.length > 0) {
       setMessages(stored);
     } else {
       setMessages([]);
     }
+    // Reset streaming state (project-specific, not transferable)
     setStreamingContent("");
     setStreamingThinking("");
     setCurrentToolCalls([]);
@@ -148,7 +160,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   useEffect(() => {
     chatHistory.saveMessages(messages);
     messagesRef.current = messages;
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [messages, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep refs in sync
   useEffect(() => { streamingContentRef.current = streamingContent; }, [streamingContent]);
@@ -530,6 +542,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
     send({
       type: "pi_prompt",
+      projectId,
       message: fullMessage,
       images: imageAttachments.length > 0 ? imageAttachments : undefined,
     });
@@ -700,7 +713,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
                 <Paperclip size={14} />
               </button>
               {isStreaming && (
-                <button onClick={() => send({ type: "pi_abort" })} className="btn-hacker danger px-4 text-xs">ABORT</button>
+                <button onClick={() => send({ type: "pi_abort", projectId })} className="btn-hacker danger px-4 text-xs">ABORT</button>
               )}
             </div>
           </div>

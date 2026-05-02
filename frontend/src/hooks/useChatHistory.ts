@@ -274,6 +274,11 @@ export function useChatHistory(projectId: string) {
     storeRef.current.set(projectId, messages);
   }, [projectId]);
 
+  // Save messages for a SPECIFIC project (used during project switch)
+  const saveMessagesFor = useCallback((messages: DisplayMessage[], targetProjectId: string) => {
+    storeRef.current.set(targetProjectId, messages);
+  }, []);
+
   // Handle pi_history from backend — converts and sets all messages
   const handleHistory = useCallback((rawMessages: any[]) => {
     const displayMessages = convertHistoryToDisplayMessages(rawMessages);
@@ -315,6 +320,7 @@ export function useChatHistory(projectId: string) {
   return {
     getMessages,
     saveMessages,
+    saveMessagesFor,
     handleHistory,
     appendMessage,
     replaceLastAssistant,

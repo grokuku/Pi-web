@@ -151,6 +151,7 @@ export function Sidebar({
             onClick={() => {
               send({
                 type: "pi_prompt",
+                projectId: activeProject?.id,
                 message: "List the files in the current directory",
               });
             }}
@@ -159,7 +160,7 @@ export function Sidebar({
             icon={<Power size={10} />}
             label="Shutdown Pi"
             onClick={() => {
-              send({ type: "pi_abort" });
+              send({ type: "pi_abort", projectId: activeProject?.id });
             }}
             danger
           />

@@ -200,6 +200,10 @@ wss.on("close", () => clearInterval(interval));
 
 // ─── WebSocket Message Handler ─────────────────────────
 async function handleWsMessage(ws: ExtendedWS, msg: any) {
+  // Always update ws.projectId when a projectId is provided
+  // This ensures fallback routing uses the latest project context
+  if (msg.projectId) ws.projectId = msg.projectId;
+
   const projectId = msg.projectId || ws.projectId || "";
 
   switch (msg.type) {
@@ -212,9 +216,6 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       }
       const project = getProject(pid);
       const cwd = project?.cwd || process.cwd();
-
-      // Track which project this client is viewing
-      ws.projectId = pid;
 
       try {
         const state = await createPiSession(cwd, pid, {
