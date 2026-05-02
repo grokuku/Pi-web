@@ -6,7 +6,7 @@ import {
   FileText,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { GitPanel } from "./GitPanel";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import type { Project } from "../../types";
@@ -35,6 +35,13 @@ export function Sidebar({
   onSendCommand,
 }: Props) {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [projectListHeight, setProjectListHeight] = useState(() => {
+    const saved = localStorage.getItem("pi-web-project-list-height");
+    return saved ? parseInt(saved) : 180;
+  });
+  const isResizingProjects = useRef(false);
+  const startY = useRef(0);
+  const startHeight = useRef(0);
 
   const handleDeleteConfirm = (deleteFiles: boolean) => {
     if (projectToDelete) {
@@ -42,10 +49,37 @@ export function Sidebar({
       setProjectToDelete(null);
     }
   };
+
+  // ── Project list vertical resize ──
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingProjects.current = true;
+    startY.current = e.clientY;
+    startHeight.current = projectListHeight;
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!isResizingProjects.current) return;
+      const delta = ev.clientY - startY.current;
+      const newHeight = Math.max(80, Math.min(600, startHeight.current + delta));
+      setProjectListHeight(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      if (isResizingProjects.current) {
+        isResizingProjects.current = false;
+        localStorage.setItem("pi-web-project-list-height", String(projectListHeight));
+      }
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, [projectListHeight]);
   return (
     <aside className="h-full border-r border-hacker-border-bright sidebar-zone flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
-      <div className="p-2 border-b border-hacker-border">
+      <div className="p-2 pb-0">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-hacker-accent text-[10px] tracking-widest">PROJECTS</span>
           <button
@@ -57,7 +91,7 @@ export function Sidebar({
           </button>
         </div>
 
-        <div className="space-y-0.5 max-h-[180px] overflow-y-auto">
+        <div className="space-y-0.5 overflow-y-auto" style={{ maxHeight: projectListHeight }}>
           {projects.map((p) => {
             const pState = projectSessions?.get(p.id);
             const isThisStreaming = pState?.isStreaming ?? false;
@@ -98,6 +132,13 @@ export function Sidebar({
           })}
         </div>
       </div>
+
+      {/* Resize handle for project list */}
+      <div
+        onMouseDown={handleResizeMouseDown}
+        className="h-1 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors border-b border-hacker-border-bright"
+        title="Resize project list"
+      />
 
       {/* ── Git panel ── */}
       {activeProject && activeProject.git?.remote && (
