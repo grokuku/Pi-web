@@ -263,10 +263,78 @@ export async function sendPrompt(
   message: string,
   projectId: string,
   images?: { data: string; mimeType: string }[]
-): Promise<void> {
+): Promise<{ command?: string; result?: string } | void> {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
+  }
+
+  // ── Handle slash commands ──
+  const trimmed = message.trim();
+  if (trimmed.startsWith("/")) {
+    const session = state.session!;  // Guaranteed by the check above
+    const spaceIndex = trimmed.indexOf(" ");
+    const cmd = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+    const args = spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1).trim();
+
+    switch (cmd) {
+      case "/new": {
+        await createPiSession(state.cwd, projectId, { resume: false });
+        return { command: "new", result: "✓ New session started" };
+      }
+      case "/compact": {
+        // Check if there are enough messages
+        const sessionManager = session.sessionManager;
+        const entries = sessionManager.getEntries();
+        const msgCount = entries.filter((e: any) => e.type === "message").length;
+        if (msgCount < 2) {
+          return { command: "compact", result: "Nothing to compact (no messages yet)" };
+        }
+        try {
+          await session.compact(args || undefined);
+          return { command: "compact", result: "✓ Context compacted" };
+        } catch {
+          return { command: "compact", result: "Compaction failed or cancelled" };
+        }
+      }
+      case "/model": {
+        // /model — list available, /model <name> — switch
+        if (!args) {
+          const available = session.modelRegistry.getAvailable();
+          const lines = available.map((m: any) => {
+            const isActive = session.model?.provider === m.provider && session.model?.id === m.id;
+            return `${isActive ? "→ " : "  "}${m.provider}/${m.id}`;
+          });
+          return { command: "model", result: `Available models:\n${lines.join("\n")}` };
+        }
+        // Try to find and set the model
+        const available = session.modelRegistry.getAvailable();
+        const match = available.find((m: any) =>
+          m.id === args || m.name === args ||
+          `${m.provider}/${m.id}` === args ||
+          m.id.includes(args)
+        );
+        if (match) {
+          await session.setModel(match);
+          return { command: "model", result: `✓ Model set to ${match.provider}/${match.id}` };
+        }
+        return { command: "model", result: `Model not found: ${args}. Use /model to list available.` };
+      }
+      case "/help": {
+        return {
+          command: "help",
+          result: `Available commands:\n  /new      — Start a new session\n  /compact   — Compact conversation context\n  /model     — List or switch model\n  /clear     — Clear screen (keep session)\n  /help      — Show this help`,
+        };
+      }
+      case "/clear": {
+        return { command: "clear", result: "" };
+      }
+      default: {
+        // Unknown command — try extension commands via session.prompt()
+        // Pi extensions may register custom commands
+        break;
+      }
+    }
   }
 
   const imageAttachments = images?.map((img) => ({

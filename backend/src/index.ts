@@ -402,7 +402,16 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       }
       const { message, images } = msg;
       try {
-        await sendPrompt(message, pid, images);
+        const result = await sendPrompt(message, pid, images);
+        // If it was a slash command, send the result back
+        if (result && result.command) {
+          ws.send(JSON.stringify({
+            type: "pi_command_result",
+            projectId: pid,
+            command: result.command,
+            result: result.result,
+          }));
+        }
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }

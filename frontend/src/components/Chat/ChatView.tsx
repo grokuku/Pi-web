@@ -371,6 +371,34 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return () => unsub();
   }, [on, projectId]);
 
+  // ── Pi command results (/new, /compact, /model, etc.) ──
+  useEffect(() => {
+    const unsub = on("pi_command_result", (msg: any) => {
+      if (msg.projectId && msg.projectId !== projectId) return;
+      if (msg.result) {
+        setMessages((prev) => [...prev, {
+          id: `cmd-${Date.now()}`,
+          role: "user" as const,
+          content: msg.result,
+          thinking: "",
+          toolCalls: [],
+          timestamp: Date.now(),
+          customType: "pi_command",
+          display: true,
+        }]);
+      }
+      // For /clear, just clear messages
+      if (msg.command === "clear") {
+        setMessages([]);
+      }
+      // For /new, clear messages (new session)
+      if (msg.command === "new") {
+        setMessages([]);
+      }
+    });
+    return () => unsub();
+  }, [on, projectId]);
+
   // ── File processing ──────────────────────────────────
 
   const processFile = useCallback((file: File) => {
@@ -483,17 +511,22 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     if (!fullMessage && imageAttachments.length === 0) return;
     setError("");
 
-    // Add user message to chat (show image thumbnails and file names)
-    const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "[images]");
-    setMessages((prev) => [...prev, {
-      id: Date.now().toString(),
-      role: "user",
-      content: displayContent,
-      thinking: "",
-      toolCalls: [],
-      timestamp: Date.now(),
-      // Store image previews for rendering
-    }]);
+    // If it's a slash command, don't add as user message (result will come via pi_command_result)
+    const isSlashCommand = fullMessage.trim().startsWith("/");
+
+    if (!isSlashCommand) {
+      // Add user message to chat (show image thumbnails and file names)
+      const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "[images]");
+      setMessages((prev) => [...prev, {
+        id: Date.now().toString(),
+        role: "user",
+        content: displayContent,
+        thinking: "",
+        toolCalls: [],
+        timestamp: Date.now(),
+        // Store image previews for rendering
+      }]);
+    }
 
     send({
       type: "pi_prompt",
@@ -725,6 +758,16 @@ function GroupedMessages({ messages, showAllThinking, expandTools }: {
 }
 
 function UserBubble({ message }: { message: DisplayMessage }) {
+  // Pi command result: system info
+  if (message.customType === "pi_command") {
+    return (
+      <div className="flex justify-center mb-3">
+        <div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-left whitespace-pre-wrap font-mono">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
   // Git notification: system-level info bubble
   if (message.customType === "git_notification") {
     return (

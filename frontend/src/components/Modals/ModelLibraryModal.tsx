@@ -614,6 +614,7 @@ function ProviderCard({
               <option value={65536}>64K</option>
               <option value={128000}>128K</option>
               <option value={200000}>200K</option>
+              <option value={256000}>256K</option>
               <option value={1000000}>1M</option>
             </select>
 
@@ -830,6 +831,7 @@ function AddModelPanel({
             <option value={65536}>64K</option>
             <option value={128000}>128K</option>
             <option value={200000}>200K</option>
+            <option value={256000}>256K</option>
             <option value={1000000}>1M</option>
           </select>
         </div>
