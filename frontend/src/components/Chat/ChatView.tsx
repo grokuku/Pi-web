@@ -109,6 +109,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandTools, setExpandTools] = useState(true);
   const [showAllThinking, setShowAllThinking] = useState(false);
+  const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
   const toggleAllThinking = () => setShowAllThinking((t) => !t);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [thinkingToast, setThinkingToast] = useState("");
@@ -245,6 +246,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       if (msg.projectId && msg.projectId !== projectId) return;
 
       const evt: PiEvent = msg.event;
+
+      // Ignore text message events from auto-review temp sessions
+      // (tool execution events are still forwarded for UI feedback)
+      if (evt._autoReview && (evt.type === "message_start" || evt.type === "message_update" || evt.type === "message_end")) {
+        // For auto-review, only show a brief indicator, don't add to message history
+        if (evt.type === "message_start" && evt.message?.role === "assistant") {
+          setAutoReviewStreaming(true);
+        }
+        if (evt.type === "message_end" && evt.message?.role === "assistant") {
+          setAutoReviewStreaming(false);
+        }
+        return;
+      }
 
       switch (evt.type) {
         case "message_start": {
@@ -690,7 +704,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
           <span className="flex items-center gap-2">
             {activeProject?.git?.branch && <span>git:{activeProject.git.branch}</span>}
-            {isStreaming && (
+            {autoReviewStreaming && (
+              <span className="text-hacker-warn flex items-center gap-1">
+                <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> reviewing…
+              </span>
+            )}
+            {isStreaming && !autoReviewStreaming && (
               <span className="text-hacker-accent flex items-center gap-1">
                 <span className="pulse-dot w-1.5 h-1.5" /> generating…
               </span>

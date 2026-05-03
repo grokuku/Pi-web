@@ -226,12 +226,14 @@ function App() {
           break;
         }
         case "auto_review_status": {
-          setAutoReviewState({
-            inProgress: evt.phase !== "done",
-            cycle: evt.cycle,
-            maxReviews: evt.maxReviews,
-            phase: evt.phase,
-          });
+          if (projectId === activeProject?.id) {
+            setAutoReviewState({
+              inProgress: evt.phase !== "done",
+              cycle: evt.cycle,
+              maxReviews: evt.maxReviews,
+              phase: evt.phase,
+            });
+          }
           break;
         }
         case "turn_end": {

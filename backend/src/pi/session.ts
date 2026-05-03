@@ -658,8 +658,8 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
           }
         }
 
-        await setModel(entry.provider, entry.modelId);
-        await setThinkingLevel(entry.thinkingLevel);
+        await setModel(entry.provider, entry.modelId, projectId);
+        await setThinkingLevel(entry.thinkingLevel, projectId);
       } catch (e: any) {
         console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
       }
@@ -726,8 +726,8 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     const entry = codeCfg.models.find(m => m.id === codeCfg.activeModelId);
     if (entry) {
       try {
-        await setModel(entry.provider, entry.modelId);
-        await setThinkingLevel(entry.thinkingLevel);
+        await setModel(entry.provider, entry.modelId, projectId);
+        await setThinkingLevel(entry.thinkingLevel, projectId);
       } catch (e: any) {
         console.error("[mode] Failed to restore code model:", e.message);
       }
@@ -896,6 +896,8 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
 
     // Subscribe to temp session events to forward tool calls for UI display
     const tempUnsub = tempSession.subscribe((event) => {
+      // Tag events from the review temp session so the frontend can distinguish them
+      const taggedEvent = { ...event, _autoReview: true } as any;
       // Forward tool call events to subscribers so the UI can show review activity
       if (event.type === "tool_execution_start") {
         activeToolCalls.set(event.toolCallId, {
@@ -922,7 +924,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
         state.isStreaming = false;
         emitSessionUpdate(projectId);
       }
-      emitToSubscribers(event, projectId);
+      emitToSubscribers(taggedEvent, projectId);
     });
 
     // Run the review prompt
