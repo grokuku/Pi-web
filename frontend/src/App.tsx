@@ -478,6 +478,13 @@ function App() {
                 send({ type: "pi_prompt", projectId: activeProject.id, message: cmd });
               }
             }}
+            onRefreshGit={() => {
+              if (activeProject) {
+                fetch(`/api/projects/${activeProject.id}/git/sync`, { method: "POST" })
+                  .then(() => loadProjects())
+                  .catch(() => {});
+              }
+            }}
           />
           {/* Resize handle */}
           <div

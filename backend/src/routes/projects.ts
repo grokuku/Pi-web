@@ -5,6 +5,7 @@ import {
   createProject,
   updateProject,
   deleteProject,
+  reorderProjects,
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
@@ -105,6 +106,20 @@ router.get("/:id/git/history", async (req: Request, res: Response) => {
 });
 
 // POST git pull
+// POST sync git info (refresh remote status without pulling/pushing)
+router.post("/:id/git/sync", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const updated = await syncGitInfo(project);
+    res.json(updated);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.post("/:id/git/pull", async (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
@@ -401,6 +416,20 @@ router.delete("/:id/git/credentials", async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT reorder projects
+router.put("/reorder", async (req: Request, res: Response) => {
+  try {
+    const { projectIds } = req.body;
+    if (!Array.isArray(projectIds)) {
+      return res.status(400).json({ error: "projectIds (string[]) required" });
+    }
+    const projects = await reorderProjects(projectIds);
+    res.json(projects);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
 });
 

@@ -28,9 +28,10 @@ type ActionType = "pull" | "push" | "commit-push" | "clone" | "init";
 
 interface Props {
   project: Project;
+  onRefresh?: () => void;
 }
 
-export function GitPanel({ project }: Props) {
+export function GitPanel({ project, onRefresh }: Props) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<ActionType | null>(null);
@@ -127,6 +128,14 @@ export function GitPanel({ project }: Props) {
       <div className="text-hacker-accent text-[10px] tracking-widest mb-2 flex items-center gap-1">
         <GitBranch size={12} />
         GIT {providerIcon}
+        <div className="flex-1" />
+        <button
+          onClick={() => { fetchStatus(); onRefresh?.(); }}
+          className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
+          title="Refresh git status"
+        >
+          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+        </button>
       </div>
 
       {loading && !status && (

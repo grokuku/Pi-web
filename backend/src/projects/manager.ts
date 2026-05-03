@@ -261,3 +261,27 @@ export async function updateProjectGit(
     return projects[index];
   });
 }
+
+/** Reorder projects — takes an array of project IDs in the desired order */
+export async function reorderProjects(orderedIds: string[]): Promise<Project[]> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const idSet = new Set(orderedIds);
+
+    // Validate all IDs exist
+    for (const id of orderedIds) {
+      if (!projects.find((p) => p.id === id)) {
+        throw new Error(`Project not found: ${id}`);
+      }
+    }
+
+    // Build reordered array: ordered IDs first, then any not mentioned (appended at end)
+    const reordered: Project[] = orderedIds.map(id => projects.find((p) => p.id === id)!);
+    for (const p of projects) {
+      if (!idSet.has(p.id)) reordered.push(p);
+    }
+
+    saveProjects(reordered);
+    return reordered;
+  });
+}

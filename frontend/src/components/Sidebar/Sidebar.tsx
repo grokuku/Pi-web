@@ -5,6 +5,7 @@ import {
   RefreshCw,
   FileText,
   Trash2,
+  GripVertical,
 } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import { GitPanel } from "./GitPanel";
@@ -21,6 +22,7 @@ interface Props {
   session: any;
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
   onSendCommand: (cmd: string) => void;
+  onRefreshGit?: () => void;
 }
 
 export function Sidebar({
@@ -33,8 +35,12 @@ export function Sidebar({
   session,
   projectSessions,
   onSendCommand,
+  onRefreshGit,
 }: Props) {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [localProjects, setLocalProjects] = useState<Project[]>(projects);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [projectListHeight, setProjectListHeight] = useState(() => {
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
@@ -45,11 +51,50 @@ export function Sidebar({
   const startY = useRef(0);
   const startHeight = useRef(0);
 
+  // Sync localProjects when the prop changes (but not during drag)
+  if (dragIdx === null && localProjects !== projects) {
+    setLocalProjects(projects);
+  }
+
   const handleDeleteConfirm = (deleteFiles: boolean) => {
     if (projectToDelete) {
       onDeleteProject(projectToDelete, deleteFiles);
       setProjectToDelete(null);
     }
+  };
+
+  // ── Drag and drop ──
+  const handleDragStart = (e: React.DragEvent, idx: number) => {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+    // Set a transparent drag image so only the grip icon feedback is visible
+    const el = e.currentTarget as HTMLElement;
+    e.dataTransfer.setDragImage(el, 16, 8);
+  };
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragIdx !== null && idx !== dragIdx) {
+      setDragOverIdx(idx);
+    }
+  };
+
+  const handleDragEnd = () => {
+    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
+      const reordered = [...localProjects];
+      const [moved] = reordered.splice(dragIdx, 1);
+      reordered.splice(dragOverIdx, 0, moved);
+      setLocalProjects(reordered);
+      // Persist the new order
+      fetch("/api/projects/reorder", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectIds: reordered.map((p) => p.id) }),
+      }).catch((err) => console.error("Failed to persist project order:", err));
+    }
+    setDragIdx(null);
+    setDragOverIdx(null);
   };
 
   // ── Project list vertical resize ──
@@ -78,6 +123,7 @@ export function Sidebar({
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
   }, [projectListHeight]);
+
   return (
     <aside className="h-full border-r border-hacker-border-bright sidebar-zone flex flex-col shrink-0 text-xs">
       {/* ── Projects ── */}
@@ -94,26 +140,43 @@ export function Sidebar({
         </div>
 
         <div className="space-y-0.5 overflow-y-auto" style={{ maxHeight: projectListHeight }}>
-          {projects.map((p) => {
+          {localProjects.map((p, idx) => {
             const pState = projectSessions?.get(p.id);
             const isThisStreaming = pState?.isStreaming ?? false;
             const hasSession = !!pState?.session;
+            const isDragging = dragIdx === idx;
+            const isDragTarget = dragOverIdx === idx;
             return (
-              <div key={p.id} className={`flex items-center group ${
-                activeProject?.id === p.id
-                  ? "bg-hacker-accent/10 border border-hacker-accent/30"
-                  : "hover:bg-hacker-border/50"
-              }`}>
+              <div
+                key={p.id}
+                className={`flex items-center group ${
+                  activeProject?.id === p.id
+                    ? "bg-hacker-accent/10 border border-hacker-accent/30"
+                    : isDragTarget
+                    ? "bg-hacker-accent/5 border border-hacker-accent/20 border-dashed"
+                    : "hover:bg-hacker-border/50 border border-transparent"
+                } ${isDragging ? "opacity-40" : ""}`}
+              >
+                {/* Drag handle */}
+                <div
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDragEnd={handleDragEnd}
+                  className="px-1 py-1 cursor-grab active:cursor-grabbing text-hacker-text-dim/0 group-hover:text-hacker-text-dim/60 hover:!text-hacker-text-dim shrink-0"
+                  title="Drag to reorder"
+                >
+                  <GripVertical size={10} />
+                </div>
+
+                {/* Project button */}
                 <button
                   onClick={() => onSelectProject(p)}
-                  className={`flex-1 text-left px-2 py-1 flex items-center gap-1.5 ${
+                  className={`flex-1 text-left px-1.5 py-1 flex items-center gap-1.5 ${
                     activeProject?.id === p.id
                       ? "text-hacker-accent"
                       : "text-hacker-text-dim"
                   }`}>
-                  <span className="text-[10px]">
-                    {p.storage === "ssh" ? "🔗" : p.storage === "smb" ? "💾" : "📁"}
-                  </span>
                   <span className="truncate flex-1">{p.name}</span>
                   {isThisStreaming && (
                     <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming" />
@@ -122,6 +185,8 @@ export function Sidebar({
                     <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />
                   )}
                 </button>
+
+                {/* Delete button */}
                 <button
                   onClick={(e) => { e.stopPropagation(); setProjectToDelete(p); }}
                   className="px-1 py-1 text-hacker-text-dim/0 group-hover:text-hacker-error/70 hover:!text-hacker-error transition-colors"
@@ -144,7 +209,7 @@ export function Sidebar({
 
       {/* ── Git panel ── */}
       {activeProject && activeProject.git?.remote && (
-        <GitPanel project={activeProject} />
+        <GitPanel project={activeProject} onRefresh={onRefreshGit} />
       )}
 
       {/* ── Slash commands ── */}
