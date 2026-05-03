@@ -449,7 +449,7 @@ export function FileExplorer({ project }: Props) {
                               style={atomOneDark}
                               language={match[1]}
                               PreTag="div"
-                              className="rounded-sm my-2 !bg-[#1d1f27] !text-xs"
+                              className="rounded-sm my-2 !text-xs"
                             >
                               {codeStr}
                             </SyntaxHighlighter>
@@ -470,7 +470,7 @@ export function FileExplorer({ project }: Props) {
                   showLineNumbers
                   wrapLines
                   PreTag="div"
-                  className="!bg-[#0a0a0a] !m-0 !rounded-none !text-xs !leading-relaxed"
+                  className="!m-0 !rounded-none !text-xs !leading-relaxed"
                 >
                   {fileContent.content}
                 </SyntaxHighlighter>

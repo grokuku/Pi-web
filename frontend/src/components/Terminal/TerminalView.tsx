@@ -31,6 +31,12 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
       fitAddonRef.current = null;
     }
 
+    // Read accent color from CSS variable for dynamic theme support
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00ff41';
+    const accentDimColor = getComputedStyle(document.documentElement).getPropertyValue('--accent-dim').trim() || '#00cc34';
+    const accentRgb = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim() || '0 255 65';
+    const selectionBg = `rgba(${accentRgb}, 0.12)`;
+
     const term = new XtermTerminal({
       cursorBlink: true,
       cursorStyle: "bar",
@@ -39,9 +45,9 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
       theme: {
         background: "#0a0a0a",
         foreground: "#c0c0c0",
-        cursor: "#00ff41",
+        cursor: accentColor,
         cursorAccent: "#0a0a0a",
-        selectionBackground: "#00ff4120",
+        selectionBackground: selectionBg,
         black: "#1a1a1a",
         red: "#ff4444",
         green: "#00ff41",

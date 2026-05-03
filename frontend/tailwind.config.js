@@ -5,35 +5,25 @@ export default {
   theme: {
     extend: {
       colors: {
+        /* All colors reference CSS custom properties.
+         * Colors that need opacity modifiers (e.g. bg-hacker-accent/10)
+         * use the `rgb(var(--xxx-rgb) / <alpha-value>)` pattern.
+         * This allows both dark/light theme AND accent colors to change
+         * without touching any Tailwind classes. */
         hacker: {
-          bg: "#0a0a0a",
-          surface: "#161616",
-          "surface-raised": "#1e1e1e",
-          border: "#2a2a2a",
-          "border-bright": "#3a3a3a",
-          accent: "#00ff41",
-          "accent-dim": "#00cc34",
-          text: "#c0c0c0",
-          "text-bright": "#e0e0e0",
-          "text-dim": "#888888",
-          warn: "#ffaa00",
-          error: "#ff4444",
-          info: "#00aaff",
-        },
-        hackerLight: {
-          bg: "#f5f5f0",
-          surface: "#ffffff",
-          "surface-raised": "#fafafa",
-          border: "#d0d0d0",
-          "border-bright": "#bbbbbb",
-          accent: "#008022",
-          "accent-dim": "#00661a",
-          text: "#333333",
-          "text-bright": "#111111",
-          "text-dim": "#888888",
-          warn: "#cc8800",
-          error: "#cc0000",
-          info: "#0066cc",
+          bg: "rgb(var(--bg-rgb) / <alpha-value>)",
+          surface: "rgb(var(--surface-rgb) / <alpha-value>)",
+          "surface-raised": "rgb(var(--surface-raised-rgb) / <alpha-value>)",
+          border: "rgb(var(--border-rgb) / <alpha-value>)",
+          "border-bright": "rgb(var(--border-bright-rgb) / <alpha-value>)",
+          accent: "rgb(var(--accent-rgb) / <alpha-value>)",
+          "accent-dim": "rgb(var(--accent-dim-rgb) / <alpha-value>)",
+          text: "rgb(var(--text-rgb) / <alpha-value>)",
+          "text-bright": "rgb(var(--text-bright-rgb) / <alpha-value>)",
+          "text-dim": "rgb(var(--text-dim-rgb) / <alpha-value>)",
+          warn: "rgb(var(--warn-rgb) / <alpha-value>)",
+          error: "rgb(var(--error-rgb) / <alpha-value>)",
+          info: "rgb(var(--info-rgb) / <alpha-value>)",
         },
       },
       fontFamily: {
@@ -51,8 +41,8 @@ export default {
           "50%": { opacity: "0" },
         },
         pulseGreen: {
-          "0%, 100%": { boxShadow: "0 0 5px #00ff41" },
-          "50%": { boxShadow: "0 0 20px #00ff41, 0 0 40px #00ff4140" },
+          "0%, 100%": { boxShadow: "0 0 5px var(--accent)" },
+          "50%": { boxShadow: "0 0 20px var(--accent), 0 0 40px rgba(var(--accent-rgb), 0.25)" },
         },
         scanLine: {
           "0%": { transform: "translateY(-100%)" },

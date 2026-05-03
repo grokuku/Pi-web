@@ -857,7 +857,7 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
             {localShow && (
               <>
                 {hasThinking && (
-                  <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
+                  <pre className="text-hacker-text-dim text-xs bg-hacker-bg/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
                     {mergedThinking}
                   </pre>
                 )}
@@ -926,7 +926,7 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
             {localShow && (
               <>
                 {hasThinking && (
-                  <pre className="text-hacker-text-dim text-xs bg-black/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
+                  <pre className="text-hacker-text-dim text-xs bg-hacker-bg/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
                     {thinking}
                   </pre>
                 )}

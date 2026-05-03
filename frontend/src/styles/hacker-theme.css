@@ -2,34 +2,168 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
-/* ─── Hacker Theme ───────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   THEME SYSTEM — CSS custom properties + data-accent presets
+   All colors use CSS variables so dark/light and accent colors
+   can be swapped without touching Tailwind classes.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Dark (default) ─────────────────────────────────────────── */
 :root {
+  /* Surfaces */
   --bg: #0a0a0a;
   --surface: #161616;
   --surface-raised: #1e1e1e;
   --border: #2a2a2a;
   --border-bright: #3a3a3a;
-  --accent: #00ff41;
-  --accent-dim: #00cc34;
-  --accent-glow: rgba(0, 255, 65, 0.08);
+
+  /* Text */
   --text: #c0c0c0;
   --text-bright: #e0e0e0;
   --text-dim: #888888;
+
+  /* Semantic */
+  --info: #00aaff;
+  --warn: #ffaa00;
+  --error: #ff4444;
+
+  /* Code backgrounds (theme-adaptive) */
+  --code-inline-bg: rgba(0, 0, 0, 0.3);
+  --code-block-bg: rgba(0, 0, 0, 0.4);
+  --tool-output-bg: rgba(0, 0, 0, 0.3);
+
+  /* RGB components for Tailwind alpha support */
+  --bg-rgb: 10 10 10;
+  --surface-rgb: 22 22 22;
+  --surface-raised-rgb: 30 30 30;
+  --border-rgb: 42 42 42;
+  --border-bright-rgb: 58 58 58;
+  --text-rgb: 192 192 192;
+  --text-bright-rgb: 224 224 224;
+  --text-dim-rgb: 136 136 136;
+  --info-rgb: 0 170 255;
+  --warn-rgb: 255 170 0;
+  --error-rgb: 255 68 68;
+
+  /* Scrollbar uses accent */
+  scrollbar-color: var(--accent-dim) var(--surface);
 }
 
+/* ── Light ───────────────────────────────────────────────────── */
 .light {
-  --bg: #f5f5f0;
-  --surface: #ffffff;
-  --surface-raised: #fafafa;
-  --border: #d0d0d0;
-  --border-bright: #bbbbbb;
-  --accent: #008022;
-  --accent-dim: #00661a;
-  --accent-glow: rgba(0, 128, 34, 0.08);
-  --text: #333333;
-  --text-bright: #111111;
-  --text-dim: #888888;
+  --bg: #eeece6;
+  --surface: #f8f7f4;
+  --surface-raised: #ffffff;
+  --border: #d0d0c8;
+  --border-bright: #b8b8b0;
+
+  --text: #3d3d3a;
+  --text-bright: #1a1a18;
+  --text-dim: #777770;
+
+  --info: #0070cc;
+  --warn: #cc8800;
+  --error: #cc2222;
+
+  --code-inline-bg: rgba(0, 0, 0, 0.06);
+  --code-block-bg: rgba(0, 0, 0, 0.08);
+  --tool-output-bg: rgba(0, 0, 0, 0.05);
+
+  --bg-rgb: 238 236 230;
+  --surface-rgb: 248 247 244;
+  --surface-raised-rgb: 255 255 255;
+  --border-rgb: 208 208 200;
+  --border-bright-rgb: 184 184 176;
+  --text-rgb: 61 61 58;
+  --text-bright-rgb: 26 26 24;
+  --text-dim-rgb: 119 119 112;
+  --info-rgb: 0 112 204;
+  --warn-rgb: 204 136 0;
+  --error-rgb: 204 34 34;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   ACCENT PRESETS — each defines accent + accent-dim for both
+   dark and light modes. Applied via data-accent="" on <html>.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Green (default, no data-accent needed) ─────────────────── */
+:root {
+  --accent: #00ff41;
+  --accent-rgb: 0 255 65;
+  --accent-dim: #00cc34;
+  --accent-dim-rgb: 0 204 52;
+}
+.light {
+  --accent: #16a34a;
+  --accent-rgb: 22 163 74;
+  --accent-dim: #15803d;
+  --accent-dim-rgb: 21 128 61;
+}
+
+/* ── Purple ──────────────────────────────────────────────────── */
+[data-accent="purple"] {
+  --accent: #c084fc;
+  --accent-rgb: 192 132 252;
+  --accent-dim: #a855f7;
+  --accent-dim-rgb: 168 85 247;
+}
+.light[data-accent="purple"],
+[data-accent="purple"].light {
+  --accent: #8b5cf6;
+  --accent-rgb: 139 92 246;
+  --accent-dim: #7c3aed;
+  --accent-dim-rgb: 124 58 237;
+}
+
+/* ── Orange ──────────────────────────────────────────────────── */
+[data-accent="orange"] {
+  --accent: #fb923c;
+  --accent-rgb: 251 146 60;
+  --accent-dim: #f97316;
+  --accent-dim-rgb: 249 115 22;
+}
+.light[data-accent="orange"],
+[data-accent="orange"].light {
+  --accent: #ea580c;
+  --accent-rgb: 234 88 12;
+  --accent-dim: #c2410c;
+  --accent-dim-rgb: 194 65 12;
+}
+
+/* ── Cyan ────────────────────────────────────────────────────── */
+[data-accent="cyan"] {
+  --accent: #22d3ee;
+  --accent-rgb: 34 211 238;
+  --accent-dim: #06b6d4;
+  --accent-dim-rgb: 6 182 212;
+}
+.light[data-accent="cyan"],
+[data-accent="cyan"].light {
+  --accent: #0891b2;
+  --accent-rgb: 8 145 178;
+  --accent-dim: #0e7490;
+  --accent-dim-rgb: 14 116 144;
+}
+
+/* ── Rose ────────────────────────────────────────────────────── */
+[data-accent="rose"] {
+  --accent: #f472b6;
+  --accent-rgb: 244 114 182;
+  --accent-dim: #ec4899;
+  --accent-dim-rgb: 236 72 153;
+}
+.light[data-accent="rose"],
+[data-accent="rose"].light {
+  --accent: #db2777;
+  --accent-rgb: 219 39 119;
+  --accent-dim: #be185d;
+  --accent-dim-rgb: 190 24 93;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BASE STYLES
+   ═══════════════════════════════════════════════════════════════ */
 
 * {
   scrollbar-width: thin;
@@ -78,7 +212,7 @@ body {
 /* ─── Terminal-style border ─────────────────── */
 .border-terminal {
   border: 1px solid var(--border);
-  box-shadow: inset 0 0 30px rgba(0, 255, 65, 0.02);
+  box-shadow: inset 0 0 30px rgba(var(--accent-rgb), 0.02);
 }
 
 /* ─── Pulse dot ─────────────────────────────── */
@@ -144,7 +278,7 @@ body {
   margin-bottom: 0.15em;
 }
 .prose-hacker code {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--code-inline-bg);
   border: 1px solid var(--border);
   padding: 1px 5px;
   border-radius: 3px;
@@ -153,7 +287,7 @@ body {
   color: var(--accent);
 }
 .prose-hacker pre {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--code-block-bg);
   border: 1px solid var(--border);
   padding: 10px 12px;
   border-radius: 4px;
@@ -207,7 +341,7 @@ body {
   padding: 4px 8px;
 }
 .prose-hacker th {
-  background: rgba(0, 255, 65, 0.05);
+  background: rgba(var(--accent-rgb), 0.05);
   color: var(--accent);
   font-weight: 600;
 }
@@ -227,8 +361,8 @@ body {
 }
 
 .btn-hacker:hover {
-  background: var(--accent-glow);
-  box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.2);
 }
 
 .btn-hacker.danger {
@@ -253,7 +387,7 @@ body {
 }
 .input-hacker:focus {
   border-color: var(--accent-dim);
-  box-shadow: 0 0 8px rgba(0, 255, 65, 0.1);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.1);
 }
 .input-hacker::placeholder {
   color: var(--text-dim);
@@ -270,7 +404,8 @@ body {
   outline: none;
   cursor: pointer;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ff41' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  /* Arrow color adapts via CSS variable — updated per accent preset */
+  background-image: var(--select-arrow);
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 24px;
@@ -280,7 +415,7 @@ body {
 .tool-output {
   max-height: 300px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--tool-output-bg);
   border: 1px solid var(--border);
   padding: 8px;
   font-size: 0.75rem;
@@ -301,7 +436,7 @@ body {
 .modal-box {
   background: var(--surface-raised);
   border: 1px solid var(--accent-dim);
-  box-shadow: 0 0 30px rgba(0, 255, 65, 0.1), 0 0 10px rgba(0, 255, 65, 0.05);
+  box-shadow: 0 0 30px rgba(var(--accent-rgb), 0.1), 0 0 10px rgba(var(--accent-rgb), 0.05);
   max-width: 30rem;
   max-height: 85vh;
   overflow-y: auto;
@@ -316,7 +451,7 @@ body {
   opacity: 0.03;
   pointer-events: none;
   z-index: -1;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%2300ff41' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
+  background-image: var(--matrix-bg-image);
   background-size: 40px 40px;
 }
 
@@ -328,8 +463,8 @@ body {
 }
 .drop-zone.active {
   border-color: var(--accent);
-  background: var(--accent-glow);
-  box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
+  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: 0 0 20px rgba(var(--accent-rgb), 0.15);
 }
 
 /* ─── Chat messages area ───────────────────── */
@@ -403,7 +538,7 @@ body {
 }
 .mode-chip.active {
   border-color: var(--accent);
-  background: var(--accent-glow);
+  background: rgba(var(--accent-rgb), 0.08);
 }
 .mode-chip.active .mode-chip-label {
   color: var(--accent);
@@ -425,3 +560,36 @@ body {
 .mode-chip:not(.active) .mode-chip-toggle:hover {
   border-color: var(--text-dim);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   SELECT ARROW + MATRIX BG per accent preset
+   Cannot use var() inside data: URIs, so we define
+   --select-arrow and --matrix-bg-image per preset.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ff41' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%2300ff41' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
+}
+.light {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2316a34a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%2316a34a' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
+}
+
+[data-accent="purple"] {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23c084fc' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%23c084fc' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
+}
+.light[data-accent="purple"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b5cf6' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); }
+[data-accent="orange"] {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23fb923c' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+}
+.light[data-accent="orange"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ea580c' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); }
+[data-accent="cyan"] {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2322d3ee' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+}
+.light[data-accent="cyan"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%230891b2' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); }
+[data-accent="rose"] {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23f472b6' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+}
+.light[data-accent="rose"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23db2777' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); }

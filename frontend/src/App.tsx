@@ -9,6 +9,7 @@ import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
+import { AccentPicker } from "./components/Header/AccentPicker";
 import type { Project } from "./types";
 
 type Tab = "pi" | "terminal" | "files";
@@ -20,11 +21,11 @@ class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean;
   render() {
     if (this.state.hasError) {
       return (
-        <div className="h-screen w-screen bg-gray-900 text-green-400 flex flex-col items-center justify-center gap-4 p-8 font-mono text-sm">
+        <div className="h-screen w-screen bg-hacker-bg text-hacker-accent flex flex-col items-center justify-center gap-4 p-8 font-mono text-sm">
           <div className="text-4xl">⚠</div>
           <div className="text-hacker-accent font-bold">RENDER ERROR</div>
-          <pre className="text-red-400 text-xs max-w-[600px] overflow-auto whitespace-pre-wrap">{this.state.error}</pre>
-          <button onClick={() => this.setState({hasError: false, error: ""})} className="bg-green-900 hover:bg-green-800 px-4 py-2 rounded border border-green-700">
+          <pre className="text-hacker-error text-xs max-w-[37.5rem] overflow-auto whitespace-pre-wrap">{this.state.error}</pre>
+          <button onClick={() => this.setState({hasError: false, error: ""})} className="btn-hacker">
             RETRY
           </button>
         </div>
@@ -46,6 +47,7 @@ function App() {
 
   // ── State ──
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
   const [activeTab, setActiveTab] = useState<Tab>("pi");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -102,6 +104,16 @@ function App() {
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  // ── Accent ──
+  useEffect(() => {
+    if (accent) {
+      document.documentElement.setAttribute("data-accent", accent);
+    } else {
+      document.documentElement.removeAttribute("data-accent");
+    }
+    localStorage.setItem("pi-web-accent", accent);
+  }, [accent]);
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
@@ -415,6 +427,7 @@ function App() {
         <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
           {theme === "dark" ? "☀" : "☾"}
         </button>
+        <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} />
         <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-1.5 py-0.5" title="Model library (Ctrl+L)">
           ⚙
         </button>
