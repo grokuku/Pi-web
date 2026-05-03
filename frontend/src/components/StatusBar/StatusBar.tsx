@@ -6,6 +6,8 @@ interface Props {
   stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
   session: any;
   connected: boolean;
+  activeMode?: string;
+  autoReviewState?: { inProgress: boolean; cycle: number; maxReviews: number; phase?: string } | null;
 }
 
 export function StatusBar({
@@ -14,6 +16,8 @@ export function StatusBar({
   stats,
   session,
   connected,
+  activeMode = "code",
+  autoReviewState,
 }: Props) {
   // Show zero stats when a session exists but stats haven't been populated yet
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
@@ -51,6 +55,26 @@ export function StatusBar({
         <>
           <span className="text-hacker-text-dim">
             {session.model.name}
+          </span>
+          <span className="text-hacker-border-bright">│</span>
+        </>
+      )}
+
+      {/* Active mode */}
+      {activeMode && activeMode !== "code" && (
+        <>
+          <span className={activeMode === "review" ? "text-hacker-warn" : activeMode === "plan" ? "text-hacker-info" : "text-hacker-accent"}>
+            {activeMode === "review" ? "📋" : activeMode === "plan" ? "🗺" : "⚡"} {activeMode.toUpperCase()}
+          </span>
+          <span className="text-hacker-border-bright">│</span>
+        </>
+      )}
+
+      {/* Auto-review indicator */}
+      {autoReviewState?.inProgress && (
+        <>
+          <span className="text-hacker-warn animate-pulse">
+            🔄 {autoReviewState.phase === "reviewing" ? "Reviewing" : "Fixing"} ({autoReviewState.cycle}/{autoReviewState.maxReviews})
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

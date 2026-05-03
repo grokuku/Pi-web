@@ -77,6 +77,8 @@ function App() {
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showModelLibrary, setShowModelLibrary] = useState(false);
+  const [activeMode, setActiveMode] = useState<string>("code");
+  const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
   // ── Helpers ──
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
@@ -213,6 +215,21 @@ function App() {
         }
         case "agent_end": {
           updateProjectSession(projectId, { isStreaming: false });
+          break;
+        }
+        case "mode_change": {
+          if (projectId === activeProject?.id) {
+            setActiveMode(evt.mode);
+          }
+          break;
+        }
+        case "auto_review_status": {
+          setAutoReviewState({
+            inProgress: evt.phase !== "done",
+            cycle: evt.cycle,
+            maxReviews: evt.maxReviews,
+            phase: evt.phase,
+          });
           break;
         }
         case "turn_end": {
@@ -356,10 +373,10 @@ function App() {
         <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
         <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
         <span
-          className={`text-[9px] ${connected ? "text-hacker-accent" : "text-hacker-error"}`}
-          title={connected ? "Connected" : "Offline"}
+          className={`text-sm ${connected ? "text-hacker-accent" : "text-hacker-error"} ${connected ? "animate-pulse-subtle" : ""}`}
+          title={connected ? "Connected to backend" : "Offline — backend unreachable"}
         >
-          {connected ? "◉" : "◌"}
+          {connected ? "●" : "○"}
         </span>
 
         <div className="w-px h-4 bg-hacker-border-bright" />
@@ -375,13 +392,21 @@ function App() {
         <div className="flex-1" />
 
         {/* Mode chips — CODE / PLAN / REVIEW */}
-        <ModelQuickSwitch onModelApplied={() => {
-          if (activeProject) {
-            fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
-              updateProjectSession(activeProject.id, { session: s });
-            }).catch(() => {});
-          }
-        }} />
+        <ModelQuickSwitch
+          activeMode={activeMode}
+          onModeSwitch={(mode) => {
+            if (activeProject) {
+              send({ type: "mode_switch", projectId: activeProject.id, mode });
+            }
+          }}
+          onModelApplied={() => {
+            if (activeProject) {
+              fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
+                updateProjectSession(activeProject.id, { session: s });
+              }).catch(() => {});
+            }
+          }}
+        />
 
         <div className="w-px h-4 bg-hacker-border-bright" />
 
@@ -488,6 +513,8 @@ function App() {
             stats={stats}
             session={session}
             connected={connected}
+            activeMode={activeMode}
+            autoReviewState={autoReviewState}
           />
         </div>
       </div>

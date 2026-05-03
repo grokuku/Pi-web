@@ -27,6 +27,12 @@ import {
   setModel,
   setThinkingLevel,
   cycleModel,
+  switchMode,
+  restoreCodeMode,
+  applyModeToSession,
+  getActiveMode,
+  getAutoReviewState,
+  abortAutoReview,
 } from "./pi/session.js";
 import {
   createTerminal,
@@ -421,8 +427,23 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
     case "pi_abort": {
       const pid = msg.projectId || projectId;
+      // Also abort any running auto-review
+      abortAutoReview(pid);
       try {
         await abortPi(pid);
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+      break;
+    }
+
+    // ── Mode switching ──
+    case "mode_switch": {
+      const pid = msg.projectId || projectId;
+      const { mode } = msg;
+      if (!pid || !mode) break;
+      try {
+        await switchMode(mode, pid);
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }

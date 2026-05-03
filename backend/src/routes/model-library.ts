@@ -6,6 +6,7 @@ import {
   setModeInstructions,
   setModeTools,
   setModeReadOnly,
+  setModeMaxReviews,
   addModelToMode,
   removeModelFromMode,
   setActiveModel,
@@ -202,6 +203,22 @@ router.put("/modes/:mode/readonly", (req: Request, res: Response) => {
       return res.status(400).json({ error: "readOnly (boolean) required" });
     }
     const library = setModeReadOnly(mode, readOnly);
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── PUT mode maxReviews ──────────────────────────────────────
+
+router.put("/modes/:mode/maxreviews", (req: Request, res: Response) => {
+  try {
+    const mode = validateMode(req.params.mode);
+    const { maxReviews } = req.body;
+    if (typeof maxReviews !== "number" || maxReviews < 0) {
+      return res.status(400).json({ error: "maxReviews (number ≥ 0) required" });
+    }
+    const library = setModeMaxReviews(mode, maxReviews);
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });

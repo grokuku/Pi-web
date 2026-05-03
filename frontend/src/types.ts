@@ -110,6 +110,7 @@ export interface ModeConfig {
   instructions: string;
   tools: string[];
   readOnly: boolean;
+  maxReviews: number;
 }
 
 export interface ModelLibrary {

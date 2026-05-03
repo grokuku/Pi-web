@@ -15,6 +15,10 @@ export interface PiSessionState {
   cwd: string;
   unsubscribe: (() => void) | null;
   projectId: string;
+  activeMode: AgentMode;       // current active mode (default "code")
+  reviewCycle: number;          // current auto-review cycle count
+  autoReviewInProgress: boolean; // is an auto-review cycle running
+  autoReviewAborted: boolean;   // was auto-review aborted by user
 }
 
 // ─── Multi-project session map ──────────────────────────
@@ -196,6 +200,10 @@ export async function createPiSession(
       cwd,
       unsubscribe,
       projectId,
+      activeMode: "code",
+      reviewCycle: 0,
+      autoReviewInProgress: false,
+      autoReviewAborted: false,
     };
 
     sessionsByProject.set(projectId, newSession);
@@ -256,6 +264,10 @@ export function getCurrentSession(): PiSessionState {
     cwd: process.cwd(),
     unsubscribe: null,
     projectId: "",
+    activeMode: "code",
+    reviewCycle: 0,
+    autoReviewInProgress: false,
+    autoReviewAborted: false,
   };
 }
 
@@ -351,6 +363,13 @@ export async function sendPrompt(
       options.images = imageAttachments;
     }
     await state.session.prompt(message, options);
+  }
+
+  // ── Trigger auto-review if applicable ──
+  // Slash commands are handled above and return early
+  // so this only runs after a real AI prompt
+  if (!trimmed.startsWith("/")) {
+    triggerAutoReviewIfNeeded(projectId);
   }
 }
 
@@ -589,6 +608,276 @@ export function getSessionMessages(projectId: string): any[] {
   if (!state?.session) return [];
   return state.session.messages || [];
 }
+
+// ── Mode Management ───────────────────────────────────
+
+const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
+const ALL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+/**
+ * Apply a mode's configuration to the Pi session:
+ * - Switch model
+ * - Set thinking level
+ * - Filter tools (read-only for plan/review)
+ * - Inject mode instructions into system prompt
+ */
+export async function applyModeToSession(mode: AgentMode, projectId: string): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) throw new Error("No active Pi session");
+
+  const library = loadModelLibrary();
+  const cfg = library.modes[mode];
+
+  // ── Apply model ──
+  if (cfg.activeModelId && cfg.enabled) {
+    const entry = cfg.models.find(m => m.id === cfg.activeModelId);
+    if (entry) {
+      try {
+        reloadModelRegistry();
+
+        // Register provider override if custom reasoning/contextWindow
+        if (entry.reasoning !== undefined || entry.contextWindow !== undefined) {
+          const registry = getModelRegistry();
+          const existingModel = registry.find(entry.provider, entry.modelId);
+          if (
+            (entry.reasoning !== undefined && existingModel?.reasoning !== entry.reasoning) ||
+            (entry.contextWindow !== undefined && existingModel?.contextWindow !== entry.contextWindow)
+          ) {
+            registry.registerProvider(entry.provider, {
+              baseUrl: existingModel?.baseUrl,
+              models: [{
+                id: existingModel?.id || entry.modelId,
+                name: existingModel?.name || entry.name || entry.modelId,
+                reasoning: entry.reasoning ?? existingModel?.reasoning ?? false,
+                input: existingModel?.input || ["text"],
+                contextWindow: entry.contextWindow ?? existingModel?.contextWindow ?? 128000,
+                maxTokens: entry.maxTokens ?? existingModel?.maxTokens ?? 16384,
+                cost: existingModel?.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              }],
+            });
+          }
+        }
+
+        await setModel(entry.provider, entry.modelId);
+        await setThinkingLevel(entry.thinkingLevel);
+      } catch (e: any) {
+        console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
+      }
+    }
+  }
+
+  // ── Apply tool filtering ──
+  const session = state.session;
+  if (cfg.readOnly || (cfg.tools.length > 0 && !cfg.tools.includes("edit") && !cfg.tools.includes("write"))) {
+    // Read-only mode: use the mode's tool list or default read-only tools
+    const toolNames = cfg.tools.length > 0 ? cfg.tools : READ_ONLY_TOOLS;
+    (session as any).setActiveToolsByName(toolNames);
+  } else if (cfg.tools.length > 0) {
+    (session as any).setActiveToolsByName(cfg.tools);
+  } else {
+    // Code mode: all tools
+    (session as any).setActiveToolsByName(ALL_TOOLS);
+  }
+
+  // ── Inject mode instructions into system prompt ──
+  if (cfg.instructions && cfg.instructions.trim()) {
+    const basePrompt = (session as any)._baseSystemPrompt || "";
+    const modeBlock = `\n\n## Current Mode: ${mode.toUpperCase()}\n\n${cfg.instructions}`;
+    (session as any)._baseSystemPrompt = basePrompt + modeBlock;
+    (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+  }
+
+  // ── Update state ──
+  state.activeMode = mode;
+  state.reviewCycle = 0;
+  state.autoReviewAborted = false;
+
+  emitModeChange(projectId, mode, false);
+  emitSessionUpdate(projectId);
+}
+
+/**
+ * Switch to a different mode. Only works if the mode is enabled and has a model.
+ */
+export async function switchMode(mode: AgentMode, projectId: string): Promise<void> {
+  const library = loadModelLibrary();
+  const cfg = library.modes[mode];
+
+  if (mode !== "code" && (!cfg.enabled || !cfg.activeModelId)) {
+    throw new Error(`Mode ${mode} is not enabled or has no active model`);
+  }
+
+  await applyModeToSession(mode, projectId);
+}
+
+/**
+ * Return to CODE mode (restore all tools, remove mode instructions).
+ */
+export async function restoreCodeMode(projectId: string): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) return;
+
+  const session = state.session;
+  const library = loadModelLibrary();
+  const codeCfg = library.modes.code;
+
+  // Apply code model (if enabled with a model)
+  if (codeCfg.activeModelId && codeCfg.enabled) {
+    const entry = codeCfg.models.find(m => m.id === codeCfg.activeModelId);
+    if (entry) {
+      try {
+        await setModel(entry.provider, entry.modelId);
+        await setThinkingLevel(entry.thinkingLevel);
+      } catch (e: any) {
+        console.error("[mode] Failed to restore code model:", e.message);
+      }
+    }
+  }
+
+  // Restore all tools
+  (session as any).setActiveToolsByName(ALL_TOOLS);
+
+  // Rebuild system prompt WITHOUT mode instructions
+  // The _rebuildSystemPrompt call from setActiveToolsByName already clears custom additions
+  // We re-apply only code mode instructions if they exist
+  if (codeCfg.instructions && codeCfg.instructions.trim()) {
+    const basePrompt = (session as any)._baseSystemPrompt || "";
+    // Only add if not already present
+    if (!basePrompt.includes("Current Mode: CODE")) {
+      const modeBlock = `\n\n## Current Mode: CODE\n\n${codeCfg.instructions}`;
+      (session as any)._baseSystemPrompt = basePrompt + modeBlock;
+      (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+    }
+  }
+
+  state.activeMode = "code";
+  emitModeChange(projectId, "code", false);
+  emitSessionUpdate(projectId);
+}
+
+/** Get the current active mode for a project */
+export function getActiveMode(projectId: string): AgentMode {
+  const state = sessionsByProject.get(projectId);
+  return state?.activeMode || "code";
+}
+
+/** Get auto-review state for a project */
+export function getAutoReviewState(projectId: string): {
+  inProgress: boolean; cycle: number; maxReviews: number; mode: AgentMode
+} {
+  const state = sessionsByProject.get(projectId);
+  const library = loadModelLibrary();
+  const reviewCfg = library.modes.review;
+  return {
+    inProgress: state?.autoReviewInProgress ?? false,
+    cycle: state?.reviewCycle ?? 0,
+    maxReviews: reviewCfg.maxReviews ?? 1,
+    mode: state?.activeMode ?? "code",
+  };
+}
+
+/** Abort any running auto-review */
+export function abortAutoReview(projectId: string): void {
+  const state = sessionsByProject.get(projectId);
+  if (state) {
+    state.autoReviewAborted = true;
+    state.autoReviewInProgress = false;
+  }
+}
+
+/**
+ * After a CODE mode prompt completes, trigger auto-review if enabled.
+ * Runs in background — does not block the caller.
+ */
+export function triggerAutoReviewIfNeeded(projectId: string): void {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) return;
+
+  const library = loadModelLibrary();
+  const reviewCfg = library.modes.review;
+  const maxReviews = reviewCfg.maxReviews ?? 1;
+
+  // Check conditions
+  if (state.activeMode !== "code") return;            // Only after code mode
+  if (!reviewCfg.enabled || !reviewCfg.activeModelId) return;  // Review must be configured
+  if (maxReviews <= 0) return;                     // Auto-review disabled
+  if (state.reviewCycle >= maxReviews) return;       // Already done max reviews
+  if (state.autoReviewInProgress) return;           // Already running
+  if (state.autoReviewAborted) return;             // Aborted by user
+  if (state.isStreaming) return;                    // Still streaming
+
+  state.autoReviewInProgress = true;
+  state.reviewCycle++;
+
+  // Run auto-review in background
+  runAutoReviewCycle(projectId, state.reviewCycle, maxReviews).catch(err => {
+    console.error("[auto-review] Error:", err);
+    state.autoReviewInProgress = false;
+  });
+}
+
+async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: number): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) return;
+  if (state.autoReviewAborted) { state.autoReviewInProgress = false; return; }
+
+  // ── Phase 1: Review ──
+  emitModeChange(projectId, "review", true);
+  emitAutoReviewStatus(projectId, "reviewing", cycle, maxReviews);
+
+  await applyModeToSession("review", projectId);
+
+  try {
+    await state.session.prompt(
+      "Review the changes you just made. Focus on bugs, security issues, code quality, and potential improvements. " +
+      "List each finding with severity (high/medium/low) and a specific description.",
+      {}
+    );
+  } catch (e: any) {
+    console.error("[auto-review] Review prompt failed:", e.message);
+    state.autoReviewInProgress = false;
+    await restoreCodeMode(projectId);
+    return;
+  }
+
+  if (state.autoReviewAborted) { state.autoReviewInProgress = false; await restoreCodeMode(projectId); return; }
+
+  // ── Phase 2: Fix ──
+  emitModeChange(projectId, "code", true);
+  emitAutoReviewStatus(projectId, "fixing", cycle, maxReviews);
+
+  await restoreCodeMode(projectId);
+
+  try {
+    await state.session.prompt(
+      "Fix the issues identified in the review. Address each finding specifically. Do not make any other changes.",
+      {}
+    );
+  } catch (e: any) {
+    console.error("[auto-review] Fix prompt failed:", e.message);
+  }
+
+  state.autoReviewInProgress = false;
+  emitAutoReviewStatus(projectId, "done", cycle, maxReviews);
+
+  // Check if another cycle is needed
+  // Only do another cycle if review mode explicitly sets maxReviews > 1
+  // and the session wasn't aborted
+  if (!state.autoReviewAborted && state.reviewCycle < maxReviews) {
+    triggerAutoReviewIfNeeded(projectId);
+  }
+}
+
+// ── WS event emitters ──
+
+function emitModeChange(projectId: string, mode: AgentMode, auto: boolean): void {
+  emitToSubscribers({ type: "mode_change", mode, auto } as any, projectId);
+}
+
+function emitAutoReviewStatus(projectId: string, phase: string, cycle: number, maxReviews: number): void {
+  emitToSubscribers({ type: "auto_review_status", phase, cycle, maxReviews } as any, projectId);
+}
+
 
 /**
  * Return info about which model would be used for commit AI generation,

@@ -27,7 +27,8 @@ export interface ModeConfig {
   models: ModelEntry[];          // models configured for this mode
   instructions: string;          // system steer / prompt for this mode (Pi "instructions" style)
   tools: string[];               // allowed tools for this mode (empty = all tools)
-  readOnly: boolean;              // convenience flag: restrict to read-only tools
+  readOnly: boolean;            // convenience flag: restrict to read-only tools
+  maxReviews: number;            // max auto-review cycles after CODE responses (0 = disabled)
 }
 
 export interface ModelLibrary {
@@ -68,6 +69,7 @@ refactor(session): switch from singleton to per-project session map
 
 Rules:
 - You can READ code but should NOT make changes
+- Only use read-only tools: read, grep, find, ls
 - Focus on: correctness, security, performance, readability
 - Identify bugs, anti-patterns, and potential issues
 - Suggest improvements with specific explanations
@@ -77,7 +79,13 @@ When reviewing:
 1. Read the relevant files thoroughly
 2. Summarize what the code does
 3. List issues found with severity
-4. Suggest specific fixes (but do not implement them)`,
+4. Suggest specific fixes (but do not implement them)
+
+Be thorough and specific. Each finding should include:
+- File and line reference
+- Severity (HIGH/MEDIUM/LOW)
+- Description of the issue
+- Suggested fix`,
 
   plan: `You are in PLAN mode — a read-only exploration mode for safe code analysis.
 
@@ -110,6 +118,13 @@ const DEFAULT_READONLY: Record<AgentMode, boolean> = {
   plan: true,
 };
 
+const DEFAULT_MAX_REVIEWS: Record<AgentMode, number> = {
+  code: 0,
+  commit: 0,
+  review: 1,
+  plan: 0,
+};
+
 // ── Persistence ──────────────────────────────────────
 
 function ensureDataDir(): void {
@@ -124,6 +139,7 @@ function createDefaultMode(mode: AgentMode): ModeConfig {
     instructions: DEFAULT_INSTRUCTIONS[mode],
     tools: DEFAULT_TOOLS[mode],
     readOnly: DEFAULT_READONLY[mode],
+    maxReviews: DEFAULT_MAX_REVIEWS[mode],
   };
 }
 
@@ -149,6 +165,7 @@ function migrateModeConfig(mode: AgentMode, config: any): ModeConfig {
     instructions: config.instructions ?? defaults.instructions,
     tools: config.tools ?? defaults.tools,
     readOnly: config.readOnly ?? defaults.readOnly,
+    maxReviews: config.maxReviews ?? defaults.maxReviews,
   };
 }
 
@@ -224,9 +241,7 @@ export function getModeConfig(mode: AgentMode): ModeConfig {
 export function setModeEnabled(mode: AgentMode, enabled: boolean): ModelLibrary {
   const library = loadModelLibrary();
   library.modes[mode].enabled = enabled;
-  if (!enabled) {
-    library.modes[mode].activeModelId = null;
-  }
+  // Keep activeModelId even when disabled, so re-enabling restores the selection
   saveModelLibrary(library);
   return library;
 }
@@ -248,6 +263,13 @@ export function setModeTools(mode: AgentMode, tools: string[]): ModelLibrary {
 export function setModeReadOnly(mode: AgentMode, readOnly: boolean): ModelLibrary {
   const library = loadModelLibrary();
   library.modes[mode].readOnly = readOnly;
+  saveModelLibrary(library);
+  return library;
+}
+
+export function setModeMaxReviews(mode: AgentMode, maxReviews: number): ModelLibrary {
+  const library = loadModelLibrary();
+  library.modes[mode].maxReviews = maxReviews;
   saveModelLibrary(library);
   return library;
 }
@@ -316,7 +338,8 @@ export function getActiveModelForMode(mode: AgentMode): ModelEntry | null {
 
 /** Get the currently active mode (first enabled mode with an active model) */
 export function getActiveMode(library: ModelLibrary): AgentMode | null {
-  for (const mode of Object.keys(library.modes) as AgentMode[]) {
+  const priority: AgentMode[] = ["code", "review", "plan"];
+  for (const mode of priority) {
     if (library.modes[mode].enabled && library.modes[mode].activeModelId) {
       return mode;
     }

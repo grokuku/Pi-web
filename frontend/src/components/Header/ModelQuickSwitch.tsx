@@ -10,10 +10,12 @@ const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: strin
 };
 
 interface Props {
+  activeMode?: string;  // current mode from the backend session
+  onModeSwitch?: (mode: AgentMode) => void;
   onModelApplied?: () => void;
 }
 
-export function ModelQuickSwitch({ onModelApplied }: Props) {
+export function ModelQuickSwitch({ activeMode, onModeSwitch, onModelApplied }: Props) {
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -30,6 +32,11 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
   useEffect(() => {
     loadLibrary();
   }, [loadLibrary]);
+
+  // Reload library when mode is applied (model might have changed)
+  useEffect(() => {
+    if (onModelApplied) loadLibrary();
+  }, [onModelApplied, loadLibrary]);
 
   // Close on click outside
   useEffect(() => {
@@ -69,19 +76,33 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
       if (!res.ok) { console.error("Failed to toggle mode:", await res.text()); return; }
       const data = await res.json();
       setLibrary(data);
-      // Refresh session so the header shows the updated model
       onModelApplied?.();
     } catch (e) { console.error("handleToggleMode error:", e); }
+  };
+
+  const handleChipClick = (mode: AgentMode) => {
+    const cfg = library?.modes[mode];
+    // If clicking the currently active mode, open dropdown
+    if (mode === activeMode) {
+      setOpenMode(openMode === mode ? null : mode);
+      return;
+    }
+    // If mode is enabled with a model, switch to it
+    if (cfg?.enabled && cfg?.activeModelId) {
+      onModeSwitch?.(mode);
+      setOpenMode(null);
+    } else {
+      // Open dropdown to configure
+      setOpenMode(openMode === mode ? null : mode);
+    }
   };
 
   const getActiveModelName = (mode: AgentMode): string => {
     const cfg = library?.modes[mode];
     if (!cfg?.activeModelId || !cfg?.models) return "—";
     const entry = cfg.models.find((m) => m.id === cfg.activeModelId);
-    // Shorten model name for chip display
     if (!entry) return "—";
     const name = entry.name;
-    // Abbreviate common model names
     if (name.includes("claude")) return name.replace("Claude ", "C").replace("claude-", "c");
     if (name.includes("GPT")) return name.replace("GPT-", "G");
     if (name.includes("o1")) return name.replace("o1-", "o1");
@@ -96,14 +117,14 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
         const cfg = library?.modes[mode];
         const isEnabled = cfg?.enabled ?? false;
         const hasModel = !!(cfg?.activeModelId);
-        const isActive = isEnabled && hasModel;
+        const isActive = activeMode === mode && isEnabled && hasModel;
         const cfg2 = MODE_CONFIG[mode];
         const isDropdownOpen = openMode === mode;
 
         return (
           <div key={mode} className="relative">
             <button
-              onClick={() => setOpenMode(isDropdownOpen ? null : mode)}
+              onClick={() => handleChipClick(mode)}
               className={`mode-chip flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-sm ${
                 isActive ? "active" : isEnabled ? "" : "disabled"
               }`}
@@ -122,7 +143,7 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
               <div className="absolute top-full right-0 mt-1 w-[200px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
                 {/* Mode header with toggle */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
-                  <span className={`text-[10px] font-bold tracking-wider ${isActive ? cfg2.color : "text-hacker-text-dim"}`}>
+                  <span className={`text-[10px] font-bold tracking-wider ${isEnabled && hasModel ? cfg2.color : "text-hacker-text-dim"}`}>
                     {cfg2.icon} {cfg2.label}
                   </span>
                   <button
@@ -136,6 +157,16 @@ export function ModelQuickSwitch({ onModelApplied }: Props) {
                     <Power size={8} />
                   </button>
                 </div>
+
+                {/* Switch to this mode button (if not active but enabled) */}
+                {isEnabled && hasModel && !isActive && (
+                  <button
+                    onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
+                    className="w-full text-left px-3 py-1.5 text-[10px] text-hacker-accent font-bold border-b border-hacker-border/50 hover:bg-hacker-accent/5"
+                  >
+                    → Switch to {cfg2.label} mode
+                  </button>
+                )}
 
                 {/* Models list */}
                 {isEnabled && cfg?.models && cfg.models.length > 0 ? (

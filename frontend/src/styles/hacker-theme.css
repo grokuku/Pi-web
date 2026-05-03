@@ -225,6 +225,21 @@ body {
   animation: dotPulse 1.5s ease-in-out infinite;
 }
 
+/* Subtle pulse for connection indicator */
+.animate-pulse-subtle {
+  animation: pulseSubtle 2s ease-in-out infinite;
+}
+
+@keyframes pulseSubtle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 @keyframes dotPulse {
   0%,
   100% {

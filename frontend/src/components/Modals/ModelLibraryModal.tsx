@@ -281,6 +281,22 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
     }
   };
 
+  // ── Update mode maxReviews ──
+  const handleSetMaxReviews = async (maxReviews: number) => {
+    try {
+      const res = await fetch(`/api/model-library/modes/${activeMode}/maxreviews`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxReviews }),
+      });
+      if (!res.ok) { const data = await res.json().catch(() => ({})); setError(data.error || `Error ${res.status}`); return; }
+      const data = await res.json();
+      setLibrary(data);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   if (!library) {
     return (
       <div className="modal-overlay">
@@ -448,6 +464,31 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
                 </span>
               )}
             </div>
+
+            {/* Auto-review config (review mode only) */}
+            {activeMode === "review" && (
+              <div className="flex items-center gap-3 px-3 py-2 border-t border-hacker-border">
+                <div className="flex items-center gap-1.5 flex-1">
+                  <span className="text-[10px]">🔄</span>
+                  <span className="text-[10px] text-hacker-text-dim">AUTO-REVIEW AFTER CODE</span>
+                </div>
+                <select
+                  value={modeConfig.maxReviews ?? 1}
+                  onChange={(e) => handleSetMaxReviews(Number(e.target.value))}
+                  className="select-hacker text-[9px] py-0 px-1 max-w-[48px]"
+                >
+                  <option value={0}>OFF</option>
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                </select>
+                {modeConfig.maxReviews > 0 && (
+                  <span className="text-[9px] text-hacker-text-dim">
+                    {modeConfig.maxReviews === 1 ? "1 cycle" : `${modeConfig.maxReviews} cycles`}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
         {modeConfig.enabled && (
