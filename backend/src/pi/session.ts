@@ -821,20 +821,132 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   if (!state?.session) return;
   if (state.autoReviewAborted) { state.autoReviewInProgress = false; return; }
 
-  // ── Phase 1: Review ──
+  // ── Phase 1: Review (NEUTRAL — fresh session, no conversation history) ──
   emitModeChange(projectId, "review", true);
   emitAutoReviewStatus(projectId, "reviewing", cycle, maxReviews);
 
-  await applyModeToSession("review", projectId);
+  const library = loadModelLibrary();
+  const reviewCfg = library.modes.review;
+
+  // Get the git diff to provide context to the reviewer
+  let diffSummary = "";
+  try {
+    const { getGitDiff } = await import("../projects/git.js");
+    const diff = await getGitDiff(state.cwd);
+    if (diff && !diff.startsWith("No changes")) {
+      // Truncate to 20K for review (more generous than default 8K)
+      diffSummary = diff.length > 20000 ? diff.slice(0, 20000) + "\n... (truncated)" : diff;
+    }
+  } catch (e: any) {
+    console.warn("[auto-review] Could not get git diff:", e.message);
+  }
+
+  let reviewFindings = "";
+  let tempSession: AgentSession | null = null;
 
   try {
-    await state.session.prompt(
-      "Review the changes you just made. Focus on bugs, security issues, code quality, and potential improvements. " +
-      "List each finding with severity (high/medium/low) and a specific description.",
-      {}
-    );
+    // Create a fresh, temporary session for neutral review
+    const tempSessionManager = SessionManager.create(state.cwd);
+    const result = await createAgentSession({
+      cwd: state.cwd,
+      sessionManager: tempSessionManager,
+      authStorage: sharedAuthStorage,
+      modelRegistry: sharedModelRegistry,
+    });
+    tempSession = result.session;
+
+    // Apply review model
+    if (reviewCfg.activeModelId) {
+      const entry = reviewCfg.models.find(m => m.id === reviewCfg.activeModelId);
+      if (entry) {
+        try {
+          const model = sharedModelRegistry.find(entry.provider, entry.modelId);
+          if (model) await tempSession.setModel(model);
+          if (entry.thinkingLevel) await tempSession.setThinkingLevel(entry.thinkingLevel as any);
+        } catch (e: any) {
+          console.warn("[auto-review] Could not set review model:", e.message);
+        }
+      }
+    }
+
+    // Restrict to read-only tools
+    (tempSession as any).setActiveToolsByName(READ_ONLY_TOOLS);
+
+    // Inject review mode instructions
+    const instructions = reviewCfg.instructions || DEFAULT_REVIEW_INSTRUCTIONS;
+    const basePrompt = (tempSession as any)._baseSystemPrompt || "";
+    const modeBlock = `\n\n## Current Mode: REVIEW\n\n${instructions}`;
+    (tempSession as any)._baseSystemPrompt = basePrompt + modeBlock;
+    (tempSession as any).agent.state.systemPrompt = (tempSession as any)._baseSystemPrompt;
+
+    // Build the review prompt — neutral, no mention of who wrote the code
+    let reviewPrompt =
+      "Perform a thorough code review of this project.";
+    if (diffSummary) {
+      reviewPrompt +=
+        "\n\nHere is the current git diff showing recent changes:\n\n```diff\n" + diffSummary + "\n```";
+    }
+    reviewPrompt +=
+      "\n\nFocus on: bugs, security issues, code quality, anti-patterns, and potential improvements.\n" +
+      "List each finding with:\n" +
+      "- File and location (if applicable)\n" +
+      "- Severity: HIGH / MEDIUM / LOW\n" +
+      "- Description of the issue\n" +
+      "- Suggested fix";
+
+    // Subscribe to temp session events to forward tool calls for UI display
+    const tempUnsub = tempSession.subscribe((event) => {
+      // Forward tool call events to subscribers so the UI can show review activity
+      if (event.type === "tool_execution_start") {
+        activeToolCalls.set(event.toolCallId, {
+          toolName: event.toolName,
+          args: event.args,
+          output: "",
+          startTime: Date.now(),
+          projectId,
+        });
+      } else if (event.type === "tool_execution_update") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing && event.partialResult?.content) {
+          existing.output = event.partialResult.content.map((c: any) => c.text || "").join("");
+        }
+      } else if (event.type === "tool_execution_end") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing && event.result?.content) {
+          existing.output = event.result.content.map((c: any) => c.text || "").join("");
+        }
+      } else if (event.type === "agent_start") {
+        state.isStreaming = true;
+        emitSessionUpdate(projectId);
+      } else if (event.type === "agent_end") {
+        state.isStreaming = false;
+        emitSessionUpdate(projectId);
+      }
+      emitToSubscribers(event, projectId);
+    });
+
+    // Run the review prompt
+    await tempSession.prompt(reviewPrompt, {});
+
+    // Extract the last assistant message as the review findings
+    const messages: any[] = tempSession.messages || [];
+    const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
+    if (lastAssistant) {
+      reviewFindings = lastAssistant.content
+        ? lastAssistant.content.map((c: any) => c.text || "").join("")
+        : JSON.stringify(lastAssistant);
+    }
+
+    // Clean up temp session
+    tempUnsub();
+    try { (tempSession as any).dispose?.(); } catch {}
+    tempSession = null;
   } catch (e: any) {
-    console.error("[auto-review] Review prompt failed:", e.message);
+    console.error("[auto-review] Review session failed:", e.message);
+    // Clean up temp session on error
+    if (tempSession) {
+      try { (tempSession as any).dispose?.(); } catch {}
+    }
     state.autoReviewInProgress = false;
     await restoreCodeMode(projectId);
     return;
@@ -842,17 +954,19 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
 
   if (state.autoReviewAborted) { state.autoReviewInProgress = false; await restoreCodeMode(projectId); return; }
 
-  // ── Phase 2: Fix ──
+  // ── Phase 2: Fix (uses main session so it has full context) ──
   emitModeChange(projectId, "code", true);
   emitAutoReviewStatus(projectId, "fixing", cycle, maxReviews);
 
   await restoreCodeMode(projectId);
 
   try {
-    await state.session.prompt(
-      "Fix the issues identified in the review. Address each finding specifically. Do not make any other changes.",
-      {}
-    );
+    // Feed the neutral review findings into the main (code) session
+    // The main session has full conversation context to understand the code
+    const fixPrompt = reviewFindings
+      ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
+      : "Fix any issues you can find in the recent changes.";
+    await state.session.prompt(fixPrompt, {});
   } catch (e: any) {
     console.error("[auto-review] Fix prompt failed:", e.message);
   }
@@ -861,12 +975,33 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   emitAutoReviewStatus(projectId, "done", cycle, maxReviews);
 
   // Check if another cycle is needed
-  // Only do another cycle if review mode explicitly sets maxReviews > 1
-  // and the session wasn't aborted
   if (!state.autoReviewAborted && state.reviewCycle < maxReviews) {
     triggerAutoReviewIfNeeded(projectId);
   }
 }
+
+// Default review instructions used by temp sessions
+const DEFAULT_REVIEW_INSTRUCTIONS = `You are in REVIEW mode. Your job is to review code and provide feedback.
+
+Rules:
+- You can READ code but should NOT make changes
+- Only use read-only tools: read, grep, find, ls
+- Focus on: correctness, security, performance, readability
+- Identify bugs, anti-patterns, and potential issues
+- Suggest improvements with specific explanations
+- Rate confidence level for each finding (high/medium/low)
+
+When reviewing:
+1. Read the relevant files thoroughly
+2. Summarize what the code does
+3. List issues found with severity
+4. Suggest specific fixes (but do not implement them)
+
+Be thorough and specific. Each finding should include:
+- File and line reference
+- Severity (HIGH/MEDIUM/LOW)
+- Description of the issue
+- Suggested fix`;
 
 // ── WS event emitters ──
 

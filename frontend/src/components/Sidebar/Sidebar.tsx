@@ -39,6 +39,8 @@ export function Sidebar({
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
   });
+  const projectListHeightRef = useRef(projectListHeight);
+  projectListHeightRef.current = projectListHeight;
   const isResizingProjects = useRef(false);
   const startY = useRef(0);
   const startHeight = useRef(0);
@@ -67,7 +69,7 @@ export function Sidebar({
     const handleMouseUp = () => {
       if (isResizingProjects.current) {
         isResizingProjects.current = false;
-        localStorage.setItem("pi-web-project-list-height", String(projectListHeight));
+        localStorage.setItem("pi-web-project-list-height", String(projectListHeightRef.current));
       }
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);

@@ -60,6 +60,8 @@ function App() {
     return saved ? parseInt(saved) : 192;
   });
   const isResizingSidebar = useRef(false);
+  const sidebarWidthRef = useRef(sidebarWidth);
+  sidebarWidthRef.current = sidebarWidth;
 
   const projectSessionsRef = useRef<Map<string, ProjectSessionState>>(new Map());
   const [, forceRender] = useState(0);
@@ -137,7 +139,7 @@ function App() {
     const handleMouseUp = () => {
       if (isResizingSidebar.current) {
         isResizingSidebar.current = false;
-        localStorage.setItem("pi-web-sidebar-width", String(sidebarWidth));
+        localStorage.setItem("pi-web-sidebar-width", String(sidebarWidthRef.current));
       }
     };
     window.addEventListener("mousemove", handleMouseMove);
