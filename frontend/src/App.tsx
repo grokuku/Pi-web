@@ -372,7 +372,7 @@ function App() {
       <div className="matrix-bg" />
 
       {/* ── HEADER ── */}
-      <header className="h-8 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
+      <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo + connection */}
         <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
         <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
@@ -388,7 +388,7 @@ function App() {
         {/* Background streaming count */}
         {backgroundStreamingProjects.length > 0 && (
           <>
-            <span className="text-[10px] text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
+            <span className="text-xs text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
             <div className="w-px h-4 bg-hacker-border-bright" />
           </>
         )}
@@ -418,7 +418,7 @@ function App() {
         {/* Tab toggles [PI] [TERM] */}
         <button
           onClick={() => setActiveTab("pi")}
-          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
             activeTab === "pi"
               ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
               : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
@@ -428,7 +428,7 @@ function App() {
         </button>
         <button
           onClick={() => setActiveTab("terminal")}
-          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
             activeTab === "terminal"
               ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
               : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
@@ -438,7 +438,7 @@ function App() {
         </button>
         <button
           onClick={() => setActiveTab("files")}
-          className={`text-[10px] px-2 py-0.5 border font-bold tracking-wide ${
+          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
             activeTab === "files"
               ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
               : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
@@ -450,15 +450,15 @@ function App() {
         <div className="w-px h-4 bg-hacker-border-bright" />
 
         {/* Zoom buttons */}
-        <button onClick={zoomOut} className="btn-hacker text-xs px-1 py-0.5" title="Zoom out">−</button>
-        <span className="text-[9px] text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
-        <button onClick={zoomIn} className="btn-hacker text-xs px-1 py-0.5" title="Zoom in">+</button>
+        <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1" title="Zoom out">−</button>
+        <span className="text-[10px] text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
+        <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1" title="Zoom in">+</button>
 
-        <button onClick={toggleTheme} className="btn-hacker text-xs px-1.5 py-0.5">
+        <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} />
-        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-1.5 py-0.5" title="Model library (Ctrl+L)">
+        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-2 py-1" title="Model library (Ctrl+L)">
           ⚙
         </button>
       </header>

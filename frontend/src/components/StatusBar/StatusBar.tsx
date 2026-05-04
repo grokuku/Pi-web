@@ -23,7 +23,7 @@ export function StatusBar({
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
 
   return (
-    <div className="h-7 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[10px] shrink-0">
+    <div className="h-8 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[11px] shrink-0">
       {/* Project info */}
       {activeProject ? (
         <>
