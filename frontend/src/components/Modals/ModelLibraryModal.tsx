@@ -368,7 +368,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   setError: (e: string) => void;
   setStatus: (s: string) => void;
 }) {
-  const [editingModelForModal, setEditingModelForModal] = useState<RegisteredModel | null>(null);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
@@ -558,7 +558,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
                       <span className="text-[11px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
-                      <button onClick={(e) => { e.stopPropagation(); setEditingModelForModal(m); }}
+                      <button onClick={(e) => { e.stopPropagation(); setEditingModelId(m.id); }}
                         className="text-hacker-text-dim hover:text-hacker-accent shrink-0"><Settings size={10} /></button>
                     </button>
                   </div>
@@ -577,14 +577,18 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
       )}
 
       {/* Model Edit Modal */}
-      {editingModelForModal && (
-        <ModelEditModal
-          model={editingModelForModal}
-          onUpdate={onUpdate}
-          isOllama={isOllamaProvider(editingModelForModal.providerId)}
-          onClose={() => setEditingModelForModal(null)}
-        />
-      )}
+      {editingModelId && (() => {
+        const editModel = library.models.find(m => m.id === editingModelId);
+        if (!editModel) return null;
+        return (
+          <ModelEditModal
+            model={editModel}
+            onUpdate={onUpdate}
+            isOllama={isOllamaProvider(editModel.providerId)}
+            onClose={() => setEditingModelId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -596,6 +600,24 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
   isOllama: boolean;
   onClose: () => void;
 }) {
+  // Local state for context window input (in K) — synced with model prop
+  const [contextK, setContextK] = useState<string>(String(Math.round(model.contextWindow / 1024)));
+  const [contextCustom, setContextCustom] = useState(false);
+
+  // Sync contextK when model prop changes (after API update)
+  useEffect(() => {
+    setContextK(String(Math.round(model.contextWindow / 1024)));
+  }, [model.contextWindow]);
+
+  const CONTEXT_PRESETS = [4, 8, 16, 32, 64, 128, 200, 256, 500, 1000];
+
+  const applyContext = (k: string) => {
+    const num = parseInt(k, 10);
+    if (!isNaN(num) && num > 0) {
+      onUpdate(model.id, { contextWindow: num * 1024 });
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal-box max-w-[36rem] max-h-[85vh] flex flex-col">
@@ -663,21 +685,46 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
 
           {/* Context Window + Reasoning + Thinking Level */}
           <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Context Window</label>
-              <select value={model.contextWindow} onChange={e => onUpdate(model.id, { contextWindow: Number(e.target.value) })}
-                className="select-hacker w-full text-sm py-1.5 px-2">
-                <option value={4096}>4K</option>
-                <option value={8192}>8K</option>
-                <option value={16384}>16K</option>
-                <option value={32768}>32K</option>
-                <option value={65536}>64K</option>
-                <option value={128000}>128K</option>
-                <option value={200000}>200K</option>
-                <option value={256000}>256K</option>
-                <option value={500000}>500K</option>
-                <option value={1000000}>1M</option>
-              </select>
+            <div className="col-span-3">
+              <label className="text-hacker-text-dim text-xs block mb-1">Context Window (tokens)</label>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="number"
+                  value={contextCustom ? contextK : Math.round(model.contextWindow / 1024)}
+                  onChange={e => {
+                    setContextK(e.target.value);
+                    setContextCustom(true);
+                    applyContext(e.target.value);
+                  }}
+                  onBlur={() => {
+                    // Finalize on blur
+                    applyContext(contextK);
+                    setContextCustom(false);
+                  }}
+                  min={1}
+                  step={1}
+                  className="input-hacker w-24 text-sm py-1.5 px-2 text-center"
+                />
+                <span className="text-hacker-text-dim text-xs shrink-0">K tokens</span>
+                <div className="flex gap-1 flex-wrap">
+                  {CONTEXT_PRESETS.map(preset => (
+                    <button key={preset}
+                      onClick={() => {
+                        setContextK(String(preset));
+                        setContextCustom(false);
+                        applyContext(String(preset));
+                      }}
+                      className={`px-1.5 py-0.5 text-[11px] border transition-colors ${
+                        Math.round(model.contextWindow / 1024) === preset
+                          ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                          : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50 hover:text-hacker-text"
+                      }`}>
+                      {preset >= 1000 ? `${preset / 1000}M` : `${preset}K`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="text-hacker-text-dim text-[10px] mt-1">Type a custom value or click a preset. Current: {model.contextWindow.toLocaleString()} tokens</div>
             </div>
             <div>
               <label className="text-hacker-text-dim text-xs block mb-1">Reasoning Model</label>

@@ -116,6 +116,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [error, setError] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
@@ -234,10 +235,25 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
-  // Auto scroll
+  // Smart auto-scroll: only scroll to bottom if user is already at the bottom
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    chatEndRef.current?.scrollIntoView({ behavior });
+  }, []);
+
+  // Track whether user is at the bottom of the chat
+  const handleScroll = useCallback(() => {
+    const el = chatEndRef.current?.parentElement;
+    if (!el) return;
+    const threshold = 80; // px from bottom to consider "at bottom"
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
+
+  // Auto scroll only when user is at the bottom
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+    if (isAtBottomRef.current) {
+      scrollToBottom(streamingContent ? "auto" : "smooth");
+    }
+  }, [messages, streamingContent, scrollToBottom]);
 
   // ── Pi event handling (filtered by projectId) ──
   useEffect(() => {
@@ -626,7 +642,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     >
       {/* Messages */}
       {hasContent ? (
-        <div className={`flex-1 overflow-y-auto p-4 chat-messages ${isDragOver ? "drop-zone active" : ""}`}>
+        <div className={`flex-1 overflow-y-auto p-4 chat-messages ${isDragOver ? "drop-zone active" : ""}`} onScroll={handleScroll}>
         {isDragOver && (
           <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20">
             <div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div>
@@ -825,7 +841,7 @@ function UserBubble({ message }: { message: DisplayMessage }) {
   return (
     <div className="flex justify-end mb-3">
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2 flex items-center gap-2">
-        <span className="text-hacker-text-bright whitespace-pre-wrap text-sm text-right flex-1">{message.content}</span>
+        <span className="text-hacker-text-bright whitespace-pre-wrap text-sm flex-1">{message.content}</span>
         {message.usage && (
           <span className="text-[9px] text-hacker-text-dim shrink-0">
             {message.usage.input + message.usage.output}t · ${message.usage.cost.total.toFixed(4)}
