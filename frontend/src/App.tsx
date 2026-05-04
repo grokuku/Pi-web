@@ -398,6 +398,7 @@ function App() {
         {/* Mode chips — CODE / PLAN / REVIEW */}
         <ModelQuickSwitch
           activeMode={activeMode}
+          activeProjectId={activeProject?.id}
           onModeSwitch={(mode) => {
             if (activeProject) {
               send({ type: "mode_switch", projectId: activeProject.id, mode });

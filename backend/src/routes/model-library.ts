@@ -2,29 +2,32 @@ import { Router, type Request, type Response } from "express";
 import {
   loadModelLibrary,
   saveModelLibrary,
-  setModeEnabled,
-  setModeInstructions,
-  setModeTools,
-  setModeReadOnly,
-  setModeMaxReviews,
-  addModelToMode,
-  removeModelFromMode,
-  setActiveModel,
-  setModelThinkingLevel,
-  makeModelEntryId,
-  getActiveModelForMode,
-  getActiveMode,
-  type AgentMode,
-  type ModelEntry,
+  addModel,
+  addModels,
+  updateModel,
+  removeModel,
+  setDefaultModel,
+  setProjectModeModel,
+  setProjectModeEnabled,
+  setProjectModeMaxReviews,
+  getProjectModeConfig,
+  getModel,
+  getDefaultModel,
+  getModeModel,
+  makeModelId,
+  cleanupProjectModes,
   inferReasoning,
+  type AgentMode,
+  type RegisteredModel,
 } from "../pi/model-library.js";
+import { loadProviders } from "../pi/providers.js";
 import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry } from "../pi/session.js";
 
 const router = Router();
 
-// ── Helpers ──────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────
 
-const VALID_MODES: AgentMode[] = ["code", "commit", "review", "plan"];
+const VALID_MODES: AgentMode[] = ["code", "review", "plan"];
 
 function validateMode(mode: string): AgentMode {
   if (!VALID_MODES.includes(mode as AgentMode)) {
@@ -33,83 +36,21 @@ function validateMode(mode: string): AgentMode {
   return mode as AgentMode;
 }
 
-function safeDecodeURIComponent(encoded: string): string {
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    return encoded; // return as-is if malformed
-  }
+function safeDecode(encoded: string): string {
+  try { return decodeURIComponent(encoded); }
+  catch { return encoded; }
 }
 
-async function applyModeToSession(mode: AgentMode): Promise<void> {
-  // Commit mode is only used for commit messages, not the interactive session
-  if (mode === "commit") return;
-
+/** Generate models.json for Pi SDK from our providers + model library */
+async function syncToModelsJson(): Promise<void> {
+  const providers = loadProviders();
   const library = loadModelLibrary();
-  const cfg = library.modes[mode];
-  if (!cfg.activeModelId || !cfg.enabled) {
-    console.log(`[mode] Not applying ${mode}: enabled=${cfg.enabled}, activeModelId=${cfg.activeModelId}`);
-    return;
-  }
-
-  const entry = getActiveModelForMode(mode);
-  if (!entry) {
-    console.warn(`[mode] No active entry found for ${mode}`);
-    return;
-  }
-
-  try {
-    console.log(`[mode] Applying ${mode} → ${entry.provider}/${entry.modelId}`);
-    reloadModelRegistry();
-
-    // If the library entry has custom reasoning/contextWindow, register it as a provider override
-    // so the Pi SDK uses these values instead of the default from the registry.
-    if (entry.reasoning !== undefined || entry.contextWindow !== undefined) {
-      const registry = getModelRegistry();
-      const existingModel = registry.find(entry.provider, entry.modelId);
-      const needsOverride =
-        (entry.reasoning !== undefined && existingModel?.reasoning !== entry.reasoning) ||
-        (entry.contextWindow !== undefined && existingModel?.contextWindow !== entry.contextWindow);
-
-      if (needsOverride) {
-        console.log(`[mode] Registering provider override for ${entry.provider}/${entry.modelId}: reasoning=${entry.reasoning}, contextWindow=${entry.contextWindow}`);
-        registry.registerProvider(entry.provider, {
-          baseUrl: existingModel?.baseUrl,
-          models: [{
-            id: existingModel?.id || entry.modelId,
-            name: existingModel?.name || entry.name || entry.modelId,
-            reasoning: entry.reasoning ?? existingModel?.reasoning ?? false,
-            input: existingModel?.input || ["text"],
-            contextWindow: entry.contextWindow ?? existingModel?.contextWindow ?? 128000,
-            maxTokens: entry.maxTokens ?? existingModel?.maxTokens ?? 16384,
-            cost: existingModel?.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          }],
-        });
-      }
-    }
-
-    await setModel(entry.provider, entry.modelId);
-    await setThinkingLevel(entry.thinkingLevel);
-    console.log(`[mode] Applied ${mode} successfully`);
-  } catch (e: any) {
-    console.error(`[mode] Failed to apply ${mode}: ${e.message}`);
-  }
+  const { writeModelsJson } = await import("../pi/sync-providers.js");
+  await writeModelsJson(providers, library);
+  reloadModelRegistry();
 }
 
-/** When disabling a mode, find the next enabled mode and apply it */
-async function applyNextEnabledMode(): Promise<void> {
-  const library = loadModelLibrary();
-  const modes: AgentMode[] = ["code", "review", "plan"]; // priority order (skip commit)
-  for (const mode of modes) {
-    if (library.modes[mode].enabled && library.modes[mode].activeModelId) {
-      await applyModeToSession(mode);
-      return;
-    }
-  }
-  console.log("[mode] No enabled modes with models found");
-}
-
-// ── GET full library ─────────────────────────────────────
+// ── GET full library ──────────────────────────────────
 
 router.get("/", (_req: Request, res: Response) => {
   try {
@@ -120,39 +61,129 @@ router.get("/", (_req: Request, res: Response) => {
   }
 });
 
-// ── GET active mode ───────────────────────────────────────
+// ── POST add model(s) ─────────────────────────────────
 
-router.get("/active", (_req: Request, res: Response) => {
+router.post("/models", async (req: Request, res: Response) => {
+  try {
+    const { models } = req.body;
+
+    if (Array.isArray(models)) {
+      // Bulk add
+      const entries: Omit<RegisteredModel, "id">[] = models.map((m: any) => ({
+        providerId: m.providerId,
+        modelId: m.modelId,
+        name: m.name || m.modelId,
+        isDefault: m.isDefault || false,
+        reasoning: m.reasoning ?? inferReasoning(m.modelId),
+        contextWindow: m.contextWindow || 128000,
+        maxTokens: m.maxTokens || 16384,
+        temperature: m.temperature,
+        topP: m.topP,
+        minP: m.minP,
+        topK: m.topK,
+        repeatPenalty: m.repeatPenalty,
+        thinkingLevel: m.thinkingLevel || "medium",
+      }));
+
+      const library = addModels(entries);
+      await syncToModelsJson();
+      res.json(library);
+    } else {
+      // Single add
+      const { providerId, modelId, name, reasoning, contextWindow, maxTokens,
+              temperature, topP, minP, topK, repeatPenalty, thinkingLevel, isDefault } = req.body;
+
+      if (!providerId || !modelId) {
+        return res.status(400).json({ error: "providerId and modelId required" });
+      }
+
+      const library = addModel({
+        providerId,
+        modelId,
+        name: name || modelId,
+        isDefault: isDefault || false,
+        reasoning: reasoning ?? inferReasoning(modelId),
+        contextWindow: contextWindow || 128000,
+        maxTokens: maxTokens || 16384,
+        temperature, topP, minP, topK, repeatPenalty,
+        thinkingLevel: thinkingLevel || "medium",
+      });
+
+      await syncToModelsJson();
+      res.json(library);
+    }
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── PUT update model ──────────────────────────────────
+
+router.put("/models/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = updateModel(id, req.body);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── DELETE model ───────────────────────────────────────
+
+router.delete("/models/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = removeModel(id);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── PUT set default model ──────────────────────────────
+
+router.put("/models/:id/default", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = setDefaultModel(id);
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── GET/PUT project mode config ───────────────────────
+
+router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
   try {
     const library = loadModelLibrary();
-    const activeMode = getActiveMode(library);
-    const activeEntry = activeMode ? getActiveModelForMode(activeMode) : null;
-    res.json({
-      mode: activeMode,
-      model: activeEntry,
-      config: activeMode ? library.modes[activeMode] : null,
-    });
+    const config = getProjectModeConfig(library, req.params.projectId);
+    res.json(config);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── PUT toggle mode enabled ──────────────────────────────
-
-router.put("/modes/:mode/enabled", async (req: Request, res: Response) => {
+router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
   try {
-    const mode = validateMode(req.params.mode);
-    const { enabled } = req.body;
-    if (typeof enabled !== "boolean") {
-      return res.status(400).json({ error: "enabled (boolean) required" });
-    }
-    const library = setModeEnabled(mode, enabled);
+    const { projectId } = req.params;
+    const { mode, modelId, enabled, maxReviews } = req.body;
 
-    if (enabled) {
-      await applyModeToSession(mode);
-    } else {
-      // Mode was disabled — restore the next enabled mode's model
-      await applyNextEnabledMode();
+    if (mode) validateMode(mode);
+
+    let library = loadModelLibrary();
+
+    if (modelId !== undefined) {
+      library = setProjectModeModel(projectId, mode, modelId);
+    }
+    if (enabled !== undefined && (mode === "plan" || mode === "review")) {
+      library = setProjectModeEnabled(projectId, mode, enabled);
+    }
+    if (maxReviews !== undefined && mode === "review") {
+      library = setProjectModeMaxReviews(projectId, maxReviews);
     }
 
     res.json(library);
@@ -161,188 +192,12 @@ router.put("/modes/:mode/enabled", async (req: Request, res: Response) => {
   }
 });
 
-// ── PUT mode instructions ─────────────────────────────────
+// ── DELETE project mode config (cleanup) ─────────────
 
-router.put("/modes/:mode/instructions", (req: Request, res: Response) => {
+router.delete("/projects/:projectId/mode", (req: Request, res: Response) => {
   try {
-    const mode = validateMode(req.params.mode);
-    const { instructions } = req.body;
-    if (typeof instructions !== "string") {
-      return res.status(400).json({ error: "instructions (string) required" });
-    }
-    const library = setModeInstructions(mode, instructions);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT mode tools ─────────────────────────────────────────
-
-router.put("/modes/:mode/tools", (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const { tools } = req.body;
-    if (!Array.isArray(tools)) {
-      return res.status(400).json({ error: "tools (string[]) required" });
-    }
-    const library = setModeTools(mode, tools);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT mode readOnly ──────────────────────────────────────
-
-router.put("/modes/:mode/readonly", (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const { readOnly } = req.body;
-    if (typeof readOnly !== "boolean") {
-      return res.status(400).json({ error: "readOnly (boolean) required" });
-    }
-    const library = setModeReadOnly(mode, readOnly);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT mode maxReviews ──────────────────────────────────────
-
-router.put("/modes/:mode/maxreviews", (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const { maxReviews } = req.body;
-    if (typeof maxReviews !== "number" || maxReviews < 0) {
-      return res.status(400).json({ error: "maxReviews (number ≥ 0) required" });
-    }
-    const library = setModeMaxReviews(mode, maxReviews);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── POST add model to mode ───────────────────────────────
-
-router.post("/modes/:mode/models", async (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const { provider, modelId, name, thinkingLevel, contextWindow, reasoning, maxTokens } = req.body;
-    if (!provider || !modelId) {
-      return res.status(400).json({ error: "provider and modelId required" });
-    }
-
-    const entry: ModelEntry = {
-      id: makeModelEntryId(provider, modelId),
-      provider,
-      modelId,
-      name: name || modelId,
-      thinkingLevel: thinkingLevel || "medium",
-      contextWindow: contextWindow || (reasoning ? 128000 : 32768),
-      reasoning: reasoning ?? inferReasoning(modelId),
-      maxTokens: maxTokens || (reasoning ? 16384 : 4096),
-    };
-
-    const library = addModelToMode(mode, entry);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── DELETE remove model from mode ────────────────────────
-
-router.delete("/modes/:mode/models/:entryId", (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const entryId = safeDecodeURIComponent(req.params.entryId);
-    const library = removeModelFromMode(mode, entryId);
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT set active model for mode (also applies to session if mode is enabled) ──
-
-router.put("/modes/:mode/active", async (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const { entryId } = req.body;
-    if (!entryId) {
-      return res.status(400).json({ error: "entryId required" });
-    }
-
-    const library = setActiveModel(mode, entryId);
-
-    // Only apply to session if this mode is currently enabled
-    if (library.modes[mode].enabled) {
-      await applyModeToSession(mode);
-    } else {
-      console.log(`[mode] Mode ${mode} is disabled, not applying to session`);
-    }
-
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT update thinking level for a model in a mode ──────
-
-router.put("/modes/:mode/models/:entryId/thinking", async (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const entryId = safeDecodeURIComponent(req.params.entryId);
-    const { thinkingLevel } = req.body;
-    if (!thinkingLevel) {
-      return res.status(400).json({ error: "thinkingLevel required" });
-    }
-    const library = setModelThinkingLevel(mode, entryId, thinkingLevel);
-
-    // If this is the active model for an enabled mode, re-apply to session
-    // (this also updates the registry with reasoning if needed)
-    const activeEntry = getActiveModelForMode(mode);
-    if (activeEntry && activeEntry.id === entryId && library.modes[mode].enabled) {
-      await applyModeToSession(mode);
-    }
-
-    res.json(library);
-  } catch (e: any) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── PUT update model properties (contextWindow, reasoning, etc.) ──
-
-router.put("/modes/:mode/models/:entryId/properties", async (req: Request, res: Response) => {
-  try {
-    const mode = validateMode(req.params.mode);
-    const entryId = safeDecodeURIComponent(req.params.entryId);
-    const { contextWindow, reasoning, maxTokens } = req.body;
-
-    const library = loadModelLibrary();
-    const entry = library.modes[mode].models.find((m) => m.id === entryId);
-    if (!entry) {
-      return res.status(404).json({ error: "Model not found" });
-    }
-
-    if (contextWindow !== undefined) entry.contextWindow = contextWindow;
-    if (reasoning !== undefined) entry.reasoning = reasoning;
-    if (maxTokens !== undefined) entry.maxTokens = maxTokens;
-
-    saveModelLibrary(library);
-
-    // Re-apply to session if this is the active model
-    const activeEntry = getActiveModelForMode(mode);
-    if (activeEntry && activeEntry.id === entryId && library.modes[mode].enabled) {
-      await applyModeToSession(mode);
-    }
-
-    res.json(library);
+    cleanupProjectModes(req.params.projectId);
+    res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

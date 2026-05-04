@@ -3,7 +3,13 @@ import { completeSimple } from "@mariozechner/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
-import { loadModelLibrary, DEFAULT_INSTRUCTIONS } from "./model-library.js";
+import {
+  loadModelLibrary,
+  getModeModel,
+  getProjectModeConfig,
+  getDefaultModel,
+}
+from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -614,9 +620,46 @@ export function getSessionMessages(projectId: string): any[] {
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const ALL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
+// Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
+const MODE_INSTRUCTIONS: Record<string, string> = {
+  code: `General coding rules:
+- Do NOT run git push or git push-like commands unless the user explicitly asks you to
+- Do NOT commit changes unless the user explicitly asks you to
+- When working on files, make minimal targeted changes — avoid rewriting entire files
+- Before editing, always read the current file content to understand the existing code
+- Prefer using the edit tool for small changes, write tool only for new files or complete rewrites`,
+  review: `You are in REVIEW mode. Your job is to review code and provide feedback.
+
+Rules:
+- You can READ code but should NOT make changes
+- Only use read-only tools: read, grep, find, ls
+- Focus on: correctness, security, performance, readability
+- Identify bugs, anti-patterns, and potential issues
+- Suggest improvements with specific explanations
+- Rate confidence level for each finding (high/medium/low)`,
+  plan: `You are in PLAN mode — a read-only exploration mode for safe code analysis.
+
+Rules:
+- You can only use read-only tools: read, grep, find, ls
+- You CANNOT use: edit, write (file modifications are disabled)
+- Bash is restricted to read-only commands
+
+Tasks:
+1. Explore the codebase thoroughly to understand the current state
+2. Create a detailed numbered plan under a "Plan:" header
+3. For each step: describe what to change, why, and potential risks`,
+};
+
+// Default thinking levels per mode
+const DEFAULT_THINKING: Record<string, string> = {
+  code: "medium",
+  review: "medium",
+  plan: "high",
+};
+
 /**
  * Apply a mode's configuration to the Pi session:
- * - Switch model
+ * - Switch model (from project-specific mode config or default)
  * - Set thinking level
  * - Filter tools (read-only for plan/review)
  * - Inject mode instructions into system prompt
@@ -626,63 +669,70 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   if (!state?.session) throw new Error("No active Pi session");
 
   const library = loadModelLibrary();
-  const cfg = library.modes[mode];
+  const session = state.session;
+  const model = getModeModel(library, projectId, mode);
 
   // ── Apply model ──
-  if (cfg.activeModelId && cfg.enabled) {
-    const entry = cfg.models.find(m => m.id === cfg.activeModelId);
-    if (entry) {
-      try {
-        reloadModelRegistry();
+  if (model) {
+    try {
+      reloadModelRegistry();
+      const piModel = sharedModelRegistry.find(model.providerId, model.modelId);
 
-        // Register provider override if custom reasoning/contextWindow
-        if (entry.reasoning !== undefined || entry.contextWindow !== undefined) {
-          const registry = getModelRegistry();
-          const existingModel = registry.find(entry.provider, entry.modelId);
+      if (piModel) {
+        // Register provider override if custom reasoning/contextWindow differs
+        if (model.reasoning !== undefined || model.contextWindow !== undefined) {
+          const existingModel = piModel;
           if (
-            (entry.reasoning !== undefined && existingModel?.reasoning !== entry.reasoning) ||
-            (entry.contextWindow !== undefined && existingModel?.contextWindow !== entry.contextWindow)
+            (model.reasoning !== undefined && existingModel.reasoning !== model.reasoning) ||
+            (model.contextWindow !== undefined && existingModel.contextWindow !== model.contextWindow)
           ) {
-            registry.registerProvider(entry.provider, {
-              baseUrl: existingModel?.baseUrl,
+            const existingAuth = await sharedModelRegistry.getApiKeyAndHeaders(existingModel);
+            const existingApiKey = existingAuth.ok ? existingAuth.apiKey : undefined;
+            const providerApi = (existingModel as any).api || "openai-completions";
+
+            sharedModelRegistry.registerProvider(model.providerId, {
+              baseUrl: (existingModel as any).baseUrl,
+              api: providerApi,
+              apiKey: existingApiKey || "ollama",
               models: [{
-                id: existingModel?.id || entry.modelId,
-                name: existingModel?.name || entry.name || entry.modelId,
-                reasoning: entry.reasoning ?? existingModel?.reasoning ?? false,
-                input: existingModel?.input || ["text"],
-                contextWindow: entry.contextWindow ?? existingModel?.contextWindow ?? 128000,
-                maxTokens: entry.maxTokens ?? existingModel?.maxTokens ?? 16384,
-                cost: existingModel?.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                id: existingModel.id || model.modelId,
+                name: existingModel.name || model.name || model.modelId,
+                api: providerApi,
+                reasoning: model.reasoning ?? existingModel.reasoning ?? false,
+                input: (existingModel as any).input || ["text"],
+                contextWindow: model.contextWindow ?? existingModel.contextWindow ?? 128000,
+                maxTokens: model.maxTokens ?? existingModel.maxTokens ?? 16384,
+                cost: (existingModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               }],
             });
           }
         }
 
-        await setModel(entry.provider, entry.modelId, projectId);
-        await setThinkingLevel(entry.thinkingLevel, projectId);
-      } catch (e: any) {
-        console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
+        await session.setModel(piModel);
+      } else {
+        // Model not in registry — try setModel with provider/id
+        await setModel(model.providerId, model.modelId, projectId);
       }
+
+      await setThinkingLevel(model.thinkingLevel || DEFAULT_THINKING[mode] || "medium", projectId);
+    } catch (e: any) {
+      console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
     }
   }
 
   // ── Apply tool filtering ──
-  const session = state.session;
-  if (cfg.readOnly || (cfg.tools.length > 0 && !cfg.tools.includes("edit") && !cfg.tools.includes("write"))) {
-    // Read-only mode: use the mode's tool list or default read-only tools
-    const toolNames = cfg.tools.length > 0 ? cfg.tools : READ_ONLY_TOOLS;
-    (session as any).setActiveToolsByName(toolNames);
-  } else if (cfg.tools.length > 0) {
-    (session as any).setActiveToolsByName(cfg.tools);
+  if (mode === "plan" || mode === "review") {
+    (session as any).setActiveToolsByName(READ_ONLY_TOOLS);
   } else {
     // Code mode: all tools
     (session as any).setActiveToolsByName(ALL_TOOLS);
   }
 
   // ── Inject mode instructions into system prompt ──
-  if (cfg.instructions && cfg.instructions.trim()) {
+  const instructions = MODE_INSTRUCTIONS[mode] || "";
+  if (instructions.trim()) {
     const basePrompt = (session as any)._baseSystemPrompt || "";
-    const modeBlock = `\n\n## Current Mode: ${mode.toUpperCase()}\n\n${cfg.instructions}`;
+    const modeBlock = `\n\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}`;
     (session as any)._baseSystemPrompt = basePrompt + modeBlock;
     (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
   }
@@ -697,14 +747,18 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 }
 
 /**
- * Switch to a different mode. Only works if the mode is enabled and has a model.
+ * Switch to a different mode.
  */
 export async function switchMode(mode: AgentMode, projectId: string): Promise<void> {
   const library = loadModelLibrary();
-  const cfg = library.modes[mode];
+  const pm = getProjectModeConfig(library, projectId);
 
-  if (mode !== "code" && (!cfg.enabled || !cfg.activeModelId)) {
-    throw new Error(`Mode ${mode} is not enabled or has no active model`);
+  // Check mode is enabled (code is always enabled)
+  if (mode !== "code") {
+    const modeCfg = pm[mode as "plan" | "review"];
+    if (!modeCfg.enabled) {
+      throw new Error(`Mode ${mode} is not enabled`);
+    }
   }
 
   await applyModeToSession(mode, projectId);
@@ -719,35 +773,30 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
 
   const session = state.session;
   const library = loadModelLibrary();
-  const codeCfg = library.modes.code;
+  const model = getModeModel(library, projectId, "code");
 
-  // Apply code model (if enabled with a model)
-  if (codeCfg.activeModelId && codeCfg.enabled) {
-    const entry = codeCfg.models.find(m => m.id === codeCfg.activeModelId);
-    if (entry) {
-      try {
-        await setModel(entry.provider, entry.modelId, projectId);
-        await setThinkingLevel(entry.thinkingLevel, projectId);
-      } catch (e: any) {
-        console.error("[mode] Failed to restore code model:", e.message);
+  // Apply the code-mode model
+  if (model) {
+    try {
+      const piModel = sharedModelRegistry.find(model.providerId, model.modelId);
+      if (piModel) {
+        await session.setModel(piModel);
       }
+      await setThinkingLevel(model.thinkingLevel || "medium", projectId);
+    } catch (e: any) {
+      console.error("[mode] Failed to restore code model:", e.message);
     }
   }
 
   // Restore all tools
   (session as any).setActiveToolsByName(ALL_TOOLS);
 
-  // Rebuild system prompt WITHOUT mode instructions
-  // The _rebuildSystemPrompt call from setActiveToolsByName already clears custom additions
-  // We re-apply only code mode instructions if they exist
-  if (codeCfg.instructions && codeCfg.instructions.trim()) {
-    const basePrompt = (session as any)._baseSystemPrompt || "";
-    // Only add if not already present
-    if (!basePrompt.includes("Current Mode: CODE")) {
-      const modeBlock = `\n\n## Current Mode: CODE\n\n${codeCfg.instructions}`;
-      (session as any)._baseSystemPrompt = basePrompt + modeBlock;
-      (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-    }
+  // Apply code mode instructions
+  const basePrompt = (session as any)._baseSystemPrompt || "";
+  if (!basePrompt.includes("Current Mode: CODE")) {
+    const modeBlock = `\n\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}`;
+    (session as any)._baseSystemPrompt = basePrompt + modeBlock;
+    (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
   }
 
   state.activeMode = "code";
@@ -767,11 +816,11 @@ export function getAutoReviewState(projectId: string): {
 } {
   const state = sessionsByProject.get(projectId);
   const library = loadModelLibrary();
-  const reviewCfg = library.modes.review;
+  const pm = getProjectModeConfig(library, projectId);
   return {
     inProgress: state?.autoReviewInProgress ?? false,
     cycle: state?.reviewCycle ?? 0,
-    maxReviews: reviewCfg.maxReviews ?? 1,
+    maxReviews: pm.review.maxReviews ?? 1,
     mode: state?.activeMode ?? "code",
   };
 }
@@ -794,17 +843,21 @@ export function triggerAutoReviewIfNeeded(projectId: string): void {
   if (!state?.session) return;
 
   const library = loadModelLibrary();
-  const reviewCfg = library.modes.review;
-  const maxReviews = reviewCfg.maxReviews ?? 1;
+  const pm = getProjectModeConfig(library, projectId);
+  const maxReviews = pm.review.maxReviews ?? 1;
 
   // Check conditions
   if (state.activeMode !== "code") return;            // Only after code mode
-  if (!reviewCfg.enabled || !reviewCfg.activeModelId) return;  // Review must be configured
-  if (maxReviews <= 0) return;                     // Auto-review disabled
-  if (state.reviewCycle >= maxReviews) return;       // Already done max reviews
-  if (state.autoReviewInProgress) return;           // Already running
-  if (state.autoReviewAborted) return;             // Aborted by user
-  if (state.isStreaming) return;                    // Still streaming
+  if (!pm.review.enabled) return;                     // Review must be enabled
+  if (maxReviews <= 0) return;                        // Auto-review disabled
+  if (state.reviewCycle >= maxReviews) return;        // Already done max reviews
+  if (state.autoReviewInProgress) return;            // Already running
+  if (state.autoReviewAborted) return;              // Aborted by user
+  if (state.isStreaming) return;                     // Still streaming
+
+  // Check that there's a review model available
+  const reviewModel = getModeModel(library, projectId, "review");
+  if (!reviewModel) return;                          // No model for review
 
   state.autoReviewInProgress = true;
   state.reviewCycle++;
@@ -826,7 +879,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   emitAutoReviewStatus(projectId, "reviewing", cycle, maxReviews);
 
   const library = loadModelLibrary();
-  const reviewCfg = library.modes.review;
+  const pm = getProjectModeConfig(library, projectId);
 
   // Get the git diff to provide context to the reviewer
   let diffSummary = "";
@@ -834,7 +887,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     const { getGitDiff } = await import("../projects/git.js");
     const diff = await getGitDiff(state.cwd);
     if (diff && !diff.startsWith("No changes")) {
-      // Truncate to 20K for review (more generous than default 8K)
+      // Truncate to 20K for review
       diffSummary = diff.length > 20000 ? diff.slice(0, 20000) + "\n... (truncated)" : diff;
     }
   } catch (e: any) {
@@ -856,16 +909,14 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     tempSession = result.session;
 
     // Apply review model
-    if (reviewCfg.activeModelId) {
-      const entry = reviewCfg.models.find(m => m.id === reviewCfg.activeModelId);
-      if (entry) {
-        try {
-          const model = sharedModelRegistry.find(entry.provider, entry.modelId);
-          if (model) await tempSession.setModel(model);
-          if (entry.thinkingLevel) await tempSession.setThinkingLevel(entry.thinkingLevel as any);
-        } catch (e: any) {
-          console.warn("[auto-review] Could not set review model:", e.message);
-        }
+    const reviewModel = getModeModel(library, projectId, "review");
+    if (reviewModel) {
+      try {
+        const piModel = sharedModelRegistry.find(reviewModel.providerId, reviewModel.modelId);
+        if (piModel) await tempSession.setModel(piModel);
+        if (reviewModel.thinkingLevel) await tempSession.setThinkingLevel(reviewModel.thinkingLevel as any);
+      } catch (e: any) {
+        console.warn("[auto-review] Could not set review model:", e.message);
       }
     }
 
@@ -873,7 +924,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     (tempSession as any).setActiveToolsByName(READ_ONLY_TOOLS);
 
     // Inject review mode instructions
-    const instructions = reviewCfg.instructions || DEFAULT_REVIEW_INSTRUCTIONS;
+    const instructions = MODE_INSTRUCTIONS.review;
     const basePrompt = (tempSession as any)._baseSystemPrompt || "";
     const modeBlock = `\n\n## Current Mode: REVIEW\n\n${instructions}`;
     (tempSession as any)._baseSystemPrompt = basePrompt + modeBlock;
@@ -896,9 +947,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
 
     // Subscribe to temp session events to forward tool calls for UI display
     const tempUnsub = tempSession.subscribe((event) => {
-      // Tag events from the review temp session so the frontend can distinguish them
       const taggedEvent = { ...event, _autoReview: true } as any;
-      // Forward tool call events to subscribers so the UI can show review activity
       if (event.type === "tool_execution_start") {
         activeToolCalls.set(event.toolCallId, {
           toolName: event.toolName,
@@ -945,7 +994,6 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     tempSession = null;
   } catch (e: any) {
     console.error("[auto-review] Review session failed:", e.message);
-    // Clean up temp session on error
     if (tempSession) {
       try { (tempSession as any).dispose?.(); } catch {}
     }
@@ -963,8 +1011,6 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   await restoreCodeMode(projectId);
 
   try {
-    // Feed the neutral review findings into the main (code) session
-    // The main session has full conversation context to understand the code
     const fixPrompt = reviewFindings
       ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
       : "Fix any issues you can find in the recent changes.";
@@ -981,32 +1027,6 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     triggerAutoReviewIfNeeded(projectId);
   }
 }
-
-// Default review instructions used by temp sessions
-const DEFAULT_REVIEW_INSTRUCTIONS = `You are in REVIEW mode. Your job is to review code and provide feedback.
-
-Rules:
-- You can READ code but should NOT make changes
-- Only use read-only tools: read, grep, find, ls
-- Focus on: correctness, security, performance, readability
-- Identify bugs, anti-patterns, and potential issues
-- Suggest improvements with specific explanations
-- Rate confidence level for each finding (high/medium/low)
-
-When reviewing:
-1. Read the relevant files thoroughly
-2. Summarize what the code does
-3. List issues found with severity
-4. Suggest specific fixes (but do not implement them)
-
-Be thorough and specific. Each finding should include:
-- File and line reference
-- Severity (HIGH/MEDIUM/LOW)
-- Description of the issue
-- Suggested fix`;
-
-// ── WS event emitters ──
-
 function emitModeChange(projectId: string, mode: AgentMode, auto: boolean): void {
   emitToSubscribers({ type: "mode_change", mode, auto } as any, projectId);
 }
@@ -1015,6 +1035,17 @@ function emitAutoReviewStatus(projectId: string, phase: string, cycle: number, m
   emitToSubscribers({ type: "auto_review_status", phase, cycle, maxReviews } as any, projectId);
 }
 
+// Commit message instructions (hardcoded)
+const COMMIT_INSTRUCTIONS = `You generate commit messages from git diffs. You must be concise, specific, and descriptive.
+
+Rules:
+- First line: type(scope): short description (max 72 chars)
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Body: 2-4 bullet points explaining WHAT changed and WHY
+- Describe the INTENT of the change, not just list file names
+- Use verb infinitive ("add", "fix", "refactor") not gerundive ("adding", "fixing")
+- No markdown, no code blocks, plain text only
+- If the diff is unclear, focus on the most significant change`;
 
 /**
  * Return info about which model would be used for commit AI generation,
@@ -1023,23 +1054,20 @@ function emitAutoReviewStatus(projectId: string, phase: string, cycle: number, m
 export function getCommitModelInfo(): {
   provider: string;
   modelId: string;
-  source: "commit-mode" | "session" | "registry" | "none";
+  source: "default-model" | "session" | "registry" | "none";
   thinkingLevel?: string;
 } {
   const library = loadModelLibrary();
-  const commitMode = library.modes.commit;
 
-  // 1. Dedicated commit mode
-  if (commitMode.enabled && commitMode.activeModelId) {
-    const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
-    if (entry) {
-      return {
-        provider: entry.provider,
-        modelId: entry.modelId,
-        source: "commit-mode",
-        thinkingLevel: entry.thinkingLevel || "off",
-      };
-    }
+  // 1. Default model from library
+  const defaultModel = getDefaultModel(library);
+  if (defaultModel) {
+    return {
+      provider: defaultModel.providerId,
+      modelId: defaultModel.modelId,
+      source: "default-model",
+      thinkingLevel: defaultModel.thinkingLevel || "off",
+    };
   }
 
   // 2. Any session model
@@ -1082,127 +1110,50 @@ export async function generateAiCommitMessage(
   projectId: string
 ): Promise<{ subject: string; body: string } | null> {
   console.log(`[commit] === Starting commit message generation ===`);
-  console.log(`[commit] diff length: ${diff?.length || 0}`);
-  console.log(`[commit] projectId: ${projectId}`);
 
-  // 1. Try the dedicated commit model from the library
   const library = loadModelLibrary();
-  const commitMode = library.modes.commit;
-  console.log(`[commit] commitMode.enabled=${commitMode.enabled}, activeModelId=${commitMode.activeModelId}, models=${commitMode.models.length}`);
 
   let model: any = null;
   let apiKey: string | undefined;
 
   // Ensure registry is loaded
   reloadModelRegistry();
-  console.log(`[commit] Registry available models: ${sharedModelRegistry.getAvailable().length}`);
-  console.log(`[commit] Registry all models: ${sharedModelRegistry.getAll().length}`);
-  
-  // Log all available model info for debugging
-  const availModels = sharedModelRegistry.getAvailable();
-  if (availModels.length > 0) {
-    console.log(`[commit] Available models: ${availModels.slice(0, 5).map((m: any) => `${m.provider}/${m.id} (api=${m.api}, reasoning=${m.reasoning})`).join(', ')}`);
-  }
-  const allModels = sharedModelRegistry.getAll();
-  if (allModels.length > 0) {
-    console.log(`[commit] All models: ${allModels.slice(0, 5).map((m: any) => `${m.provider}/${m.id}`).join(', ')}`);
-  }
 
-  if (commitMode.enabled && commitMode.activeModelId) {
-    const entry = commitMode.models.find(m => m.id === commitMode.activeModelId);
-    console.log(`[commit] Found commit entry: ${entry ? JSON.stringify({id: entry.id, provider: entry.provider, modelId: entry.modelId, name: entry.name, reasoning: entry.reasoning, contextWindow: entry.contextWindow}) : "NONE"}`);
-    if (entry) {
-      // Use registry.find for a proper model object (has all expected fields)
-      model = sharedModelRegistry.find(entry.provider, entry.modelId);
-      console.log(`[commit] Registry.find("${entry.provider}", "${entry.modelId}") = ${model ? `found: ${model.provider}/${model.id} (api=${model.api})` : "NOT FOUND"}`);
-      if (!model) {
-        // Fallback: build manually. Need to determine the correct api type.
-        const providerApiMap: Record<string, string> = {
-          ollama: "openai-completions",
-          openai: "openai-completions",
-          anthropic: "anthropic-messages",
-          google: "google-generative-ai",
-          deepseek: "openai-completions",
-          groq: "openai-completions",
-          xai: "openai-completions",
-          openrouter: "openai-completions",
-          mistral: "openai-completions",
-        };
-        const api = providerApiMap[entry.provider] || entry.provider;
-        model = {
-          id: entry.id,
-          provider: entry.provider,
-          api,
-          modelId: entry.modelId,
-          name: entry.name || entry.modelId,
-          reasoning: entry.reasoning ?? false,
-          contextWindow: entry.contextWindow ?? 128000,
-          maxTokens: entry.maxTokens ?? 16384,
-          baseUrl: "",  // will need apiKey from registry
-        };
-        console.log(`[commit] Built fallback model: ${model.provider}/${model.modelId} (api=${model.api})`);
-      }
-      console.log(`[commit] Commit model resolved: ${model.provider}/${model.modelId || model.id} (api=${model.api}, reasoning=${model.reasoning})`);
+  // 1. Use the default model from the library
+  const defaultModel = getDefaultModel(library);
+  if (defaultModel) {
+    model = sharedModelRegistry.find(defaultModel.providerId, defaultModel.modelId);
+    if (model) {
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      console.log(`[commit] Commit model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
   // 2. Fallback: use the session model (if available)
   if (!model?.id) {
-    console.log("[commit] No commit model, falling back to session model");
     const state = sessionsByProject.get(projectId);
-    console.log(`[commit] Session state: ${state ? "found" : "NOT FOUND"}`);
     if (state?.session?.model) {
       model = state.session.model;
-      console.log(`[commit] Session model: ${model.provider}/${model.modelId}`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      console.log(`[commit] Session model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
-    } else {
-      console.log("[commit] No session model available");
     }
   }
 
   // 3. Last resort: first available model from the registry
   if (!model?.id) {
-    console.log("[commit] No session model, searching registry...");
     const availableModels = sharedModelRegistry.getAvailable();
-    console.log(`[commit] Registry has ${availableModels.length} available models`);
     if (availableModels.length > 0) {
       model = availableModels[0];
-      console.log(`[commit] Using registry model: ${model.provider}/${model.modelId}`);
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      console.log(`[commit] Registry model auth: ok=${auth.ok}, apiKey=${auth.ok ? "present" : "n/a"}`);
       if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
-  // 4. Absolute last resort: scan all library modes for any model entry
+  // 4. Absolute last resort: scan all library models
   if (!model?.id) {
-    console.log("[commit] Registry empty, scanning all library modes...");
-    for (const mode of ["code", "plan", "review"] as AgentMode[]) {
-      const cfg = library.modes[mode];
-      if (cfg.models.length > 0) {
-        const entry = cfg.models[0];
-        model = sharedModelRegistry.find(entry.provider, entry.modelId);
-        if (!model) {
-          const providerApiMap: Record<string, string> = {
-            ollama: "openai-completions",
-            openai: "openai-completions",
-            anthropic: "anthropic-messages",
-            google: "google-generative-ai",
-            deepseek: "openai-completions",
-            groq: "openai-completions",
-            xai: "openai-completions",
-            openrouter: "openai-completions",
-            mistral: "openai-completions",
-          };
-          const api = providerApiMap[entry.provider] || entry.provider;
-          model = { id: entry.id, provider: entry.provider, api, modelId: entry.modelId };
-        }
-        console.log(`[commit] Found model from mode ${mode}: ${model.provider}/${model.modelId}`);
+    for (const m of library.models) {
+      model = sharedModelRegistry.find(m.providerId, m.modelId);
+      if (model) {
         const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
         if (auth.ok) apiKey = (auth as any).apiKey;
         break;
@@ -1215,13 +1166,9 @@ export async function generateAiCommitMessage(
     return null;
   }
 
-  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} (apiKey=${apiKey ? "present" : "MISSING"}, api=${model.api}, baseUrl=${model.baseUrl || "none"}) ===`);
+  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} (apiKey=${apiKey ? "present" : "MISSING"}, api=${model.api}) ===`);
 
-  const systemPrompt = (commitMode.instructions && commitMode.instructions.trim())
-    ? commitMode.instructions
-    : DEFAULT_INSTRUCTIONS.commit;
-
-  console.log(`[commit] systemPrompt length: ${systemPrompt.length}`);
+  const systemPrompt = COMMIT_INSTRUCTIONS;
 
   const context = {
     systemPrompt,
@@ -1238,7 +1185,6 @@ export async function generateAiCommitMessage(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
 
-    console.log("[commit] Calling completeSimple...");
     const response = await completeSimple(model, context, {
       temperature: 0.2,
       maxTokens: 400,
@@ -1247,16 +1193,11 @@ export async function generateAiCommitMessage(
     });
     clearTimeout(timeout);
 
-    console.log(`[commit] completeSimple returned, content items: ${response.content?.length || 0}, stopReason: ${response.stopReason}, error: ${response.errorMessage || "none"}`);
-
     const text = response.content
       ?.filter((c: any) => c.type === "text")
       ?.map((c: any) => c.text || "")
       ?.join("\n")
       ?.trim() || "";
-
-    console.log(`[commit] Extracted text length: ${text.length}`);
-    console.log(`[commit] Text preview: ${text.slice(0, 200)}`);
 
     if (!text) {
       console.warn("[commit] Empty response from model");
@@ -1267,7 +1208,6 @@ export async function generateAiCommitMessage(
     const subject = lines[0].trim();
     const body = lines.slice(1).join("\n").trim();
 
-    console.log(`[commit] === Success: subject="${subject}", body=${body.length} chars ===`);
     return { subject: subject || text, body };
   } catch (error: any) {
     console.error("[commit] === completeSimple FAILED ===", error?.message || error);

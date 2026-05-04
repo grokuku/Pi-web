@@ -1,3 +1,5 @@
+// ── Project ──────────────────────────────────────────
+
 export interface Project {
   id: string;
   name: string;
@@ -31,6 +33,8 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
 }
+
+// ── Events ────────────────────────────────────────────
 
 export interface PiEvent {
   type: string;
@@ -88,31 +92,92 @@ export interface ToolCallInfo {
   isStreaming: boolean;
 }
 
-// ── Model Library ──────────────────────────────────────
+// ── Providers ─────────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "plan" | "commit";
+export type ProviderType = "ollama" | "openai-compatible" | "anthropic" | "google";
 
-export interface ModelEntry {
+export interface ProviderConfig {
   id: string;
-  provider: string;
-  modelId: string;
+  name: string;           // custom display name
+  type: ProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  discoveredModels?: DiscoveredModel[];
+  connectionStatus?: "ok" | "error" | "untested";
+  connectionError?: string;
+  lastTestedAt?: string;
+}
+
+export interface DiscoveredModel {
+  id: string;
   name: string;
-  thinkingLevel: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  maxTokens?: number;
+  size?: number;
+  quantization?: string;
+  family?: string;
+}
+
+export const PROVIDER_PRESETS: Record<ProviderType, {
+  defaultBaseUrl: string;
+  requiresApiKey: boolean;
+  description: string;
+}> = {
+  ollama: {
+    defaultBaseUrl: "http://localhost:11434/v1",
+    requiresApiKey: false,
+    description: "Local/self-hosted Ollama server",
+  },
+  "openai-compatible": {
+    defaultBaseUrl: "https://api.openai.com/v1",
+    requiresApiKey: true,
+    description: "OpenAI-compatible API (DeepSeek, Groq, etc.)",
+  },
+  anthropic: {
+    defaultBaseUrl: "https://api.anthropic.com",
+    requiresApiKey: true,
+    description: "Anthropic Claude API",
+  },
+  google: {
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    requiresApiKey: true,
+    description: "Google Gemini API",
+  },
+};
+
+// ── Model Library ─────────────────────────────────────
+
+export type AgentMode = "code" | "review" | "plan";
+
+export interface RegisteredModel {
+  id: string;                  // unique internal ID
+  providerId: string;          // references ProviderConfig.id
+  modelId: string;             // the model's id on the provider
+  name: string;                // display name
+  isDefault: boolean;          // default model for modes without a specific model
+  reasoning: boolean;
+  contextWindow: number;       // tokens
+  maxTokens: number;           // max output tokens
+  // Inference parameters
+  temperature?: number;        // 0-2
+  topP?: number;               // 0-1
+  minP?: number;               // 0-1
+  topK?: number;               // 1-100
+  repeatPenalty?: number;      // 1-2
+  // Thinking
+  thinkingLevel: string;       // off, minimal, low, medium, high
 }
 
 export interface ModeConfig {
-  enabled: boolean;
-  activeModelId: string | null;
-  models: ModelEntry[];
-  instructions: string;
-  tools: string[];
-  readOnly: boolean;
-  maxReviews: number;
+  modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
+}
+
+export interface ProjectModeConfig {
+  code: ModeConfig;
+  plan: ModeConfig & { enabled: boolean };
+  review: ModeConfig & { enabled: boolean; maxReviews: number };
 }
 
 export interface ModelLibrary {
-  modes: Record<AgentMode, ModeConfig>;
+  models: RegisteredModel[];
+  defaultModelId: string | null;
+  projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }

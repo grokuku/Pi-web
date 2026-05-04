@@ -10,6 +10,7 @@ import projectsRouter from "./routes/projects.js";
 import settingsRouter from "./routes/settings.js";
 import ollamaRouter from "./routes/ollama.js";
 import modelLibraryRouter from "./routes/model-library.js";
+import providersRouter from "./routes/providers.js";
 import filesRouter from "./routes/files.js";
 import {
   createPiSession,
@@ -66,6 +67,7 @@ app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/ollama", ollamaRouter);
 app.use("/api/model-library", modelLibraryRouter);
+app.use("/api/providers", providersRouter);
 app.use("/api/files", filesRouter);
 
 // Serve frontend in production
