@@ -354,6 +354,8 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
 // ── Models Tab ───────────────────────────────────────────
 
+// ── Models Tab (two-column selector) ───────────────────────
+
 function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault, loading, setLoading, setError, setStatus }: {
   library: ModelLibrary;
   providers: ProviderConfig[];
@@ -366,126 +368,216 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   setError: (e: string) => void;
   setStatus: (s: string) => void;
 }) {
-  const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
+  const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
+  const [scanning, setScanning] = useState(false);
+
+  // All discovered models across all providers (cached)
+  const [allDiscovered, setAllDiscovered] = useState<DiscoveredModel[]>(() => {
+    // Initialize from providers' cached discoveredModels
+    const cache: DiscoveredModel[] = [];
+    for (const p of providers) {
+      if (p.discoveredModels) {
+        for (const dm of p.discoveredModels) {
+          cache.push({ ...dm, _providerId: p.id } as any);
+        }
+      }
+    }
+    return cache;
+  });
+
+  // Available = discovered models that are NOT in the library
+  const configuredIds = new Set(library.models.map(m => m.modelId));
+  const availableModels = allDiscovered.filter(dm => !configuredIds.has(dm.id));
 
   const getProviderName = (providerId: string) => {
     const p = providers.find(p => p.id === providerId);
     return p?.name || p?.type || providerId;
   };
 
+  const getProviderNameForDiscovered = (dm: DiscoveredModel) => {
+    const provId = (dm as any)._providerId;
+    return provId ? getProviderName(provId) : "";
+  };
+
+  // Scan all providers
+  const handleScanAll = async () => {
+    setScanning(true);
+    setError("");
+    try {
+      const newDiscovered: DiscoveredModel[] = [];
+      for (const p of providers) {
+        try {
+          const res = await fetch(`/api/providers/${p.id}/test`, { method: "POST" });
+          const data = await res.json();
+          if (data.ok && data.models) {
+            for (const m of data.models) {
+              newDiscovered.push({ ...m, _providerId: p.id } as any);
+            }
+          }
+        } catch (e: any) {
+          console.warn(`[scan] Provider ${p.name} failed:`, e.message);
+        }
+      }
+      setAllDiscovered(newDiscovered);
+      // Refresh providers (to cache discovered models)
+      const refreshRes = await fetch("/api/providers");
+      if (refreshRes.ok) {
+        // Optionally update parent state but not critical
+      }
+      setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)`);
+    } catch (e: any) { setError(e.message); }
+    finally { setScanning(false); }
+  };
+
+  // Move selected available → configured
+  const handleAddSelected = async () => {
+    if (selectedAvailable.size === 0) return;
+    const models: Omit<RegisteredModel, "id">[] = [];
+    for (const modelId of selectedAvailable) {
+      const dm = allDiscovered.find(m => m.id === modelId);
+      const provId = (dm as any)?._providerId || "unknown";
+      models.push({
+        providerId: provId,
+        modelId,
+        name: dm?.name || modelId,
+        isDefault: false,
+        reasoning: inferReasoning(modelId),
+        contextWindow: 128000,
+        maxTokens: 16384,
+        thinkingLevel: "medium",
+      });
+    }
+    await onAdd(models);
+    setSelectedAvailable(new Set());
+  };
+
+  // Move selected configured → remove
+  const handleRemoveSelected = async () => {
+    if (selectedConfigured.size === 0) return;
+    for (const id of selectedConfigured) {
+      await onRemove(id);
+    }
+    setSelectedConfigured(new Set());
+  };
+
+  const toggleAvailable = (id: string) => {
+    const next = new Set(selectedAvailable);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedAvailable(next);
+  };
+
+  const toggleConfigured = (id: string) => {
+    const next = new Set(selectedConfigured);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedConfigured(next);
+  };
+
+  const isOllamaProvider = (provId: string) => {
+    return providers.find(p => p.id === provId)?.type === "ollama";
+  };
+
   return (
-    <div className="space-y-2">
-      {/* Model list */}
-      {library.models.length === 0 ? (
-        <div className="text-center text-hacker-text-dim text-xs border border-hacker-border p-6">
-          <span className="text-2xl block mb-2">🤖</span>
-          No models configured yet. Add one to get started.
+    <div className="flex flex-col gap-2">
+      {/* Three-column layout: available | actions | selected */}
+      <div className="flex gap-1 min-h-[300px]">
+        {/* Left column: Available models */}
+        <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
+            <span className="text-hacker-accent text-[10px] font-bold tracking-wider flex-1">AVAILABLE</span>
+            <span className="text-hacker-text-dim text-[9px]">{availableModels.length}</span>
+            <button onClick={handleScanAll} disabled={scanning}
+              className="btn-hacker text-[9px] px-1.5 py-0.5 flex items-center gap-0.5" title="Rescan all providers">
+              <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> UPDATE
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto max-h-[400px]">
+            {availableModels.length === 0 ? (
+              <div className="text-hacker-text-dim text-[10px] italic p-3 text-center">
+                {allDiscovered.length === 0 ? "Click UPDATE to scan providers" : "All models already added"}
+              </div>
+            ) : (
+              availableModels.map(dm => {
+                const isSelected = selectedAvailable.has(dm.id);
+                const provName = getProviderNameForDiscovered(dm);
+                return (
+                  <button key={dm.id} onClick={() => toggleAvailable(dm.id)}
+                    className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                      isSelected ? "bg-hacker-accent/10 text-hacker-accent" : "text-hacker-text-dim hover:bg-hacker-border/30"
+                    }`}>
+                    <span className="text-[8px]">{isSelected ? "☑" : "☐"}</span>
+                    <span className="truncate flex-1">{dm.name || dm.id}</span>
+                    {provName && <span className="text-[8px] text-hacker-text-dim">({provName})</span>}
+                    {dm.size ? <span className="text-[8px] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
-      ) : (
-        library.models.map(m => (
-          <ModelRow
-            key={m.id}
-            model={m}
-            providerName={getProviderName(m.providerId)}
-            isDefault={m.id === library.defaultModelId}
-            isEditing={editingId === m.id}
-            onUpdate={onUpdate}
-            onRemove={onRemove}
-            onSetDefault={onSetDefault}
-            onStartEdit={() => setEditingId(editingId === m.id ? null : m.id)}
-          />
-        ))
-      )}
 
-      {/* Add button */}
-      {!showAddModal && (
-        <button onClick={() => setShowAddModal(true)}
-          className="mt-2 btn-hacker w-full text-xs py-2 flex items-center justify-center gap-1.5">
-          <Plus size={12} /> ADD MODELS
-        </button>
-      )}
+        {/* Middle: Action buttons */}
+        <div className="flex flex-col justify-center gap-1 px-0.5">
+          <button onClick={handleAddSelected} disabled={selectedAvailable.size === 0}
+            className="btn-hacker text-[10px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            title="Add selected models">
+            ▶
+          </button>
+          <button onClick={handleRemoveSelected} disabled={selectedConfigured.size === 0}
+            className="btn-hacker text-[10px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            title="Remove selected models">
+            ◀
+          </button>
+        </div>
 
-      {showAddModal && (
-        <AddModelsModal
-          providers={providers}
-          onAdd={onAdd}
-          onClose={() => setShowAddModal(false)}
-          loading={loading}
-          setLoading={setLoading}
-          setError={setError}
-          setStatus={setStatus}
-        />
-      )}
-    </div>
-  );
-}
-
-// ── Model Row ─────────────────────────────────────────────
-
-function ModelRow({ model, providerName, isDefault, isEditing, onUpdate, onRemove, onSetDefault, onStartEdit }: {
-  model: RegisteredModel;
-  providerName: string;
-  isDefault: boolean;
-  isEditing: boolean;
-  onUpdate: (id: string, updates: Partial<RegisteredModel>) => void;
-  onRemove: (id: string) => void;
-  onSetDefault: (id: string) => void;
-  onStartEdit: () => void;
-}) {
-  return (
-    <div className={`border ${isDefault ? "border-hacker-accent/50 bg-hacker-accent/5" : "border-hacker-border bg-hacker-surface/50"}`}>
-      <div className="flex items-center gap-2 px-3 py-1.5">
-        {/* Default star */}
-        <button onClick={() => onSetDefault(model.id)}
-          className={`text-sm ${isDefault ? "text-hacker-accent" : "text-hacker-text-dim hover:text-hacker-accent/60"}`}
-          title={isDefault ? "Default model" : "Set as default"}>
-          <Star size={12} fill={isDefault ? "currentColor" : "none"} />
-        </button>
-
-        {/* Model name */}
-        <span className="text-xs font-bold text-hacker-text flex-1 truncate">
-          {model.name}
-        </span>
-        <span className="text-[9px] text-hacker-text-dim">({providerName})</span>
-
-        {/* Quick toggles */}
-        <button onClick={() => onUpdate(model.id, { reasoning: !model.reasoning })}
-          className={`text-[9px] border px-1.5 py-0.5 cursor-pointer select-none ${
-            model.reasoning ? "border-hacker-warn/50 text-hacker-warn bg-hacker-warn/10" : "border-hacker-border text-hacker-text-dim hover:text-hacker-text"
-          }`} title={model.reasoning ? "Reasoning ON" : "Reasoning OFF"}>
-          🧠 {model.reasoning ? "ON" : "OFF"}
-        </button>
-
-        {/* Context window */}
-        <select value={model.contextWindow} onChange={e => onUpdate(model.id, { contextWindow: Number(e.target.value) })}
-          className="select-hacker text-[9px] py-0 px-1 max-w-[52px]" onClick={e => e.stopPropagation()}>
-          <option value={8192}>8K</option>
-          <option value={32768}>32K</option>
-          <option value={65536}>64K</option>
-          <option value={128000}>128K</option>
-          <option value={200000}>200K</option>
-          <option value={256000}>256K</option>
-          <option value={1000000}>1M</option>
-        </select>
-
-        {/* Thinking level */}
-        <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
-          className="select-hacker text-[9px] py-0 px-1 max-w-[70px]" onClick={e => e.stopPropagation()}>
-          {THINKING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
-
-        {/* Edit + Delete */}
-        <button onClick={onStartEdit}
-          className="text-hacker-text-dim hover:text-hacker-accent"><Settings size={11} /></button>
-        <button onClick={() => onRemove(model.id)}
-          className="text-hacker-text-dim hover:text-hacker-error"><Trash2 size={11} /></button>
+        {/* Right column: Configured models */}
+        <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
+            <span className="text-hacker-accent text-[10px] font-bold tracking-wider flex-1">SELECTED</span>
+            <span className="text-hacker-text-dim text-[9px]">{library.models.length}</span>
+          </div>
+          <div className="flex-1 overflow-y-auto max-h-[400px]">
+            {library.models.length === 0 ? (
+              <div className="text-hacker-text-dim text-[10px] italic p-3 text-center">
+                No models selected yet
+              </div>
+            ) : (
+              library.models.map(m => {
+                const isSelected = selectedConfigured.has(m.id);
+                const isDef = m.id === library.defaultModelId;
+                const isEditing = editingId === m.id;
+                return (
+                  <div key={m.id}>
+                    <button onClick={() => toggleConfigured(m.id)}
+                      className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                        isSelected ? "bg-hacker-error/10 text-hacker-error" : isDef ? "bg-hacker-accent/5" : "hover:bg-hacker-border/30"
+                      }`}>
+                      <span className="text-[8px]">{isSelected ? "☑" : "☐"}</span>
+                      <Star size={8} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
+                        onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
+                      <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
+                      <span className="text-[8px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
+                      <button onClick={(e) => { e.stopPropagation(); setEditingId(isEditing ? null : m.id); }}
+                        className="text-hacker-text-dim hover:text-hacker-accent shrink-0"><Settings size={9} /></button>
+                    </button>
+                    {isEditing && (
+                      <div className="px-3 py-1.5 border-b border-hacker-border/50 bg-hacker-bg/30">
+                        <ModelEditPanel model={m} onUpdate={onUpdate} isOllama={isOllamaProvider(m.providerId)} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Expanded edit panel */}
-      {isEditing && (
-        <div className="px-3 pb-2 pt-1 border-t border-hacker-border/50">
-          <ModelEditPanel model={model} onUpdate={onUpdate} />
+      {/* Set default hint */}
+      {library.models.length > 0 && (
+        <div className="text-hacker-text-dim text-[9px] text-center">
+          ★ = default model · Click ⚙ to edit parameters
         </div>
       )}
     </div>
@@ -494,16 +586,13 @@ function ModelRow({ model, providerName, isDefault, isEditing, onUpdate, onRemov
 
 // ── Model Edit Panel (inference params) ───────────────────
 
-function ModelEditPanel({ model, onUpdate }: {
+function ModelEditPanel({ model, onUpdate, isOllama }: {
   model: RegisteredModel;
   onUpdate: (id: string, updates: Partial<RegisteredModel>) => void;
+  isOllama: boolean;
 }) {
-  const providerType = "openai-compatible"; // default, we don't have direct type here
-  // For ollama, all params are supported. For others, only temp + topP
-  const isOllama = model.providerId.toLowerCase().includes("ollama");
-
   return (
-    <div className="grid grid-cols-4 gap-x-3 gap-y-1.5">
+    <div className="grid grid-cols-4 gap-x-3 gap-y-1">
       <div>
         <label className="text-hacker-text-dim text-[9px] block">Temperature</label>
         <input type="number" value={model.temperature ?? ""} min={0} max={2} step={0.1}
@@ -541,7 +630,7 @@ function ModelEditPanel({ model, onUpdate }: {
           className="input-hacker w-full text-[10px] py-0 px-1" placeholder="auto" />
       </div>
       <div>
-        <label className="text-hacker-text-dim text-[9px] block">Context Window</label>
+        <label className="text-hacker-text-dim text-[9px] block">Context</label>
         <select value={model.contextWindow} onChange={e => onUpdate(model.id, { contextWindow: Number(e.target.value) })}
           className="select-hacker w-full text-[10px] py-0 px-1">
           <option value={8192}>8K</option>
@@ -554,146 +643,11 @@ function ModelEditPanel({ model, onUpdate }: {
         </select>
       </div>
       <div>
-        <label className="text-hacker-text-dim text-[9px] block">Thinking Level</label>
+        <label className="text-hacker-text-dim text-[9px] block">Thinking</label>
         <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
           className="select-hacker w-full text-[10px] py-0 px-1">
           {THINKING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
-      </div>
-    </div>
-  );
-}
-
-// ── Add Models Modal ──────────────────────────────────────
-
-function AddModelsModal({ providers, onAdd, onClose, loading, setLoading, setError, setStatus }: {
-  providers: ProviderConfig[];
-  onAdd: (models: Omit<RegisteredModel, "id">[]) => Promise<void>;
-  onClose: () => void;
-  loading: boolean;
-  setLoading: (b: boolean) => void;
-  setError: (e: string) => void;
-  setStatus: (s: string) => void;
-}) {
-  const [selectedProvider, setSelectedProvider] = useState<string>(providers[0]?.id || "");
-  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [testing, setTesting] = useState(false);
-
-  const provider = providers.find(p => p.id === selectedProvider);
-
-  const handleScan = async () => {
-    if (!provider) return;
-    setTesting(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/providers/${provider.id}/test`, { method: "POST" });
-      const data = await res.json();
-      if (data.ok) {
-        setDiscoveredModels(data.models || []);
-        // Refresh providers to get updated models
-        setStatus(`✓ Found ${data.models?.length || 0} models`);
-      } else {
-        setError(data.error || "Connection failed");
-      }
-    } catch (e: any) { setError(e.message); }
-    finally { setTesting(false); }
-  };
-
-  const handleAddSelected = async () => {
-    if (selectedIds.size === 0) return;
-    const models: Omit<RegisteredModel, "id">[] = [];
-    for (const modelId of selectedIds) {
-      const dm = discoveredModels.find(m => m.id === modelId);
-      models.push({
-        providerId: selectedProvider,
-        modelId,
-        name: dm?.name || modelId,
-        isDefault: false,
-        reasoning: inferReasoning(modelId),
-        contextWindow: 128000,
-        maxTokens: 16384,
-        thinkingLevel: "medium",
-      });
-    }
-    await onAdd(models);
-    onClose();
-  };
-
-  const toggleModel = (id: string) => {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setSelectedIds(next);
-  };
-
-  const selectAll = () => {
-    if (selectedIds.size === discoveredModels.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(discoveredModels.map(m => m.id)));
-    }
-  };
-
-  return (
-    <div className="border border-hacker-accent/30 bg-hacker-surface/80 p-3 mt-2">
-      <div className="text-hacker-accent text-[10px] tracking-widest mb-2">+ ADD MODELS</div>
-
-      {/* Provider selector */}
-      <div className="mb-2">
-        <label className="text-hacker-accent text-[10px] block mb-1">PROVIDER</label>
-        <select value={selectedProvider} onChange={e => { setSelectedProvider(e.target.value); setDiscoveredModels([]); setSelectedIds(new Set()); }}
-          className="select-hacker w-full text-xs">
-          {providers.map(p => (
-            <option key={p.id} value={p.id}>{p.name || p.type} ({p.type})</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Scan button */}
-      <div className="mb-2">
-        <button onClick={handleScan} disabled={testing || !provider}
-          className="btn-hacker w-full text-xs flex items-center justify-center gap-1.5">
-          {testing ? <RefreshCw size={12} className="animate-spin" /> : <Wifi size={12} />}
-          {testing ? "SCANNING..." : "SCAN MODELS"}
-        </button>
-        {provider?.connectionStatus === "ok" && discoveredModels.length === 0 && (
-          <div className="text-hacker-text-dim text-[9px] mt-1">Connected — click SCAN to list models</div>
-        )}
-      </div>
-
-      {/* Discovered models list */}
-      {discoveredModels.length > 0 && (
-        <div className="mb-2">
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-hacker-accent text-[10px]">{discoveredModels.length} MODEL{discoveredModels.length !== 1 ? "S" : ""} FOUND</label>
-            <button onClick={selectAll} className="text-hacker-text-dim text-[9px] hover:text-hacker-accent">
-              {selectedIds.size === discoveredModels.length ? "DESELECT ALL" : "SELECT ALL"}
-            </button>
-          </div>
-          <div className="max-h-[250px] overflow-y-auto border border-hacker-border">
-            {discoveredModels.map(m => (
-              <button key={m.id} onClick={() => toggleModel(m.id)}
-                className={`w-full text-left px-2 py-1.5 text-[10px] flex justify-between items-center border-b border-hacker-border last:border-0 ${
-                  selectedIds.has(m.id) ? "bg-hacker-accent/10 text-hacker-accent" : "text-hacker-text-dim hover:bg-hacker-border/30"
-                }`}>
-                <span className="flex items-center gap-1.5">
-                  <span className="text-[8px]">{selectedIds.has(m.id) ? "☑" : "☐"}</span>
-                  <span className="truncate max-w-[320px]">{m.name || m.id}</span>
-                </span>
-                {m.size ? <span className="text-hacker-text-dim ml-2 shrink-0">{formatSize(m.size)}</span> : null}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex gap-2">
-        <button onClick={handleAddSelected} disabled={selectedIds.size === 0 || loading}
-          className="btn-hacker flex-1 text-xs flex items-center justify-center gap-1">
-          <Check size={12} /> ADD {selectedIds.size > 0 ? `${selectedIds.size} MODEL${selectedIds.size > 1 ? "S" : ""}` : ""}
-        </button>
-        <button onClick={onClose} className="btn-hacker text-xs px-4">CANCEL</button>
       </div>
     </div>
   );

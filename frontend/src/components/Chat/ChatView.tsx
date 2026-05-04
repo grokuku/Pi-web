@@ -718,10 +718,20 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         </div>
 
         <div className="flex gap-2">
-          <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
+          <textarea ref={inputRef} value={input} onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-expand up to 8 lines
+              const target = e.target;
+              target.style.height = 'auto';
+              const lineHeight = parseInt(getComputedStyle(target).lineHeight) || 20;
+              const maxH = lineHeight * 8;
+              target.style.height = Math.min(target.scrollHeight, maxH) + 'px';
+            }}
             onKeyDown={handleKeyDown}
             placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
-            className="input-hacker flex-1 resize-none" rows={2} />
+            className="input-hacker flex-1 resize-none overflow-y-auto" rows={2}
+            style={{ minHeight: '3rem', maxHeight: '10rem' }}
+          />
 
           <div className="flex flex-col gap-1">
             <button onClick={handleSend} className="btn-hacker flex-1 px-4"

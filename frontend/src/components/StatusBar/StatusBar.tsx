@@ -124,6 +124,11 @@ export function StatusBar({
             <span className="text-hacker-text-dim min-w-[27px]">
               {displayStats.contextPercent}%
             </span>
+            {session?.model?.contextWindow && (
+              <span className="text-hacker-text-dim" title="Model context window">
+                /{session.model.contextWindow >= 1000000 ? `${(session.model.contextWindow / 1000000).toFixed(0)}M` : `${(session.model.contextWindow / 1000).toFixed(0)}K`}
+              </span>
+            )}
           </div>
           <span className="text-hacker-border-bright">│</span>
         </>

@@ -53,7 +53,7 @@ function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [zoomLevel, setZoomLevel] = useState(() => {
     const saved = localStorage.getItem("pi-web-zoom");
-    return saved ? parseFloat(saved) : 1;
+    return saved ? parseFloat(saved) : 1.2;
   });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem("pi-web-sidebar-width");

@@ -2,10 +2,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig } from "../../types";
 
-const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string }> = {
-  code:   { icon: "⚡", label: "CODE",   color: "text-hacker-accent" },
-  plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info" },
-  review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn" },
+const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string; activeBg: string }> = {
+  code:   { icon: "⚡", label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/15 border-hacker-accent/50" },
+  plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/15 border-hacker-info/50" },
+  review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/15 border-hacker-warn/50" },
 };
 
 interface Props {
@@ -20,7 +20,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Load library
   const loadLibrary = useCallback(async () => {
     try {
       const res = await fetch("/api/model-library");
@@ -43,19 +42,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
 
   // Get project mode config
   const pm: ProjectModeConfig = activeProjectId
-    ? (library?.projectModes?.[activeProjectId] || {
-        code: { modelId: null },
-        plan: { modelId: null, enabled: false },
-        review: { modelId: null, enabled: false, maxReviews: 1 },
-      })
-    : {
-        code: { modelId: null },
-        plan: { modelId: null, enabled: false },
-        review: { modelId: null, enabled: false, maxReviews: 1 },
-      };
+    ? (library?.projectModes?.[activeProjectId] || defaultProjectMode())
+    : defaultProjectMode();
 
   const getModelForMode = (mode: AgentMode): RegisteredModel | null => {
-    const modelId = pm[mode as keyof ProjectModeConfig]?.modelId;
+    const modelId = (pm as any)[mode]?.modelId;
     if (modelId && library) {
       const m = library.models.find(m => m.id === modelId);
       if (m) return m;
@@ -67,9 +58,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     return library?.models[0] || null;
   };
 
-  const defaultModel = library ? (library.models.find(m => m.id === library.defaultModelId) || library.models[0]) : null;
-
-  const handleSelectModel = async (mode: AgentMode, modelId: string | null) => {
+  const handleSelectModel = async (mode: AgentMode, modelId: string) => {
     if (!activeProjectId) return;
     try {
       await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
@@ -83,17 +72,28 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     setOpenMode(null);
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review", enabled: boolean) => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review") => {
     e.stopPropagation();
     if (!activeProjectId) return;
+    const modeCfg = (pm as any)[mode] as { enabled: boolean };
+    const newEnabled = !modeCfg.enabled;
     try {
       await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, enabled }),
+        body: JSON.stringify({ mode, enabled: newEnabled }),
       });
       await loadLibrary();
       onModelApplied?.();
+
+      // If enabling PLAN, also switch to plan mode
+      if (mode === "plan" && newEnabled) {
+        onModeSwitch?.("plan");
+      }
+      // If disabling PLAN and was active, switch back to code
+      if (mode === "plan" && !newEnabled && activeMode === "plan") {
+        onModeSwitch?.("code");
+      }
     } catch (e) { console.error("handleToggleMode error:", e); }
   };
 
@@ -121,112 +121,120 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     return name.slice(0, 10) + "…";
   };
 
-  const getProviderLabel = (model: RegisteredModel | null): string => {
-    if (!model || !library) return "";
-    // Find the provider to get its custom name
-    // We don't have providers list here, so show model's providerId
-    return model.providerId;
-  };
-
   const modes: AgentMode[] = ["code", "plan", "review"];
 
   return (
-    <div ref={ref} className="flex items-center gap-1">
+    <div ref={ref} className="flex items-center gap-1.5">
       {modes.map((mode) => {
         const cfg = MODE_CONFIG[mode];
         const model = getModelForMode(mode);
         const isCode = mode === "code";
-        const modeCfg = mode !== "code" ? pm[mode] : null;
-        const isEnabled = isCode ? true : (modeCfg as any)?.enabled ?? false;
+        const modeCfg = mode !== "code" ? (pm as any)[mode] : null;
+        const isEnabled = isCode || (modeCfg?.enabled ?? false);
         const isActive = activeMode === mode && isEnabled;
         const isDropdownOpen = openMode === mode;
 
+        // Determine visual state:
+        // - CODE is always on but visually dimmed when PLAN is active (PLAN overrides)
+        // - REVIEW is lit when enabled AND not overridden by PLAN
+        // - PLAN is lit when enabled
+        const isVisuallyActive = isActive;
+        const isPlanActive = pm.plan.enabled && activeMode === "plan";
+        const isOverriddenByPlan = !isCode && isPlanActive && mode !== "plan";
+
         return (
           <div key={mode} className="relative">
+            {/* Main button — integrated ON/OFF */}
             <button
-              onClick={() => handleChipClick(mode)}
-              className={`mode-chip flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-sm ${
-                isActive ? "active" : isEnabled ? "" : "disabled"
+              className={`flex items-center border rounded-sm transition-all ${
+                isVisuallyActive
+                  ? `${cfg.activeBg} border ${cfg.color}`
+                  : isOverriddenByPlan
+                  ? "bg-hacker-bg border-hacker-border/50 text-hacker-text-dim/50"
+                  : isEnabled
+                  ? "bg-hacker-bg border-hacker-border text-hacker-text-dim"
+                  : "bg-hacker-bg border-hacker-border/40 text-hacker-text-dim/50"
               }`}
+              onClick={() => handleChipClick(mode)}
             >
-              <span className={`font-bold tracking-wide ${isActive ? cfg.color : "text-hacker-text-dim"}`}>
-                {cfg.icon}
-              </span>
-              <span className={isActive ? "" : "text-hacker-text-dim"}>
-                {isActive ? getShortModelName(model) : cfg.label}
-              </span>
-              <ChevronDown size={8} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
+              {/* ON/OFF toggle zone (left part of button) */}
+              {!isCode && (
+                <button
+                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review")}
+                  className={`px-1.5 py-0.5 border-r transition-colors ${
+                    isEnabled
+                      ? `border-hacker-border ${cfg.color}`
+                      : "border-hacker-border/30 text-hacker-text-dim/40 hover:text-hacker-text-dim"
+                  }`}
+                  title={isEnabled ? `Disable ${cfg.label}` : `Enable ${cfg.label}`}
+                >
+                  <Power size={8} />
+                </button>
+              )}
+
+              {/* Main clickable zone */}
+              <div className={`flex items-center gap-1 px-1.5 py-0.5 cursor-pointer ${
+                isVisuallyActive ? "" : isOverriddenByPlan ? "opacity-40" : ""
+              }`}>
+                <span className={`text-xs ${isVisuallyActive ? cfg.color : ""}`}>{cfg.icon}</span>
+                <span className={`text-[10px] font-bold tracking-wide ${
+                  isVisuallyActive ? cfg.color : "text-hacker-text-dim"
+                }`}>
+                  {isVisuallyActive ? getShortModelName(model) : cfg.label}
+                </span>
+                <ChevronDown size={8} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
+              </div>
             </button>
 
+            {/* Dropdown */}
             {isDropdownOpen && (
               <div className="absolute top-full right-0 mt-1 w-[220px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
-                {/* Mode header */}
+                {/* Header */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
-                  <span className={`text-[10px] font-bold tracking-wider ${isEnabled && (isCode || model) ? cfg.color : "text-hacker-text-dim"}`}>
-                    {cfg.icon} {cfg.label}
+                  <span className={`text-[10px] font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
+                    {cfg.icon} {cfg.label} {isCode ? "(always on)" : isEnabled ? "● ON" : "○ OFF"}
                   </span>
-                  {/* ON/OFF toggle (not for CODE) */}
-                  {!isCode && (
-                    <button
-                      onClick={(e) => handleToggleMode(e, mode as "plan" | "review", !isEnabled)}
-                      className={`text-[9px] px-1.5 py-0.5 border flex items-center gap-0.5 ${
-                        isEnabled
-                          ? "border-hacker-accent/50 text-hacker-accent bg-hacker-accent/10"
-                          : "border-hacker-border text-hacker-text-dim"
-                      }`}>
-                      <Power size={7} />
-                      {isEnabled ? "ON" : "OFF"}
-                    </button>
-                  )}
                 </div>
 
-                {/* Switch to this mode button */}
-                {isEnabled && !isActive && model && (
-                  <button
-                    onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
-                    className="w-full text-left px-3 py-1.5 text-[10px] text-hacker-accent font-bold border-b border-hacker-border/50 hover:bg-hacker-accent/5">
-                    → Switch to {cfg.label} mode
-                  </button>
-                )}
-
-                {/* Models list */}
+                {/* Model list (only if enabled) */}
                 {isEnabled && library && library.models.length > 0 ? (
-                  <>
-                    <div className="max-h-[150px] overflow-y-auto">
-                      {library.models.map((m) => {
-                        const isModelActive = m.id === (pm[mode as keyof ProjectModeConfig] as any)?.modelId;
-                        const isDefault = m.id === library.defaultModelId;
-                        return (
-                          <button
-                            key={m.id}
-                            onClick={() => handleSelectModel(mode, m.id)}
-                            className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 ${
-                              isModelActive
-                                ? "bg-hacker-accent/10 text-hacker-accent"
-                                : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
-                            }`}>
-                            <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent" : "text-transparent"} />
-                            <span className="truncate flex-1">{m.name}</span>
-                            <span className="text-[8px] text-hacker-text-dim">({m.providerId})</span>
-                            {isModelActive && <span className="text-hacker-accent text-[8px]">●</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {/* Default option */}
-                    <button
-                      onClick={() => handleSelectModel(mode, null)}
-                      className="w-full text-left px-3 py-1 text-[10px] text-hacker-text-dim hover:text-hacker-text border-t border-hacker-border/30">
-                      ★ Use default model
-                    </button>
-                  </>
+                  <div className="max-h-[150px] overflow-y-auto">
+                    {library.models.map((m) => {
+                      const isModelSelected = m.id === (pm as any)[mode]?.modelId;
+                      const isDefault = m.id === library.defaultModelId;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => handleSelectModel(mode, m.id)}
+                          className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 ${
+                            isModelSelected
+                              ? `bg-hacker-accent/10 ${cfg.color}`
+                              : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
+                          }`}>
+                          <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
+                          <span className="truncate flex-1">{m.name}</span>
+                          {m.providerId && <span className="text-[8px] text-hacker-text-dim shrink-0">({m.providerId})</span>}
+                          {isModelSelected && <span className={`${cfg.color} text-[8px] shrink-0`}>●</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
                 ) : isEnabled ? (
                   <div className="px-3 py-1.5 text-[9px] text-hacker-text-dim italic">
                     No models configured
                   </div>
                 ) : null}
 
-                {/* Max reviews (REVIEW mode only) */}
+                {/* Switch to mode button (if enabled and not active) */}
+                {isEnabled && !isActive && model && (
+                  <button
+                    onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
+                    className={`w-full text-left px-3 py-1.5 text-[10px] ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
+                    → Switch to {cfg.label}
+                  </button>
+                )}
+
+                {/* Max reviews (REVIEW only) */}
                 {mode === "review" && isEnabled && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border-t border-hacker-border/30">
                     <span className="text-[9px] text-hacker-text-dim">🔄 MAX REVIEWS</span>
@@ -249,4 +257,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
       })}
     </div>
   );
+}
+
+function defaultProjectMode(): ProjectModeConfig {
+  return {
+    code: { modelId: null },
+    plan: { modelId: null, enabled: false },
+    review: { modelId: null, enabled: false, maxReviews: 1 },
+  };
 }
