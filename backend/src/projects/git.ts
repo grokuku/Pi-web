@@ -3,6 +3,7 @@ import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
+import { Mutex } from "../utils/mutex.js";
 import { updateProjectGit } from "./manager.js";
 import { credentialStore } from "./credential-store.js";
 
@@ -47,17 +48,43 @@ function isLockError(msg: string): boolean {
 const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
 /**
- * Wrap a promise with a timeout that rejects with a clear error message.
+ * Per-project mutex to prevent concurrent git operations
+ * from racing on credential injection/restoration.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+const gitMutexByCwd = new Map<string, Mutex>();
+function getGitMutex(cwd: string): Mutex {
+  let m = gitMutexByCwd.get(cwd);
+  if (!m) {
+    m = new Mutex();
+    gitMutexByCwd.set(cwd, m);
+  }
+  return m;
+}
+
+/**
+ * Wrap a promise with a timeout that rejects with a clear error message.
+ * Also attempts to abort the underlying simple-git process on timeout.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string, git?: SimpleGit): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms / 1000}s — this usually means authentication is required or the remote is unreachable`)),
-      ms,
-    );
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      // Attempt to kill the underlying git process
+      if (git) {
+        try {
+          const childProc = (git as any)._executor?.childProcess;
+          if (childProc && typeof childProc.kill === "function") {
+            childProc.kill("SIGTERM");
+          }
+        } catch {}
+      }
+      reject(new Error(`${label} timed out after ${ms / 1000}s — this usually means authentication is required or the remote is unreachable`));
+    }, ms);
     promise
-      .then((v) => { clearTimeout(timer); resolve(v); })
-      .catch((e) => { clearTimeout(timer); reject(e); });
+      .then((v) => { if (!settled) { clearTimeout(timer); settled = true; resolve(v); } })
+      .catch((e) => { if (!settled) { clearTimeout(timer); settled = true; reject(e); } });
   });
 }
 
@@ -195,41 +222,53 @@ export async function getGitDiff(cwd: string): Promise<string> {
 }
 
 export async function gitPull(cwd: string): Promise<string> {
-  cleanupGitLock(cwd);
-  const git: SimpleGit = await gitWithAuth(cwd);
-  try {
-    const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull");
-    return result.summary.changes
-      ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
-      : "Already up to date";
-  } catch (error: any) {
-    const msg = error.message || "";
-    if (isAuthError(msg)) {
-      throw new GitAuthError(`Git pull authentication failed: ${msg}`);
+  return getGitMutex(cwd).run(async () => {
+    cleanupGitLock(cwd);
+    const git: SimpleGit = await gitWithAuth(cwd);
+    try {
+      const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull", git);
+      return result.summary.changes
+        ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
+        : "Already up to date";
+    } catch (error: any) {
+      const msg = error.message || "";
+      if (isAuthError(msg)) {
+        throw new GitAuthError(`Git pull authentication failed: ${msg}`);
+      }
+      throw new Error(`Git pull failed: ${msg}`);
+    } finally {
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(`[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! cwd=${cwd}`, e.message);
+      }
     }
-    throw new Error(`Git pull failed: ${msg}`);
-  } finally {
-    await restoreRemoteUrl(cwd).catch(() => {});
-  }
+  });
 }
 
 export async function gitPush(cwd: string): Promise<string> {
-  cleanupGitLock(cwd);
-  const git: SimpleGit = await gitWithAuth(cwd);
-  try {
-    const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push");
-    return result.pushed
-      ? `Pushed ${result.pushed.length} ref(s)`
-      : "Nothing to push";
-  } catch (error: any) {
-    const msg = error.message || "";
-    if (isAuthError(msg)) {
-      throw new GitAuthError(`Git push authentication failed: ${msg}`);
+  return getGitMutex(cwd).run(async () => {
+    cleanupGitLock(cwd);
+    const git: SimpleGit = await gitWithAuth(cwd);
+    try {
+      const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push", git);
+      return result.pushed
+        ? `Pushed ${result.pushed.length} ref(s)`
+        : "Nothing to push";
+    } catch (error: any) {
+      const msg = error.message || "";
+      if (isAuthError(msg)) {
+        throw new GitAuthError(`Git push authentication failed: ${msg}`);
+      }
+      throw new Error(`Git push failed: ${msg}`);
+    } finally {
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(`[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! cwd=${cwd}`, e.message);
+      }
     }
-    throw new Error(`Git push failed: ${msg}`);
-  } finally {
-    await restoreRemoteUrl(cwd).catch(() => {});
-  }
+  });
 }
 
 // ── Commit message generation ─────────────────────────

@@ -54,11 +54,14 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: restrict to same origin in production, allow localhost for dev
+// CORS: use ALLOWED_ORIGINS env var in production, allow all in dev
+const allowedOrigins = process.env.NODE_ENV === "development"
+  ? true
+  : (process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",")
+    : ["https://pi-web.local"]);
 app.use(cors({
-  origin: process.env.NODE_ENV === "development"
-    ? true // Allow all origins in dev
-    : ["http://localhost:3000", "http://localhost:3005"], // Restrict in prod
+  origin: allowedOrigins,
 }));
 app.use(express.json({ limit: "50mb" }));
 

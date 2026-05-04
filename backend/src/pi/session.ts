@@ -3,6 +3,7 @@ import { completeSimple } from "@mariozechner/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
+import { unlinkSync, existsSync } from "fs";
 import {
   loadModelLibrary,
   getModeModel,
@@ -55,6 +56,17 @@ const activeToolCalls: Map<
     projectId: string;
   }
 > = new Map();
+
+// Stale entry cleanup: remove entries older than 5 minutes
+const TOOL_CALL_TTL_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, tc] of activeToolCalls) {
+    if (now - tc.startTime > TOOL_CALL_TTL_MS) {
+      activeToolCalls.delete(id);
+    }
+  }
+}, 60_000);
 
 export function getActiveToolCalls() {
   return activeToolCalls;
@@ -260,22 +272,11 @@ export function getSession(projectId: string): PiSessionState | undefined {
  * Get the current session for backward compatibility (returns first active session).
  * Prefer getSession(projectId) for multi-project support.
  */
-export function getCurrentSession(): PiSessionState {
-  // Return first active session, or empty state
+export function getCurrentSession(): PiSessionState | undefined {
   for (const [, state] of sessionsByProject) {
     if (state.session) return state;
   }
-  return {
-    session: null,
-    isStreaming: false,
-    cwd: process.cwd(),
-    unsubscribe: null,
-    projectId: "",
-    activeMode: "code",
-    reviewCycle: 0,
-    autoReviewInProgress: false,
-    autoReviewAborted: false,
-  };
+  return undefined;
 }
 
 export async function sendPrompt(
@@ -968,10 +969,12 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
 
   let reviewFindings = "";
   let tempSession: AgentSession | null = null;
+  let tempSessionFile: string | undefined;
 
   try {
     // Create a fresh, temporary session for neutral review
     const tempSessionManager = SessionManager.create(state.cwd);
+    tempSessionFile = tempSessionManager.getSessionFile();
     const result = await createAgentSession({
       cwd: state.cwd,
       sessionManager: tempSessionManager,
@@ -1063,11 +1066,20 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     // Clean up temp session
     tempUnsub();
     try { (tempSession as any).dispose?.(); } catch {}
+    // Clean up temp session file from disk
+    if (tempSessionFile) {
+      try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch (e: any) {
+        console.warn("[auto-review] Failed to clean temp session file:", e.message);
+      }
+    }
     tempSession = null;
   } catch (e: any) {
     console.error("[auto-review] Review session failed:", e.message);
     if (tempSession) {
       try { (tempSession as any).dispose?.(); } catch {}
+    }
+    if (tempSessionFile) {
+      try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch {}
     }
     state.autoReviewInProgress = false;
     await restoreCodeMode(projectId);

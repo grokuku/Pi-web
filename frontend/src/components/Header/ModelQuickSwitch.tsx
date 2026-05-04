@@ -222,7 +222,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                   {cfg.label}
                 </span>
                 {isVisuallyActive && (
-                  <span className="text-[11px] text-hacker-text-dim">{getShortModelName(model)}</span>
+                  <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
               </div>
@@ -233,7 +233,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
               <div className="absolute top-full right-0 mt-1 w-[240px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
                 {/* Header */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
-                  <span className={`text-[11px] font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
+                  <span className={`text-xs font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
                     {cfg.icon} {cfg.label} {isCode ? "(always on)" : isEnabled ? "● ON" : "○ OFF"}
                   </span>
                 </div>
@@ -248,21 +248,21 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                         <button
                           key={m.id}
                           onClick={() => handleSelectModel(mode, m.id)}
-                          className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 ${
+                          className={`w-full text-left px-3 py-1 text-xs flex items-center gap-1.5 ${
                             isModelSelected
                               ? `bg-hacker-accent/10 ${cfg.color}`
                               : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
                           }`}>
                           <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                           <span className="truncate flex-1">{m.name}</span>
-                          {m.providerId && <span className="text-[9px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
-                          {isModelSelected && <span className={`${cfg.color} text-[9px] shrink-0`}>●</span>}
+                          {m.providerId && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                          {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
                         </button>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="px-3 py-1.5 text-[10px] text-hacker-text-dim italic">
+                  <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic">
                     No models configured
                   </div>
                 )}
@@ -271,7 +271,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                 {isEnabled && !isActive && model && (
                   <button
                     onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
-                    className={`w-full text-left px-3 py-1.5 text-[11px] ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
+                    className={`w-full text-left px-3 py-1.5 text-xs ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
                     → Switch to {cfg.label}
                   </button>
                 )}
@@ -279,11 +279,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                 {/* Max reviews (REVIEW only, always show if enabled) */}
                 {mode === "review" && isEnabled && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border-t border-hacker-border/30">
-                    <span className="text-[10px] text-hacker-text-dim">🔄 MAX REVIEWS</span>
+                    <span className="text-[11px] text-hacker-text-dim">🔄 MAX REVIEWS</span>
                     <select
                       value={(pm.review as any).maxReviews ?? 1}
                       onChange={(e) => handleMaxReviews(Number(e.target.value))}
-                      className="select-hacker text-[9px] py-0 px-1 max-w-[48px]"
+                      className="select-hacker text-[10px] py-0 px-1 max-w-[48px]"
                     >
                       <option value={0}>OFF</option>
                       <option value={1}>1</option>
@@ -312,13 +312,13 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
         {openMode === "commit" && library && (
           <div className="absolute top-full right-0 mt-1 w-[240px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
             <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
-              <span className="text-[11px] font-bold tracking-wider text-hacker-text-dim">
+              <span className="text-xs font-bold tracking-wider text-hacker-text-dim">
                 <GitCommit size={10} className="inline mr-1" />COMMIT MODEL
               </span>
               {library.commitModelId && (
                 <button
                   onClick={handleClearCommitModel}
-                  className="text-[9px] text-hacker-text-dim hover:text-hacker-warm"
+                  className="text-[10px] text-hacker-text-dim hover:text-hacker-warm"
                   title="Reset to default"
                 >✕ reset</button>
               )}
@@ -332,21 +332,21 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                     <button
                       key={m.id}
                       onClick={() => handleSetCommitModel(m.id)}
-                      className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 ${
+                      className={`w-full text-left px-3 py-1 text-xs flex items-center gap-1.5 ${
                         isSelected
                           ? "bg-hacker-accent/10 text-hacker-accent"
                           : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
                       }`}>
                       <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                       <span className="truncate flex-1">{m.name}</span>
-                      {m.providerId && <span className="text-[9px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
-                      {isSelected && <span className="text-hacker-accent text-[9px] shrink-0">●</span>}
+                      {m.providerId && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                      {isSelected && <span className="text-hacker-accent text-[10px] shrink-0">●</span>}
                     </button>
                   );
                 })}
               </div>
             ) : (
-              <div className="px-3 py-1.5 text-[10px] text-hacker-text-dim italic">
+              <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic">
                 No models configured
               </div>
             )}

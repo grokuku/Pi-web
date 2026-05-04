@@ -248,11 +248,11 @@ class CredentialStore {
 
   /**
    * Get the temp file path for a hostname.
-   * Uses a safe filename (non-special chars only).
+   * Uses a truncated SHA-256 hash of the hostname to avoid collisions.
    */
   tmpPath(hostname: string): string {
-    const safe = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
-    return path.join(this.tmpDir, safe);
+    const hash = crypto.createHash("sha256").update(hostname).digest("hex").slice(0, 16);
+    return path.join(this.tmpDir, hash);
   }
 
   /**

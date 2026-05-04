@@ -109,6 +109,15 @@ function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
+  // ── Model applied callback (stable reference for child components) ──
+  const handleModelApplied = useCallback(() => {
+    if (activeProject) {
+      fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
+        updateProjectSession(activeProject.id, { session: s });
+      }).catch(() => {});
+    }
+  }, [activeProject?.id, updateProjectSession]);
+
   // ── Accent ──
   useEffect(() => {
     if (accent) {
@@ -404,13 +413,7 @@ function App() {
               send({ type: "mode_switch", projectId: activeProject.id, mode });
             }
           }}
-          onModelApplied={() => {
-            if (activeProject) {
-              fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
-                updateProjectSession(activeProject.id, { session: s });
-              }).catch(() => {});
-            }
-          }}
+          onModelApplied={handleModelApplied}
         />
 
         <div className="w-px h-4 bg-hacker-border-bright" />
@@ -451,7 +454,7 @@ function App() {
 
         {/* Zoom buttons */}
         <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1" title="Zoom out">−</button>
-        <span className="text-[10px] text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
+        <span className="text-xs text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
         <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1" title="Zoom in">+</button>
 
         <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
@@ -559,13 +562,7 @@ function App() {
         <ModelLibraryModal
           onClose={() => setShowModelLibrary(false)}
           session={session}
-          onModelApplied={() => {
-            if (activeProject) {
-              fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
-                updateProjectSession(activeProject.id, { session: s });
-              }).catch(() => {});
-            }
-          }}
+          onModelApplied={handleModelApplied}
         />
       )}
     </div>
