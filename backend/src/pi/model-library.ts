@@ -51,6 +51,7 @@ export interface ProjectModeConfig {
 export interface ModelLibrary {
   models: RegisteredModel[];
   defaultModelId: string | null;
+  commitModelId: string | null;           // model for AI commit messages (null = use default)
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }
 
@@ -70,6 +71,7 @@ function getDefaultLibrary(): ModelLibrary {
   return {
     models: [],
     defaultModelId: null,
+    commitModelId: null,
     projectModes: {},
   };
 }
@@ -109,6 +111,7 @@ function migrateLibrary(data: any): ModelLibrary {
   const lib: ModelLibrary = {
     models: (data.models || []).map(migrateModel),
     defaultModelId: data.defaultModelId || null,
+    commitModelId: data.commitModelId || null,
     projectModes: {},
   };
 
@@ -123,7 +126,7 @@ function migrateLibrary(data: any): ModelLibrary {
 }
 
 function migrateFromOldFormat(data: any): ModelLibrary {
-  const lib: ModelLibrary = { models: [], defaultModelId: null, projectModes: {} };
+  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, projectModes: {} };
 
   // Collect all unique models from all modes
   const seenIds = new Set<string>();
@@ -201,6 +204,14 @@ export function getDefaultModel(library: ModelLibrary): RegisteredModel | undefi
   }
   // Fall back to first model
   return library.models[0];
+}
+
+export function getCommitModel(library: ModelLibrary): RegisteredModel | undefined {
+  if (library.commitModelId) {
+    const m = library.models.find((m) => m.id === library.commitModelId);
+    if (m) return m;
+  }
+  return getDefaultModel(library);
 }
 
 export function getModeModel(library: ModelLibrary, projectId: string, mode: AgentMode): RegisteredModel | undefined {

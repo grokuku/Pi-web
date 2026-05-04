@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ChevronDown, Power, Star } from "lucide-react";
-import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig } from "../../types";
+import { ChevronDown, Power, Star, GitCommit } from "lucide-react";
+import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
 
 const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string; activeBg: string }> = {
   code:   { icon: "⚡", label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/15 border-hacker-accent/50" },
-  plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/15 border-hacker-info/50" },
+  plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/15 border-hacker-border-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/15 border-hacker-warn/50" },
 };
 
@@ -16,8 +16,9 @@ interface Props {
 }
 
 export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, onModelApplied }: Props) {
-  const [openMode, setOpenMode] = useState<AgentMode | null>(null);
+  const [openMode, setOpenMode] = useState<AgentMode | "commit" | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const ref = useRef<HTMLDivElement>(null);
 
   const loadLibrary = useCallback(async () => {
@@ -27,7 +28,14 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     } catch {}
   }, []);
 
-  useEffect(() => { loadLibrary(); }, [loadLibrary]);
+  const loadProviders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/providers");
+      setProviders(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadLibrary(); loadProviders(); }, [loadLibrary, loadProviders]);
   useEffect(() => { if (onModelApplied) loadLibrary(); }, [onModelApplied, loadLibrary]);
 
   // Close on click outside
@@ -58,6 +66,15 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     return library?.models[0] || null;
   };
 
+  const getCommitModel = (): RegisteredModel | null => {
+    if (!library) return null;
+    if (library.commitModelId) {
+      const m = library.models.find(m => m.id === library.commitModelId);
+      if (m) return m;
+    }
+    return library.models.find(m => m.id === library.defaultModelId) || library.models[0] || null;
+  };
+
   const handleSelectModel = async (mode: AgentMode, modelId: string) => {
     if (!activeProjectId) return;
     try {
@@ -69,6 +86,26 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
       await loadLibrary();
       onModelApplied?.();
     } catch (e) { console.error("handleSelectModel error:", e); }
+    setOpenMode(null);
+  };
+
+  const handleSetCommitModel = async (modelId: string) => {
+    try {
+      await fetch(`/api/model-library/commit-model/${encodeURIComponent(modelId)}`, {
+        method: "PUT",
+      });
+      await loadLibrary();
+      onModelApplied?.();
+    } catch (e) { console.error("handleSetCommitModel error:", e); }
+    setOpenMode(null);
+  };
+
+  const handleClearCommitModel = async () => {
+    try {
+      await fetch("/api/model-library/commit-model", { method: "DELETE" });
+      await loadLibrary();
+      onModelApplied?.();
+    } catch (e) { console.error("handleClearCommitModel error:", e); }
     setOpenMode(null);
   };
 
@@ -109,7 +146,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     } catch (e) { console.error("handleMaxReviews error:", e); }
   };
 
-  const handleChipClick = (mode: AgentMode) => {
+  const handleChipClick = (mode: AgentMode | "commit") => {
     if (openMode === mode) { setOpenMode(null); return; }
     setOpenMode(mode);
   };
@@ -119,6 +156,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
     const name = model.name;
     if (name.length <= 12) return name;
     return name.slice(0, 10) + "…";
+  };
+
+  const getProviderName = (providerId: string): string => {
+    const p = providers.find(p => p.id === providerId);
+    return p?.name || providerId;
   };
 
   const modes: AgentMode[] = ["code", "plan", "review"];
@@ -134,13 +176,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
         const isActive = activeMode === mode && isEnabled;
         const isDropdownOpen = openMode === mode;
 
-        // Determine visual state:
-        // - CODE is always on but visually dimmed when PLAN is active (PLAN overrides)
-        // - REVIEW is lit when enabled AND not overridden by PLAN
-        // - PLAN is lit when enabled
-        const isVisuallyActive = isActive;
+        // Visual states
         const isPlanActive = pm.plan.enabled && activeMode === "plan";
         const isOverriddenByPlan = !isCode && isPlanActive && mode !== "plan";
+        const isVisuallyActive = isActive;
 
         return (
           <div key={mode} className="relative">
@@ -186,7 +225,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
               </div>
             </button>
 
-            {/* Dropdown */}
+            {/* Dropdown — always shows model list regardless of enabled state */}
             {isDropdownOpen && (
               <div className="absolute top-full right-0 mt-1 w-[220px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
                 {/* Header */}
@@ -196,8 +235,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                   </span>
                 </div>
 
-                {/* Model list (only if enabled) */}
-                {isEnabled && library && library.models.length > 0 ? (
+                {/* Model list — always shown */}
+                {library && library.models.length > 0 ? (
                   <div className="max-h-[150px] overflow-y-auto">
                     {library.models.map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
@@ -213,17 +252,17 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                           }`}>
                           <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                           <span className="truncate flex-1">{m.name}</span>
-                          {m.providerId && <span className="text-[8px] text-hacker-text-dim shrink-0">({m.providerId})</span>}
+                          {m.providerId && <span className="text-[8px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
                           {isModelSelected && <span className={`${cfg.color} text-[8px] shrink-0`}>●</span>}
                         </button>
                       );
                     })}
                   </div>
-                ) : isEnabled ? (
+                ) : (
                   <div className="px-3 py-1.5 text-[9px] text-hacker-text-dim italic">
                     No models configured
                   </div>
-                ) : null}
+                )}
 
                 {/* Switch to mode button (if enabled and not active) */}
                 {isEnabled && !isActive && model && (
@@ -234,7 +273,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                   </button>
                 )}
 
-                {/* Max reviews (REVIEW only) */}
+                {/* Max reviews (REVIEW only, always show if enabled) */}
                 {mode === "review" && isEnabled && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border-t border-hacker-border/30">
                     <span className="text-[9px] text-hacker-text-dim">🔄 MAX REVIEWS</span>
@@ -255,6 +294,62 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
           </div>
         );
       })}
+
+      {/* Commit model button */}
+      <div className="relative">
+        <button
+          className="flex items-center gap-1 px-1.5 py-0.5 border border-hacker-border/40 rounded-sm text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border transition-all"
+          onClick={() => handleChipClick("commit")}
+        >
+          <GitCommit size={10} />
+          <span className="text-[10px] font-bold tracking-wide">{getShortModelName(getCommitModel())}</span>
+          <ChevronDown size={8} className={`text-hacker-text-dim transition-transform ${openMode === "commit" ? "rotate-180" : ""}`} />
+        </button>
+
+        {openMode === "commit" && library && (
+          <div className="absolute top-full right-0 mt-1 w-[220px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
+              <span className="text-[10px] font-bold tracking-wider text-hacker-text-dim">
+                <GitCommit size={10} className="inline mr-1" />COMMIT MODEL
+              </span>
+              {library.commitModelId && (
+                <button
+                  onClick={handleClearCommitModel}
+                  className="text-[9px] text-hacker-text-dim hover:text-hacker-warm"
+                  title="Reset to default"
+                >✕ reset</button>
+              )}
+            </div>
+            {library.models.length > 0 ? (
+              <div className="max-h-[150px] overflow-y-auto">
+                {library.models.map((m) => {
+                  const isSelected = m.id === library.commitModelId;
+                  const isDefault = m.id === library.defaultModelId;
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => handleSetCommitModel(m.id)}
+                      className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 ${
+                        isSelected
+                          ? "bg-hacker-accent/10 text-hacker-accent"
+                          : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
+                      }`}>
+                      <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
+                      <span className="truncate flex-1">{m.name}</span>
+                      {m.providerId && <span className="text-[8px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                      {isSelected && <span className="text-hacker-accent text-[8px] shrink-0">●</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="px-3 py-1.5 text-[9px] text-hacker-text-dim italic">
+                No models configured
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

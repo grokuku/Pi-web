@@ -8,6 +8,7 @@ import {
   getModeModel,
   getProjectModeConfig,
   getDefaultModel,
+  getCommitModel,
 }
 from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
@@ -1190,10 +1191,10 @@ export async function generateAiCommitMessage(
   // Ensure registry is loaded
   reloadModelRegistry();
 
-  // 1. Use the default model from the library
-  const defaultModel = getDefaultModel(library);
-  if (defaultModel) {
-    model = sharedModelRegistry.find(defaultModel.providerId, defaultModel.modelId);
+  // 1. Use the commit model (or default) from the library
+  const commitModel = getCommitModel(library);
+  if (commitModel) {
+    model = sharedModelRegistry.find(commitModel.providerId, commitModel.modelId);
     if (model) {
       const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
       if (auth.ok) apiKey = (auth as any).apiKey;

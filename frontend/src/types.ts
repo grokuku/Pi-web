@@ -179,5 +179,6 @@ export interface ProjectModeConfig {
 export interface ModelLibrary {
   models: RegisteredModel[];
   defaultModelId: string | null;
+  commitModelId: string | null;
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }

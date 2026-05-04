@@ -155,6 +155,32 @@ router.put("/models/:id/default", async (req: Request, res: Response) => {
   }
 });
 
+// ── PUT/DELETE set commit model ────────────────────────
+
+router.put("/commit-model/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = loadModelLibrary();
+    library.commitModelId = id;
+    saveModelLibrary(library);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete("/commit-model", (_req: Request, res: Response) => {
+  try {
+    const library = loadModelLibrary();
+    library.commitModelId = null;
+    saveModelLibrary(library);
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ── GET/PUT project mode config ───────────────────────
 
 router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
