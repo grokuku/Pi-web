@@ -189,9 +189,9 @@ function ProvidersTab({ providers, setProviders, setError }: {
               <span className="text-sm">{p.type === "ollama" ? "🦙" : p.type === "anthropic" ? "☁" : p.type === "google" ? "✨" : "🔗"}</span>
               <div className="flex-1 min-w-0">
                 <span className="text-hacker-accent text-xs font-bold">{p.name || p.type}</span>
-                <span className="text-hacker-text-dim text-[10px] ml-2">{p.type}</span>
+                <span className="text-hacker-text-dim text-[11px] ml-2">{p.type}</span>
               </div>
-              <span className={`text-[9px] px-1.5 py-0.5 border ${
+              <span className={`text-[11px] px-1.5 py-0.5 border ${
                 p.connectionStatus === "ok" ? "border-hacker-accent/50 text-hacker-accent" :
                 p.connectionStatus === "error" ? "border-hacker-error/50 text-hacker-error" :
                 "border-hacker-border text-hacker-text-dim"
@@ -199,15 +199,15 @@ function ProvidersTab({ providers, setProviders, setError }: {
                 {p.connectionStatus === "ok" ? "✓ CONNECTED" : p.connectionStatus === "error" ? "✗ ERROR" : "? UNTESTED"}
               </span>
               <button onClick={() => handleTest(p.id)}
-                className="btn-hacker text-[10px] px-2 py-0.5 flex items-center gap-1">
-                <TestTube2 size={9} /> TEST
+                className="btn-hacker text-[11px] px-2 py-0.5 flex items-center gap-1">
+                <TestTube2 size={10} /> TEST
               </button>
               <button onClick={() => setEditing(p)}
                 className="text-hacker-text-dim hover:text-hacker-accent"><Edit2 size={11} /></button>
               <button onClick={() => handleDelete(p.id)}
                 className="text-hacker-text-dim hover:text-hacker-error"><Trash2 size={11} /></button>
             </div>
-            {p.baseUrl && <div className="px-3 pb-1.5 text-[9px] text-hacker-text-dim truncate">{p.baseUrl}</div>}
+            {p.baseUrl && <div className="px-3 pb-1.5 text-[11px] text-hacker-text-dim truncate">{p.baseUrl}</div>}
           </div>
         );
       })}
@@ -296,13 +296,13 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
   return (
     <div className="border border-hacker-accent/30 bg-hacker-surface/80 p-3 mt-2">
-      <div className="text-hacker-accent text-[10px] tracking-widest mb-2">
+      <div className="text-hacker-accent text-[11px] tracking-widest mb-2">
         {isEdit ? "EDIT" : "ADD"} PROVIDER
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-2">
         <div>
-          <label className="text-hacker-accent text-[10px] block mb-1">TYPE</label>
+          <label className="text-hacker-accent text-[11px] block mb-1">TYPE</label>
           <select value={type} onChange={e => handleTypeChange(e.target.value as ProviderType)}
             className="select-hacker w-full text-xs" disabled={isEdit}>
             {Object.entries(PROVIDER_PRESETS).map(([k, v]) => (
@@ -311,14 +311,14 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
           </select>
         </div>
         <div>
-          <label className="text-hacker-accent text-[10px] block mb-1">NAME</label>
+          <label className="text-hacker-accent text-[11px] block mb-1">NAME</label>
           <input value={name} onChange={e => setName(e.target.value)}
             className="input-hacker w-full text-xs" placeholder="My Provider" />
         </div>
       </div>
 
       <div className="mb-2">
-        <label className="text-hacker-accent text-[10px] flex items-center gap-1 mb-1">
+        <label className="text-hacker-accent text-[11px] flex items-center gap-1 mb-1">
           <Wifi size={10} /> BASE URL
         </label>
         <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
@@ -327,7 +327,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
       {PROVIDER_PRESETS[type].requiresApiKey && (
         <div className="mb-2">
-          <label className="text-hacker-accent text-[10px] flex items-center gap-1 mb-1">
+          <label className="text-hacker-accent text-[11px] flex items-center gap-1 mb-1">
             <Key size={10} /> API KEY
           </label>
           <div className="flex gap-1">
@@ -368,7 +368,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   setError: (e: string) => void;
   setStatus: (s: string) => void;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingModelForModal, setEditingModelForModal] = useState<RegisteredModel | null>(null);
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
@@ -485,16 +485,16 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         {/* Left column: Available models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[10px] font-bold tracking-wider flex-1">AVAILABLE</span>
-            <span className="text-hacker-text-dim text-[9px]">{availableModels.length}</span>
+            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">AVAILABLE</span>
+            <span className="text-hacker-text-dim text-[11px]">{availableModels.length}</span>
             <button onClick={handleScanAll} disabled={scanning}
-              className="btn-hacker text-[9px] px-1.5 py-0.5 flex items-center gap-0.5" title="Rescan all providers">
+              className="btn-hacker text-[11px] px-1.5 py-0.5 flex items-center gap-0.5" title="Rescan all providers">
               <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> UPDATE
             </button>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {availableModels.length === 0 ? (
-              <div className="text-hacker-text-dim text-[10px] italic p-3 text-center">
+              <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
                 {allDiscovered.length === 0 ? "Click UPDATE to scan providers" : "All models already added"}
               </div>
             ) : (
@@ -503,13 +503,13 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
                 const provName = getProviderNameForDiscovered(dm);
                 return (
                   <button key={dm.id} onClick={() => toggleAvailable(dm.id)}
-                    className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                    className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
                       isSelected ? "bg-hacker-accent/10 text-hacker-accent" : "text-hacker-text-dim hover:bg-hacker-border/30"
                     }`}>
-                    <span className="text-[8px]">{isSelected ? "☑" : "☐"}</span>
+                    <span className="text-[11px]">{isSelected ? "☑" : "☐"}</span>
                     <span className="truncate flex-1">{dm.name || dm.id}</span>
-                    {provName && <span className="text-[8px] text-hacker-text-dim">({provName})</span>}
-                    {dm.size ? <span className="text-[8px] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
+                    {provName && <span className="text-[11px] text-hacker-text-dim">({provName})</span>}
+                    {dm.size ? <span className="text-[11px] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
                   </button>
                 );
               })
@@ -520,12 +520,12 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         {/* Middle: Action buttons */}
         <div className="flex flex-col justify-center gap-1 px-0.5">
           <button onClick={handleAddSelected} disabled={selectedAvailable.size === 0}
-            className="btn-hacker text-[10px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
             title="Add selected models">
             ▶
           </button>
           <button onClick={handleRemoveSelected} disabled={selectedConfigured.size === 0}
-            className="btn-hacker text-[10px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
             title="Remove selected models">
             ◀
           </button>
@@ -534,38 +534,33 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         {/* Right column: Configured models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[10px] font-bold tracking-wider flex-1">SELECTED</span>
-            <span className="text-hacker-text-dim text-[9px]">{library.models.length}</span>
+            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">SELECTED</span>
+            <span className="text-hacker-text-dim text-[11px]">{library.models.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {library.models.length === 0 ? (
-              <div className="text-hacker-text-dim text-[10px] italic p-3 text-center">
+              <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
                 No models selected yet
               </div>
             ) : (
               library.models.map(m => {
                 const isSelected = selectedConfigured.has(m.id);
                 const isDef = m.id === library.defaultModelId;
-                const isEditing = editingId === m.id;
+                
                 return (
                   <div key={m.id}>
                     <button onClick={() => toggleConfigured(m.id)}
-                      className={`w-full text-left px-3 py-1 text-[10px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                      className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
                         isSelected ? "bg-hacker-error/10 text-hacker-error" : isDef ? "bg-hacker-accent/5" : "hover:bg-hacker-border/30"
                       }`}>
-                      <span className="text-[8px]">{isSelected ? "☑" : "☐"}</span>
-                      <Star size={8} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
+                      <span className="text-[11px]">{isSelected ? "☑" : "☐"}</span>
+                      <Star size={10} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
-                      <span className="text-[8px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
-                      <button onClick={(e) => { e.stopPropagation(); setEditingId(isEditing ? null : m.id); }}
-                        className="text-hacker-text-dim hover:text-hacker-accent shrink-0"><Settings size={9} /></button>
+                      <span className="text-[11px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
+                      <button onClick={(e) => { e.stopPropagation(); setEditingModelForModal(m); }}
+                        className="text-hacker-text-dim hover:text-hacker-accent shrink-0"><Settings size={10} /></button>
                     </button>
-                    {isEditing && (
-                      <div className="px-3 py-1.5 border-b border-hacker-border/50 bg-hacker-bg/30">
-                        <ModelEditPanel model={m} onUpdate={onUpdate} isOllama={isOllamaProvider(m.providerId)} />
-                      </div>
-                    )}
                   </div>
                 );
               })
@@ -576,78 +571,141 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
 
       {/* Set default hint */}
       {library.models.length > 0 && (
-        <div className="text-hacker-text-dim text-[9px] text-center">
+        <div className="text-hacker-text-dim text-[11px] text-center">
           ★ = default model · Click ⚙ to edit parameters
         </div>
+      )}
+
+      {/* Model Edit Modal */}
+      {editingModelForModal && (
+        <ModelEditModal
+          model={editingModelForModal}
+          onUpdate={onUpdate}
+          isOllama={isOllamaProvider(editingModelForModal.providerId)}
+          onClose={() => setEditingModelForModal(null)}
+        />
       )}
     </div>
   );
 }
+// ── Model Edit Modal (inference params) ────────────────────
 
-// ── Model Edit Panel (inference params) ───────────────────
-
-function ModelEditPanel({ model, onUpdate, isOllama }: {
+function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
   model: RegisteredModel;
   onUpdate: (id: string, updates: Partial<RegisteredModel>) => void;
   isOllama: boolean;
+  onClose: () => void;
 }) {
   return (
-    <div className="grid grid-cols-4 gap-x-3 gap-y-1">
-      <div>
-        <label className="text-hacker-text-dim text-[9px] block">Temperature</label>
-        <input type="number" value={model.temperature ?? ""} min={0} max={2} step={0.1}
-          onChange={e => onUpdate(model.id, { temperature: e.target.value ? Number(e.target.value) : undefined })}
-          className="input-hacker w-full text-[10px] py-0 px-1" placeholder="auto" />
-      </div>
-      <div>
-        <label className="text-hacker-text-dim text-[9px] block">Top P</label>
-        <input type="number" value={model.topP ?? ""} min={0} max={1} step={0.05}
-          onChange={e => onUpdate(model.id, { topP: e.target.value ? Number(e.target.value) : undefined })}
-          className="input-hacker w-full text-[10px] py-0 px-1" placeholder="auto" />
-      </div>
-      <div className={isOllama ? "" : "opacity-40 pointer-events-none"}>
-        <label className="text-hacker-text-dim text-[9px] block">Min P</label>
-        <input type="number" value={model.minP ?? ""} min={0} max={1} step={0.05}
-          onChange={e => onUpdate(model.id, { minP: e.target.value ? Number(e.target.value) : undefined })}
-          className="input-hacker w-full text-[10px] py-0 px-1" placeholder="auto" />
-      </div>
-      <div className={isOllama ? "" : "opacity-40 pointer-events-none"}>
-        <label className="text-hacker-text-dim text-[9px] block">Repeat Penalty</label>
-        <input type="number" value={model.repeatPenalty ?? ""} min={1} max={2} step={0.1}
-          onChange={e => onUpdate(model.id, { repeatPenalty: e.target.value ? Number(e.target.value) : undefined })}
-          className="input-hacker w-full text-[10px] py-0 px-1" placeholder="1.1" />
-      </div>
-      <div>
-        <label className="text-hacker-text-dim text-[9px] block">Max Tokens</label>
-        <input type="number" value={model.maxTokens ?? 16384} min={1} step={1024}
-          onChange={e => onUpdate(model.id, { maxTokens: Number(e.target.value) })}
-          className="input-hacker w-full text-[10px] py-0 px-1" />
-      </div>
-      <div className={isOllama ? "" : "opacity-40 pointer-events-none"}>
-        <label className="text-hacker-text-dim text-[9px] block">Top K</label>
-        <input type="number" value={model.topK ?? ""} min={1} max={100} step={1}
-          onChange={e => onUpdate(model.id, { topK: e.target.value ? Number(e.target.value) : undefined })}
-          className="input-hacker w-full text-[10px] py-0 px-1" placeholder="auto" />
-      </div>
-      <div>
-        <label className="text-hacker-text-dim text-[9px] block">Context</label>
-        <select value={model.contextWindow} onChange={e => onUpdate(model.id, { contextWindow: Number(e.target.value) })}
-          className="select-hacker w-full text-[10px] py-0 px-1">
-          <option value={8192}>8K</option>
-          <option value={32768}>32K</option>
-          <option value={65536}>64K</option>
-          <option value={128000}>128K</option>
-          <option value={200000}>200K</option>
-          <option value={256000}>256K</option>
-          <option value={1000000}>1M</option>
-        </select>
-      </div>
-      <div>
-        <label className="text-hacker-text-dim text-[9px] block">Thinking</label>
-        <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
-          className="select-hacker w-full text-[10px] py-0 px-1">
-          {THINKING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box max-w-[36rem] max-h-[85vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <span className="text-hacker-accent font-bold text-sm tracking-wider">⚡ EDIT MODEL</span>
+            <div className="text-hacker-text text-sm font-bold mt-0.5 truncate max-w-[28rem]">{model.name}</div>
+          </div>
+          <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
+        </div>
+
+        {/* Form */}
+        <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+          {/* Temperature + Top P */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Temperature</label>
+              <input type="number" value={model.temperature ?? ""} min={0} max={2} step={0.1}
+                onChange={e => onUpdate(model.id, { temperature: e.target.value ? Number(e.target.value) : undefined })}
+                className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
+              <div className="text-hacker-text-dim text-[10px] mt-0.5">0.0 – 2.0 (lower = more deterministic)</div>
+            </div>
+            <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Top P</label>
+              <input type="number" value={model.topP ?? ""} min={0} max={1} step={0.05}
+                onChange={e => onUpdate(model.id, { topP: e.target.value ? Number(e.target.value) : undefined })}
+                className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
+              <div className="text-hacker-text-dim text-[10px] mt-0.5">0.0 – 1.0 (nucleus sampling)</div>
+            </div>
+          </div>
+
+          {/* Ollama-specific params */}
+          {isOllama && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-hacker-text-dim text-xs block mb-1">Min P</label>
+                <input type="number" value={model.minP ?? ""} min={0} max={1} step={0.05}
+                  onChange={e => onUpdate(model.id, { minP: e.target.value ? Number(e.target.value) : undefined })}
+                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
+              </div>
+              <div>
+                <label className="text-hacker-text-dim text-xs block mb-1">Top K</label>
+                <input type="number" value={model.topK ?? ""} min={1} max={100} step={1}
+                  onChange={e => onUpdate(model.id, { topK: e.target.value ? Number(e.target.value) : undefined })}
+                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
+              </div>
+              <div>
+                <label className="text-hacker-text-dim text-xs block mb-1">Repeat Penalty</label>
+                <input type="number" value={model.repeatPenalty ?? ""} min={1} max={2} step={0.1}
+                  onChange={e => onUpdate(model.id, { repeatPenalty: e.target.value ? Number(e.target.value) : undefined })}
+                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="1.1" />
+              </div>
+            </div>
+          )}
+
+          {/* Max Tokens full width */}
+          <div>
+            <label className="text-hacker-text-dim text-xs block mb-1">Max Tokens</label>
+            <input type="number" value={model.maxTokens ?? 16384} min={1} step={1024}
+              onChange={e => onUpdate(model.id, { maxTokens: Number(e.target.value) })}
+              className="input-hacker w-full text-sm py-1.5 px-2" />
+            <div className="text-hacker-text-dim text-[10px] mt-0.5">Maximum output tokens per response</div>
+          </div>
+
+          {/* Context Window + Reasoning + Thinking Level */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Context Window</label>
+              <select value={model.contextWindow} onChange={e => onUpdate(model.id, { contextWindow: Number(e.target.value) })}
+                className="select-hacker w-full text-sm py-1.5 px-2">
+                <option value={4096}>4K</option>
+                <option value={8192}>8K</option>
+                <option value={16384}>16K</option>
+                <option value={32768}>32K</option>
+                <option value={65536}>64K</option>
+                <option value={128000}>128K</option>
+                <option value={200000}>200K</option>
+                <option value={256000}>256K</option>
+                <option value={500000}>500K</option>
+                <option value={1000000}>1M</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Reasoning Model</label>
+              <select value={model.reasoning ? "yes" : "no"} onChange={e => onUpdate(model.id, { reasoning: e.target.value === "yes" })}
+                className="select-hacker w-full text-sm py-1.5 px-2">
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+              <div className="text-hacker-text-dim text-[10px] mt-0.5">Has native chain-of-thought</div>
+            </div>
+            <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Thinking Level</label>
+              <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
+                className="select-hacker w-full text-sm py-1.5 px-2">
+                {THINKING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <div className="text-hacker-text-dim text-[10px] mt-0.5">Reasoning depth (if supported)</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-2 mt-4 pt-3 border-t border-hacker-border">
+          <button onClick={onClose}
+            className="btn-hacker flex-1 text-sm py-2 flex items-center justify-center gap-1.5">
+            <Check size={14} /> DONE
+          </button>
+        </div>
       </div>
     </div>
   );
