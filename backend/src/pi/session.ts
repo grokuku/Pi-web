@@ -287,6 +287,28 @@ export async function sendPrompt(
     throw new Error("No active Pi session for this project");
   }
 
+  // ── Ensure model matches current mode config ──
+  try {
+    const library = loadModelLibrary();
+    const currentMode = state.activeMode || "code";
+    const desiredModel = getModeModel(library, projectId, currentMode);
+    const currentModel = state.session.model;
+    console.log(`[prompt] Session model: ${currentModel?.provider || "none"}/${currentModel?.id || "none"}, desired: ${desiredModel?.providerId || "none"}/${desiredModel?.modelId || "none"}`);
+    if (desiredModel && currentModel) {
+      const needsUpdate = currentModel.id !== desiredModel.modelId ||
+        currentModel.provider !== desiredModel.providerId;
+      if (needsUpdate) {
+        console.log(`[prompt] Model mismatch! Applying ${desiredModel.providerId}/${desiredModel.modelId}...`);
+        await applyModeToSession(currentMode, projectId);
+      }
+    } else if (desiredModel && !currentModel) {
+      console.log(`[prompt] No model on session, applying ${desiredModel.providerId}/${desiredModel.modelId}`);
+      await applyModeToSession(currentMode, projectId);
+    }
+  } catch (e: any) {
+    console.warn(`[prompt] Failed to sync model:`, e.message);
+  }
+
   // ── Handle slash commands ──
   const trimmed = message.trim();
   if (trimmed.startsWith("/")) {
@@ -679,36 +701,85 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
       const piModel = sharedModelRegistry.find(model.providerId, model.modelId);
 
       if (piModel) {
-        // Register provider override if custom reasoning/contextWindow differs
-        if (model.reasoning !== undefined || model.contextWindow !== undefined) {
-          const existingModel = piModel;
-          if (
-            (model.reasoning !== undefined && existingModel.reasoning !== model.reasoning) ||
-            (model.contextWindow !== undefined && existingModel.contextWindow !== model.contextWindow)
-          ) {
-            const existingAuth = await sharedModelRegistry.getApiKeyAndHeaders(existingModel);
-            const existingApiKey = existingAuth.ok ? existingAuth.apiKey : undefined;
-            const providerApi = (existingModel as any).api || "openai-completions";
+        // Check if we need to override model capabilities (reasoning, contextWindow)
+        const needsOverride = (
+          (model.reasoning !== undefined && piModel.reasoning !== model.reasoning) ||
+          (model.contextWindow !== undefined && piModel.contextWindow !== model.contextWindow) ||
+          (model.maxTokens !== undefined && piModel.maxTokens !== model.maxTokens)
+        );
 
-            sharedModelRegistry.registerProvider(model.providerId, {
-              baseUrl: (existingModel as any).baseUrl,
+        if (needsOverride) {
+          // Re-register the ENTIRE provider with all its models,
+          // overriding only the one model that needs capability changes.
+          // This avoids losing other models on the same provider.
+          const existingAuth = await sharedModelRegistry.getApiKeyAndHeaders(piModel);
+          const existingApiKey = existingAuth.ok ? existingAuth.apiKey : undefined;
+          const providerApi = (piModel as any).api || "openai-completions";
+          const providerBaseUrl = (piModel as any).baseUrl || "";
+
+          // Get ALL models from this provider in the registry
+          const allProviderModels = sharedModelRegistry.getAvailable()
+            .filter((m: any) => m.provider === model.providerId);
+
+          const models = allProviderModels.map((m: any) => {
+            // Override our target model's capabilities
+            if (m.id === model.modelId || m.id === piModel.id) {
+              return {
+                id: m.id,
+                name: m.name || m.id,
+                api: m.api || providerApi,
+                reasoning: model.reasoning ?? m.reasoning ?? false,
+                input: m.input || ["text"],
+                contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
+                maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
+                cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              };
+            }
+            return {
+              id: m.id,
+              name: m.name || m.id,
+              api: m.api || providerApi,
+              reasoning: m.reasoning ?? false,
+              input: m.input || ["text"],
+              contextWindow: m.contextWindow ?? 128000,
+              maxTokens: m.maxTokens ?? 16384,
+              cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            };
+          });
+
+          // If no other models were found, at least include the target model
+          if (models.length === 0) {
+            models.push({
+              id: piModel.id || model.modelId,
+              name: piModel.name || model.name || model.modelId,
               api: providerApi,
-              apiKey: existingApiKey || "ollama",
-              models: [{
-                id: existingModel.id || model.modelId,
-                name: existingModel.name || model.name || model.modelId,
-                api: providerApi,
-                reasoning: model.reasoning ?? existingModel.reasoning ?? false,
-                input: (existingModel as any).input || ["text"],
-                contextWindow: model.contextWindow ?? existingModel.contextWindow ?? 128000,
-                maxTokens: model.maxTokens ?? existingModel.maxTokens ?? 16384,
-                cost: (existingModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              }],
+              reasoning: model.reasoning ?? piModel.reasoning ?? false,
+              input: (piModel as any).input || ["text"],
+              contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
+              maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
+              cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             });
           }
-        }
 
-        await session.setModel(piModel);
+          console.log(`[mode] Re-registering provider ${model.providerId} with ${models.length} models (override: ${model.modelId})`);
+          sharedModelRegistry.registerProvider(model.providerId, {
+            baseUrl: providerBaseUrl,
+            api: providerApi,
+            apiKey: existingApiKey || "ollama",
+            models,
+          });
+
+          // Re-find after re-registration
+          const updatedModel = sharedModelRegistry.find(model.providerId, model.modelId);
+          if (updatedModel) {
+            await session.setModel(updatedModel);
+          } else {
+            await session.setModel(piModel);
+          }
+        } else {
+          // No override needed — just set the model
+          await session.setModel(piModel);
+        }
       } else {
         // Model not in registry — try setModel with provider/id
         await setModel(model.providerId, model.modelId, projectId);

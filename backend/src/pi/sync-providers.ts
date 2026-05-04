@@ -80,22 +80,44 @@ export async function writeModelsJson(
   const existingProviders = existing?.providers || {};
   const managedProviderIds = new Set(providers.map((p) => p.id));
 
-  const mergedProviders = {
-    ...existingProviders,
-    // Remove any providers that were previously managed but are now deleted
-  };
-
-  // Remove deleted providers
-  for (const key of Object.keys(mergedProviders)) {
-    // Check if this key looks like one of our managed provider IDs
+  // Collect all provider IDs that are managed by our system (provider_xxx prefix)
+  // Also track known provider types that we may have created
+  const knownManagedPrefixes = providers.map((p) => p.id);
+  // Also consider any provider_ keys as managed (from previous runs)
+  for (const key of Object.keys(existingProviders)) {
     if (key.startsWith("provider_")) {
-      if (!managedProviderIds.has(key)) {
-        delete mergedProviders[key];
-      }
+      knownManagedPrefixes.push(key);
     }
   }
 
-  // Add/update managed providers
+  // Build merged: start with non-managed, add our managed ones
+  const mergedProviders: Record<string, any> = {};
+  
+  // Well-known provider names that our system may manage
+  const WELL_KNOWN_PROVIDERS = ["ollama", "openai", "anthropic", "google", "openrouter"];
+  const managedTypes = new Set(providers.map(p => p.type));
+  
+  // Keep only existing providers that are NOT managed by us
+  for (const [key, value] of Object.entries(existingProviders)) {
+    // Skip if this is one of our managed provider IDs
+    if (knownManagedPrefixes.includes(key) || key.startsWith("provider_")) {
+      continue;
+    }
+    // Skip well-known providers if we now manage that provider type
+    // (e.g., remove legacy "ollama" if we have a provider_abc Ollama)
+    if (WELL_KNOWN_PROVIDERS.includes(key) && managedTypes.size > 0) {
+      const existingBaseUrl = ((value as any)?.baseUrl || "").toLowerCase();
+      // Check if any of our providers has a similar base URL
+      const isManagedByUs = providers.some(p => {
+        const ourBaseUrl = (p.baseUrl || getProviderPreset(p.type).defaultBaseUrl).toLowerCase();
+        return existingBaseUrl.includes(new URL(ourBaseUrl).hostname);
+      });
+      if (isManagedByUs) continue;
+    }
+    mergedProviders[key] = value;
+  }
+
+  // Add/update managed providers (including known types like "ollama" that we now manage)
   for (const [id, entry] of Object.entries(providerEntries)) {
     mergedProviders[id] = entry;
   }

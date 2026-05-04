@@ -563,6 +563,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
     setInput("");
     setAttachments([]);
+    // Reset textarea height after sending
+    if (inputRef.current) inputRef.current.style.height = 'auto';
   }, [input, attachments, send]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
