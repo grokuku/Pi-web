@@ -55,13 +55,13 @@ const PORT = 3000;
 const app = express();
 
 // CORS: in dev allow all, in production allow configured origins or same-origin
-const allowedOrigins = process.env.NODE_ENV === "development"
+const corsOrigins = process.env.NODE_ENV === "development"
   ? true
   : (process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(",")
-    : true); // Default: allow all origins (works with reverse proxies)
+    : true);
 app.use(cors({
-  origin: allowedOrigins,
+  origin: corsOrigins,
 }));
 app.use(express.json({ limit: "50mb" }));
 
@@ -103,8 +103,41 @@ app.get("/api/sessions/:projectId/info", (req, res) => {
 // ─── HTTP Server ───────────────────────────────────────
 const httpServer = createServer(app);
 
-// ─── WebSocket Server (same HTTP port) ──────────────
-const wss = new WebSocketServer({ server: httpServer });
+// ── WebSocket Server ──────────────────────────────────
+// Validate Origin header to prevent Cross-Site WebSocket Hijacking (CSWSH).
+// Only connections from the same origin are allowed.
+const wsAllowedOrigins: string[] = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:3000", "http://localhost:3005", "http://localhost:5173"];
+
+function validateOrigin(origin: string | undefined): boolean {
+  if (!origin) return true; // Allow non-browser clients (curl, etc.)
+  try {
+    const url = new URL(origin);
+    return wsAllowedOrigins.some(allowed => {
+      const allowedUrl = new URL(allowed.startsWith("http") ? allowed : `http://${allowed}`);
+      // Allow same hostname, and also allow HTTPS variant
+      return url.hostname === allowedUrl.hostname ||
+        origin === allowed ||
+        origin === allowed.replace("http://", "https://");
+    });
+  } catch {
+    return false;
+  }
+}
+
+const wss = new WebSocketServer({
+  server: httpServer,
+  verifyClient: (info, callback) => {
+    const origin = info.req.headers.origin as string | undefined;
+    if (!validateOrigin(origin)) {
+      console.log(`[WS] Rejected connection from origin: ${origin}`);
+      callback(false, 403, "Forbidden");
+      return;
+    }
+    callback(true);
+  },
+});
 
 interface ExtendedWS extends WebSocket {
   isAlive: boolean;

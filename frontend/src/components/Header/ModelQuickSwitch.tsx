@@ -11,11 +11,12 @@ const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: strin
 interface Props {
   activeMode?: string;
   activeProjectId?: string;
+  modelChangeVersion?: number;
   onModeSwitch?: (mode: AgentMode) => void;
   onModelApplied?: () => void;
 }
 
-export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, onModelApplied }: Props) {
+export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied }: Props) {
   const [openMode, setOpenMode] = useState<AgentMode | "commit" | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -36,7 +37,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
   }, []);
 
   useEffect(() => { loadLibrary(); loadProviders(); }, [loadLibrary, loadProviders]);
-  useEffect(() => { if (onModelApplied) loadLibrary(); }, [onModelApplied, loadLibrary]);
+  // Reload when models change externally (e.g. from ModelLibraryModal)
+  useEffect(() => { loadLibrary(); }, [modelChangeVersion, loadLibrary]);
 
   // Close on click outside
   useEffect(() => {

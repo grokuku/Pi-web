@@ -46,7 +46,10 @@ function App() {
   const { connected, send, on } = useWebSocket();
 
   // ── State ──
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    const saved = localStorage.getItem("pi-web-theme");
+    return (saved === "light" || saved === "dark") ? saved : "dark";
+  });
   const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
   const [activeTab, setActiveTab] = useState<Tab>("pi");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -109,8 +112,10 @@ function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  // ── Model applied callback (stable reference for child components) ──
+  // ── Model change version counter (forces ModelQuickSwitch to reload) ──
+  const [modelChangeVersion, setModelChangeVersion] = useState(0);
   const handleModelApplied = useCallback(() => {
+    setModelChangeVersion(v => v + 1);
     if (activeProject) {
       fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
         updateProjectSession(activeProject.id, { session: s });
@@ -128,7 +133,13 @@ function App() {
     localStorage.setItem("pi-web-accent", accent);
   }, [accent]);
 
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const toggleTheme = () => {
+    setTheme((t) => {
+      const next = t === "dark" ? "light" : "dark";
+      localStorage.setItem("pi-web-theme", next);
+      return next;
+    });
+  };
 
   // ── Zoom ──
   useEffect(() => {
@@ -408,6 +419,7 @@ function App() {
         <ModelQuickSwitch
           activeMode={activeMode}
           activeProjectId={activeProject?.id}
+          modelChangeVersion={modelChangeVersion}
           onModeSwitch={(mode) => {
             if (activeProject) {
               send({ type: "mode_switch", projectId: activeProject.id, mode });
