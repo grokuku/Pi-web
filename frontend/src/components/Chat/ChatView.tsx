@@ -1,8 +1,13 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
+
+// ── Memoized ReactMarkdown to avoid re-parsing on every render ──
+const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
+});
 import type { Project } from "../../types";
 import { useChatHistory } from "../../hooks/useChatHistory";
 
@@ -104,9 +109,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
   const [currentToolCalls, setCurrentToolCalls] = useState<ToolCallInfo[]>([]);
-  const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [expandTools, setExpandTools] = useState(true);
   const [showAllThinking, setShowAllThinking] = useState(false);
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
@@ -117,8 +119,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const currentAssistantIdRef = useRef<string | null>(null);
 
   // Refs to avoid stale closures in WS handler
@@ -245,7 +246,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const el = chatEndRef.current?.parentElement;
     if (!el) return;
     const threshold = 80; // px from bottom to consider "at bottom"
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
   }, []);
 
   // Auto scroll only when user is at the bottom
@@ -443,86 +446,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ── File processing ──────────────────────────────────
 
-  const processFile = useCallback((file: File) => {
-    if (attachments.length >= 10) {
-      setError("Maximum 10 files per message");
-      return;
-    }
+  // ── Send messagelength]);
 
-    const category = categorizeFile(file.type || "application/octet-stream", file.name);
-
-    // Size limits
-    if (category === "image" && file.size > MAX_IMAGE_SIZE) {
-      setError(`Image too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_IMAGE_SIZE)}.`);
-      return;
-    }
-    if (category === "text" && file.size > MAX_TEXT_SIZE) {
-      setError(`Text file too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_TEXT_SIZE)}.`);
-      return;
-    }
-    if (category === "binary") {
-      setError(`Cannot attach binary file: ${file.name}. Only images, text, and code files are supported.`);
-      return;
-    }
-
-    const reader = new FileReader();
-
-    if (category === "image") {
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        const attachment: Attachment = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-          category,
-          data: base64,
-          preview: reader.result as string, // data URL for thumbnail
-        };
-        setAttachments((prev) => [...prev, attachment]);
-      };
-      reader.readAsDataURL(file);
-    } else if (category === "audio") {
-      // Read as base64 but warn user
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        const attachment: Attachment = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-          category,
-          data: base64,
-        };
-        setAttachments((prev) => [...prev, attachment]);
-      };
-      reader.readAsDataURL(file);
-    } else {
-      // Text / code file — read as text
-      reader.onload = () => {
-        const text = reader.result as string;
-        const lang = getLanguageTag(file.name);
-        // Build a formatted snippet for the preview
-        const previewLines = text.split("\n").slice(0, 3).join("\n");
-        const attachment: Attachment = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name,
-          mimeType: file.type || "text/plain",
-          size: file.size,
-          category,
-          data: `\n\n📄 **${file.name}**\n\`\`\`${lang}\n${text}\n\`\`\`\n`,
-          preview: previewLines.length > 200 ? previewLines.slice(0, 200) + "..." : previewLines,
-        };
-        setAttachments((prev) => [...prev, attachment]);
-      };
-      reader.readAsText(file);
-    }
-  }, [attachments.length]);
-
-  // ── Send message ──
-  const handleSend = useCallback(() => {
-    const text = input.trim();
-
+  // ── Send message (called by ChatInputArea) ──
+  const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     // Collect image attachments for the SDK
     const imageAttachments = attachments
       .filter((a) => a.category === "image")
@@ -532,8 +459,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const audioAttachments = attachments.filter((a) => a.category === "audio");
     if (audioAttachments.length > 0) {
       setError(`Audio files are not supported by most AI models. They will be skipped.`);
-      // Remove audio attachments
-      setAttachments((prev) => prev.filter((a) => a.category !== "audio"));
       return;
     }
 
@@ -541,7 +466,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     let fullMessage = text;
     const textAttachments = attachments.filter((a) => a.category === "text");
     if (textAttachments.length > 0) {
-      // Append text file contents to the message
       const filesContent = textAttachments.map((a) => a.data).join("");
       if (text.trim()) {
         fullMessage = `${filesContent}\n\n${text}`;
@@ -553,11 +477,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     if (!fullMessage && imageAttachments.length === 0) return;
     setError("");
 
-    // If it's a slash command, don't add as user message (result will come via pi_command_result)
+    // If it's a slash command, don't add as user message
     const isSlashCommand = fullMessage.trim().startsWith("/");
 
     if (!isSlashCommand) {
-      // Add user message to chat (show image thumbnails and file names)
       const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "[images]");
       setMessages((prev) => [...prev, {
         id: Date.now().toString(),
@@ -566,7 +489,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         thinking: "",
         toolCalls: [],
         timestamp: Date.now(),
-        // Store image previews for rendering
       }]);
     }
 
@@ -576,47 +498,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       message: fullMessage,
       images: imageAttachments.length > 0 ? imageAttachments : undefined,
     });
-
-    setInput("");
-    setAttachments([]);
-    // Reset textarea height after sending
-    if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [input, attachments, send]);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  }, [send, projectId]);
 
   // ── Drag & drop ──
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    for (const file of Array.from(e.dataTransfer.files)) {
-      processFile(file);
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    for (const item of e.clipboardData.items) {
-      if (item.type.startsWith("image/")) {
-        const blob = item.getAsFile();
-        if (blob) processFile(blob);
-      }
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      for (const file of Array.from(e.target.files)) {
-        processFile(file);
-      }
-    }
-    // Reset the input so the same file can be selected again
-    e.target.value = "";
-  };
 
   if (!activeProject) {
     return (
@@ -635,19 +519,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   return (
     <div
       className="h-full flex flex-col"
-      onDrop={handleDrop}
-      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-      onDragLeave={() => setIsDragOver(false)}
-      onPaste={handlePaste}
     >
       {/* Messages */}
       {hasContent ? (
-        <div className={`flex-1 overflow-y-auto p-4 chat-messages ${isDragOver ? "drop-zone active" : ""}`} onScroll={handleScroll}>
-        {isDragOver && (
-          <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20">
-            <div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div>
-          </div>
-        )}
+        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`} onScroll={handleScroll}>
+
 
         {error && (
           <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>
@@ -681,6 +557,23 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         )}
 
         <div ref={chatEndRef} />
+
+        {/* Scroll to bottom button */}
+        {showScrollBtn && (
+          <button
+            onClick={() => {
+              scrollToBottom("smooth");
+              isAtBottomRef.current = true;
+              setShowScrollBtn(false);
+            }}
+            className="absolute bottom-4 right-4 z-10 w-9 h-9 flex items-center justify-center rounded-full border border-hacker-border bg-hacker-surface/90 text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-accent/50 transition-all shadow-lg"
+            title="Scroll to bottom"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+          </button>
+        )}
       </div>
       ) : (
         <div className="flex-1 flex items-center justify-center">
@@ -695,86 +588,14 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         </div>
       )}
 
-      {/* Input area */}
-      <div className="border-t border-hacker-border-bright bg-hacker-surface p-3">
-        {/* Attachment previews */}
-        {attachments.length > 0 && (
-          <div className="flex gap-2 mb-2 flex-wrap">
-            {attachments.map((att) => (
-              <div key={att.id} className="flex items-center gap-1.5 text-xs bg-hacker-border/40 border border-hacker-border px-2 py-1.5 rounded group">
-                {att.category === "image" && att.preview ? (
-                  <img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />
-                ) : (
-                  <span className="text-hacker-accent">{getFileExtensionIcon(att.category, att.name)}</span>
-                )}
-                <span className="truncate max-w-[120px]">{att.name}</span>
-                <span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>
-                <button onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  className="text-hacker-text-dim hover:text-hacker-error ml-1">
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="text-hacker-text-dim text-[10px] mb-1 flex justify-between">
-          <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
-          <span className="flex items-center gap-2">
-            {activeProject?.git?.branch && <span>git:{activeProject.git.branch}</span>}
-            {autoReviewStreaming && (
-              <span className="text-hacker-warn flex items-center gap-1">
-                <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> reviewing…
-              </span>
-            )}
-            {isStreaming && !autoReviewStreaming && (
-              <span className="text-hacker-accent flex items-center gap-1">
-                <span className="pulse-dot w-1.5 h-1.5" /> generating…
-              </span>
-            )}
-          </span>
-        </div>
-
-        <div className="flex gap-2">
-          <textarea ref={inputRef} value={input} onChange={(e) => {
-              setInput(e.target.value);
-              // Auto-expand up to 8 lines
-              const target = e.target;
-              target.style.height = 'auto';
-              const lineHeight = parseInt(getComputedStyle(target).lineHeight) || 20;
-              const maxH = lineHeight * 8;
-              target.style.height = Math.min(target.scrollHeight, maxH) + 'px';
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
-            className="input-hacker flex-1 resize-none overflow-y-auto" rows={2}
-            style={{ minHeight: '3rem', maxHeight: '10rem' }}
-          />
-
-          <div className="flex flex-col gap-1">
-            <button onClick={handleSend} className="btn-hacker flex-1 px-4"
-              disabled={!input.trim() && attachments.length === 0}>SEND</button>
-            <div className="flex gap-1">
-              <button onClick={() => fileInputRef.current?.click()}
-                className="btn-hacker px-2 text-xs" title="Attach file">
-                <Paperclip size={14} />
-              </button>
-              {isStreaming && (
-                <button onClick={() => send({ type: "pi_abort", projectId })} className="btn-hacker danger px-4 text-xs">ABORT</button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept="image/*,text/*,application/json,application/xml,application/javascript,application/x-shellscript,.js,.ts,.tsx,.jsx,.py,.rb,.rs,.go,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.sh,.bash,.sql,.yaml,.yml,.toml,.ini,.cfg,.env,.md,.txt,.log,.css,.scss,.less,.html,.svg"
-        onChange={handleFileSelect}
-        className="hidden"
+      {/* Input area — isolated component to prevent re-renders on keystroke */}
+      <ChatInputArea
+        onSend={handleSend}
+        onAbort={() => send({ type: "pi_abort", projectId })}
+        isStreaming={isStreaming}
+        autoReviewStreaming={autoReviewStreaming}
+        gitBranch={activeProject?.git?.branch}
+        setError={setError}
       />
     </div>
   );
@@ -791,7 +612,7 @@ interface AssistantMsg {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-function GroupedMessages({ messages, showAllThinking, expandTools }: {
+const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools }: {
   messages: DisplayMessage[];
   showAllThinking: boolean;
   expandTools: boolean;
@@ -815,9 +636,9 @@ function GroupedMessages({ messages, showAllThinking, expandTools }: {
         showAllThinking={showAllThinking} expandTools={expandTools} />;
     })}
   </>;
-}
+})
 
-function UserBubble({ message }: { message: DisplayMessage }) {
+const UserBubble = memo(function UserBubble({ message }: { message: DisplayMessage }) {
   // Pi command result: system info
   if (message.customType === "pi_command") {
     return (
@@ -850,9 +671,9 @@ function UserBubble({ message }: { message: DisplayMessage }) {
       </div>
     </div>
   );
-}
+})
 
-function AssistantGroup({ messages, showAllThinking, expandTools }: {
+const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking, expandTools }: {
   messages: AssistantMsg[];
   showAllThinking: boolean;
   expandTools: boolean;
@@ -921,9 +742,7 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
         {/* Final text — ReactMarkdown for formatting, <pre> for code blocks */}
         {finalText && (
           <div className="px-3 py-2 prose-hacker">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {finalText}
-            </ReactMarkdown>
+            <MemoizedReactMarkdown>{finalText}</MemoizedReactMarkdown>
           </div>
         )}
 
@@ -936,10 +755,10 @@ function AssistantGroup({ messages, showAllThinking, expandTools }: {
       </div>
     </div>
   );
-}
+})
 
 // ── Streaming Block ────────────────────────────────────
-function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools }: {
+const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools }: {
   content: string;
   thinking: string;
   toolCalls: ToolCallInfo[];
@@ -990,9 +809,7 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
         {/* Streaming content with blinking cursor */}
         {content ? (
           <div className="px-3 py-2 prose-hacker">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {content}
-            </ReactMarkdown>
+            <MemoizedReactMarkdown>{content}</MemoizedReactMarkdown>
             <span className="cursor-blink" />
           </div>
         ) : (thinking || toolCalls.length > 0) ? (
@@ -1003,13 +820,13 @@ function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandT
       </div>
     </div>
   );
-}
+})
 
 // ── Tool Call Card ─────────────────────────────────────
 // Two modes:
 // - "badge" (default for completed tools): tiny inline pill like  ✓ bash  ✓ edit src/file.ts
 // - "detail" (for streaming or when user clicks): full card with args/output
-function ToolCallCard({ toolCall, defaultExpanded = true, forceBadge = false }: {
+const ToolCallCard = memo(function ToolCallCard({ toolCall, defaultExpanded = true, forceBadge = false }: {
   toolCall: ToolCallInfo;
   defaultExpanded?: boolean;
   forceBadge?: boolean;
@@ -1074,7 +891,7 @@ function ToolCallCard({ toolCall, defaultExpanded = true, forceBadge = false }: 
       )}
     </div>
   );
-}
+})
 
 /** Short label for a tool call badge, e.g. "bash", "edit src/app.tsx", "read README.md" */
 function getToolShortLabel(name: string, args: any): string {
@@ -1110,3 +927,205 @@ function extractToolArgs(args: any): any {
   if (Object.keys(rest).length > 0) return rest;
   return args;
 }
+// ── ChatInputArea (isolated to prevent re-renders on every keystroke) ──
+
+const ChatInputArea = memo(function ChatInputArea({
+  onSend, onAbort, isStreaming, autoReviewStreaming, gitBranch, setError,
+}: {
+  onSend: (text: string, attachments: Attachment[]) => void;
+  onAbort: () => void;
+  isStreaming: boolean;
+  autoReviewStreaming: boolean;
+  gitBranch?: string;
+  setError: (e: string) => void;
+}) {
+  const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const processFile = useCallback((file: File) => {
+    if (attachments.length >= 10) {
+      setError("Maximum 10 files per message");
+      return;
+    }
+    const category = categorizeFile(file.type || "application/octet-stream", file.name);
+    if (category === "image" && file.size > MAX_IMAGE_SIZE) {
+      setError(`Image too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_IMAGE_SIZE)}.`);
+      return;
+    }
+    if (category === "text" && file.size > MAX_TEXT_SIZE) {
+      setError(`Text file too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_TEXT_SIZE)}.`);
+      return;
+    }
+    if (category === "binary") {
+      setError(`Cannot attach binary file: ${file.name}. Only images, text, and code files are supported.`);
+      return;
+    }
+    const reader = new FileReader();
+    const uid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (category === "image") {
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        setAttachments((prev) => [...prev, {
+          id: uid, name: file.name, mimeType: file.type, size: file.size,
+          category, data: base64, preview: reader.result as string,
+        }]);
+      };
+      reader.readAsDataURL(file);
+    } else if (category === "audio") {
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        setAttachments((prev) => [...prev, {
+          id: uid, name: file.name, mimeType: file.type, size: file.size,
+          category, data: base64,
+        }]);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = () => {
+        const text = reader.result as string;
+        const lang = getLanguageTag(file.name);
+        const previewLines = text.split("\n").slice(0, 3).join("\n");
+        setAttachments((prev) => [...prev, {
+          id: uid, name: file.name, mimeType: file.type || "text/plain", size: file.size,
+          category, data: `\n\n📄 **${file.name}**\n\`\`\`${lang}\n${text}\n\`\`\`\n`,
+          preview: previewLines.length > 200 ? previewLines.slice(0, 200) + "..." : previewLines,
+        }]);
+      };
+      reader.readAsText(file);
+    }
+  }, [attachments.length, setError]);
+
+  const handleSendClick = useCallback(() => {
+    const text = input.trim();
+    if (!text && attachments.length === 0) return;
+    onSend(input, attachments);
+    setInput("");
+    setAttachments([]);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+  }, [input, attachments, onSend]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendClick();
+    }
+  }, [handleSendClick]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    for (const file of Array.from(e.dataTransfer.files)) processFile(file);
+  }, [processFile]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    for (const item of e.clipboardData.items) {
+      if (item.type.startsWith("image/")) {
+        const blob = item.getAsFile();
+        if (blob) processFile(blob);
+      }
+    }
+  }, [processFile]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      for (const file of Array.from(e.target.files)) processFile(file);
+    }
+  }, [processFile]);
+
+  return (
+    <div
+      className="border-t border-hacker-border-bright bg-hacker-surface p-3"
+      onDrop={handleDrop}
+      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+      onDragLeave={() => setIsDragOver(false)}
+      onPaste={handlePaste}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20">
+          <div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div>
+        </div>
+      )}
+
+      {/* Attachment previews */}
+      {attachments.length > 0 && (
+        <div className="flex gap-2 mb-2 flex-wrap">
+          {attachments.map((att) => (
+            <div key={att.id} className="flex items-center gap-1.5 text-xs bg-hacker-border/40 border border-hacker-border px-2 py-1.5 rounded group">
+              {att.category === "image" && att.preview ? (
+                <img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />
+              ) : (
+                <span className="text-hacker-accent">{getFileExtensionIcon(att.category, att.name)}</span>
+              )}
+              <span className="truncate max-w-[120px]">{att.name}</span>
+              <span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>
+              <button onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                className="text-hacker-text-dim hover:text-hacker-error ml-1">
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="text-hacker-text-dim text-[10px] mb-1 flex justify-between">
+        <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
+        <span className="flex items-center gap-2">
+          {gitBranch && <span>git:{gitBranch}</span>}
+          {autoReviewStreaming && (
+            <span className="text-hacker-warn flex items-center gap-1">
+              <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> reviewing…
+            </span>
+          )}
+          {isStreaming && !autoReviewStreaming && (
+            <span className="text-hacker-accent flex items-center gap-1">
+              <span className="pulse-dot w-1.5 h-1.5" /> generating…
+            </span>
+          )}
+        </span>
+      </div>
+
+      <div className="flex gap-2">
+        <textarea ref={inputRef} value={input} onChange={(e) => {
+            setInput(e.target.value);
+            const target = e.target;
+            target.style.height = 'auto';
+            const lineHeight = parseInt(getComputedStyle(target).lineHeight) || 20;
+            const maxH = lineHeight * 8;
+            target.style.height = Math.min(target.scrollHeight, maxH) + 'px';
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
+          className="input-hacker flex-1 resize-none overflow-y-auto" rows={2}
+          style={{ minHeight: '3rem', maxHeight: '10rem' }}
+        />
+
+        <div className="flex flex-col gap-1">
+          <button onClick={handleSendClick} className="btn-hacker flex-1 px-4"
+            disabled={!input.trim() && attachments.length === 0}>SEND</button>
+          <div className="flex gap-1">
+            <button onClick={() => fileInputRef.current?.click()}
+              className="btn-hacker px-2 text-xs" title="Attach file">
+              <Paperclip size={14} />
+            </button>
+            {isStreaming && (
+              <button onClick={onAbort} className="btn-hacker danger px-4 text-xs">ABORT</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*,text/*,application/json,application/xml,application/javascript,application/x-shellscript,.js,.ts,.tsx,.jsx,.py,.rb,.rs,.go,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.sh,.bash,.sql,.yaml,.yml,.toml,.ini,.cfg,.env,.md,.txt,.log,.css,.scss,.less,.html,.svg"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+    </div>
+  );
+});

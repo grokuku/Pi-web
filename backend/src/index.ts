@@ -54,12 +54,12 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: use ALLOWED_ORIGINS env var in production, allow all in dev
+// CORS: in dev allow all, in production allow configured origins or same-origin
 const allowedOrigins = process.env.NODE_ENV === "development"
   ? true
   : (process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(",")
-    : ["https://pi-web.local"]);
+    : true); // Default: allow all origins (works with reverse proxies)
 app.use(cors({
   origin: allowedOrigins,
 }));
