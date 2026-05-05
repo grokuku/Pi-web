@@ -35,9 +35,9 @@ export function useWebSocket() {
     if (isDestroyedRef.current) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // In dev (Vite), use /ws path which the Vite proxy handles.
-    // In production, use root path / which reverse proxies forward correctly.
-    const wsPath = import.meta.env.DEV ? "/ws" : "/";
+    // Runtime detection: localhost dev uses /ws (Vite proxy), everything else uses / (reverse proxy friendly)
+    const isLocalDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const wsPath = isLocalDev ? "/ws" : "/";
     const wsUrl = `${protocol}//${window.location.host}${wsPath}`;
 
     console.log(`[WS] Connecting to ${wsUrl}...`);
@@ -58,7 +58,6 @@ export function useWebSocket() {
         if (listeners) {
           listeners.forEach((cb) => cb(msg));
         }
-        // Also notify wildcard listeners
         const wildcard = listenersRef.current.get("*");
         if (wildcard) {
           wildcard.forEach((cb) => cb(msg));
@@ -71,7 +70,6 @@ export function useWebSocket() {
     ws.onclose = () => {
       wsRef.current = null;
       setConnected(false);
-      // Exponential backoff: 1s, 2s, 4s, 8s... max 30s
       const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
       reconnectAttemptsRef.current++;
       if (!isDestroyedRef.current) {
@@ -90,12 +88,10 @@ export function useWebSocket() {
     connect();
     return () => {
       isDestroyedRef.current = true;
-      // Clear any pending reconnect timer
       if (reconnectTimerRef.current !== null) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      // Close socket without triggering reconnect
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.onerror = null;
