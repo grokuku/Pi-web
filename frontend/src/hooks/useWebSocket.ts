@@ -35,10 +35,7 @@ export function useWebSocket() {
     if (isDestroyedRef.current) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl =
-      import.meta.env.MODE === "development"
-        ? "ws://localhost:3000"
-        : `${protocol}//${window.location.host}`;
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
