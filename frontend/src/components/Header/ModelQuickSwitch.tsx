@@ -198,9 +198,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
             >
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
-                <button
+                <div
                   onClick={(e) => handleToggleMode(e, mode as "plan" | "review")}
-                  className={`px-2 py-1 border-r transition-colors ${
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review"); } }}
+                  className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
                       : "border-hacker-border/20 text-hacker-text-dim/30 hover:text-hacker-text-dim"
@@ -208,7 +211,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, onModeSwitch, on
                   title={isEnabled ? `Disable ${cfg.label}` : `Enable ${cfg.label}`}
                 >
                   <Power size={10} />
-                </button>
+                </div>
               )}
 
               {/* Main clickable zone */}
