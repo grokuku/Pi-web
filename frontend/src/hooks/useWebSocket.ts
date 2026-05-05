@@ -14,6 +14,7 @@ export function useWebSocket() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDestroyedRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
+  const wsPathRef = useRef<string | null>(null); // remembers which path worked
 
   const connect = useCallback(() => {
     // Clear any pending reconnect timer
@@ -22,7 +23,7 @@ export function useWebSocket() {
       reconnectTimerRef.current = null;
     }
 
-    // Close existing connection cleanly (prevent old socket handlers from firing)
+    // Close existing connection cleanly
     if (wsRef.current) {
       const old = wsRef.current;
       old.onclose = null;
@@ -35,13 +36,31 @@ export function useWebSocket() {
     if (isDestroyedRef.current) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const host = window.location.host;
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    // If we already know which path works, use it directly
+    if (wsPathRef.current) {
+      const wsUrl = `${protocol}//${host}${wsPathRef.current}`;
+      console.log(`[WS] Reconnecting to ${wsUrl}...`);
+      openWs(wsUrl, null);
+      return;
+    }
+
+    // Try /ws first (works with Vite proxy in dev), fall back to / (root path for reverse proxies)
+    const primaryUrl = `${protocol}//${host}/ws`;
+    const fallbackUrl = `${protocol}//${host}/`;
+    console.log(`[WS] Connecting to ${primaryUrl}${import.meta.env.DEV ? "" : ` (fallback: ${fallbackUrl})`}...`);
+    openWs(primaryUrl, import.meta.env.DEV ? null : fallbackUrl);
+  }, []);
+
+  const openWs = useCallback((url: string, fallbackUrl: string | null) => {
+    const ws = new WebSocket(url);
 
     ws.onopen = () => {
-      console.log("[WS] Connected");
+      // Remember which path worked for future reconnections
+      const urlObj = new URL(url);
+      wsPathRef.current = urlObj.pathname || "/";
+      console.log(`[WS] Connected to ${url}`);
       setConnected(true);
       reconnectAttemptsRef.current = 0;
     };
@@ -63,8 +82,15 @@ export function useWebSocket() {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       wsRef.current = null;
+      // If connection was never established and we have a fallback, try it
+      if (event.code === 1006 && !wsPathRef.current && fallbackUrl && reconnectAttemptsRef.current === 0) {
+        console.log(`[WS] ${url} failed (code 1006), trying fallback ${fallbackUrl}...`);
+        reconnectAttemptsRef.current++;
+        openWs(fallbackUrl, null);
+        return;
+      }
       setConnected(false);
       // Exponential backoff: 1s, 2s, 4s, 8s... max 30s
       const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
@@ -75,10 +101,12 @@ export function useWebSocket() {
       }
     };
 
-    ws.onerror = (e) => {
-      console.error("[WS] Error:", e);
+    ws.onerror = () => {
+      // onclose will handle reconnection
     };
-  }, []);
+
+    wsRef.current = ws;
+  }, [connect]);
 
   useEffect(() => {
     isDestroyedRef.current = false;
