@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { readdirSync, statSync, mkdirSync, existsSync, readFileSync } from "fs";
+import { readdirSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync, createReadStream, copyFileSync, unlinkSync } from "fs";
 import path from "path";
 
 const router = Router();
@@ -139,6 +139,16 @@ const IMAGE_EXTENSIONS = new Set([
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 
+// Multer for file uploads (imported dynamically to avoid bundling issues)
+let uploadMiddleware: any;
+async function getUploadMiddleware() {
+  if (!uploadMiddleware) {
+    const multer = (await import("multer")).default;
+    uploadMiddleware = multer({ dest: "/tmp/pi-web-uploads/", limits: { fileSize: 50 * 1024 * 1024 } });
+  }
+  return uploadMiddleware;
+}
+
 router.get("/read", (req: Request, res: Response) => {
   try {
     const filePath = (req.query.path as string) || "";
@@ -189,6 +199,106 @@ router.get("/read", (req: Request, res: Response) => {
     }
 
     return res.status(415).json({ error: `Cannot preview file type: ${ext}` });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Write/save file content ──
+router.put("/write", (req: Request, res: Response) => {
+  try {
+    const { path: filePath, content } = req.body;
+    if (!filePath || content === undefined) {
+      return res.status(400).json({ error: "path and content are required" });
+    }
+    const resolved = path.resolve(filePath);
+    if (!isPathAllowed(resolved)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    writeFileSync(resolved, content, "utf-8");
+    res.json({ success: true, path: filePath });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Download file ──
+router.get("/download", (req: Request, res: Response) => {
+  try {
+    const paths = ((req.query.paths as string) || "").split("|").filter(Boolean);
+    if (paths.length === 0) {
+      return res.status(400).json({ error: "paths parameter required (pipe-separated)" });
+    }
+   
+    if (paths.length === 1) {
+      // Single file
+      const resolved = path.resolve(paths[0]);
+      if (!isPathAllowed(resolved)) return res.status(403).json({ error: "Access denied" });
+      if (!existsSync(resolved)) return res.status(404).json({ error: "Not found" });
+      const stat = statSync(resolved);
+      const filename = path.basename(resolved);
+      
+      if (stat.isDirectory()) {
+        // Directory: tar.gz
+        res.setHeader("Content-Type", "application/gzip");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}.tar.gz"`);
+        const { spawn } = require("child_process");
+        const child = spawn("tar", ["-czf", "-", "-C", resolved, "."]);
+        child.stdout.pipe(res);
+        child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
+        child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
+      } else {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.setHeader("Content-Length", stat.size);
+        createReadStream(resolved).pipe(res);
+      }
+    } else {
+      // Multiple files/folders: tar.gz
+      const resolvedPaths = paths.map(p => path.resolve(p));
+      for (const rp of resolvedPaths) {
+        if (!isPathAllowed(rp)) return res.status(403).json({ error: `Access denied: ${rp}` });
+      }
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", `attachment; filename="download.tar.gz"`);
+      const { spawn } = require("child_process");
+      // tar all paths relative to common parent
+      const commonParent = path.dirname(resolvedPaths[0]);
+      const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
+      const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames]);
+      child.stdout.pipe(res);
+      child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
+      child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Upload files ──
+router.post("/upload", async (req: Request, res: Response) => {
+  try {
+    const upload = await getUploadMiddleware();
+    upload.array("files", 50)(req, res, async (err: any) => {
+      if (err) return res.status(400).json({ error: err.message });
+      
+      const targetPath = (req.body.targetPath as string) || "/projects";
+      const resolved = path.resolve(targetPath);
+      if (!isPathAllowed(resolved)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (!existsSync(resolved)) mkdirSync(resolved, { recursive: true });
+      
+      const files = req.files as Express.Multer.File[];
+      const uploaded: string[] = [];
+      for (const file of files) {
+        const dest = path.join(resolved, file.originalname);
+        copyFileSync(file.path, dest);
+        try { unlinkSync(file.path); } catch {}
+        uploaded.push(file.originalname);
+      }
+      res.json({ success: true, uploaded, path: targetPath });
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
