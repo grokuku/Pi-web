@@ -1,21 +1,78 @@
 import { execFile } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
+import crypto from "crypto";
 
 /**
  * SMB/CIFS mount manager for Pi-Web.
- * 
+ *
  * Mounts Windows shares (or any SMB share) into the container so
  * Pi can work on files stored on remote machines.
- * 
- * Mount point convention: /mnt/smb/<project-id>
- * 
+ *
+ * Passwords are encrypted at rest using AES-256-GCM with a
+ * server-derived key. The key is generated once and stored in
+ * /app/.data/.smb-key — never exposed via API.
+ *
+ * Mount point convention: /mnt/smb/<sanitized-name>
+ *
  * Requires:
  *  - cifs-utils installed in the container
- *  - CAP_SYS_ADMIN (or privileged mode) for mount operations
+ *  - privileged mode for mount operations
  */
 
 const SMB_BASE = "/mnt/smb";
+const SMB_KEY_FILE = path.join(process.env.HOME || "/root", ".pi", "agent", ".smb-key");
+
+// ── Password encryption ───────────────────────────
+
+function getEncryptionKey(): Buffer {
+  try {
+    if (existsSync(SMB_KEY_FILE)) {
+      return Buffer.from(readFileSync(SMB_KEY_FILE, "utf-8"), "hex");
+    }
+  } catch {}
+  // Generate new key
+  const key = crypto.randomBytes(32);
+  const dir = path.dirname(SMB_KEY_FILE);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(SMB_KEY_FILE, key.toString("hex"), { mode: 0o600 });
+  return key;
+}
+
+const encryptionKey = getEncryptionKey();
+
+/** Encrypt a plaintext string. Returns "enc:<iv>:<ciphertext>:<authTag>" */
+export function encryptSmbPassword(plaintext: string): string {
+  if (!plaintext) return "";
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey, iv);
+  let encrypted = cipher.update(plaintext, "utf-8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag().toString("hex");
+  return `enc:${iv.toString("hex")}:${encrypted}:${authTag}`;
+}
+
+/** Decrypt an encrypted password string. Returns plaintext. */
+export function decryptSmbPassword(encoded: string): string {
+  if (!encoded) return "";
+  if (!encoded.startsWith("enc:")) return encoded; // plaintext for backward compat
+  try {
+    const parts = encoded.split(":");
+    if (parts.length !== 4) return encoded; // malformed, return as-is
+    const iv = Buffer.from(parts[1], "hex");
+    const encrypted = parts[2];
+    const authTag = Buffer.from(parts[3], "hex");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, "hex", "utf-8");
+    decrypted += decipher.final("utf-8");
+    return decrypted;
+  } catch {
+    return ""; // Decryption failed — password unusable
+  }
+}
+
+// ── Mount management ──────────────────────────────
 
 /** Ensure the base mount directory exists */
 function ensureBaseDir() {
@@ -24,8 +81,14 @@ function ensureBaseDir() {
   }
 }
 
+/** Sanitize a project name for use as mount directory name */
+function sanitizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
 /** Build the mount point path for a project */
-export function getMountPoint(projectId: string): string {
+export function getMountPoint(projectId: string, projectName?: string): string {
+  if (projectName) return path.join(SMB_BASE, sanitizeName(projectName));
   return path.join(SMB_BASE, projectId);
 }
 
@@ -33,38 +96,38 @@ export function getMountPoint(projectId: string): string {
 export async function isMounted(mountPoint: string): Promise<boolean> {
   return new Promise((resolve) => {
     execFile("mountpoint", ["-q", mountPoint], (err) => {
-      resolve(!err); // mountpoint returns 0 if mounted
+      resolve(!err);
     });
   });
 }
 
-/** Build the cifs mount options string */
-function buildCifsOptions(username?: string, password?: string, domain?: string): string {
-  const parts: string[] = [];
-  if (username) parts.push(`username=${username}`);
-  else parts.push("guest"); // anonymous access if no username
+/** Build the cifs mount options string. Password is passed via a credentials file to avoid shell escaping issues. */
+async function buildCredentialsFile(username: string, password: string, domain?: string): Promise<string> {
+  const { mkdtempSync, writeFileSync, unlinkSync } = await import("fs");
+  const { tmpdir } = await import("os");
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "smb-"));
+  const credFile = path.join(tmpDir, ".credentials");
+  let content = "";
+  if (domain) content += `domain=${domain}\n`;
+  content += `username=${username}\n`;
+  content += `password=${password}\n`;
+  writeFileSync(credFile, content, { mode: 0o600 });
+  return credFile;
+}
 
-  if (password) parts.push(`password=${password}`);
-  else if (!username) parts.push("password="); // empty password for guest
-
-  if (domain) parts.push(`domain=${domain}`);
-
-  // Common options for better compatibility
-  parts.push("iocharset=utf8");
-  parts.push("file_mode=0666");
-  parts.push("dir_mode=0777");
-  parts.push("vers=3.0"); // Try SMBv3 first
-  parts.push("actimeo=30"); // Cache attributes for 30s
-
-  return parts.join(",");
+function cleanupCredentialsFile(credFile: string) {
+  try {
+    const { unlinkSync, rmdirSync } = require("fs");
+    unlinkSync(credFile);
+    rmdirSync(path.dirname(credFile));
+  } catch {}
 }
 
 /**
  * Mount an SMB share.
- * 
- * @param share     UNC path like //192.168.1.100/share or smb://server/share
- * @param mountPoint Local directory to mount on
- * @param options   Optional credentials
+ *
+ * Uses a credentials file instead of passing password via -o option.
+ * This avoids shell escaping issues (e.g. $ in passwords or usernames).
  */
 export async function mountSmb(
   share: string,
@@ -84,43 +147,74 @@ export async function mountSmb(
     return { ok: true };
   }
 
-  const mountOpts = buildCifsOptions(options?.username, options?.password, options?.domain);
+  // Decrypt password if encrypted
+  const decryptedPassword = options?.password ? decryptSmbPassword(options.password) : "";
+  const username = options?.username || "guest";
+  const domain = options?.domain;
 
-  return new Promise((resolve) => {
-    execFile(
-      "mount",
-      ["-t", "cifs", normalizedShare, mountPoint, "-o", mountOpts],
-      { timeout: 15000 },
-      (err, stdout, stderr) => {
-        if (err) {
-          console.error(`[SMB] Mount failed: ${err.message}`);
-          console.error(`[SMB] stderr: ${stderr}`);
-          // Try SMBv1 if v3 fails (some older Windows shares)
-          const v1Opts = mountOpts.replace("vers=3.0", "vers=1.0");
-          execFile(
-            "mount",
-            ["-t", "cifs", normalizedShare, mountPoint, "-o", v1Opts],
-            { timeout: 15000 },
-            (err2, _stdout2, stderr2) => {
-              if (err2) {
-                console.error(`[SMB] Mount v1 also failed: ${err2.message}`);
-                console.error(`[SMB] stderr: ${stderr2}`);
-                resolve({
-                  ok: false,
-                  error: `Failed to mount ${normalizedShare}: ${err.message}. SMBv1 fallback also failed: ${err2.message}`,
-                });
-              } else {
-                console.log(`[SMB] Mounted ${normalizedShare} at ${mountPoint} (SMBv1)`);
-                resolve({ ok: true });
-              }
-            }
-          );
-        } else {
-          console.log(`[SMB] Mounted ${normalizedShare} at ${mountPoint}`);
-          resolve({ ok: true });
-        }
+  // Build mount args
+  const mountArgs = ["-t", "cifs", normalizedShare, mountPoint];
+
+  if (username && decryptedPassword) {
+    // Use credentials file to avoid escaping issues with $, spaces, etc.
+    let credFile = "";
+    try {
+      credFile = await buildCredentialsFile(username, decryptedPassword, domain);
+      mountArgs.push("-o", `credentials=${credFile},iocharset=utf8,file_mode=0666,dir_mode=0777,vers=3.0,actimeo=30`);
+    } catch (e: any) {
+      // Fallback to inline options if cred file fails
+      console.warn("[SMB] Credentials file failed, using inline options:", e.message);
+      const parts = [`username=${username}`, `password=${decryptedPassword}`];
+      if (domain) parts.push(`domain=${domain}`);
+      parts.push("iocharset=utf8", "file_mode=0666", "dir_mode=0777", "vers=3.0", "actimeo=30");
+      mountArgs.push("-o", parts.join(","));
+    }
+
+    const result = await doMount(mountArgs, credFile);
+    if (!result.ok && credFile) {
+      // Try SMBv2 (some Windows servers don't support v3)
+      console.warn("[SMB] SMBv3 failed, trying v2...");
+      const v2Args = [...mountArgs];
+      // Replace vers=3.0 with vers=2.0
+      const lastIdx = v2Args.length - 1;
+      v2Args[lastIdx] = v2Args[lastIdx].replace("vers=3.0", "vers=2.0");
+      const v2Result = await doMount(v2Args, credFile);
+      if (!v2Result.ok) {
+        // Try SMBv1
+        console.warn("[SMB] SMBv2 failed, trying v1...");
+        const v1Args = [...mountArgs];
+        v1Args[lastIdx] = v1Args[lastIdx].replace("vers=3.0", "vers=1.0");
+        return doMount(v1Args, credFile);
       }
-    );
+      return v2Result;
+    }
+    return result;
+  } else {
+    // Guest/anonymous access
+    mountArgs.push("-o", "guest,iocharset=utf8,file_mode=0666,dir_mode=0777,vers=3.0,actimeo=30");
+    const result = await doMount(mountArgs, "");
+    if (!result.ok) {
+      const v2Args = [...mountArgs];
+      v2Args[v2Args.length - 1] = v2Args[v2Args.length - 1].replace("vers=3.0", "vers=2.0");
+      return doMount(v2Args, "");
+    }
+    return result;
+  }
+}
+
+function doMount(args: string[], credFile: string): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    execFile("mount", args, { timeout: 15000 }, (err, _stdout, stderr) => {
+      if (credFile) cleanupCredentialsFile(credFile);
+      if (err) {
+        console.error(`[SMB] Mount failed: ${err.message}`);
+        if (stderr) console.error(`[SMB] stderr: ${stderr.trim()}`);
+        resolve({ ok: false, error: `${err.message}${stderr ? ` — ${stderr.trim()}` : ""}` });
+      } else {
+        console.log(`[SMB] Mounted successfully`);
+        resolve({ ok: true });
+      }
+    });
   });
 }
 
@@ -129,14 +223,13 @@ export async function mountSmb(
  */
 export async function unmountSmb(mountPoint: string): Promise<{ ok: boolean; error?: string }> {
   if (!(await isMounted(mountPoint))) {
-    return { ok: true }; // Already unmounted
+    return { ok: true };
   }
 
   return new Promise((resolve) => {
     execFile("umount", [mountPoint], { timeout: 10000 }, (err, _stdout, stderr) => {
       if (err) {
-        // Try lazy unmount
-        console.warn(`[SMB] Lazy unmount ${mountPoint}: ${stderr}`);
+        console.warn(`[SMB] Lazy unmount ${mountPoint}: ${stderr?.trim() || err.message}`);
         execFile("umount", ["-l", mountPoint], { timeout: 10000 }, (err2) => {
           if (err2) {
             console.error(`[SMB] Lazy unmount also failed: ${err2.message}`);
@@ -158,15 +251,15 @@ export async function unmountSmb(mountPoint: string): Promise<{ ok: boolean; err
  * Mount all SMB projects that have SMB config.
  * Called at startup.
  */
-export async function mountAllSmbProjects(projects: { id: string; storage: string; smb?: { share: string; mountPoint: string; username?: string; password?: string; domain?: string } }[]): Promise<void> {
+export async function mountAllSmbProjects(projects: { id: string; name?: string; storage: string; smb?: { share: string; mountPoint: string; username?: string; password?: string; domain?: string } }[]): Promise<void> {
   ensureBaseDir();
   for (const project of projects) {
     if (project.storage === "smb" && project.smb?.share) {
-      const mountPoint = project.smb.mountPoint || getMountPoint(project.id);
+      const mountPoint = project.smb.mountPoint || getMountPoint(project.id, project.name);
       console.log(`[SMB] Auto-mounting ${project.smb.share} → ${mountPoint}`);
       const result = await mountSmb(project.smb.share, mountPoint, {
         username: project.smb.username,
-        password: project.smb.password,
+        password: project.smb.password, // Will be decrypted inside mountSmb
         domain: project.smb.domain,
       });
       if (!result.ok) {
@@ -181,11 +274,9 @@ export async function mountAllSmbProjects(projects: { id: string; storage: strin
  * Called at shutdown.
  */
 export async function unmountAllSmb(): Promise<void> {
-  const fs = await import("fs");
-  const { readdirSync } = fs;
-
   if (!existsSync(SMB_BASE)) return;
 
+  const { readdirSync } = await import("fs");
   const entries = readdirSync(SMB_BASE);
   for (const entry of entries) {
     const mountPoint = path.join(SMB_BASE, entry);

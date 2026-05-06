@@ -17,7 +17,11 @@ const router = Router();
 router.get("/", (_req: Request, res: Response) => {
   try {
     const projects = getAllProjects();
-    res.json(projects);
+    // Strip SMB passwords from API response
+    res.json(projects.map(p => {
+      if (p.smb) return { ...p, smb: { ...p.smb, password: undefined } };
+      return p;
+    }));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -30,7 +34,9 @@ router.get("/:id", (req: Request, res: Response) => {
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
-    res.json(project);
+    // Strip SMB password
+    const safe = project.smb ? { ...project, smb: { ...project.smb, password: undefined } } : project;
+    res.json(safe);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

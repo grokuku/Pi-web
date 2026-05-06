@@ -3,6 +3,7 @@ import path from "path";
 import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
 import { Mutex } from "../utils/mutex.js";
+import { encryptSmbPassword } from "./smb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
@@ -162,7 +163,7 @@ export async function createProject(
     versioning,
     cwd,
     ssh,
-    smb,
+    smb: smb ? { ...smb, password: smb.password ? encryptSmbPassword(smb.password) : undefined } : undefined,
     git: versioning === "git" ? {
       remote: git?.remote || "",
       branch: git?.branch || "main",
