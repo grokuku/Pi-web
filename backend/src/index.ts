@@ -54,12 +54,10 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: in dev allow all, in production allow configured origins or same-origin
-const corsOrigins = process.env.NODE_ENV === "development"
-  ? true
-  : (process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",")
-    : true);
+// CORS: ALLOWED_ORIGINS env var (comma-separated origins, or "*" for all). Default: allow all.
+const corsOrigins = process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS !== "*"
+  ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim())
+  : true; // Allow all origins by default
 app.use(cors({
   origin: corsOrigins,
 }));
@@ -104,29 +102,28 @@ app.get("/api/sessions/:projectId/info", (req, res) => {
 const httpServer = createServer(app);
 
 // ── WebSocket Server ──────────────────────────────────
-// Validate Origin header to prevent Cross-Site WebSocket Hijacking (CSWSH).
-const wsAllowedOrigins: string[] = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-  : ["http://localhost:3000", "http://localhost:3005", "http://localhost:5173"];
-
-// In development mode, allow all origins (consistent with CORS policy)
-const wsAllowAllOrigins = process.env.NODE_ENV === "development" && !process.env.ALLOWED_ORIGINS;
+// WS_ALLOWED_ORIGINS env var (comma-separated origins, or "*" for all). Default: allow all.
+const wsAllowAllOrigins = !process.env.WS_ALLOWED_ORIGINS || process.env.WS_ALLOWED_ORIGINS === "*";
+const wsAllowedOrigins: string[] = (!wsAllowAllOrigins && process.env.WS_ALLOWED_ORIGINS)
+  ? process.env.WS_ALLOWED_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
+  : [];
 
 function validateOrigin(origin: string | undefined): boolean {
   if (!origin) return true; // Allow non-browser clients (curl, etc.)
-  if (wsAllowAllOrigins) return true; // Dev mode: allow all
+  if (wsAllowAllOrigins) return true;
   try {
     const url = new URL(origin);
     return wsAllowedOrigins.some(allowed => {
-      const allowedUrl = new URL(allowed.startsWith("http") ? allowed : `http://${allowed}`);
-      // Allow same hostname, and also allow HTTPS variant
-      return url.hostname === allowedUrl.hostname ||
-        origin === allowed ||
-        origin === allowed.replace("http://", "https://");
+      try {
+        const allowedUrl = new URL(allowed.startsWith("http") ? allowed : `https://${allowed}`);
+        // Match by hostname (ignoring protocol and port)
+        return url.hostname === allowedUrl.hostname
+          || origin === allowed
+          || origin === allowed.replace(/^http:/, "https:")
+          || origin === allowed.replace(/^https:/, "http:");
+      } catch { return false; }
     });
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 const wss = new WebSocketServer({
@@ -577,7 +574,7 @@ httpServer.listen(PORT, () => {
   ║  ⚡ PI-WEB  ███▓▓▒▒░░  v2.0  ░░▒▒▓▓███  ║
   ╠══════════════════════════════════════════╣
   ║  HTTP+WS → http://localhost:${PORT}                  ║
-  ║  Mode  → ${process.env.NODE_ENV || "development"}                     ║
+  ║  CORS/WS → ${wsAllowAllOrigins ? "allow all" : wsAllowedOrigins.length + " origins"}                  ║
   ╚══════════════════════════════════════════╝
   `);
 });
