@@ -3,6 +3,7 @@ import {
   X, Wifi, Plus, Trash2, Star, Check, RefreshCw,
   Edit2, Key, Power, Settings, TestTube2, Eye, EyeOff,
 } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
 import { PROVIDER_PRESETS } from "../../types";
 
@@ -92,15 +93,15 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
   if (!library) {
     return (
-      <div className="modal-overlay">
-        <div className="modal-box"><span className="text-hacker-accent animate-pulse">Loading...</span></div>
-      </div>
+      <ModalDialog id="model-library-loading" onClose={onClose} closeOnOverlay={false}>
+        <span className="text-hacker-accent animate-pulse">Loading...</span>
+      </ModalDialog>
     );
   }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box max-w-[52rem] max-h-[90vh] flex flex-col">
+    <ModalDialog id="model-library" onClose={onClose}>
+      <div className="max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <span className="text-hacker-accent font-bold text-sm tracking-wider">⚡ MODEL LIBRARY</span>
@@ -144,7 +145,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }
 
@@ -619,13 +620,13 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
   };
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box max-w-[36rem] max-h-[85vh] flex flex-col">
+    <ModalDialog id="model-edit" onClose={onClose}>
+      <div className="max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
             <span className="text-hacker-accent font-bold text-sm tracking-wider">⚡ EDIT MODEL</span>
-            <div className="text-hacker-text text-sm font-bold mt-0.5 truncate max-w-[28rem]">{model.name}</div>
+            <div className="text-hacker-text text-sm font-bold mt-0.5">{model.name}</div>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
         </div>
@@ -754,7 +755,7 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
           </button>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }
 

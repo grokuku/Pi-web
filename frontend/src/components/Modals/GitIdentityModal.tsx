@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X, User, Mail, RefreshCw } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 
 interface Props {
   project: Project;
@@ -40,8 +41,7 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-box max-w-sm">
+    <ModalDialog id="git-identity" onClose={onClose}>
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -116,7 +116,6 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
             {loading ? "SAVING..." : "SAVE & RETRY"}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

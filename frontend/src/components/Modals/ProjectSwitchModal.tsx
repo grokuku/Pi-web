@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
 
 interface Props {
@@ -15,8 +16,7 @@ export function ProjectSwitchModal({
   onCancel,
 }: Props) {
   return (
-    <div className="modal-overlay">
-      <div className="modal-box">
+    <ModalDialog id="project-switch" onClose={onCancel}>
         <div className="flex items-center gap-2 mb-4">
           <AlertTriangle size={18} className="text-hacker-warn" />
           <span className="text-hacker-warn font-bold text-sm tracking-wider">
@@ -52,7 +52,6 @@ export function ProjectSwitchModal({
             SWITCH NOW
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

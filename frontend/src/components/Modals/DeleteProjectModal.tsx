@@ -1,4 +1,5 @@
 import { AlertTriangle, Trash2, FolderX } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
 
 interface Props {
@@ -14,11 +15,7 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
   const isRemote = project.storage === "ssh" || project.storage === "smb";
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-box max-w-[30rem]"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalDialog id="delete-project" onClose={onClose}>
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-hacker-warn/10 border border-hacker-warn/30">
@@ -117,7 +114,6 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
             💡 Remote content is always preserved. Only the local project configuration is removed.
           </div>
         )}
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

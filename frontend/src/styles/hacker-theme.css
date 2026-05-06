@@ -454,23 +454,24 @@ body {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   z-index: 10000;
+  /* No flex centering — modals are absolutely positioned for drag/resize */
 }
 .modal-box {
   background: var(--surface-raised);
   border: 1px solid var(--accent-dim);
   box-shadow: 0 0 30px rgba(var(--accent-rgb), 0.1), 0 0 10px rgba(var(--accent-rgb), 0.05);
-  max-width: 30rem;
-  max-height: 85vh;
   overflow-y: auto;
   width: 90%;
   padding: 1.5rem;
+  /* Absolute positioning is set inline by ModalDialog */
+}
+.modal-box.dragging,
+.modal-box.resizing {
+  pointer-events: auto;
 }
 
-/* ─── Matrix rain effect ────────────────────── */
+
 .matrix-bg {
   position: fixed;
   inset: 0;

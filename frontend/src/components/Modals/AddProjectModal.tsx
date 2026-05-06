@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
 import type { Project } from "../../types";
 
@@ -184,8 +185,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
     gitProvider;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-box max-w-lg">
+    <ModalDialog id="add-project" onClose={onClose}>
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -532,7 +532,6 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

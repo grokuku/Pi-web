@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu,
 } from "lucide-react";
+import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
 import { GitAuthModal } from "./GitAuthModal";
@@ -161,8 +162,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
   const canGenerateAi = modelInfo && modelInfo.source !== "none";
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-box max-w-lg">
+    <>
+    <ModalDialog id="commit-push" onClose={onClose}>
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -375,9 +376,9 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
             </button>
           </div>
         )}
-      </div>
+    </ModalDialog>
 
-      {/* Identity modal */}
+      {/* Identity modal -- rendered as separate overlay */}
       {showIdentityModal && (
         <GitIdentityModal
           project={project}
@@ -390,7 +391,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
         />
       )}
 
-      {/* Auth modal */}
+      {/* Auth modal -- rendered as separate overlay */}
       {showAuthModal && (
         <GitAuthModal
           project={project}
@@ -402,6 +403,6 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
