@@ -105,13 +105,16 @@ const httpServer = createServer(app);
 
 // ── WebSocket Server ──────────────────────────────────
 // Validate Origin header to prevent Cross-Site WebSocket Hijacking (CSWSH).
-// Only connections from the same origin are allowed.
 const wsAllowedOrigins: string[] = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
   : ["http://localhost:3000", "http://localhost:3005", "http://localhost:5173"];
 
+// In development mode, allow all origins (consistent with CORS policy)
+const wsAllowAllOrigins = process.env.NODE_ENV === "development" && !process.env.ALLOWED_ORIGINS;
+
 function validateOrigin(origin: string | undefined): boolean {
   if (!origin) return true; // Allow non-browser clients (curl, etc.)
+  if (wsAllowAllOrigins) return true; // Dev mode: allow all
   try {
     const url = new URL(origin);
     return wsAllowedOrigins.some(allowed => {
