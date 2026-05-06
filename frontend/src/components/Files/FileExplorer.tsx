@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ChevronRight, ChevronDown, Folder, FolderOpen, RefreshCw,
   Image, Code, FileText, Edit3, Save, X, Download, Upload, CheckSquare, Square,
+  CheckCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -364,6 +365,17 @@ export function FileExplorer({ project }: Props) {
     });
   }, []);
 
+  const selectAll = useCallback(() => {
+    if (!tree) return;
+    const all = new Set<string>();
+    const walk = (node: TreeNode) => {
+      all.add(node.path);
+      node.children?.forEach(walk);
+    };
+    walk(tree);
+    setSelectedPaths(all);
+  }, [tree]);
+
   const [treeWidth, setTreeWidth] = useState(240);
   const fileTreeResizeRef = useRef(false);
 
@@ -395,6 +407,12 @@ export function FileExplorer({ project }: Props) {
         <div className="flex items-center justify-between px-2 py-1.5 border-b border-hacker-border">
           <span className="text-hacker-accent text-[10px] tracking-widest">FILES</span>
           <div className="flex items-center gap-1">
+            {/* Select all */}
+            {tree && (
+              <button onClick={selectAll} className="text-hacker-text-dim hover:text-hacker-accent" title="Select all files">
+                <CheckCheck size={12} />
+              </button>
+            )}
             {/* Upload button */}
             <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
               className="text-hacker-text-dim hover:text-hacker-accent disabled:opacity-30" title="Upload files">
@@ -417,8 +435,9 @@ export function FileExplorer({ project }: Props) {
         </div>
 
         {selectedPaths.size > 0 && (
-          <div className="px-2 py-1 bg-hacker-accent/10 text-hacker-accent text-[10px] border-b border-hacker-border">
-            {selectedPaths.size} selected
+          <div className="px-2 py-1 bg-hacker-accent/10 text-hacker-accent text-[10px] border-b border-hacker-border flex items-center justify-between">
+            <span>{selectedPaths.size} selected</span>
+            <button onClick={() => setSelectedPaths(new Set())} className="text-hacker-text-dim hover:text-hacker-text text-[10px]">CLEAR</button>
           </div>
         )}
 

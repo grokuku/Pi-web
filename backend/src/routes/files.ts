@@ -222,56 +222,71 @@ router.put("/write", (req: Request, res: Response) => {
   }
 });
 
-// ── Download file ──
+// ── Download file(s) ──
 router.get("/download", (req: Request, res: Response) => {
   try {
     const paths = ((req.query.paths as string) || "").split("|").filter(Boolean);
     if (paths.length === 0) {
       return res.status(400).json({ error: "paths parameter required (pipe-separated)" });
     }
-   
-    if (paths.length === 1) {
-      // Single file
-      const resolved = path.resolve(paths[0]);
-      if (!isPathAllowed(resolved)) return res.status(403).json({ error: "Access denied" });
-      if (!existsSync(resolved)) return res.status(404).json({ error: "Not found" });
+
+    const resolvedPaths = paths.map(p => path.resolve(p));
+    for (const rp of resolvedPaths) {
+      if (!isPathAllowed(rp)) return res.status(403).json({ error: `Access denied: ${rp}` });
+      if (!existsSync(rp)) return res.status(404).json({ error: `Not found: ${rp}` });
+    }
+
+    // Single file (not a directory) — stream directly
+    if (resolvedPaths.length === 1 && !statSync(resolvedPaths[0]).isDirectory()) {
+      const resolved = resolvedPaths[0];
       const stat = statSync(resolved);
       const filename = path.basename(resolved);
-      
-      if (stat.isDirectory()) {
-        // Directory: tar.gz
-        res.setHeader("Content-Type", "application/gzip");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}.tar.gz"`);
-        const { spawn } = require("child_process");
-        const child = spawn("tar", ["-czf", "-", "-C", resolved, "."]);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Length", stat.size);
+      createReadStream(resolved).pipe(res);
+      return;
+    }
+
+    // Directory or multiple items — use tar.gz
+    const firstPath = resolvedPaths[0];
+    const basename = resolvedPaths.length === 1 ? path.basename(firstPath) : "download";
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Disposition", `attachment; filename="${basename}.tar.gz"`);
+
+    import("child_process").then(({ spawn }) => {
+      let tarArgs: string[];
+      if (resolvedPaths.length === 1 && statSync(firstPath).isDirectory()) {
+        // Single directory
+        tarArgs = ["-czf", "-", "."];
+        const child = spawn("tar", tarArgs, { cwd: firstPath });
         child.stdout.pipe(res);
         child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
         child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
+        child.on("close", (code: number) => {
+          if (code !== 0 && !res.headersSent) {
+            res.status(500).json({ error: `tar exited with code ${code}` });
+          }
+        });
       } else {
-        res.setHeader("Content-Type", "application/octet-stream");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-        res.setHeader("Content-Length", stat.size);
-        createReadStream(resolved).pipe(res);
+        // Multiple paths — use common parent as base
+        const commonParent = path.dirname(firstPath);
+        const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
+        const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames], { cwd: commonParent });
+        child.stdout.pipe(res);
+        child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
+        child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
+        child.on("close", (code: number) => {
+          if (code !== 0 && !res.headersSent) {
+            res.status(500).json({ error: `tar exited with code ${code}` });
+          }
+        });
       }
-    } else {
-      // Multiple files/folders: tar.gz
-      const resolvedPaths = paths.map(p => path.resolve(p));
-      for (const rp of resolvedPaths) {
-        if (!isPathAllowed(rp)) return res.status(403).json({ error: `Access denied: ${rp}` });
-      }
-      res.setHeader("Content-Type", "application/gzip");
-      res.setHeader("Content-Disposition", `attachment; filename="download.tar.gz"`);
-      const { spawn } = require("child_process");
-      // tar all paths relative to common parent
-      const commonParent = path.dirname(resolvedPaths[0]);
-      const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
-      const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames]);
-      child.stdout.pipe(res);
-      child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
-      child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
-    }
+    }).catch((e: any) => {
+      if (!res.headersSent) res.status(500).json({ error: e.message });
+    });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
