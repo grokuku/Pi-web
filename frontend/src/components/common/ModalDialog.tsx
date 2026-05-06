@@ -43,7 +43,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
 };
 
 // ── Resize handle positions ──
-const EDGE = 6; // px grab area from edge
+const EDGE = 8; // px grab area from edge (larger for easier grabbing)
 type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 const EDGE_CURSORS: Record<Edge, string> = {
@@ -73,11 +73,9 @@ interface Props {
   children: ReactNode;
   /** Optional className for the inner box */
   className?: string;
-  /** Can close by clicking overlay background */
-  closeOnOverlay?: boolean;
 }
 
-export function ModalDialog({ id, onClose, children, className = "", closeOnOverlay = true }: Props) {
+export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
   const saved = loadGeometry(id);
   const def = DEFAULTS[id] || { w: 440, h: 400 };
@@ -117,6 +115,15 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
     };
   }, [id]);
 
+  // ── Escape key to close ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   // ── Drag ──
   const handleMouseDownDrag = (e: React.MouseEvent) => {
     // Only start drag on non-interactive elements
@@ -146,7 +153,7 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
     const handleUp = () => {
       setIsDragging(false);
       dragState.current = null;
-      persist(); // Save after drag ends
+      persist();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -184,17 +191,12 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
     const handleUp = () => {
       setIsResizing(false);
       resizeState.current = null;
-      persist(); // Save after resize ends
+      persist();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
   }, [isResizing, persist]);
-
-  // ── Overlay click ──
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (closeOnOverlay && e.target === e.currentTarget) onClose();
-  };
 
   // ── Render resize handles ──
   const resizeHandles = (["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Edge[]).map(edge => {
@@ -215,7 +217,7 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
   });
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay">
       <div
         ref={boxRef}
         className={`modal-box ${isDragging ? "dragging" : ""} ${isResizing ? "resizing" : ""} ${className}`}
@@ -228,7 +230,7 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
           maxWidth: "none",
           maxHeight: "none",
           cursor: isDragging ? "grabbing" : hoverEdge ? EDGE_CURSORS[hoverEdge] : "default",
-          userSelect: isDragging || isResizing ? "none" : "auto",
+          userSelect: "none",
         }}
         onMouseDown={handleMouseDownDrag}
         onMouseMove={e => {
@@ -242,9 +244,12 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
         }}
         onMouseLeave={() => setHoverEdge(null)}
       >
-        {/* Resize handles */}
+        {/* Resize handles — on top so they grab before scrollbar */}
         {resizeHandles}
-        {children}
+        {/* Inner scrollable content — separate from resize zone */}
+        <div className="modal-inner">
+          {children}
+        </div>
       </div>
     </div>
   );

@@ -321,7 +321,21 @@ export async function sendPrompt(
 
     switch (cmd) {
       case "/new": {
+        // Destroy the existing session before creating a new one
+        const oldState = sessionsByProject.get(projectId);
+        if (oldState?.session) {
+          // Clear messages on the old session
+          try { (oldState.session as any).agent.state.messages = []; } catch {}
+          // Remove from map so createPiSession won't reuse it
+          sessionsByProject.delete(projectId);
+          activeToolCalls.forEach((_, key) => {
+            if (key.endsWith(`:${projectId}`)) activeToolCalls.delete(key);
+          });
+        }
         await createPiSession(state.cwd, projectId, { resume: false });
+        // Re-apply current mode to the new session
+        const newMode = oldState?.activeMode || "code";
+        try { await applyModeToSession(newMode, projectId); } catch {}
         return { command: "new", result: "✓ New session started" };
       }
       case "/compact": {
@@ -641,37 +655,150 @@ export function getSessionMessages(projectId: string): any[] {
 
 // ── Mode Management ───────────────────────────────────
 
-const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
+const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const ALL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
+/**
+ * Strip any previously injected mode blocks and identity overrides from the prompt.
+ * This prevents accumulation when switching modes.
+ */
+const MODE_IDENTITY_MARKER = "<!-- PI_IDENTITY -->";
+const MODE_BLOCK_MARKER_START = "<!-- PI_MODE:" ;
+const MODE_BLOCK_MARKER_END = "-->";
+
+function cleanPromptForModeChange(rawPrompt: string): string {
+  // Remove existing mode blocks (e.g. <!-- PI_MODE:PLAN -->...<!-- /PI_MODE:PLAN -->)
+  let prompt = rawPrompt.replace(/\n*<!-- PI_MODE:\w+ -->[\s\S]*?<!-- \/PI_MODE:\w+ -->\n*/g, "\n");
+  // Remove identity override block
+  prompt = prompt.replace(/\n*<!-- PI_IDENTITY -->[\s\S]*?<!-- \/PI_IDENTITY -->\n*/g, "\n");
+  return prompt.trim() + "\n";
+}
+
+/**
+ * Strip the default Pi identity paragraph from the base prompt so we can replace it.
+ * The default starts with "You are an expert coding assistant" and ends before "Available tools:".
+ */
+function stripDefaultIdentity(prompt: string): { identity: string; rest: string } {
+  const marker = "You are an expert coding assistant";
+  const idx = prompt.indexOf(marker);
+  if (idx === -1) return { identity: "", rest: prompt };
+  // Find the end of the identity paragraph — ends at "Available tools:", "Guidelines:", or double newline
+  const afterMarker = prompt.slice(idx);
+  const endMatch = afterMarker.match(/\n(?:Available tools:|Guidelines:)/);
+  if (endMatch && endMatch.index !== undefined) {
+    const endIdx = idx + endMatch.index;
+    return {
+      identity: prompt.slice(idx, endIdx).trim(),
+      rest: prompt.slice(0, idx) + prompt.slice(endIdx),
+    };
+  }
+  // Fallback: identity goes to first double newline
+  const doubleNl = afterMarker.indexOf("\n\n");
+  if (doubleNl !== -1) {
+    const endIdx = idx + doubleNl;
+    return {
+      identity: prompt.slice(idx, endIdx).trim(),
+      rest: prompt.slice(0, idx) + prompt.slice(endIdx),
+    };
+  }
+  return { identity: "", rest: prompt };
+}
+
+/** Identity overrides for each mode — replaces the default "expert coding assistant" paragraph */
+const MODE_IDENTITIES: Record<string, string> = {
+  code: "",  // Keep default identity for code mode
+  review: "You are a senior code reviewer. Your job is to READ code, analyze it, and provide detailed feedback. You do NOT make changes.",
+  plan: "You are a PLANNING agent. You do NOT write code, edit files, or suggest shell commands. You analyze the codebase and produce structured implementation plans.",
+};
+
 const MODE_INSTRUCTIONS: Record<string, string> = {
   code: `General coding rules:
 - Do NOT run git push or git push-like commands unless the user explicitly asks you to
 - Do NOT commit changes unless the user explicitly asks you to
 - When working on files, make minimal targeted changes — avoid rewriting entire files
 - Before editing, always read the current file content to understand the existing code
-- Prefer using the edit tool for small changes, write tool only for new files or complete rewrites`,
-  review: `You are in REVIEW mode. Your job is to review code and provide feedback.
+- Prefer using the edit tool for small changes, write tool only for new files or complete rewrites
+- When creating new files, follow existing project conventions (naming, structure, style)
+- Test your changes mentally — think about edge cases and error paths
+- If a change affects multiple files, list all affected files before starting
+- Keep commits atomic — one logical change per commit when possible`,
+  review: `You are in REVIEW mode — an independent code review focused on quality, correctness, and security.
 
-Rules:
-- You can READ code but should NOT make changes
-- Only use read-only tools: read, grep, find, ls
-- Focus on: correctness, security, performance, readability
-- Identify bugs, anti-patterns, and potential issues
-- Suggest improvements with specific explanations
-- Rate confidence level for each finding (high/medium/low)`,
-  plan: `You are in PLAN mode — a read-only exploration mode for safe code analysis.
-
-Rules:
-- You can only use read-only tools: read, grep, find, ls
+## Core Rules
+- You can ONLY use read-only tools: read, bash (read-only commands), grep, find, ls
 - You CANNOT use: edit, write (file modifications are disabled)
-- Bash is restricted to read-only commands
+- Bash is restricted to read-only commands: cat, head, tail, wc, find, grep, ls, git status, git log, git diff, tree, du, pwd, echo, which, type, file, stat
+- NEVER execute any command that modifies the filesystem or state
 
-Tasks:
-1. Explore the codebase thoroughly to understand the current state
-2. Create a detailed numbered plan under a "Plan:" header
-3. For each step: describe what to change, why, and potential risks`,
+## Review Focus
+1. **Correctness** — Logic errors, off-by-one, null handling, race conditions, missing error handling
+2. **Security** — Injection risks, exposed secrets, insecure defaults, missing input validation
+3. **Performance** — Unnecessary allocations, N+1 queries, memory leaks, blocking operations
+4. **Readability** — Naming, code organization, dead code, overly complex logic
+5. **Maintainability** — Hardcoded values, tight coupling, missing types, undocumented behavior
+
+## Review Format
+For each finding:
+- **[HIGH/MEDIUM/LOW]** Severity level
+- **File:Line** Location
+- **Description** What the issue is
+- **Suggestion** How to fix it (specific code, not vague advice)
+
+## Important
+- Be specific — cite exact file paths and line numbers
+- Prioritize findings by severity (HIGH first)
+- If code looks good, say so — don't fabricate issues
+- If you lack context to judge something, state it explicitly`,
+  plan: `You are a PLANNING agent. You do NOT write code, edit files, or suggest commands.
+
+Your SOLE purpose is to:
+1. Explore and understand the codebase (using read-only tools)
+2. Produce a structured implementation plan describing WHAT should change, WHERE, and WHY
+
+## Absolute Prohibitions
+- Do NOT write, suggest, or paste any code — not even snippets, pseudocode, or one-liners
+- Do NOT suggest shell commands like sed, awk, echo, cat with redirects, etc.
+- Do NOT say "you can run this command" or "run the following"
+- Do NOT output diffs, patches, or code blocks with implementation details
+- Your plan should describe CHANGES at a conceptual level, not provide the literal code
+
+## What You SHOULD Do
+- Read files to understand the current code
+- Analyze architecture, dependencies, and patterns
+- Ask clarifying questions if the request is ambiguous
+- Identify potential risks, edge cases, and side effects
+- Produce a clear, numbered implementation plan
+
+## Plan Format
+Every plan MUST use this format:
+
+## Analysis
+<Brief summary of what you found in the codebase and what needs to change>
+
+## Plan
+1. [S/M/L] <Description of the change>
+   - File: <path>
+   - What: <describe the change conceptually, no code>
+   - Why: <reason for this change>
+2. ...
+
+## Risks
+- <potential issues or side effects>
+
+## Questions
+- <anything unclear that needs user input>
+
+## Size Legend
+- S: Small change, localized to 1-2 files
+- M: Medium change, touches a few files
+- L: Large change, affects core logic or many files
+
+## Important
+- This is a PLANNING mode — think, explore, and plan. DO NOT implement.
+- If the request is too large, break it into phases
+- Always read relevant files before planning
+- Flag any assumptions you're making`
 };
 
 // Default thinking levels per mode
@@ -803,12 +930,27 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 
   // ── Inject mode instructions into system prompt ──
   const instructions = MODE_INSTRUCTIONS[mode] || "";
-  if (instructions.trim()) {
-    const basePrompt = (session as any)._baseSystemPrompt || "";
-    const modeBlock = `\n\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}`;
-    (session as any)._baseSystemPrompt = basePrompt + modeBlock;
-    (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+  const identityOverride = MODE_IDENTITIES[mode] || "";
+
+  // Clean any previously injected mode blocks and identity overrides
+  const rawPrompt = (session as any)._baseSystemPrompt || "";
+  let prompt = cleanPromptForModeChange(rawPrompt);
+
+  // For plan/review: replace the default identity paragraph
+  if (identityOverride) {
+    const { rest } = stripDefaultIdentity(prompt);
+    prompt = rest.trim() + "\n";
+    // Inject new identity with markers
+    prompt += `\n${MODE_IDENTITY_MARKER}\n${identityOverride}\n${MODE_IDENTITY_MARKER.replace("<!-- PI", "<!-- /PI")}\n\n`;
   }
+
+  // Append mode-specific instructions with markers
+  if (instructions.trim()) {
+    prompt += `\n${MODE_BLOCK_MARKER_START}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
+  }
+
+  (session as any)._baseSystemPrompt = prompt;
+  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 
   // ── Update state ──
   state.activeMode = mode;
@@ -864,13 +1006,20 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   // Restore all tools
   (session as any).setActiveToolsByName(ALL_TOOLS);
 
-  // Apply code mode instructions
-  const basePrompt = (session as any)._baseSystemPrompt || "";
-  if (!basePrompt.includes("Current Mode: CODE")) {
-    const modeBlock = `\n\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}`;
-    (session as any)._baseSystemPrompt = basePrompt + modeBlock;
-    (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+  // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
+  let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
+  // Restore default identity if it was stripped
+  const { identity } = stripDefaultIdentity(prompt);
+  if (!identity) {
+    // Default identity was stripped by plan/review mode — we can't restore it perfectly,
+    // but the rest of the prompt (tools, guidelines, context) is still there.
+    // The Pi framework will have set it originally, so we just need to make sure
+    // the "Available tools" and other sections remain intact.
   }
+  prompt = prompt.trim() + "\n";
+  prompt += `\n${MODE_BLOCK_MARKER_START}CODE ${MODE_BLOCK_MARKER_END}\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}\n${MODE_BLOCK_MARKER_START.replace("\u003c!-- PI", "\u003c!-- /PI")}CODE ${MODE_BLOCK_MARKER_END}\n`;
+  (session as any)._baseSystemPrompt = prompt;
+  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 
   state.activeMode = "code";
   emitModeChange(projectId, "code", false);

@@ -93,7 +93,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
   if (!library) {
     return (
-      <ModalDialog id="model-library-loading" onClose={onClose} closeOnOverlay={false}>
+      <ModalDialog id="model-library-loading" onClose={onClose}>
         <span className="text-hacker-accent animate-pulse">Loading...</span>
       </ModalDialog>
     );

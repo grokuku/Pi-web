@@ -1,9 +1,5 @@
 import {
   Plus,
-  Power,
-  FolderOpen,
-  RefreshCw,
-  FileText,
   Trash2,
   GripVertical,
 } from "lucide-react";
@@ -18,7 +14,6 @@ interface Props {
   onSelectProject: (p: Project) => void;
   onAddProject: () => void;
   onDeleteProject: (p: Project, deleteFiles: boolean) => void;
-  send: (msg: any) => void;
   session: any;
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
   onSendCommand: (cmd: string) => void;
@@ -31,7 +26,6 @@ export function Sidebar({
   onSelectProject,
   onAddProject,
   onDeleteProject,
-  send,
   session,
   projectSessions,
   onSendCommand,
@@ -212,8 +206,8 @@ export function Sidebar({
         <GitPanel project={activeProject} onRefresh={onRefreshGit} />
       )}
 
-      {/* ── Slash commands ── */}
-      <div className="p-2 border-t border-hacker-border-bright">
+      {/* ── Commands ── */}
+      <div className="p-2 mt-auto border-t border-hacker-border-bright">
         <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">COMMANDS</div>
         <div className="flex flex-wrap gap-1">
           {[
@@ -221,57 +215,17 @@ export function Sidebar({
             { cmd: "/compact", tip: "Compact context" },
             { cmd: "/model", tip: "List/switch model" },
             { cmd: "/clear", tip: "Clear screen" },
-            { cmd: "/help", tip: "Show commands" },
+            { cmd: "/help", tip: "Show help" },
           ].map(({ cmd, tip }) => (
             <button
               key={cmd}
               onClick={() => onSendCommand(cmd)}
-              className="text-[9px] text-hacker-text-dim border border-hacker-border px-1.5 py-0.5 hover:border-hacker-accent/50 hover:text-hacker-accent hover:bg-hacker-accent/5"
+              className="text-xs font-bold tracking-wider px-2 py-1 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50 hover:text-hacker-accent hover:bg-hacker-accent/5 transition-colors rounded"
               title={tip}
             >
               {cmd}
             </button>
           ))}
-        </div>
-      </div>
-
-      {/* ── Quick actions ── */}
-      <div className="p-2 mt-auto border-t border-hacker-border-bright">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">ACTIONS</div>
-        <div className="space-y-0.5">
-          <ActionBtn
-            icon={<RefreshCw size={10} />}
-            label="Restart Pi"
-            onClick={() => {
-              send({ type: "pi_start", projectId: activeProject?.id });
-            }}
-          />
-          <ActionBtn
-            icon={<FileText size={10} />}
-            label="New Session"
-            onClick={async () => {
-              await fetch("/api/settings/session/new", { method: "POST" });
-            }}
-          />
-          <ActionBtn
-            icon={<FolderOpen size={10} />}
-            label="Explorer"
-            onClick={() => {
-              send({
-                type: "pi_prompt",
-                projectId: activeProject?.id,
-                message: "List the files in the current directory",
-              });
-            }}
-          />
-          <ActionBtn
-            icon={<Power size={10} />}
-            label="Shutdown Pi"
-            onClick={() => {
-              send({ type: "pi_abort", projectId: activeProject?.id });
-            }}
-            danger
-          />
         </div>
       </div>
 
@@ -282,31 +236,5 @@ export function Sidebar({
         onConfirm={handleDeleteConfirm}
       />
     </aside>
-  );
-}
-
-function ActionBtn({
-  icon,
-  label,
-  onClick,
-  danger,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-center gap-1.5 px-2 py-0.5 text-left ${
-        danger
-          ? "text-hacker-error hover:bg-hacker-error/10 border border-transparent hover:border-hacker-error/30"
-          : "text-hacker-text-dim hover:text-hacker-text hover:bg-hacker-border/50"
-      }`}
-    >
-      {icon}
-      <span className="text-[10px]">{label}</span>
-    </button>
   );
 }
