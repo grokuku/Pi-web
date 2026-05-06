@@ -5,9 +5,10 @@ RUN apt-get update && apt-get install -y \
     git curl openssh-client \
     nano mc procps \
     build-essential python3 \
+    cifs-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /projects /sessions && \
+RUN mkdir -p /projects /sessions /mnt/smb && \
     git config --system --add safe.directory '*'
 
 WORKDIR /app

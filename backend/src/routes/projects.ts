@@ -44,11 +44,32 @@ router.post("/", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "name and storage are required" });
     }
     // Default cwd to /projects/{name} for local storage if not provided
-    const effectiveCwd = storage === "local" ? (cwd || `/projects/${name}`) : cwd;
+    // For SMB: auto-generate mount point if not provided
+    let effectiveCwd = storage === "local" ? (cwd || `/projects/${name}`) : cwd;
+    if (storage === "smb" && smb?.share) {
+      effectiveCwd = smb.mountPoint || `/mnt/smb/${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
+      smb.mountPoint = effectiveCwd;
+    }
     if (!effectiveCwd) {
       return res.status(400).json({ error: "cwd is required for non-local storage" });
     }
     const project = await createProject(name, storage, effectiveCwd, versioning || "standalone", git, ssh, smb);
+
+    // Auto-mount SMB share if applicable
+    if (project.storage === "smb" && project.smb?.share) {
+      const { mountSmb, getMountPoint } = await import("../projects/smb.js");
+      const mountPoint = project.smb.mountPoint || getMountPoint(project.id);
+      const mountResult = await mountSmb(project.smb.share, mountPoint, {
+        username: project.smb.username,
+        password: project.smb.password,
+        domain: project.smb.domain,
+      });
+      if (!mountResult.ok) {
+        // Project created but mount failed — still return project but with warning
+        return res.status(201).json({ ...project, _warning: `SMB mount failed: ${mountResult.error}` });
+      }
+    }
+
     res.status(201).json(project);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -414,6 +435,74 @@ router.delete("/:id/git/credentials", async (req: Request, res: Response) => {
     const host = await getRemoteHost(project.cwd);
     credentialStore.delete(host);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── SMB mount/unmount endpoints ──
+import { mountSmb, unmountSmb, getMountPoint, isMounted } from "../projects/smb.js";
+
+// POST mount SMB share for a project
+router.post("/:id/smb/mount", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+    if (project.storage !== "smb" || !project.smb?.share) {
+      return res.status(400).json({ error: "Project is not an SMB project" });
+    }
+    const mountPoint = project.smb.mountPoint || getMountPoint(project.id);
+    const result = await mountSmb(project.smb.share, mountPoint, {
+      username: project.smb.username,
+      password: project.smb.password,
+      domain: project.smb.domain,
+    });
+    if (result.ok) {
+      res.json({ success: true, mountPoint });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST unmount SMB share for a project
+router.post("/:id/smb/unmount", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+    if (project.storage !== "smb") {
+      return res.status(400).json({ error: "Project is not an SMB project" });
+    }
+    const mountPoint = project.smb?.mountPoint || getMountPoint(project.id);
+    const result = await unmountSmb(mountPoint);
+    if (result.ok) {
+      res.json({ success: true });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET SMB mount status for a project
+router.get("/:id/smb/status", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+    if (project.storage !== "smb") {
+      return res.json({ storage: "local", mounted: true });
+    }
+    const mountPoint = project.smb?.mountPoint || getMountPoint(project.id);
+    const mounted = await isMounted(mountPoint);
+    res.json({
+      storage: "smb",
+      share: project.smb?.share,
+      mountPoint,
+      mounted,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

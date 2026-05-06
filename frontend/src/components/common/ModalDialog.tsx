@@ -94,16 +94,28 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const resizeState = useRef<{ edge: Edge; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number } | null>(null);
 
-  // Save geometry on changes (debounced)
+  // Use refs for current pos/size so drag/resize callbacks always have latest values
+  const posRef = useRef(pos);
+  const sizeRef = useRef(size);
+  posRef.current = pos;
+  sizeRef.current = size;
+
+  // ── Persist to localStorage ──
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persist = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveGeometry(id, { x: pos.x, y: pos.y, w: size.w, h: size.h });
-    }, 300);
-  }, [id, pos, size]);
+      saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+    }, 200);
+  }, [id]);
 
-  useEffect(() => { persist(); }, [persist]);
+  // Save on unmount (final position)
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+    };
+  }, [id]);
 
   // ── Drag ──
   const handleMouseDownDrag = (e: React.MouseEvent) => {
@@ -131,11 +143,15 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
       const newY = Math.max(0, Math.min(window.innerHeight - 40, dragState.current.origY + dy));
       setPos({ x: newX, y: newY });
     };
-    const handleUp = () => { setIsDragging(false); dragState.current = null; };
+    const handleUp = () => {
+      setIsDragging(false);
+      dragState.current = null;
+      persist(); // Save after drag ends
+    };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isDragging]);
+  }, [isDragging, persist]);
 
   // ── Resize ──
   const handleMouseDownResize = (e: React.MouseEvent, edge: Edge) => {
@@ -165,11 +181,15 @@ export function ModalDialog({ id, onClose, children, className = "", closeOnOver
       setPos({ x: newX, y: newY });
       setSize({ w: newW, h: newH });
     };
-    const handleUp = () => { setIsResizing(false); resizeState.current = null; };
+    const handleUp = () => {
+      setIsResizing(false);
+      resizeState.current = null;
+      persist(); // Save after resize ends
+    };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isResizing]);
+  }, [isResizing, persist]);
 
   // ── Overlay click ──
   const handleOverlayClick = (e: React.MouseEvent) => {

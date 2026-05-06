@@ -47,6 +47,7 @@ import {
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { credentialStore } from "./projects/credential-store.js";
 import { syncGitInfo } from "./projects/git.js";
+import { mountAllSmbProjects, unmountAllSmb } from "./projects/smb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
@@ -565,9 +566,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 // ─── Start Server ──────────────────────────────────────
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
   // Re-create temp files for any persisted credentials (needed by GIT_ASKPASS)
   credentialStore.ensureTempFiles();
+
+  // Auto-mount SMB projects
+  try {
+    const projects = getAllProjects();
+    await mountAllSmbProjects(projects);
+  } catch (e: any) {
+    console.error("[SMB] Auto-mount error:", e.message);
+  }
 
   console.log(`
   ╔══════════════════════════════════════════╗
@@ -583,6 +592,8 @@ httpServer.listen(PORT, () => {
 const shutdown = async () => {
   console.log("Shutting down...");
   clearInterval(interval);
+  // Unmount SMB shares gracefully
+  try { await unmountAllSmb(); } catch (e) { console.error("[SMB] Unmount error:", e); }
   // Don't kill terminals on shutdown — they should persist
   // (In production with tmux, they'd survive process restarts)
   await disposeAllSessions();

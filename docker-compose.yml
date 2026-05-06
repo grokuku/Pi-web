@@ -12,6 +12,10 @@ services:
     environment:
       - ALLOWED_ORIGINS=*
       - WS_ALLOWED_ORIGINS=*
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
     stdin_open: true
     tty: true
     restart: unless-stopped
