@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
-import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
@@ -13,47 +13,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // since simple-git has no interactive terminal). With this env var, git fails immediately
 // with an error instead of prompting.
 process.env.GIT_TERMINAL_PROMPT = "0";
-
-// Temp directory for GIT_ASKPASS credentials
-const GIT_ASKPASS_DIR = "/tmp/pi-web-creds";
-const GIT_ASKPASS_SCRIPT = path.join(__dirname, "git-askpass.sh");
-
-// Ensure ASKPASS temp directory exists
-if (!existsSync(GIT_ASKPASS_DIR)) {
-  try { mkdirSync(GIT_ASKPASS_DIR, { recursive: true, mode: 0o700 }); } catch {}
-}
-
-// Clean up ASKPASS temp files on startup
-function cleanupAskpassFiles() {
-  try {
-    if (existsSync(GIT_ASKPASS_DIR)) {
-      const files = readdirSync(GIT_ASKPASS_DIR);
-      for (const f of files) {
-        try { unlinkSync(path.join(GIT_ASKPASS_DIR, f)); } catch {}
-      }
-    }
-  } catch {}
-}
-cleanupAskpassFiles();
-
-/**
- * Write credentials to a temp file for GIT_ASKPASS to read.
- * Returns the path to the temp file.
- */
-function writeAskpassCreds(host: string, username: string, password: string): string {
-  const credFile = path.join(GIT_ASKPASS_DIR, host);
-  // Write username on line 1, password on line 2
-  writeFileSync(credFile, `${username}\n${password}`, { mode: 0o600 });
-  return credFile;
-}
-
-/**
- * Remove credentials temp file for a host.
- */
-function removeAskpassCreds(host: string): void {
-  const credFile = path.join(GIT_ASKPASS_DIR, host);
-  try { if (existsSync(credFile)) unlinkSync(credFile); } catch {}
-}
 
 // ── Lock file cleanup ──────────────────────────
 // If a git process crashes, it leaves a stale .git/index.lock.
@@ -265,7 +224,7 @@ export async function getGitDiff(cwd: string): Promise<string> {
 export async function gitPull(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const { git, cleanup } = await gitWithAuth(cwd);
+    const git: SimpleGit = await gitWithAuth(cwd);
     try {
       const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull", git);
       return result.summary.changes
@@ -278,7 +237,11 @@ export async function gitPull(cwd: string): Promise<string> {
       }
       throw new Error(`Git pull failed: ${msg}`);
     } finally {
-      cleanup();
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(`[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! cwd=${cwd}`, e.message);
+      }
     }
   });
 }
@@ -286,7 +249,7 @@ export async function gitPull(cwd: string): Promise<string> {
 export async function gitPush(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const { git, cleanup } = await gitWithAuth(cwd);
+    const git: SimpleGit = await gitWithAuth(cwd);
     try {
       const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push", git);
       return result.pushed
@@ -299,7 +262,11 @@ export async function gitPush(cwd: string): Promise<string> {
       }
       throw new Error(`Git push failed: ${msg}`);
     } finally {
-      cleanup();
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(`[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! cwd=${cwd}`, e.message);
+      }
     }
   });
 }
@@ -437,55 +404,45 @@ export async function getRemoteHost(cwd: string): Promise<string> {
 }
 
 /**
- * Create a simple-git instance with GIT_ASKPASS configured for authentication.
- * This avoids embedding credentials in URLs.
+ * Create a simple-git instance with credentials embedded in the remote URL.
  *
- * Instead of modifying the remote URL, we:
- * 1. Write credentials to a temp file
- * 2. Set GIT_ASKPASS environment variable to our askpass script
- * 3. The script reads credentials from the temp file when git prompts
+ * Instead of GIT_ASKPASS (blocked by git >=2.36 unless allowUnsafeAskPass
+ * is set), we rewrite the remote URL to include the token:
  *
- * Credentials are cleaned up after the operation.
+ *   https://x-access-token:TOKEN@github.com/user/repo.git
+ *
+ * This works with GitHub, GitLab, Bitbucket personal access tokens.
  */
-async function gitWithAuth(cwd: string): Promise<{ git: SimpleGit; cleanup: () => void }> {
+async function gitWithAuth(cwd: string): Promise<SimpleGit> {
   const git = simpleGit(cwd);
-  let host: string | null = null;
-  let credFile: string | null = null;
 
   try {
     const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
-    host = extractHost(remoteUrl);
+    const host = extractHost(remoteUrl);
     console.log(`[git] gitWithAuth: remoteUrl=${remoteUrl.replace(/:[^@]+@/, ":****@")}, host=${host}, hasCreds=${host ? credentialStore.has(host) : false}`);
 
     if (host && credentialStore.has(host)) {
       const creds = credentialStore.get(host)!;
-      // Write credentials to temp file for GIT_ASKPASS
-      credFile = writeAskpassCreds(host, creds.username, creds.password);
-      console.log(`[git] gitWithAuth: using GIT_ASKPASS for ${host}`);
-      // Create SimpleGit with allowUnsafeAskPass option to permit GIT_ASKPASS usage
-      const gitWithEnv = simpleGit({
-        baseDir: cwd,
-        config: [
-          "credential.allowUnsafeAskPass=true"
-        ]
-      }).env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
-        .env("GIT_TERMINAL_PROMPT", "0");
-      return {
-        git: gitWithEnv,
-        cleanup: () => {
-          if (credFile) removeAskpassCreds(host!);
-        }
-      };
+      const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
+      console.log(`[git] gitWithAuth: injecting credentials, result=${authUrl.replace(/:[^@]+@/, ":****@")}`);
+      // Temporarily set the remote URL with credentials for this operation
+      await git.raw(["remote", "set-url", "origin", authUrl]);
+      // Git 2.38+ may reject credentials in URLs — explicitly allow it
+      try {
+        await git.raw(["config", "transfer.credentialsInUrl", "allow"]);
+      } catch {
+        // config may not support this option (older git), ignore
+      }
+      // Return the git instance (caller will use it for pull/push/etc)
+      return git;
     }
   } catch (e: any) {
     console.log(`[git] gitWithAuth: error (will proceed without auth): ${e?.message || e}`);
+    // Not a git repo or no remote — proceed without auth
   }
 
   // No credentials stored — use default (will fail on auth-required remotes)
-  return {
-    git: simpleGit(cwd),
-    cleanup: () => {}
-  };
+  return git;
 }
 
 /**
@@ -512,8 +469,51 @@ function extractHost(url: string): string | null {
  * Inject credentials into a git remote URL.
  *
  * For GitHub tokens, the username is typically "x-access-token" or the actual username,
+ * and the password/token goes in the password field.
+ *
+ * Examples:
+ *   https://github.com/user/repo.git → https://x-access-token:TOKEN@github.com/user/repo.git
+ *   https://user@github.com/user/repo.git → https://user:TOKEN@github.com/user/repo.git
+ */
+function injectCredentialsInUrl(url: string, username: string, password: string): string {
+  // Already has credentials — replace them
+  const withCredsReplaced = url.replace(
+    /^(https?:\/\/)([^@]+@)?(.+)/,
+    (_, protocol, _oldCreds, rest) => {
+      const encodedPassword = encodeURIComponent(password);
+      return `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`;
+    }
+  );
+  if (withCredsReplaced !== url) return withCredsReplaced;
 
+  // No existing credentials — inject them
+  const encodedPassword = encodeURIComponent(password);
+  return url.replace(
+    /^(https?:\/\/)(.+)/,
+    (_, protocol, rest) => `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`
+  );
+}
 
+/**
+ * Remove credentials from a git remote URL (restore original).
+ * Call this after any authenticated git operation.
+ */
+export async function restoreRemoteUrl(cwd: string): Promise<void> {
+  const git = simpleGit(cwd);
+  try {
+    const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
+    // Strip credentials: https://user:pass@host → https://host
+    const cleanUrl = remoteUrl.replace(
+      /^(https?:\/\/)([^@]+@)?(.+)/,
+      (_, protocol, _creds, rest) => `${protocol}${rest}`
+    );
+    if (cleanUrl !== remoteUrl) {
+      await git.raw(["remote", "set-url", "origin", cleanUrl]);
+    }
+  } catch {
+    // Not a git repo — ignore
+  }
+}
 
 /**
  * Store git credentials for HTTPS auth in memory (not on disk).
@@ -532,7 +532,8 @@ export async function setGitCredentials(
   const host = await getRemoteHost(cwd);
   console.log(`[git] setGitCredentials: host=${host}, username=${username}, password=${password.length} chars`);
   credentialStore.set(host, username, password);
-  // Credentials will be used via GIT_ASKPASS during git operations
+  // Credentials are now injected into remote URLs at operation time
+  // (no ASKPASS script needed with git >= 2.36)
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
@@ -753,33 +754,22 @@ export async function gitClone(
 
   const git: SimpleGit = simpleGit(parentDir);
 
-  // Use GIT_ASKPASS if credentials are available
+  // Inject credentials into remote URL if available
   if (host && credentialStore.has(host)) {
     const creds = credentialStore.get(host)!;
     console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
-    // Write credentials to temp file and set GIT_ASKPASS
-    const credFile = writeAskpassCreds(host, creds.username, creds.password);
-    // Create SimpleGit with allowUnsafeAskPass option
-    const gitWithAuth = simpleGit({
-      baseDir: parentDir,
-      config: [
-        "credential.allowUnsafeAskPass=true"
-      ]
-    }).env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
-      .env("GIT_TERMINAL_PROMPT", "0");
+    const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
+    console.log(`[git-clone] Auth URL (redacted): ${authUrl.replace(/:[^@]+@/, ":****@")}`);
     try {
+      // Git 2.38+ may reject credentials in URLs — explicitly allow it
       await withTimeout(
-        gitWithAuth.raw(["clone", remote, repoName, "--branch", branch]),
+        git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]),
         GIT_NETWORK_TIMEOUT_MS,
         "git clone"
       );
-      // Clean up temp file
-      removeAskpassCreds(host);
       console.log(`[git-clone] Clone succeeded!`);
       return `Cloned ${remote} (${branch})`;
     } catch (error: any) {
-      // Clean up temp file
-      removeAskpassCreds(host);
       const msg = error.message || "";
       console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
       if (isAuthError(msg)) {
