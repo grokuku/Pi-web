@@ -132,6 +132,11 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     saveGeometry(id, { x: pos.x, y: pos.y, w: size.w, h: size.h });
   }, [id, pos.x, pos.y, size.w, size.h]);
 
+  // Helper to force save (used in drag/resize end)
+  const forceSaveGeometry = () => {
+    saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+  };
+
   // ── Escape key to close ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -172,6 +177,7 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsDragging(false);
       dragState.current = null;
+      forceSaveGeometry(); // Save immediately on drop
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -209,6 +215,7 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsResizing(false);
       resizeState.current = null;
+      forceSaveGeometry(); // Save immediately on resize end
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
