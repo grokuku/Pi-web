@@ -89,6 +89,8 @@ function App() {
     url.searchParams.set('standalone', 'true');
     url.searchParams.set('panel', id);
     const win = window.open(url.toString(), `pi-web-${id}`, features);
+      // Hide the panel in the main interface to avoid duplicates
+      hidePanel(id);
     if (win) {
       win.document.title = `Pi-Web - ${id.toUpperCase()}`;
     }
@@ -491,15 +493,46 @@ function App() {
           handleReferenceFile(filePath);
         }
       }
+      if (event.data.type === 'restore-panel') {
+        const panelId = event.data.panelId as PanelId;
+        // Restore the panel in the main interface
+        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files")) {
+          setPanels(prev => {
+            const p = { ...prev };
+            if (p[panelId]) {
+              p[panelId] = { ...p[panelId], visible: true, floating: false };
+            }
+            return p;
+          });
+        }
+      }
     };
     return () => channel.close();
-  }, [activeProject, handleReferenceFile]);
+  }, [activeProject, handleReferenceFile, panels, savePanels]);
 
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)
   if (isStandalone && standalonePanel) {
     return (
       <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
+        {/* Close button for standalone mode */}
+        <div className="flex items-center justify-between px-3 h-10 bg-hacker-surface border-b border-hacker-border">
+          <span className="text-hacker-accent text-xs font-bold tracking-widest">PI-WEB STANDALONE - {standalonePanel.toUpperCase()}</span>
+          <button
+            onClick={() => {
+              // Notify main window to restore the panel
+              const channel = new BroadcastChannel('pi-web-file-ref');
+              channel.postMessage({ type: 'restore-panel', panelId: standalonePanel });
+              channel.close();
+              // Close this window
+              window.close();
+            }}
+            className="btn-hacker text-xs px-2 py-1"
+            title="Close and restore to main window"
+          >
+            Close ✕
+          </button>
+        </div>
         <div className="flex-1 overflow-hidden">
           {standalonePanel === "pi" && (
             <div className="h-full flex flex-col">
