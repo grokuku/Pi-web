@@ -451,6 +451,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         return;
       }
       const { message, images } = msg;
+      console.log(`[Pi] Prompt received for ${pid}: ${message.substring(0, 80)}${message.length > 80 ? "..." : ""} (images: ${images?.length || 0})`);
       try {
         const result = await sendPrompt(message, pid, images);
         // If it was a slash command, send the result back

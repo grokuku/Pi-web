@@ -56,7 +56,7 @@ export async function writeModelsJson(
         id: m.modelId,
         name: `${m.name} (${provider.name})`,
         reasoning: m.reasoning,
-        input: ["text", ...(m.reasoning ? ["text"] : [])],
+        input: ["text", ...(m.vision ? ["image" as const] : [])],
         contextWindow: m.contextWindow,
         maxTokens: m.maxTokens,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

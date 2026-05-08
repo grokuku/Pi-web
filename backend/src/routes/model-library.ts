@@ -75,6 +75,7 @@ router.post("/models", async (req: Request, res: Response) => {
         name: m.name || m.modelId,
         isDefault: m.isDefault || false,
         reasoning: m.reasoning ?? inferReasoning(m.modelId),
+        vision: m.vision ?? false,
         contextWindow: m.contextWindow || 128000,
         maxTokens: m.maxTokens || 16384,
         temperature: m.temperature,
@@ -90,7 +91,7 @@ router.post("/models", async (req: Request, res: Response) => {
       res.json(library);
     } else {
       // Single add
-      const { providerId, modelId, name, reasoning, contextWindow, maxTokens,
+      const { providerId, modelId, name, reasoning, vision, contextWindow, maxTokens,
               temperature, topP, minP, topK, repeatPenalty, thinkingLevel, isDefault } = req.body;
 
       if (!providerId || !modelId) {
@@ -103,6 +104,7 @@ router.post("/models", async (req: Request, res: Response) => {
         name: name || modelId,
         isDefault: isDefault || false,
         reasoning: reasoning ?? inferReasoning(modelId),
+        vision: vision ?? false,
         contextWindow: contextWindow || 128000,
         maxTokens: maxTokens || 16384,
         temperature, topP, minP, topK, repeatPenalty,

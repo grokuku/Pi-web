@@ -373,6 +373,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
+  const [modelFilter, setModelFilter] = useState("");
 
   // All discovered models across all providers (cached)
   const [allDiscovered, setAllDiscovered] = useState<DiscoveredModel[]>(() => {
@@ -390,7 +391,14 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
 
   // Available = discovered models that are NOT in the library
   const configuredIds = new Set(library.models.map(m => m.modelId));
-  const availableModels = allDiscovered.filter(dm => !configuredIds.has(dm.id));
+  const filteredAvailable = allDiscovered
+    .filter(dm => !configuredIds.has(dm.id))
+    .filter(dm => !modelFilter || (dm.name || dm.id).toLowerCase().includes(modelFilter.toLowerCase()))
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+
+  const filteredConfigured = library.models
+    .filter(m => !modelFilter || (m.name || m.modelId).toLowerCase().includes(modelFilter.toLowerCase()))
+    .sort((a, b) => (a.name || a.modelId).localeCompare(b.name || b.modelId));
 
   const getProviderName = (providerId: string) => {
     const p = providers.find(p => p.id === providerId);
@@ -445,6 +453,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         name: dm?.name || modelId,
         isDefault: false,
         reasoning: inferReasoning(modelId),
+        vision: inferVision(modelId),
         contextWindow: 128000,
         maxTokens: 16384,
         thinkingLevel: "medium",
@@ -481,25 +490,41 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
 
   return (
     <div className="flex flex-col gap-2">
+      {/* Model filter */}
+      <div className="flex items-center gap-2 mb-1">
+        <input
+          type="text"
+          value={modelFilter}
+          onChange={e => setModelFilter(e.target.value)}
+          placeholder="Filter models by name..."
+          className="flex-1 bg-hacker-bg border border-hacker-border px-2 py-1 text-[11px] text-hacker-text-bright focus:outline-none focus:border-hacker-accent"
+        />
+        {modelFilter && (
+          <button onClick={() => setModelFilter("")} className="text-hacker-text-dim hover:text-hacker-accent">
+            <X size={12} />
+          </button>
+        )}
+      </div>
+
       {/* Three-column layout: available | actions | selected */}
       <div className="flex gap-1 min-h-[300px]">
         {/* Left column: Available models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
             <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">AVAILABLE</span>
-            <span className="text-hacker-text-dim text-[11px]">{availableModels.length}</span>
+            <span className="text-hacker-text-dim text-[11px]">{filteredAvailable.length}</span>
             <button onClick={handleScanAll} disabled={scanning}
               className="btn-hacker text-[11px] px-1.5 py-0.5 flex items-center gap-0.5" title="Rescan all providers">
               <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> UPDATE
             </button>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[400px]">
-            {availableModels.length === 0 ? (
+            {filteredAvailable.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
-                {allDiscovered.length === 0 ? "Click UPDATE to scan providers" : "All models already added"}
+                {allDiscovered.length === 0 ? "Click UPDATE to scan providers" : modelFilter ? "No matches" : "All models already added"}
               </div>
             ) : (
-              availableModels.map(dm => {
+              filteredAvailable.map(dm => {
                 const isSelected = selectedAvailable.has(dm.id);
                 const provName = getProviderNameForDiscovered(dm);
                 return (
@@ -536,15 +561,15 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
             <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">SELECTED</span>
-            <span className="text-hacker-text-dim text-[11px]">{library.models.length}</span>
+            <span className="text-hacker-text-dim text-[11px]">{filteredConfigured.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[400px]">
-            {library.models.length === 0 ? (
+            {filteredConfigured.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
-                No models selected yet
+                {library.models.length === 0 ? "No models selected yet" : "No matches"}
               </div>
             ) : (
-              library.models.map(m => {
+              filteredConfigured.map(m => {
                 const isSelected = selectedConfigured.has(m.id);
                 const isDef = m.id === library.defaultModelId;
                 
@@ -737,6 +762,15 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
               <div className="text-hacker-text-dim text-[10px] mt-0.5">Has native chain-of-thought</div>
             </div>
             <div>
+              <label className="text-hacker-text-dim text-xs block mb-1">Vision Model</label>
+              <select value={model.vision ? "yes" : "no"} onChange={e => onUpdate(model.id, { vision: e.target.value === "yes" })}
+                className="select-hacker w-full text-sm py-1.5 px-2">
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+              <div className="text-hacker-text-dim text-[10px] mt-0.5">Supports image/vision input</div>
+            </div>
+            <div>
               <label className="text-hacker-text-dim text-xs block mb-1">Thinking Level</label>
               <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
                 className="select-hacker w-full text-sm py-1.5 px-2">
@@ -771,4 +805,9 @@ function formatSize(bytes: number): string {
 function inferReasoning(modelId: string): boolean {
   const name = modelId.toLowerCase();
   return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|reason/i.test(name);
+}
+
+function inferVision(modelId: string): boolean {
+  const name = modelId.toLowerCase();
+  return /llava|gemma[-_.]?3|minicpm-v|qwen.*vl|qwen.*vision|pixtral|llama.*vision|llama3[._-]?2[._-]?9|phi[-_.]?3[._-]?5|internvl|idefics|cogvlm|molmo|glm.*4v|gpt[-_.]?4[-_.]?o|gpt[-_.]?4[-_.]?vision|gpt[-_.]?4o|vision/i.test(name);
 }

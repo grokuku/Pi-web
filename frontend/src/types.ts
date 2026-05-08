@@ -58,7 +58,7 @@ export interface ChatMessage {
   timestamp: number;
   toolCalls?: ToolCallInfo[];
   thinking?: string;
-  images?: string[];
+  images?: { data: string; mimeType: string }[];
   usage?: {
     input: number;
     output: number;
@@ -154,6 +154,7 @@ export interface RegisteredModel {
   name: string;                // display name
   isDefault: boolean;          // default model for modes without a specific model
   reasoning: boolean;
+  vision: boolean;             // supports image/vision input
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
   // Inference parameters

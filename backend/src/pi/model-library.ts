@@ -22,6 +22,7 @@ export interface RegisteredModel {
 
   // Model capabilities/dimensions
   reasoning: boolean;
+  vision: boolean;             // supports image input
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
 
@@ -160,6 +161,7 @@ function migrateModel(m: any): RegisteredModel {
     name: m.name || m.modelId || "",
     isDefault: m.isDefault || false,
     reasoning: m.reasoning ?? inferReasoning(m.modelId || m.name || ""),
+    vision: m.vision ?? false,
     contextWindow: m.contextWindow || 128000,
     maxTokens: m.maxTokens || 16384,
     temperature: m.temperature,

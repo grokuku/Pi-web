@@ -102,6 +102,10 @@ interface DisplayMessage {
   // Custom message metadata (git_notification, etc.)
   customType?: string;
   display?: boolean;
+  // Images attached to user message
+  images?: { data: string; mimeType: string }[];
+  // Text/code files attached to user message
+  attachments?: { name: string; content: string; mimeType: string }[];
 }
 
 export function ChatView({ send, on, activeProject, isStreaming, session, projectId }: Props) {
@@ -112,6 +116,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [expandTools, setExpandTools] = useState(true);
   const [showAllThinking, setShowAllThinking] = useState(false);
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
+
+  // File viewer overlay state
+  const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
   const toggleAllThinking = () => setShowAllThinking((t) => !t);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [thinkingToast, setThinkingToast] = useState("");
@@ -227,6 +234,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
             });
           })
           .catch(() => {});
+        return;
+      }
+
+      // Escape → close file viewer
+      if (e.key === "Escape") {
+        setViewerFile(null);
         return;
       }
     };
@@ -481,7 +494,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const isSlashCommand = fullMessage.trim().startsWith("/");
 
     if (!isSlashCommand) {
-      const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "[images]");
+      const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "");
       setMessages((prev) => [...prev, {
         id: Date.now().toString(),
         role: "user",
@@ -489,6 +502,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         thinking: "",
         toolCalls: [],
         timestamp: Date.now(),
+        images: imageAttachments.length > 0 ? imageAttachments.map((a) => ({ data: a.data, mimeType: a.mimeType })) : undefined,
+        attachments: textAttachments.length > 0 ? textAttachments.map((a) => ({ name: a.name, content: a.data, mimeType: a.mimeType })) : undefined,
       }]);
     }
 
@@ -547,7 +562,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
         {/* Messages — grouped: consecutive assistants are merged into one block */}
         <GroupedMessages messages={messages} showAllThinking={showAllThinking}
-          expandTools={expandTools} />
+          expandTools={expandTools} onFileClick={setViewerFile} />
 
         {/* Streaming block */}
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
@@ -597,6 +612,37 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         gitBranch={activeProject?.git?.branch}
         setError={setError}
       />
+
+      {/* File viewer overlay */}
+      {viewerFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setViewerFile(null)}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh] bg-hacker-surface border border-hacker-border rounded-lg shadow-2xl flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
+              <span className="text-sm text-hacker-text-bright truncate max-w-[60vw]">{viewerFile.name || "Attachment"}</span>
+              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error">
+                <X size={16} />
+              </button>
+            </div>
+            {/* Content */}
+            {viewerFile.type === "image" ? (
+              <img
+                src={viewerFile.src}
+                alt={viewerFile.name || "Image"}
+                className="max-w-[85vw] max-h-[80vh] object-contain p-2"
+              />
+            ) : (
+              <pre className="p-4 overflow-auto max-h-[80vh] text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -612,10 +658,11 @@ interface AssistantMsg {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools }: {
+const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools, onFileClick }: {
   messages: DisplayMessage[];
   showAllThinking: boolean;
   expandTools: boolean;
+  onFileClick: (file: { type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string }) => void;
 }) {
   const groups: DisplayMessage[][] = [];
   for (const msg of messages) {
@@ -630,7 +677,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinkin
     {groups.map((group) => {
       const first = group[0];
       if (first.role === "user") {
-        return <UserBubble key={first.id} message={first} />;
+        return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       }
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]}
         showAllThinking={showAllThinking} expandTools={expandTools} />;
@@ -638,7 +685,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinkin
   </>;
 })
 
-const UserBubble = memo(function UserBubble({ message }: { message: DisplayMessage }) {
+const UserBubble = memo(function UserBubble({ message, onFileClick }: { message: DisplayMessage; onFileClick: (file: { type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string }) => void }) {
   // Pi command result: system info
   if (message.customType === "pi_command") {
     return (
@@ -661,8 +708,37 @@ const UserBubble = memo(function UserBubble({ message }: { message: DisplayMessa
   }
   return (
     <div className="flex justify-end mb-3">
-      <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2 flex items-center gap-2">
-        <span className="text-hacker-text-bright whitespace-pre-wrap text-sm flex-1">{message.content}</span>
+      <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
+        {message.content && (
+          <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>
+        )}
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {message.images.map((img, i) => (
+              <img
+                key={i}
+                src={`data:${img.mimeType};base64,${img.data}`}
+                alt="Attached image"
+                className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors"
+                onClick={() => onFileClick({ type: "image", src: `data:${img.mimeType};base64,${img.data}`, name: "image" })}
+              />
+            ))}
+          </div>
+        )}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {message.attachments.map((att, i) => (
+              <button
+                key={i}
+                className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright"
+                onClick={() => onFileClick({ type: "text", content: att.content, name: att.name })}
+              >
+                <FileText size={12} />
+                {att.name}
+              </button>
+            ))}
+          </div>
+        )}
         {message.usage && (
           <span className="text-[9px] text-hacker-text-dim shrink-0">
             {message.usage.input + message.usage.output}t · ${message.usage.cost.total.toFixed(4)}
