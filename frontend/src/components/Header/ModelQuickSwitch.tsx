@@ -181,8 +181,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
         // Visual states
         const isPlanActive = pm.plan.enabled && activeMode === "plan";
-        const isOverriddenByPlan = !isCode && isPlanActive && mode !== "plan";
-        const isVisuallyActive = isActive;
+        const isReviewActive = pm.review.enabled && (activeMode === "review");
+        const isOverridden = !isCode && (
+          (isPlanActive && mode !== "plan") ||
+          (isReviewActive && mode !== "review" && !pm.review.enabled)
+        );
+        const isVisuallyActive = isActive || (mode !== "code" && isEnabled);
 
         return (
           <div key={mode} className="relative">
@@ -191,7 +195,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               className={`flex items-center border rounded transition-all ${
                 isVisuallyActive
                   ? `${cfg.activeBg} ${cfg.activeBorder} ${cfg.color}`
-                  : isOverriddenByPlan
+                  : isOverridden
                   ? "bg-hacker-bg border-hacker-border/50 text-hacker-text-dim/50"
                   : isEnabled
                   ? "bg-hacker-bg border-hacker-border text-hacker-text-dim"
@@ -217,9 +221,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 </div>
               )}
 
-              {/* Main clickable zone */}
               <div className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer ${
-                isVisuallyActive ? "" : isOverriddenByPlan ? "opacity-40" : ""
+                isVisuallyActive ? "" : isOverridden ? "opacity-40" : ""
               }`}>
                 <span className={`text-xs ${isVisuallyActive ? cfg.color : ""}`}>{cfg.icon}</span>
                 <span className={`text-xs font-bold tracking-wide ${

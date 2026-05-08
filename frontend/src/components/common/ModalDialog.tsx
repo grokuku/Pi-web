@@ -25,9 +25,18 @@ function saveGeometry(id: string, g: ModalGeometry) {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const all = raw ? JSON.parse(raw) : {};
+    if (typeof all !== "object" || all === null) {
+      // Reset if corrupted
+      const fresh: Record<string, ModalGeometry> = {};
+      fresh[id] = g;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+      return;
+    }
     all[id] = g;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch {}
+  } catch (e) {
+    console.warn("[ModalDialog] Failed to save geometry:", e);
+  }
 }
 
 // ── Default sizes per modal ──
