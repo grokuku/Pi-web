@@ -51,6 +51,7 @@ function App() {
     return (saved === "light" || saved === "dark") ? saved : "dark";
   });
   const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
+  const [scanlines, setScanlines] = useState(() => localStorage.getItem("pi-web-scanlines") !== "false");
   const [activeTab, setActiveTab] = useState<Tab>("pi");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -137,6 +138,14 @@ function App() {
     setTheme((t) => {
       const next = t === "dark" ? "light" : "dark";
       localStorage.setItem("pi-web-theme", next);
+      return next;
+    });
+  };
+
+  const toggleScanlines = () => {
+    setScanlines((s) => {
+      const next = !s;
+      localStorage.setItem("pi-web-scanlines", String(next));
       return next;
     });
   };
@@ -402,7 +411,7 @@ function App() {
   );
 
   return (
-    <div className="h-screen flex flex-col scanlines">
+    <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
       <div className="matrix-bg" />
 
       {/* ── HEADER ── */}
@@ -486,7 +495,7 @@ function App() {
         <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
           {theme === "dark" ? "☀" : "☾"}
         </button>
-        <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} />
+        <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
         <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-2 py-1" title="Model library (Ctrl+L)">
           ⚙
         </button>

@@ -44,7 +44,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, {
     defaultBaseUrl: "http://localhost:11434/v1",
     requiresApiKey: false,
     apiType: "openai-completions",
-    description: "Local/self-hosted Ollama server",
+    description: "Ollama (local or remote server)",
   },
   "openai-compatible": {
     defaultBaseUrl: "https://api.openai.com/v1",

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 
 // ── Persisted modal geometry (localStorage) ──
 interface ModalGeometry {
@@ -32,14 +32,14 @@ function saveGeometry(id: string, g: ModalGeometry) {
 
 // ── Default sizes per modal ──
 const DEFAULTS: Record<string, { w: number; h: number }> = {
-  "model-library": { w: 900, h: 700 },
-  "model-edit": { w: 640, h: 640 },
-  "add-project": { w: 600, h: 560 },
-  "commit-push": { w: 640, h: 640 },
-  "git-auth": { w: 560, h: 480 },
-  "git-identity": { w: 560, h: 440 },
-  "project-switch": { w: 520, h: 560 },
-  "delete-project": { w: 520, h: 400 },
+  "model-library": { w: 1200, h: 800 },
+  "model-edit": { w: 800, h: 700 },
+  "add-project": { w: 900, h: 700 },
+  "commit-push": { w: 900, h: 700 },
+  "git-auth": { w: 800, h: 600 },
+  "git-identity": { w: 800, h: 600 },
+  "project-switch": { w: 800, h: 700 },
+  "delete-project": { w: 800, h: 500 },
 };
 
 // ── Resize handle positions ──
@@ -77,8 +77,16 @@ interface Props {
 
 export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const saved = loadGeometry(id);
-  const def = DEFAULTS[id] || { w: 440, h: 400 };
+  const savedRaw = loadGeometry(id);
+  const def = DEFAULTS[id] || { w: 1320, h: 800 };
+
+  // Enforce minimum size: if saved geometry is smaller than defaults, use defaults
+  const saved = savedRaw ? {
+    x: savedRaw.x,
+    y: savedRaw.y,
+    w: Math.max(savedRaw.w, def.w),
+    h: Math.max(savedRaw.h, def.h),
+  } : null;
 
   // Calculate centered position if no saved position
   const defaultX = saved?.x ?? Math.max(40, (window.innerWidth - (saved?.w ?? def.w)) / 2);
@@ -99,38 +107,21 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   sizeRef.current = size;
 
   // ── Persist to localStorage ──
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushSave = useCallback(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = null;
-    saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
-  }, [id]);
-
-  const persist = useCallback(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
-    }, 200);
-  }, [id]);
-
-  // Save on unmount (final position)
+  // Save immediately whenever position or size changes
   useEffect(() => {
-    return () => {
-      flushSave();
-    };
-  }, [id, flushSave]);
+    saveGeometry(id, { x: pos.x, y: pos.y, w: size.w, h: size.h });
+  }, [id, pos.x, pos.y, size.w, size.h]);
 
   // ── Escape key to close ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        flushSave();
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, flushSave]);
+  }, [onClose]);
 
   // ── Drag ──
   const handleMouseDownDrag = (e: React.MouseEvent) => {
@@ -161,12 +152,11 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsDragging(false);
       dragState.current = null;
-      flushSave(); // Immediate save after drag ends
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isDragging, flushSave]);
+  }, [isDragging]);
 
   // ── Resize ──
   const handleMouseDownResize = (e: React.MouseEvent, edge: Edge) => {
@@ -199,12 +189,11 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsResizing(false);
       resizeState.current = null;
-      flushSave(); // Immediate save after resize ends
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isResizing, flushSave]);
+  }, [isResizing]);
 
   // ── Render resize handles ──
   const resizeHandles = (["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Edge[]).map(edge => {

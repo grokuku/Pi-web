@@ -3,6 +3,10 @@ import cors from "cors";
 import { createServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 import path from "path";
+import { setMaxListeners } from "events";
+
+// Increase max listeners for abort signals (Pi SDK creates many per session)
+setMaxListeners(50);
 import { fileURLToPath } from "url";
 import { existsSync, mkdirSync } from "fs";
 
@@ -604,3 +608,24 @@ const shutdown = async () => {
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
+// ── Crash handler ──
+process.on("uncaughtException", (error) => {
+  console.error("\n========== UNCAUGHT EXCEPTION ==========");
+  console.error("Time:", new Date().toISOString());
+  console.error("Error:", error);
+  console.error("Stack:", error?.stack || "No stack available");
+  console.error("=========================================");
+  // Attempt graceful shutdown, but don't hang
+  setTimeout(() => process.exit(1), 1000);
+  try { shutdown(); } catch {}
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("\n========== UNHANDLED REJECTION ==========");
+  console.error("Time:", new Date().toISOString());
+  console.error("Reason:", reason);
+  console.error("Promise:", promise);
+  console.error("Stack:", (reason as any)?.stack || "No stack available");
+  console.error("=========================================");
+});

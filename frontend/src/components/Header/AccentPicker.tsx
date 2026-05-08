@@ -11,10 +11,12 @@ const ACCENT_PRESETS = [
 interface AccentPickerProps {
   theme: "dark" | "light";
   accent: string;
+  scanlines: boolean;
   onAccentChange: (id: string) => void;
+  onScanlinesToggle: () => void;
 }
 
-export function AccentPicker({ theme, accent, onAccentChange }: AccentPickerProps) {
+export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanlinesToggle }: AccentPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -45,24 +47,42 @@ export function AccentPicker({ theme, accent, onAccentChange }: AccentPickerProp
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 p-1.5 border border-hacker-border bg-hacker-surface-raised shadow-lg z-50 flex gap-1.5">
-          {ACCENT_PRESETS.map((p) => {
-            const color = theme === "dark" ? p.dark : p.light;
-            const isActive = accent === p.id;
-            return (
-              <button
-                key={p.id}
-                onClick={() => { onAccentChange(p.id); setOpen(false); }}
-                className="w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
-                style={{ backgroundColor: color }}
-                title={p.label}
-              >
-                {isActive && (
-                  <span className="text-white text-[8px] font-bold drop-shadow-sm">✓</span>
-                )}
-              </button>
-            );
-          })}
+        <div className="absolute top-full right-0 mt-1 p-2 border border-hacker-border bg-hacker-surface-raised shadow-lg z-50 space-y-2 min-w-[140px]">
+          {/* Scanlines toggle */}
+          <button
+            onClick={onScanlinesToggle}
+            className={`w-full flex items-center gap-2 px-1 py-0.5 text-xs rounded transition-colors ${
+              scanlines ? "text-hacker-accent" : "text-hacker-text-dim"
+            }`}
+          >
+            <span className={`w-3 h-3 rounded border flex items-center justify-center text-[8px] ${
+              scanlines ? "border-hacker-accent bg-hacker-accent/20" : "border-hacker-border"
+            }`}>
+              {scanlines ? "✓" : ""}
+            </span>
+            Scanlines
+          </button>
+
+          {/* Accent colors */}
+          <div className="flex gap-1.5 justify-center">
+            {ACCENT_PRESETS.map((p) => {
+              const color = theme === "dark" ? p.dark : p.light;
+              const isActive = accent === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => { onAccentChange(p.id); }}
+                  className="w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
+                  style={{ backgroundColor: color }}
+                  title={p.label}
+                >
+                  {isActive && (
+                    <span className="text-white text-[8px] font-bold drop-shadow-sm">✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

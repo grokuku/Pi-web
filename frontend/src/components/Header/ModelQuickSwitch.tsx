@@ -155,14 +155,15 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const getShortModelName = (model: RegisteredModel | null): string => {
     if (!model) return "—";
-    const name = model.name;
-    if (name.length <= 12) return name;
-    return name.slice(0, 10) + "…";
+    return model.name || model.id;
   };
 
   const getProviderName = (providerId: string): string => {
     const p = providers.find(p => p.id === providerId);
-    return p?.name || providerId;
+    const name = p?.name || providerId;
+    // Truncate provider name: full name if short, first word + "…" otherwise
+    if (name.length <= 10) return name;
+    return name.split(/[\s-_]/)[0] + "…";
   };
 
   const modes: AgentMode[] = ["code", "plan", "review"];

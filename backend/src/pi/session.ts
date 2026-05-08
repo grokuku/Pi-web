@@ -691,7 +691,11 @@ export function getSessionMessages(projectId: string): any[] {
 
 // ── Mode Management ───────────────────────────────────
 
-const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls"];
+const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
+// For plan mode: no bash at all — it can create files
+const PLAN_TOOLS = ["read", "grep", "find", "ls"];
+// For review mode: bash allowed but only for read-only exploration
+const REVIEW_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const ALL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
@@ -957,8 +961,10 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   }
 
   // ── Apply tool filtering ──
-  if (mode === "plan" || mode === "review") {
-    (session as any).setActiveToolsByName(READ_ONLY_TOOLS);
+  if (mode === "plan") {
+    (session as any).setActiveToolsByName(PLAN_TOOLS);
+  } else if (mode === "review") {
+    (session as any).setActiveToolsByName(REVIEW_TOOLS);
   } else {
     // Code mode: all tools
     (session as any).setActiveToolsByName(ALL_TOOLS);
@@ -1181,7 +1187,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     }
 
     // Restrict to read-only tools
-    (tempSession as any).setActiveToolsByName(READ_ONLY_TOOLS);
+    (tempSession as any).setActiveToolsByName(REVIEW_TOOLS);
 
     // Inject review mode instructions
     const instructions = MODE_INSTRUCTIONS.review;

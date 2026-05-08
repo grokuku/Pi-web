@@ -79,9 +79,9 @@ function isEditable(ext: string): boolean {
 
 function getFileIcon(name: string) {
   const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : "";
-  if (IMAGE_EXTS.has(ext)) return <Image size={14} className="text-hacker-info shrink-0" />;
-  if (CODE_EXTS.has(ext)) return <Code size={14} className="text-hacker-accent shrink-0" />;
-  return <FileText size={14} className="text-hacker-text-dim shrink-0" />;
+  if (IMAGE_EXTS.has(ext)) return <Image size={16} className="text-hacker-info shrink-0" />;
+  if (CODE_EXTS.has(ext)) return <Code size={16} className="text-hacker-accent shrink-0" />;
+  return <FileText size={16} className="text-hacker-text-dim shrink-0" />;
 }
 
 function formatSize(bytes: number): string {
@@ -132,8 +132,8 @@ function DirNode({
         </span>
         {isDir ? (
           <>
-            {isExpanded ? <ChevronDown size={12} className="text-hacker-text-dim shrink-0" /> : <ChevronRight size={12} className="text-hacker-text-dim shrink-0" />}
-            {isExpanded ? <FolderOpen size={14} className="text-hacker-warn shrink-0" /> : <Folder size={14} className="text-hacker-warn/70 shrink-0" />}
+            {isExpanded ? <ChevronDown size={14} className="text-hacker-text-dim shrink-0" /> : <ChevronRight size={14} className="text-hacker-text-dim shrink-0" />}
+            {isExpanded ? <FolderOpen size={16} className="text-hacker-warn shrink-0" /> : <Folder size={16} className="text-hacker-warn/70 shrink-0" />}
           </>
         ) : (
           <>
@@ -141,7 +141,7 @@ function DirNode({
             {getFileIcon(node.name)}
           </>
         )}
-        <span className="truncate text-[11px]">{node.name}</span>
+        <span className="truncate text-xs">{node.name}</span>
       </div>
       {isExpanded && node.children && (
         <div className="pl-3">
@@ -184,6 +184,16 @@ export function FileExplorer({ project }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const rootPath = project?.cwd || "/projects";
+
+  // Reset file preview when project changes
+  useEffect(() => {
+    setSelectedPath(null);
+    setFileContent(null);
+    setImageUrl(null);
+    setEditMode(false);
+    setPreviewError("");
+    setSelectedPaths(new Set());
+  }, [project?.id]);
 
   // Load root directory
   useEffect(() => {
