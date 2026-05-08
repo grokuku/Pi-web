@@ -32,14 +32,14 @@ function saveGeometry(id: string, g: ModalGeometry) {
 
 // ── Default sizes per modal ──
 const DEFAULTS: Record<string, { w: number; h: number }> = {
-  "model-library": { w: 780, h: 560 },
-  "model-edit": { w: 520, h: 520 },
-  "add-project": { w: 440, h: 400 },
-  "commit-push": { w: 480, h: 480 },
-  "git-auth": { w: 400, h: 340 },
-  "git-identity": { w: 380, h: 300 },
-  "project-switch": { w: 380, h: 420 },
-  "delete-project": { w: 380, h: 260 },
+  "model-library": { w: 900, h: 700 },
+  "model-edit": { w: 640, h: 640 },
+  "add-project": { w: 600, h: 560 },
+  "commit-push": { w: 640, h: 640 },
+  "git-auth": { w: 560, h: 480 },
+  "git-identity": { w: 560, h: 440 },
+  "project-switch": { w: 520, h: 560 },
+  "delete-project": { w: 520, h: 400 },
 };
 
 // ── Resize handle positions ──
@@ -100,6 +100,12 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
 
   // ── Persist to localStorage ──
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushSave = useCallback(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+  }, [id]);
+
   const persist = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -110,19 +116,21 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   // Save on unmount (final position)
   useEffect(() => {
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+      flushSave();
     };
-  }, [id]);
+  }, [id, flushSave]);
 
   // ── Escape key to close ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        flushSave();
+        onClose();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, flushSave]);
 
   // ── Drag ──
   const handleMouseDownDrag = (e: React.MouseEvent) => {
@@ -153,12 +161,12 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsDragging(false);
       dragState.current = null;
-      persist();
+      flushSave(); // Immediate save after drag ends
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isDragging, persist]);
+  }, [isDragging, flushSave]);
 
   // ── Resize ──
   const handleMouseDownResize = (e: React.MouseEvent, edge: Edge) => {
@@ -191,12 +199,12 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
     const handleUp = () => {
       setIsResizing(false);
       resizeState.current = null;
-      persist();
+      flushSave(); // Immediate save after resize ends
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
-  }, [isResizing, persist]);
+  }, [isResizing, flushSave]);
 
   // ── Render resize handles ──
   const resizeHandles = (["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Edge[]).map(edge => {

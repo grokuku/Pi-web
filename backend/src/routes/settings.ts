@@ -9,8 +9,60 @@ import {
   reloadModelRegistry,
   getSession,
 } from "../pi/session.js";
+import { execSync } from "child_process";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const router = Router();
+
+// ── Version info ──
+const PI_WEB_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
+    return pkg.version || "unknown";
+  } catch { return "unknown"; }
+})();
+
+const PI_AGENT_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
+    return pkg.version || "unknown";
+  } catch { return "unknown"; }
+})();
+
+router.get("/version", (_req: Request, res: Response) => {
+  res.json({
+    piWeb: PI_WEB_VERSION,
+    piAgent: PI_AGENT_VERSION,
+  });
+});
+
+// Check for pi-agent update
+router.get("/update-check", async (_req: Request, res: Response) => {
+  try {
+    const result = execSync("npm view @mariozechner/pi-coding-agent version", { timeout: 15000, encoding: "utf-8" }).trim();
+    const latestVersion = result;
+    res.json({
+      current: PI_AGENT_VERSION,
+      latest: latestVersion,
+      updateAvailable: latestVersion !== PI_AGENT_VERSION,
+    });
+  } catch (e: any) {
+    res.json({ current: PI_AGENT_VERSION, latest: PI_AGENT_VERSION, updateAvailable: false, error: e.message });
+  }
+});
+
+// Update pi-agent and restart
+router.post("/update", async (_req: Request, res: Response) => {
+  try {
+    // Update the package
+    execSync("npm update @mariozechner/pi-coding-agent", { timeout: 120000, encoding: "utf-8" });
+    const newPkg = JSON.parse(readFileSync(join(process.cwd(), "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
+    res.json({ success: true, newVersion: newPkg.version, message: "Update successful. Please restart Pi-Web." });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 // GET session info (optionally for a specific project)
 router.get("/session", (req: Request, res: Response) => {

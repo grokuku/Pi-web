@@ -21,7 +21,7 @@ import {
   type RegisteredModel,
 } from "../pi/model-library.js";
 import { loadProviders } from "../pi/providers.js";
-import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry } from "../pi/session.js";
+import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode } from "../pi/session.js";
 
 const router = Router();
 
@@ -187,7 +187,8 @@ router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
   try {
     const library = loadModelLibrary();
     const config = getProjectModeConfig(library, req.params.projectId);
-    res.json(config);
+    const activeMode = getActiveMode(req.params.projectId);
+    res.json({ ...config, activeMode });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

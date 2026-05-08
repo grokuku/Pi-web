@@ -376,10 +376,44 @@ export async function sendPrompt(
         }
         return { command: "model", result: `Model not found: ${args}. Use /model to list available.` };
       }
+      case "/plan": {
+        const library = loadModelLibrary();
+        const pm = getProjectModeConfig(library, projectId);
+        const currentMode = state.activeMode || "code";
+        if (currentMode === "plan") {
+          // Toggle off → back to code
+          await restoreCodeMode(projectId);
+          return { command: "plan", result: "✓ Switched back to CODE mode" };
+        } else {
+          // Enable plan mode
+          if (!pm.plan?.enabled) {
+            return { command: "plan", result: "✗ PLAN mode is not enabled. Enable it in the mode selector." };
+          }
+          await switchMode("plan", projectId);
+          return { command: "plan", result: "✓ Switched to PLAN mode" };
+        }
+      }
+      case "/review": {
+        const library = loadModelLibrary();
+        const pm = getProjectModeConfig(library, projectId);
+        const currentMode = state.activeMode || "code";
+        if (currentMode === "review") {
+          // Toggle off → back to code
+          await restoreCodeMode(projectId);
+          return { command: "review", result: "✓ Switched back to CODE mode" };
+        } else {
+          // Enable review mode
+          if (!pm.review?.enabled) {
+            return { command: "review", result: "✗ REVIEW mode is not enabled. Enable it in the mode selector." };
+          }
+          await switchMode("review", projectId);
+          return { command: "review", result: "✓ Switched to REVIEW mode" };
+        }
+      }
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new      — Start a new session\n  /compact   — Compact conversation context\n  /model     — List or switch model\n  /clear     — Clear screen (keep session)\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /clear     — Clear screen (keep session)\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -615,6 +649,7 @@ export function getSessionInfo(projectId?: string) {
       content: m.content,
       id: m.id,
     })) || [],
+    activeMode: state.activeMode || "code",
   };
 }
 

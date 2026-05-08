@@ -2,8 +2,9 @@ import {
   Plus,
   Trash2,
   GripVertical,
+  ArrowUpCircle,
 } from "lucide-react";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { GitPanel } from "./GitPanel";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import type { Project } from "../../types";
@@ -35,6 +36,30 @@ export function Sidebar({
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [updateAvailable, setUpdataAvailable] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [piWebVersion, setPiWebVersion] = useState("?");
+
+  // Check for updates on mount
+  useEffect(() => {
+    fetch("/api/settings/version").then(r => r.json()).then(data => {
+      setPiWebVersion(data.piWeb || "?");
+    }).catch(() => {});
+    fetch("/api/settings/update-check").then(r => r.json()).then(data => {
+      setUpdataAvailable(!!data.updateAvailable);
+    }).catch(() => {});
+  }, []);
+
+  const handleUpdate = useCallback(() => {
+    setUpdating(true);
+    fetch("/api/settings/update", { method: "POST" })
+      .then(r => r.json())
+      .then(() => {
+        setUpdataAvailable(false);
+        setUpdating(false);
+      })
+      .catch(() => setUpdating(false));
+  }, []);
   const [projectListHeight, setProjectListHeight] = useState(() => {
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
@@ -213,8 +238,9 @@ export function Sidebar({
           {[
             { cmd: "/new", tip: "New session" },
             { cmd: "/compact", tip: "Compact context" },
-            { cmd: "/model", tip: "List/switch model" },
             { cmd: "/clear", tip: "Clear screen" },
+            { cmd: "/plan", tip: "Toggle PLAN mode" },
+            { cmd: "/review", tip: "Toggle REVIEW mode" },
             { cmd: "/help", tip: "Show help" },
           ].map(({ cmd, tip }) => (
             <button
@@ -227,6 +253,23 @@ export function Sidebar({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Version footer ── */}
+      <div className="h-8 border-t border-hacker-border-bright bg-hacker-surface/50 flex items-center px-2 gap-2 text-[10px] text-hacker-text-dim shrink-0">
+        <span>pi-web</span>
+        <span className="text-hacker-text-dim/50">v{piWebVersion}</span>
+        {updateAvailable && (
+          <button
+            onClick={handleUpdate}
+            disabled={updating}
+            className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5"
+            title="Update available! Click to update"
+          >
+            <ArrowUpCircle size={10} />
+            {updating ? "Updating..." : "Update"}
+          </button>
+        )}
       </div>
 
       {/* ── Delete project modal ── */}

@@ -283,6 +283,10 @@ function App() {
               state.stats = { tokens: 0, contextPercent: 0, totalTokens: 0 };
             }
             updateProjectSession(projectId, { session: evt.session });
+            // Sync active mode from backend
+            if (evt.session.activeMode && projectId === activeProject?.id) {
+              setActiveMode(evt.session.activeMode);
+            }
           }
           break;
         }
@@ -346,6 +350,14 @@ function App() {
           projectId: project.id,
         });
       }
+
+      // Load active mode for this project
+      fetch(`/api/model-library/projects/${project.id}/mode`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.activeMode) setActiveMode(data.activeMode);
+        })
+        .catch(() => {});
 
       rerender();
     },
