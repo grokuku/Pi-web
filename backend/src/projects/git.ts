@@ -462,16 +462,14 @@ async function gitWithAuth(cwd: string): Promise<{ git: SimpleGit; cleanup: () =
       // Write credentials to temp file for GIT_ASKPASS
       credFile = writeAskpassCreds(host, creds.username, creds.password);
       console.log(`[git] gitWithAuth: using GIT_ASKPASS for ${host}`);
-      // Configure git to use our askpass script
-      const gitWithEnv = simpleGit(cwd)
-        .env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
+      // Create SimpleGit with allowUnsafeAskPass option to permit GIT_ASKPASS usage
+      const gitWithEnv = simpleGit({
+        baseDir: cwd,
+        config: [
+          "credential.allowUnsafeAskPass=true"
+        ]
+      }).env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
         .env("GIT_TERMINAL_PROMPT", "0");
-      // Also allow askpass (git >= 2.36 may block it)
-      try {
-        await gitWithEnv.raw(["config", "credential.allowUnsafeAskPass", "true"]);
-      } catch {
-        // Older git may not support this option
-      }
       return {
         git: gitWithEnv,
         cleanup: () => {
@@ -761,14 +759,14 @@ export async function gitClone(
     console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
     // Write credentials to temp file and set GIT_ASKPASS
     const credFile = writeAskpassCreds(host, creds.username, creds.password);
-    const gitWithAuth = git.env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
-                        .env("GIT_TERMINAL_PROMPT", "0");
-    try {
-      // Allow askpass (git >= 2.36 may block it)
-      await gitWithAuth.raw(["config", "--global", "credential.allowUnsafeAskPass", "true"]);
-    } catch {
-      // Ignore if not supported
-    }
+    // Create SimpleGit with allowUnsafeAskPass option
+    const gitWithAuth = simpleGit({
+      baseDir: parentDir,
+      config: [
+        "credential.allowUnsafeAskPass=true"
+      ]
+    }).env("GIT_ASKPASS", GIT_ASKPASS_SCRIPT)
+      .env("GIT_TERMINAL_PROMPT", "0");
     try {
       await withTimeout(
         gitWithAuth.raw(["clone", remote, repoName, "--branch", branch]),
