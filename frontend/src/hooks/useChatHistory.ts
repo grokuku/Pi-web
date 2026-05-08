@@ -85,8 +85,14 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         ? msg.content
         : extractTextContent(msg.content);
 
-      // Skip empty user messages
-      if (!text.trim()) continue;
+      // Extract images from content blocks
+      const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
+      const images = contentBlocks
+        .filter((b: any) => b.type === "image" && b.data && b.mimeType)
+        .map((b: any) => ({ data: b.data, mimeType: b.mimeType }));
+
+      // Skip empty user messages (unless they have images)
+      if (!text.trim() && images.length === 0) continue;
 
       displayMessages.push({
         id: msg.id || `user-${msg.timestamp || Date.now()}`,
@@ -95,6 +101,7 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         thinking: "",
         toolCalls: [],
         timestamp: msg.timestamp || Date.now(),
+        images: images.length > 0 ? images : undefined,
       });
     }
 

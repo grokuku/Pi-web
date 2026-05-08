@@ -100,7 +100,8 @@ function App() {
     (projectId: string, update: Partial<ProjectSessionState>) => {
       const state = getProjectSession(projectId);
       Object.assign(state, update);
-      if (activeProject?.id === projectId) {
+      // Always re-render on streaming state changes (sidebar shows background streams)
+      if (!activeProject || projectId !== activeProject.id || update.isStreaming !== undefined) {
         rerender();
       }
     },

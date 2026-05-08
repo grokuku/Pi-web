@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
+import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
 import { ModalDialog } from "../common/ModalDialog";
 
 // ── Memoized ReactMarkdown to avoid re-parsing on every render ──
@@ -90,23 +90,6 @@ interface Props {
   isStreaming: boolean;
   session: any;
   projectId: string;
-}
-
-interface DisplayMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  thinking: string;
-  toolCalls: ToolCallInfo[];
-  timestamp: number;
-  usage?: { input: number; output: number; cost: { total: number } };
-  // Custom message metadata (git_notification, etc.)
-  customType?: string;
-  display?: boolean;
-  // Images attached to user message
-  images?: { data: string; mimeType: string }[];
-  // Text/code files attached to user message
-  attachments?: { name: string; content: string; mimeType: string }[];
 }
 
 export function ChatView({ send, on, activeProject, isStreaming, session, projectId }: Props) {
@@ -620,7 +603,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           <div className="flex flex-col h-full">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
-              <span className="text-sm text-hacker-text-bright truncate">{viewerFile.name || "Attachment"}</span>
+              <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || "Attachment"}</span>
+              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0">
+                <X size={16} />
+              </button>
             </div>
             {/* Content */}
             <div className="flex-1 overflow-auto p-4">

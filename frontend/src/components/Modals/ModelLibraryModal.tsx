@@ -783,6 +783,20 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
 
         {/* Footer */}
         <div className="flex gap-2 mt-4 pt-3 border-t border-hacker-border">
+          <button onClick={() => {
+            onUpdate(model.id, {
+              reasoning: inferReasoning(model.modelId || model.name),
+              vision: inferVision(model.modelId || model.name),
+              contextWindow: 128000,
+              maxTokens: 16384,
+              thinkingLevel: "medium",
+            });
+          }}
+            className="btn-hacker text-sm px-3 py-2 flex items-center justify-center gap-1.5 text-hacker-text-dim"
+            title="Reset to auto-detected defaults">
+            ↺ RESET
+          </button>
+          <div className="flex-1" />
           <button onClick={onClose}
             className="btn-hacker flex-1 text-sm py-2 flex items-center justify-center gap-1.5">
             <Check size={14} /> DONE

@@ -434,8 +434,14 @@ export async function sendPrompt(
     mimeType: img.mimeType,
   }));
 
-  if (state.isStreaming) {
-    await state.session.steer(message, imageAttachments);
+  if (state.isStreaming && imageAttachments && imageAttachments.length > 0) {
+    // steer() doesn't support images — abort current stream and send as new prompt
+    try { await state.session.abort(); } catch {}
+    const options: any = {};
+    options.images = imageAttachments;
+    await state.session.prompt(message, options);
+  } else if (state.isStreaming) {
+    await state.session.steer(message);
   } else {
     const options: any = {};
     if (imageAttachments && imageAttachments.length > 0) {

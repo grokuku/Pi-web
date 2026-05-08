@@ -81,6 +81,10 @@ export interface DisplayMessage {
   // Custom message metadata (for git_notification, etc.)
   customType?: string;
   display?: boolean;
+  // Images attached to user message
+  images?: { data: string; mimeType: string }[];
+  // Text/code files attached to user message
+  attachments?: { name: string; content: string; mimeType: string }[];
 }
 
 export interface ToolCallInfo {
