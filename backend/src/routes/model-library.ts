@@ -20,7 +20,7 @@ import {
   type AgentMode,
   type RegisteredModel,
 } from "../pi/model-library.js";
-import { loadProviders } from "../pi/providers.js";
+import { loadProviders, inferVision, inferContextWindow } from "../pi/providers.js";
 import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode, reapplyAllSessions } from "../pi/session.js";
 
 const router = Router();
@@ -75,8 +75,8 @@ router.post("/models", async (req: Request, res: Response) => {
         name: m.name || m.modelId,
         isDefault: m.isDefault || false,
         reasoning: m.reasoning ?? inferReasoning(m.modelId),
-        vision: m.vision ?? false,
-        contextWindow: m.contextWindow || 128000,
+        vision: m.vision ?? inferVision(m.modelId),
+        contextWindow: m.contextWindow || inferContextWindow(m.modelId),
         maxTokens: m.maxTokens || 16384,
         temperature: m.temperature,
         topP: m.topP,
@@ -105,8 +105,8 @@ router.post("/models", async (req: Request, res: Response) => {
         name: name || modelId,
         isDefault: isDefault || false,
         reasoning: reasoning ?? inferReasoning(modelId),
-        vision: vision ?? false,
-        contextWindow: contextWindow || 128000,
+        vision: vision ?? inferVision(modelId),
+        contextWindow: contextWindow || inferContextWindow(modelId),
         maxTokens: maxTokens || 16384,
         temperature, topP, minP, topK, repeatPenalty,
         thinkingLevel: thinkingLevel || "medium",

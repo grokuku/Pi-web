@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
+import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
 
 const MODELS_JSON_PATH = path.join(os.homedir(), ".pi", "agent", "models.json");
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -52,15 +53,21 @@ export async function writeModelsJson(
     }
 
     if (models.length > 0) {
-      piProvider.models = models.map((m) => ({
-        id: m.modelId,
-        name: `${m.name} (${provider.name})`,
-        reasoning: m.reasoning,
-        input: ["text", ...(m.vision ? ["image" as const] : [])],
-        contextWindow: m.contextWindow,
-        maxTokens: m.maxTokens,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      }));
+      piProvider.models = models.map((m) => {
+        // Apply inference for any zero/empty/missing values
+        const reasoning = m.reasoning ?? inferReasoning(m.modelId);
+        const vision = m.vision ?? inferVision(m.modelId);
+        const contextWindow = m.contextWindow > 0 ? m.contextWindow : inferContextWindow(m.modelId);
+        return {
+          id: m.modelId,
+          name: `${m.name} (${provider.name})`,
+          reasoning,
+          input: vision ? ["text", "image" as const] : ["text"],
+          contextWindow,
+          maxTokens: m.maxTokens > 0 ? m.maxTokens : 16384,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        };
+      });
     }
 
     // Use the provider ID as the Pi provider name

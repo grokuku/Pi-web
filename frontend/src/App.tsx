@@ -8,6 +8,7 @@ import { FileExplorer } from "./components/Files/FileExplorer";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
+import { ExtensionsModal } from "./components/Modals/ExtensionsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import type { Project } from "./types";
@@ -83,6 +84,7 @@ function App() {
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showModelLibrary, setShowModelLibrary] = useState(false);
+  const [showExtensions, setShowExtensions] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
@@ -198,6 +200,7 @@ function App() {
           send({ type: "pi_abort", projectId: activeProject.id });
         }
         if (showModelLibrary) { e.preventDefault(); setShowModelLibrary(false); }
+        else if (showExtensions) { e.preventDefault(); setShowExtensions(false); }
         else if (showAddProject) { e.preventDefault(); setShowAddProject(false); }
         else if (showProjectSwitch) { e.preventDefault(); setShowProjectSwitch(false); }
         return;
@@ -497,6 +500,9 @@ function App() {
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
+        <button onClick={() => setShowExtensions(true)} className="btn-hacker text-xs px-2 py-1" title="Extensions & Skills">
+          📦
+        </button>
         <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-2 py-1" title="Model library (Ctrl+L)">
           ⚙
         </button>
@@ -598,6 +604,12 @@ function App() {
           onClose={() => setShowModelLibrary(false)}
           session={session}
           onModelApplied={handleModelApplied}
+        />
+      )}
+
+      {showExtensions && (
+        <ExtensionsModal
+          onClose={() => setShowExtensions(false)}
         />
       )}
     </div>

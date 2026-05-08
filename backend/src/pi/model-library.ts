@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { inferReasoning } from "./providers.js";
+import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -161,8 +161,8 @@ function migrateModel(m: any): RegisteredModel {
     name: m.name || m.modelId || "",
     isDefault: m.isDefault || false,
     reasoning: m.reasoning ?? inferReasoning(m.modelId || m.name || ""),
-    vision: m.vision ?? false,
-    contextWindow: m.contextWindow || 128000,
+    vision: m.vision ?? inferVision(m.modelId || m.name || ""),
+    contextWindow: m.contextWindow || inferContextWindow(m.modelId || m.name || ""),
     maxTokens: m.maxTokens || 16384,
     temperature: m.temperature,
     topP: m.topP,

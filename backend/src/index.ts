@@ -16,6 +16,7 @@ import ollamaRouter from "./routes/ollama.js";
 import modelLibraryRouter from "./routes/model-library.js";
 import providersRouter from "./routes/providers.js";
 import filesRouter from "./routes/files.js";
+import piSettingsRouter from "./routes/pi-settings.js";
 import {
   createPiSession,
   subscribeToEvents,
@@ -75,6 +76,7 @@ app.use("/api/ollama", ollamaRouter);
 app.use("/api/model-library", modelLibraryRouter);
 app.use("/api/providers", providersRouter);
 app.use("/api/files", filesRouter);
+app.use("/api/pi", piSettingsRouter);
 
 // Serve frontend in production
 const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");

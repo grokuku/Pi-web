@@ -818,10 +818,76 @@ function formatSize(bytes: number): string {
 
 function inferReasoning(modelId: string): boolean {
   const name = modelId.toLowerCase();
-  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|reason/i.test(name);
+  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason/i.test(name);
 }
 
 function inferVision(modelId: string): boolean {
   const name = modelId.toLowerCase();
-  return /llava|gemma[-_.]?3|minicpm-v|qwen.*vl|qwen.*vision|pixtral|llama.*vision|llama3[._-]?2[._-]?9|phi[-_.]?3[._-]?5|internvl|idefics|cogvlm|molmo|glm.*4v|gpt[-_.]?4[-_.]?o|gpt[-_.]?4[-_.]?vision|gpt[-_.]?4o|vision/i.test(name);
+  return /llava|gemma[-_.]?3|minicpm-v|qwen.*vl|qwen.*vision|pixtral|llama.*vision|llama3[._-]?2[._-]?9|phi[-_.]?3[._-]?5|internvl|idefics|cogvlm|molmo|glm.*4v|gpt[-_.]?4[-_.]?o|gpt[-_.]?4[-_.]?vision|gpt[-_.]?4o|vision|kimi|multimodal/i.test(name);
+}
+
+function inferContextWindow(modelId: string): number {
+  const key = modelId.toLowerCase().replace(/[:_]/g, "-");
+  const overrides: Record<string, number> = {
+    "kimi-k2.6": 256000,
+    "kimi-k2.5": 256000,
+    "kimi-k2.0": 200000,
+    "kimi-k1.5": 256000,
+    "deepseek-r1": 128000,
+    "deepseek-v3": 128000,
+    "qwq": 128000,
+    "qwq-32b": 128000,
+    "qwen3.5": 128000,
+    "qwen3": 128000,
+    "qwen2.5": 128000,
+    "qwen2": 128000,
+    "llama3.3": 128000,
+    "llama3.2": 128000,
+    "llama3.1": 128000,
+    "llama3": 128000,
+    "mistral": 128000,
+    "mixtral": 64000,
+    "gemma3": 128000,
+    "gemma2": 128000,
+    "command-r": 128000,
+    "aya": 256000,
+    "phi3": 128000,
+    "phi4": 128000,
+    "granite3": 128000,
+    "codestral": 32000,
+    "nemotron": 128000,
+    "llava": 4096,
+    "bakllava": 4096,
+    "moondream": 8192,
+  };
+  if (overrides[key] !== undefined) return overrides[key];
+  for (const [prefix, ctx] of Object.entries(overrides)) {
+    if (key.startsWith(prefix + "-")) return ctx;
+  }
+  if (key.includes("kimi")) return 256000;
+  if (key.includes("deepseek-r1")) return 128000;
+  if (key.includes("deepseek-v3")) return 128000;
+  if (key.includes("qwq")) return 128000;
+  if (key.includes("qwen3")) return 128000;
+  if (key.includes("qwen2.5")) return 128000;
+  if (key.includes("qwen2")) return 128000;
+  if (key.includes("llama3")) return 128000;
+  if (key.includes("mistral")) return 128000;
+  if (key.includes("mixtral")) return 64000;
+  if (key.includes("gemma3")) return 128000;
+  if (key.includes("gemma2")) return 128000;
+  if (key.includes("gemma")) return 8192;
+  if (key.includes("command-r")) return 128000;
+  if (key.includes("aya")) return 256000;
+  if (key.includes("phi3") || key.includes("phi-3")) return 128000;
+  if (key.includes("phi4") || key.includes("phi-4")) return 128000;
+  if (key.includes("granite3")) return 128000;
+  if (key.includes("codestral")) return 32000;
+  if (key.includes("codellama")) return 16384;
+  if (key.includes("llava")) return 4096;
+  if (key.includes("bakllava")) return 4096;
+  if (key.includes("moondream")) return 8192;
+  if (key.includes("minicpm")) return 128000;
+  if (key.includes("embed")) return 8192;
+  return 128000;
 }
