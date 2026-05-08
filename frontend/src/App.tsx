@@ -84,13 +84,13 @@ function App() {
     const left = window.screenX + 100;
     const top = window.screenY + 100;
     const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
-    const win = window.open("", `pi-web-${id}`, features);
+    // Build URL with standalone mode and panel parameter
+    const url = new URL(window.location.href);
+    url.searchParams.set('standalone', 'true');
+    url.searchParams.set('panel', id);
+    const win = window.open(url.toString(), `pi-web-${id}`, features);
     if (win) {
       win.document.title = `Pi-Web - ${id.toUpperCase()}`;
-      // We can't inject React here easily, so we load the main app and send a message to show this panel
-      win.location.href = window.location.href;
-      // Ideally, we'd communicate via localStorage or BroadcastChannel, but for now, just open a new tab
-      // A proper implementation would involve a URL parameter like ?panel=files
     }
   };
 
@@ -462,6 +462,16 @@ function App() {
     activateProject(project);
   };
 
+  // ── Background streaming ──
+  const backgroundStreamingProjects = projects.filter(
+    (p) => p.id !== activeProject?.id && projectSessionsRef.current.get(p.id)?.isStreaming
+  );
+
+  // ── Standalone mode (opened from main window as new tab) ──
+  const urlParams = new URLSearchParams(window.location.search);
+  const isStandalone = urlParams.get('standalone') === 'true';
+  const standalonePanel = urlParams.get('panel') as PanelId | null;
+
   // ── Handle file reference injection ──
   const handleReferenceFile = useCallback((filePath: string) => {
     if (!activeProject) return;
@@ -485,11 +495,46 @@ function App() {
     return () => channel.close();
   }, [activeProject, handleReferenceFile]);
 
-  // ── Background streaming ──
-  const backgroundStreamingProjects = projects.filter(
-    (p) => p.id !== activeProject?.id && projectSessionsRef.current.get(p.id)?.isStreaming
-  );
+  // ── RENDER ──
+  // If standalone mode, only show the requested panel (no header, no sidebar)
+  if (isStandalone && standalonePanel) {
+    return (
+      <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
+        <div className="flex-1 overflow-hidden">
+          {standalonePanel === "pi" && (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 overflow-hidden">
+                <ChatView
+                  send={send}
+                  on={on}
+                  activeProject={activeProject}
+                  isStreaming={isStreaming}
+                  session={session}
+                  projectId={activeProject?.id || ""}
+                />
+              </div>
+            </div>
+          )}
+          {standalonePanel === "terminal" && (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 overflow-hidden">
+                <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
+              </div>
+            </div>
+          )}
+          {standalonePanel === "files" && (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 overflow-hidden">
+                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
+  // Normal mode: full interface
   return (
     <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
       <div className="matrix-bg" />
@@ -601,7 +646,7 @@ function App() {
                   <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
                     <span className="text-xs font-bold text-hacker-accent">PI</span>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window (Ctrl+Shift+Click)">
+                      <button onClick={() => openInNewWindow("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
                         <ExternalLink size={12} />
                       </button>
                       <button onClick={() => undockPanel("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
