@@ -239,7 +239,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
             {/* Dropdown — always shows model list regardless of enabled state */}
             {isDropdownOpen && (
-              <div className="absolute top-full right-0 mt-1 w-[240px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
+              <div className="absolute top-full right-0 mt-1 w-[350px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
                 {/* Header */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
                   <span className={`text-xs font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
@@ -249,7 +249,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
                 {/* Model list — always shown */}
                 {library && library.models.length > 0 ? (
-                  <div className="max-h-[150px] overflow-y-auto">
+                  <div className="max-h-[300px] overflow-y-auto">
                     {library.models.map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
                       const isDefault = m.id === library.defaultModelId;
@@ -319,7 +319,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
         </button>
 
         {openMode === "commit" && library && (
-          <div className="absolute top-full right-0 mt-1 w-[240px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
+          <div className="absolute top-full right-0 mt-1 w-[350px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
             <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
               <span className="text-xs font-bold tracking-wider text-hacker-text-dim">
                 <GitCommit size={10} className="inline mr-1" />COMMIT MODEL
@@ -333,7 +333,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               )}
             </div>
             {library.models.length > 0 ? (
-              <div className="max-h-[150px] overflow-y-auto">
+              <div className="max-h-[300px] overflow-y-auto">
                 {library.models.map((m) => {
                   const isSelected = m.id === library.commitModelId;
                   const isDefault = m.id === library.defaultModelId;

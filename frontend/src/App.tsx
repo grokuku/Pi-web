@@ -11,9 +11,9 @@ import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
 import { ExtensionsModal } from "./components/Modals/ExtensionsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
+import { Window } from "./components/common/Window";
+import { ExternalLink } from "lucide-react";
 import type { Project } from "./types";
-
-type Tab = "pi" | "terminal" | "files";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -53,7 +53,47 @@ function App() {
   });
   const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
   const [scanlines, setScanlines] = useState(() => localStorage.getItem("pi-web-scanlines") !== "false");
-  const [activeTab, setActiveTab] = useState<Tab>("pi");
+
+  // ── Panel State ──
+  type PanelId = "pi" | "terminal" | "files";
+  interface PanelState { visible: boolean; floating: boolean; }
+  const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
+    const saved = localStorage.getItem("pi-web-panels");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed === "object" && parsed !== null) return parsed;
+      } catch {}
+    }
+    return { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false } };
+  });
+
+  const savePanels = (p: Record<PanelId, PanelState>) => {
+    try { localStorage.setItem("pi-web-panels", JSON.stringify(p)); } catch {}
+    setPanels(p);
+  };
+
+  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: !panels[id].visible, floating: false } });
+  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { visible: true, floating: true } });
+  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { visible: true, floating: false } });
+  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { visible: false, floating: false } });
+
+  // Helper to render panel buttons in header
+  const renderPanelSwitch = (id: PanelId, label: string) => {
+    const isOn = panels[id].visible && !panels[id].floating;
+    return (
+      <button
+        onClick={() => togglePanel(id)}
+        className={`text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+          isOn ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10" : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
+        }`}
+        title={`${isOn ? 'Hide' : 'Show'} ${label}`}
+      >
+        {isOn ? `[${label}]` : label}
+      </button>
+    );
+  };
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [zoomLevel, setZoomLevel] = useState(() => {
@@ -180,7 +220,7 @@ function App() {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [sidebarWidth]);
+  }, []);
 
   const startResizeSidebar = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -309,17 +349,14 @@ function App() {
     });
 
     const unsubTerm = on("terminal_data", (_msg: any) => {});
-
     const unsubError = on("error", (msg: any) => {
       console.error("[WS Error]", msg.error);
     });
-
     const unsubHistory = on("pi_history", (msg: any) => {
       if (msg.messages && msg.messages.length > 0) {
         console.log(`[Pi] Restored ${msg.messages.length} messages for project ${msg.projectId}`);
       }
     });
-
     const unsubStarted = on("pi_started", (msg: any) => {
       const { projectId, resumed } = msg.data || {};
       if (projectId) {
@@ -430,13 +467,13 @@ function App() {
           {connected ? "●" : "○"}
         </span>
 
-        <div className="w-px h-4 bg-hacker-border-bright" />
+        <div className="w-px h-4 bg-hacker-border-right" />
 
         {/* Background streaming count */}
         {backgroundStreamingProjects.length > 0 && (
           <>
             <span className="text-xs text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
-            <div className="w-px h-4 bg-hacker-border-bright" />
+            <div className="w-px h-4 bg-hacker-border-right" />
           </>
         )}
 
@@ -455,41 +492,14 @@ function App() {
           onModelApplied={handleModelApplied}
         />
 
-        <div className="w-px h-4 bg-hacker-border-bright" />
+        <div className="w-px h-4 bg-hacker-border-right" />
 
-        {/* Tab toggles [PI] [TERM] */}
-        <button
-          onClick={() => setActiveTab("pi")}
-          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
-            activeTab === "pi"
-              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
-          }`}
-        >
-          [PI]
-        </button>
-        <button
-          onClick={() => setActiveTab("terminal")}
-          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
-            activeTab === "terminal"
-              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
-          }`}
-        >
-          [TERM]
-        </button>
-        <button
-          onClick={() => setActiveTab("files")}
-          className={`text-xs px-2 py-1 border font-bold tracking-wide ${
-            activeTab === "files"
-              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-              : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
-          }`}
-        >
-          [FILES]
-        </button>
+        {/* Panel Switches (ON/OFF) */}
+        {renderPanelSwitch("pi", "PI")}
+        {renderPanelSwitch("terminal", "TERM")}
+        {renderPanelSwitch("files", "FILES")}
 
-        <div className="w-px h-4 bg-hacker-border-bright" />
+        <div className="w-px h-4 bg-hacker-border-right" />
 
         {/* Zoom buttons */}
         <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1" title="Zoom out">−</button>
@@ -541,38 +551,88 @@ function App() {
           />
         </div>
 
-        {/* Content */}
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-hidden relative">
-            <div className={activeTab === "pi" ? "absolute inset-0" : "hidden"}>
-              <ChatView
-                send={send}
-                on={on}
-                activeProject={activeProject}
-                isStreaming={isStreaming}
-                session={session}
-                projectId={activeProject?.id || ""}
-              />
+        {/* MAIN CONTENT: Docked Panels */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Docked PI Panel */}
+          {panels.pi.visible && !panels.pi.floating && (
+            <div className="flex-1 min-w-0 border-r border-hacker-border">
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <span className="text-xs font-bold text-hacker-accent">PI</span>
+                  <button onClick={() => undockPanel("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Détacher"><ExternalLink size={12} /></button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <ChatView
+                    send={send}
+                    on={on}
+                    activeProject={activeProject}
+                    isStreaming={isStreaming}
+                    session={session}
+                    projectId={activeProject?.id || ""}
+                  />
+                </div>
+              </div>
             </div>
-            <div className={activeTab === "terminal" ? "absolute inset-0" : "hidden"}>
-              <TerminalView send={send} on={on} activeProject={activeProject} isActive={activeTab === "terminal"} />
-            </div>
-            <div className={activeTab === "files" ? "absolute inset-0" : "hidden"}>
-              <FileExplorer project={activeProject} />
-            </div>
-          </div>
+          )}
 
-          {/* StatusBar */}
-          <StatusBar
-            activeProject={activeProject}
-            isStreaming={isStreaming}
-            stats={stats}
-            session={session}
-            connected={connected}
-            activeMode={activeMode}
-            autoReviewState={autoReviewState}
-          />
+          {/* Docked Terminal Panel */}
+          {panels.terminal.visible && !panels.terminal.floating && (
+            <div className="flex-1 min-w-0 border-r border-hacker-border">
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <span className="text-xs font-bold text-hacker-accent">TERMINAL</span>
+                  <button onClick={() => undockPanel("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Détacher"><ExternalLink size={12} /></button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal.visible && !panels.terminal.floating} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Docked Files Panel */}
+          {panels.files.visible && !panels.files.floating && (
+            <div className="flex-1 min-w-0">
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <span className="text-xs font-bold text-hacker-accent">FILES</span>
+                  <button onClick={() => undockPanel("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Détacher"><ExternalLink size={12} /></button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <FileExplorer project={activeProject} />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* FLOATING PANELS (Windows) */}
+        {panels.pi.visible && panels.pi.floating && (
+          <Window id="pi-float" title="PI" icon="⚡" onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
+            <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+          </Window>
+        )}
+        {panels.terminal.visible && panels.terminal.floating && (
+          <Window id="term-float" title="TERMINAL" icon="🖥" onClose={() => hidePanel("terminal")} onDock={() => dockPanel("terminal")}>
+            <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
+          </Window>
+        )}
+        {panels.files.visible && panels.files.floating && (
+          <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
+            <FileExplorer project={activeProject} />
+          </Window>
+        )}
+
+        {/* StatusBar (always at bottom) */}
+        <StatusBar
+          activeProject={activeProject}
+          isStreaming={isStreaming}
+          stats={stats}
+          session={session}
+          connected={connected}
+          activeMode={activeMode}
+          autoReviewState={autoReviewState}
+        />
       </div>
 
       {/* ── MODALS ── */}
