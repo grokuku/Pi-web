@@ -10,6 +10,7 @@ import {
   getProjectModeConfig,
   getDefaultModel,
   getCommitModel,
+  setProjectModeEnabled,
 }
 from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
@@ -378,16 +379,16 @@ export async function sendPrompt(
       }
       case "/plan": {
         const library = loadModelLibrary();
-        const pm = getProjectModeConfig(library, projectId);
         const currentMode = state.activeMode || "code";
         if (currentMode === "plan") {
           // Toggle off → back to code
           await restoreCodeMode(projectId);
           return { command: "plan", result: "✓ Switched back to CODE mode" };
         } else {
-          // Enable plan mode
+          // Enable plan mode (auto-enable if not already enabled)
+          const pm = getProjectModeConfig(library, projectId);
           if (!pm.plan?.enabled) {
-            return { command: "plan", result: "✗ PLAN mode is not enabled. Enable it in the mode selector." };
+            setProjectModeEnabled(projectId, "plan", true);
           }
           await switchMode("plan", projectId);
           return { command: "plan", result: "✓ Switched to PLAN mode" };
@@ -395,16 +396,16 @@ export async function sendPrompt(
       }
       case "/review": {
         const library = loadModelLibrary();
-        const pm = getProjectModeConfig(library, projectId);
         const currentMode = state.activeMode || "code";
         if (currentMode === "review") {
           // Toggle off → back to code
           await restoreCodeMode(projectId);
           return { command: "review", result: "✓ Switched back to CODE mode" };
         } else {
-          // Enable review mode
+          // Enable review mode (auto-enable if not already enabled)
+          const pm = getProjectModeConfig(library, projectId);
           if (!pm.review?.enabled) {
-            return { command: "review", result: "✗ REVIEW mode is not enabled. Enable it in the mode selector." };
+            setProjectModeEnabled(projectId, "review", true);
           }
           await switchMode("review", projectId);
           return { command: "review", result: "✓ Switched to REVIEW mode" };

@@ -243,6 +243,8 @@ function App() {
           if (projectId === activeProject?.id) {
             setActiveMode(evt.mode);
           }
+          // Reload model library when mode changes (enabled state may have changed)
+          setModelChangeVersion(v => v + 1);
           break;
         }
         case "auto_review_status": {
