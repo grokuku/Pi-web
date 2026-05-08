@@ -127,10 +127,18 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   sizeRef.current = size;
 
   // ── Persist to localStorage ──
-  // Save immediately whenever position or size changes
+  // Save whenever position or size changes (for live feedback)
   useEffect(() => {
     saveGeometry(id, { x: pos.x, y: pos.y, w: size.w, h: size.h });
   }, [id, pos.x, pos.y, size.w, size.h]);
+
+  // Save on unmount (when modal closes via X or Escape key)
+  useEffect(() => {
+    return () => {
+      // Cleanup function runs on unmount
+      saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
+    };
+  }, [id]);
 
   // Helper to force save (used in drag/resize end)
   const forceSaveGeometry = () => {
