@@ -374,6 +374,22 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
+  // Provider filter: which providers are visible in the Available column
+  const [providerFilter, setProviderFilter] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
+
+  // Sync providerFilter when providers change
+  useEffect(() => {
+    setProviderFilter(prev => {
+      const next = new Set<string>();
+      for (const p of providers) {
+        if (prev.has(p.id) || !prev.has(p.id)) {
+          // Keep existing selection, add new providers as visible
+          next.add(p.id);
+        }
+      }
+      return next;
+    });
+  }, [providers]);
 
   // All discovered models across all providers (cached)
   const [allDiscovered, setAllDiscovered] = useState<DiscoveredModel[]>(() => {
@@ -389,14 +405,21 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     return cache;
   });
 
-  // Available = discovered models that are NOT in the library
+  // Available = discovered models that are NOT in the library AND match provider filter
   const configuredIds = new Set(library.models.map(m => m.modelId));
   const filteredAvailable = allDiscovered
     .filter(dm => !configuredIds.has(dm.id))
+    .filter(dm => {
+      const provId = (dm as any)._providerId as string | undefined;
+      // Show if provider is not tracked in filter (legacy), or is checked
+      if (!provId) return true;
+      return providerFilter.has(provId);
+    })
     .filter(dm => !modelFilter || (dm.name || dm.id).toLowerCase().includes(modelFilter.toLowerCase()))
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 
   const filteredConfigured = library.models
+    .filter(m => providerFilter.has(m.providerId) || !providers.find(p => p.id === m.providerId))
     .filter(m => !modelFilter || (m.name || m.modelId).toLowerCase().includes(modelFilter.toLowerCase()))
     .sort((a, b) => (a.name || a.modelId).localeCompare(b.name || b.modelId));
 
@@ -505,6 +528,36 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
           </button>
         )}
       </div>
+
+      {/* Provider filter checkboxes */}
+      {providers.length > 1 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1 px-1">
+          {providers.map(p => {
+            const checked = providerFilter.has(p.id);
+            const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id).length;
+            return (
+              <label key={p.id} className="flex items-center gap-1 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => {
+                    setProviderFilter(prev => {
+                      const next = new Set(prev);
+                      if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                      return next;
+                    });
+                  }}
+                  className="accent-[var(--accent)] w-3 h-3"
+                />
+                <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                  {p.name || p.type}
+                </span>
+                {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+              </label>
+            );
+          })}
+        </div>
+      )}
 
       {/* Three-column layout: available | actions | selected */}
       <div className="flex gap-1 min-h-[300px]">
