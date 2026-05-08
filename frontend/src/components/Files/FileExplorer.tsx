@@ -39,6 +39,7 @@ interface TreeNode {
 
 interface Props {
   project: any;
+  onReferenceFile?: (path: string) => void;
 }
 
 // ── Helpers ──
@@ -97,12 +98,16 @@ function DirNode({
   onSelect,
   onExpand,
   onToggleSelect,
+  onReferenceFile,
+  projectId,
 }: {
   node: TreeNode;
   selectedPaths: Set<string>;
   onSelect: (path: string) => void;
   onExpand: (node: TreeNode) => void;
   onToggleSelect: (path: string, type: "dir" | "file") => void;
+  onReferenceFile?: (path: string) => void;
+  projectId?: string;
 }) {
   const isExpanded = node.loaded && node.children && node.children.length > 0;
   const isDir = node.type === "dir";
@@ -142,6 +147,29 @@ function DirNode({
           </>
         )}
         <span className="truncate text-xs">{node.name}</span>
+        {/* Reference button (only for selected files) */}
+        {!isDir && isSelected && (
+          <button
+            onClick={(e) => { e.stopPropagation();
+              if (onReferenceFile) {
+                if (window.opener) {
+                  // We're in a popup window, use window.opener to access parent
+                  // Note: Direct access is limited by same-origin policy
+                  // So we use BroadcastChannel
+                  const channel = new BroadcastChannel('pi-web-file-ref');
+                  channel.postMessage({ type: 'file-reference', filePath: node.path, projectId: projectId });
+                  channel.close();
+                } else {
+                  onReferenceFile(node.path);
+                }
+              }
+            }}
+            className="ml-auto text-hacker-accent hover:text-hacker-accent/80 text-[10px] px-1 py-0.5 border border-hacker-accent/30 rounded"
+            title="Reference this file in next prompt"
+          >
+            Ref
+          </button>
+        )}
       </div>
       {isExpanded && node.children && (
         <div className="pl-3">

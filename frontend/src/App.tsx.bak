@@ -12,7 +12,7 @@ import { ExtensionsModal } from "./components/Modals/ExtensionsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Columns2 } from "lucide-react";
 import type { Project } from "./types";
 
 // ── Error boundary to prevent white/dark screen of death ──
@@ -36,7 +36,7 @@ class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean;
   }
 }
 
-// ── Per-project session state ──────────────────────
+// ── Per-project session state ─────────────────────
 interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
@@ -56,7 +56,7 @@ function App() {
 
   // ── Panel State ──
   type PanelId = "pi" | "terminal" | "files";
-  interface PanelState { visible: boolean; floating: boolean; }
+  interface PanelState { visible: boolean; floating: boolean; tab: boolean; }
   const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
     const saved = localStorage.getItem("pi-web-panels");
     if (saved) {
@@ -65,7 +65,7 @@ function App() {
         if (typeof parsed === "object" && parsed !== null) return parsed;
       } catch {}
     }
-    return { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false } };
+    return { pi: { visible: true, floating: false, tab: false }, terminal: { visible: false, floating: false, tab: false }, files: { visible: false, floating: false, tab: false } };
   });
 
   const savePanels = (p: Record<PanelId, PanelState>) => {
@@ -73,30 +73,16 @@ function App() {
     setPanels(p);
   };
 
-  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: !panels[id].visible, floating: false } });
-  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: true } });
-  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: false } });
-  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: false, floating: false } });
-
-  // Open panel in new browser window (tab)
-  const openInNewWindow = (id: PanelId) => {
-    const width = 1200, height = 800;
-    const left = window.screenX + 100;
-    const top = window.screenY + 100;
-    const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
-    const win = window.open("", `pi-web-${id}`, features);
-    if (win) {
-      win.document.title = `Pi-Web - ${id.toUpperCase()}`;
-      // We can't inject React here easily, so we load the main app and send a message to show this panel
-      win.location.href = window.location.href;
-      // Ideally, we'd communicate via localStorage or BroadcastChannel, but for now, just open a new tab
-      // A proper implementation would involve a URL parameter like ?panel=files
-    }
-  };
+  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: !panels[id].visible, floating: false, tab: false } });
+  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: true, tab: false } });
+  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: false, tab: false } });
+  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: false, floating: false, tab: false } });
+  const sendToTab = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], tab: true } });
+  const restoreFromTab = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], tab: false } });
 
   // Helper to render panel buttons in header
   const renderPanelSwitch = (id: PanelId, label: string) => {
-    const isOn = panels[id].visible && !panels[id].floating;
+    const isOn = panels[id].visible && !panels[id].floating && !panels[id].tab;
     return (
       <button
         onClick={() => togglePanel(id)}
@@ -462,29 +448,6 @@ function App() {
     activateProject(project);
   };
 
-  // ── Handle file reference injection ──
-  const handleReferenceFile = useCallback((filePath: string) => {
-    if (!activeProject) return;
-    // Send a special prompt prefix that the backend can interpret as a file reference
-    const referencePrompt = `@file ${filePath}`;
-    send({ type: "pi_prompt", projectId: activeProject.id, message: referencePrompt, isReference: true });
-    console.log(`[FileExplorer] Referenced file: ${filePath}`);
-  }, [activeProject, send]);
-
-  // ── BroadcastChannel for cross-tab/window communication ──
-  useEffect(() => {
-    const channel = new BroadcastChannel('pi-web-file-ref');
-    channel.onmessage = (event) => {
-      if (event.data.type === 'file-reference') {
-        const { filePath, projectId } = event.data;
-        if (projectId === activeProject?.id) {
-          handleReferenceFile(filePath);
-        }
-      }
-    };
-    return () => channel.close();
-  }, [activeProject, handleReferenceFile]);
-
   // ── Background streaming ──
   const backgroundStreamingProjects = projects.filter(
     (p) => p.id !== activeProject?.id && projectSessionsRef.current.get(p.id)?.isStreaming
@@ -595,14 +558,14 @@ function App() {
           {/* Docked Panels Area (side-by-side) */}
           <div className="flex-1 flex overflow-hidden">
             {/* Docked PI Panel */}
-            {panels.pi.visible && !panels.pi.floating && (
+            {panels.pi.visible && !panels.pi.floating && !panels.pi.tab && (
               <div className="flex-1 min-w-0 border-r border-hacker-border">
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
                     <span className="text-xs font-bold text-hacker-accent">PI</span>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window (Ctrl+Shift+Click)">
-                        <ExternalLink size={12} />
+                      <button onClick={() => sendToTab("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Send to separate tab">
+                        <Columns2 size={12} />
                       </button>
                       <button onClick={() => undockPanel("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
                         <ExternalLink size={12} />
@@ -624,14 +587,14 @@ function App() {
             )}
 
             {/* Docked Terminal Panel */}
-            {panels.terminal.visible && !panels.terminal.floating && (
+            {panels.terminal.visible && !panels.terminal.floating && !panels.terminal.tab && (
               <div className="flex-1 min-w-0 border-r border-hacker-border">
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
                     <span className="text-xs font-bold text-hacker-accent">TERMINAL</span>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-                        <ExternalLink size={12} />
+                      <button onClick={() => sendToTab("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Send to separate tab">
+                        <Columns2 size={12} />
                       </button>
                       <button onClick={() => undockPanel("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
                         <ExternalLink size={12} />
@@ -639,21 +602,21 @@ function App() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal.visible && !panels.terminal.floating} />
+                    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal.visible && !panels.terminal.floating && !panels.terminal.tab} />
                   </div>
                 </div>
               </div>
             )}
 
             {/* Docked Files Panel */}
-            {panels.files.visible && !panels.files.floating && (
+            {panels.files.visible && !panels.files.floating && !panels.files.tab && (
               <div className="flex-1 min-w-0">
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
                     <span className="text-xs font-bold text-hacker-accent">FILES</span>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-                        <ExternalLink size={12} />
+                      <button onClick={() => sendToTab("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Send to separate tab">
+                        <Columns2 size={12} />
                       </button>
                       <button onClick={() => undockPanel("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
                         <ExternalLink size={12} />
@@ -661,14 +624,14 @@ function App() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+                    <FileExplorer project={activeProject} />
                   </div>
                 </div>
               </div>
             )}
           </div>
 
-          {/* StatusBar (always at bottom of main area) */}
+          {/* StatusBar (always at bottom of main area, below panels) */}
           <StatusBar
             activeProject={activeProject}
             isStreaming={isStreaming}
@@ -680,6 +643,60 @@ function App() {
           />
         </div>
       </div>
+
+      {/* SEPARATE TAB AREA (for tab panels) */}
+      {panels.pi.tab && (
+        <div className="fixed top-0 right-0 w-1/2 h-screen z-40 bg-hacker-surface border-l border-hacker-border">
+          <div className="h-full flex flex-col">
+            <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+              <span className="text-xs font-bold text-hacker-accent">PI (TAB)</span>
+              <button onClick={() => restoreFromTab("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Restore to main area">
+                <Columns2 size={12} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <ChatView
+                send={send}
+                on={on}
+                activeProject={activeProject}
+                isStreaming={isStreaming}
+                session={session}
+                projectId={activeProject?.id || ""}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+      {panels.terminal.tab && (
+        <div className="fixed top-0 right-0 w-1/2 h-screen z-40 bg-hacker-surface border-l border-hacker-border">
+          <div className="h-full flex flex-col">
+            <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+              <span className="text-xs font-bold text-hacker-accent">TERMINAL (TAB)</span>
+              <button onClick={() => restoreFromTab("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Restore to main area">
+                <Columns2 size={12} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
+            </div>
+          </div>
+        </div>
+      )}
+      {panels.files.tab && (
+        <div className="fixed top-0 right-0 w-1/2 h-screen z-40 bg-hacker-surface border-l border-hacker-border">
+          <div className="h-full flex flex-col">
+            <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+              <span className="text-xs font-bold text-hacker-accent">FILES (TAB)</span>
+              <button onClick={() => restoreFromTab("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Restore to main area">
+                <Columns2 size={12} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <FileExplorer project={activeProject} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FLOATING PANELS (Windows) */}
       {panels.pi.visible && panels.pi.floating && (
@@ -694,7 +711,7 @@ function App() {
       )}
       {panels.files.visible && panels.files.floating && (
         <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
-          <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+          <FileExplorer project={activeProject} />
         </Window>
       )}
 
