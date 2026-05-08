@@ -16,7 +16,11 @@ function loadGeometry(id: string): ModalGeometry | null {
     if (!raw) return null;
     const all = JSON.parse(raw);
     const g = all[id];
-    if (!g || typeof g.x !== "number") return null;
+    if (!g || typeof g.x !== "number" || typeof g.y !== "number" || typeof g.w !== "number" || typeof g.h !== "number") {
+      return null;
+    }
+    // Validate reasonable values (not negative, width/height at least 100)
+    if (g.w < 100 || g.h < 100) return null;
     return g;
   } catch { return null; }
 }
@@ -24,13 +28,17 @@ function loadGeometry(id: string): ModalGeometry | null {
 function saveGeometry(id: string, g: ModalGeometry) {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    const all = raw ? JSON.parse(raw) : {};
-    if (typeof all !== "object" || all === null) {
-      // Reset if corrupted
-      const fresh: Record<string, ModalGeometry> = {};
-      fresh[id] = g;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-      return;
+    let all: Record<string, ModalGeometry> = {};
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === "object" && parsed !== null) {
+          all = parsed;
+        }
+        // If parsed is invalid, all remains empty object (we'll overwrite with current id)
+      } catch {
+        // Invalid JSON, start fresh
+      }
     }
     all[id] = g;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
@@ -42,6 +50,7 @@ function saveGeometry(id: string, g: ModalGeometry) {
 // ── Default sizes per modal ──
 const DEFAULTS: Record<string, { w: number; h: number }> = {
   "model-library": { w: 1200, h: 800 },
+  "model-library-loading": { w: 1200, h: 800 },
   "model-edit": { w: 800, h: 700 },
   "add-project": { w: 900, h: 700 },
   "commit-push": { w: 900, h: 700 },
@@ -50,6 +59,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "project-switch": { w: 800, h: 700 },
   "delete-project": { w: 800, h: 500 },
   "file-viewer": { w: 900, h: 700 },
+  "extensions": { w: 900, h: 700 },
 };
 
 // ── Resize handle positions ──
