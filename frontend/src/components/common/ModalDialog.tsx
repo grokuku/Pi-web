@@ -40,6 +40,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "git-identity": { w: 800, h: 600 },
   "project-switch": { w: 800, h: 700 },
   "delete-project": { w: 800, h: 500 },
+  "file-viewer": { w: 900, h: 700 },
 };
 
 // ── Resize handle positions ──

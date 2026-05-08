@@ -680,6 +680,24 @@ export async function disposeAllSessions(): Promise<void> {
 }
 
 /**
+ * Re-apply active mode for all active sessions (e.g. after model library update).
+ * Reloads the model registry first, then re-applies the current mode model.
+ */
+export async function reapplyAllSessions(): Promise<void> {
+  reloadModelRegistry();
+  const library = loadModelLibrary();
+  for (const [projectId, state] of sessionsByProject) {
+    if (!state.session) continue;
+    const mode = state.activeMode || "code";
+    try {
+      await applyModeToSession(mode, projectId);
+    } catch (e: any) {
+      console.warn(`[reapply] Failed for ${projectId}:`, e.message);
+    }
+  }
+}
+
+/**
  * Get the full message history for a project's session.
  * Useful for reconstructing chat UI after reconnection.
  */

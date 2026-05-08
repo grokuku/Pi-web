@@ -21,7 +21,7 @@ import {
   type RegisteredModel,
 } from "../pi/model-library.js";
 import { loadProviders } from "../pi/providers.js";
-import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode } from "../pi/session.js";
+import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode, reapplyAllSessions } from "../pi/session.js";
 
 const router = Router();
 
@@ -88,6 +88,7 @@ router.post("/models", async (req: Request, res: Response) => {
 
       const library = addModels(entries);
       await syncToModelsJson();
+      reapplyAllSessions().catch((e) => console.warn("[model-library] Failed to reapply sessions:", e.message));
       res.json(library);
     } else {
       // Single add
@@ -112,6 +113,7 @@ router.post("/models", async (req: Request, res: Response) => {
       });
 
       await syncToModelsJson();
+      reapplyAllSessions().catch((e) => console.warn("[model-library] Failed to reapply sessions:", e.message));
       res.json(library);
     }
   } catch (e: any) {
@@ -126,6 +128,8 @@ router.put("/models/:id", async (req: Request, res: Response) => {
     const id = safeDecode(req.params.id);
     const library = updateModel(id, req.body);
     await syncToModelsJson();
+    // Re-apply active sessions so they pick up model capability changes (e.g. vision)
+    reapplyAllSessions().catch((e) => console.warn("[model-library] Failed to reapply sessions:", e.message));
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -139,6 +143,7 @@ router.delete("/models/:id", async (req: Request, res: Response) => {
     const id = safeDecode(req.params.id);
     const library = removeModel(id);
     await syncToModelsJson();
+    reapplyAllSessions().catch((e) => console.warn("[model-library] Failed to reapply sessions:", e.message));
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });

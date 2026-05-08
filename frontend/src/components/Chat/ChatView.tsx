@@ -3,6 +3,7 @@ import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment } from "../../types";
+import { ModalDialog } from "../common/ModalDialog";
 
 // ── Memoized ReactMarkdown to avoid re-parsing on every render ──
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
@@ -615,33 +616,26 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
       {/* File viewer overlay */}
       {viewerFile && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={() => setViewerFile(null)}
-        >
-          <div
-            className="relative max-w-[90vw] max-h-[90vh] bg-hacker-surface border border-hacker-border rounded-lg shadow-2xl flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <ModalDialog id="file-viewer" onClose={() => setViewerFile(null)}>
+          <div className="flex flex-col h-full">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
-              <span className="text-sm text-hacker-text-bright truncate max-w-[60vw]">{viewerFile.name || "Attachment"}</span>
-              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error">
-                <X size={16} />
-              </button>
+              <span className="text-sm text-hacker-text-bright truncate">{viewerFile.name || "Attachment"}</span>
             </div>
             {/* Content */}
-            {viewerFile.type === "image" ? (
-              <img
-                src={viewerFile.src}
-                alt={viewerFile.name || "Image"}
-                className="max-w-[85vw] max-h-[80vh] object-contain p-2"
-              />
-            ) : (
-              <pre className="p-4 overflow-auto max-h-[80vh] text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>
-            )}
+            <div className="flex-1 overflow-auto p-4">
+              {viewerFile.type === "image" ? (
+                <img
+                  src={viewerFile.src}
+                  alt={viewerFile.name || "Image"}
+                  className="max-w-full max-h-full object-contain mx-auto"
+                />
+              ) : (
+                <pre className="text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>
+              )}
+            </div>
           </div>
-        </div>
+        </ModalDialog>
       )}
     </div>
   );
