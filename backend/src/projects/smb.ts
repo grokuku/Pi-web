@@ -22,10 +22,27 @@ import crypto from "crypto";
 
 const SMB_BASE = "/mnt/smb";
 const SMB_KEY_FILE = path.join(process.env.HOME || "/root", ".pi", "agent", ".smb-key");
+const SMB_KEY_ENV = process.env.SMB_ENCRYPTION_KEY; // Hex-encoded 32-byte key
 
 // ── Password encryption ───────────────────────────
 
 function getEncryptionKey(): Buffer {
+  // Prefer environment variable if set
+  if (process.env.SMB_ENCRYPTION_KEY) {
+    try {
+      const key = Buffer.from(process.env.SMB_ENCRYPTION_KEY, "hex");
+      if (key.length === 32) {
+        console.log("[SMB] Using encryption key from SMB_ENCRYPTION_KEY env var");
+        return key;
+      } else {
+        console.warn("[SMB] SMB_ENCRYPTION_KEY is not 32 bytes (64 hex chars), ignoring");
+      }
+    } catch (e) {
+      console.warn("[SMB] Failed to parse SMB_ENCRYPTION_KEY, falling back to file", e);
+    }
+  }
+
+  // Fall back to file-based key
   try {
     if (existsSync(SMB_KEY_FILE)) {
       return Buffer.from(readFileSync(SMB_KEY_FILE, "utf-8"), "hex");
@@ -36,6 +53,7 @@ function getEncryptionKey(): Buffer {
   const dir = path.dirname(SMB_KEY_FILE);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(SMB_KEY_FILE, key.toString("hex"), { mode: 0o600 });
+  console.log(`[SMB] Generated new encryption key, stored in ${SMB_KEY_FILE}`);
   return key;
 }
 

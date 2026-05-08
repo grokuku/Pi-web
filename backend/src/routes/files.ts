@@ -4,15 +4,35 @@ import path from "path";
 
 const router = Router();
 
-// Allowed root paths for browsing
-const ALLOWED_ROOTS = ["/projects", "/home", "/root", "/app", "/mnt"];
+// Allowed root paths for browsing (restrictive by default)
+const ALLOWED_ROOTS = ["/projects", "/home", "/mnt"];
+
+// Sensitive paths that should never be accessible
+const DENY_LIST = [
+  ".ssh",
+  ".env",
+  "credentials.enc",
+  ".smb-key",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "known_hosts",
+  "authorized_keys",
+];
 
 function isPathAllowed(targetPath: string): boolean {
   const resolved = path.resolve(targetPath);
-  return ALLOWED_ROOTS.some((root) => {
+  // Check if path is within allowed roots
+  const inAllowedRoot = ALLOWED_ROOTS.some((root) => {
     const resolvedRoot = path.resolve(root);
     return resolved.startsWith(resolvedRoot);
   });
+  if (!inAllowedRoot) return false;
+  // Check deny list (path components)
+  const parts = resolved.split(path.sep);
+  const hasSensitive = parts.some(part => DENY_LIST.includes(part));
+  return !hasSensitive;
 }
 
 interface FileEntry {

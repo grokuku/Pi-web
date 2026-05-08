@@ -17,6 +17,7 @@ import modelLibraryRouter from "./routes/model-library.js";
 import providersRouter from "./routes/providers.js";
 import filesRouter from "./routes/files.js";
 import piSettingsRouter from "./routes/pi-settings.js";
+import type { Project } from "./projects/manager.js";
 import {
   createPiSession,
   subscribeToEvents,
@@ -60,13 +61,18 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: ALLOWED_ORIGINS env var (comma-separated origins, or "*" for all). Default: allow all.
-const corsOrigins = process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS !== "*"
-  ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim())
-  : true; // Allow all origins by default
+// CORS: ALLOWED_ORIGINS env var (comma-separated origins). Default: deny all.
+const corsOrigins: string[] | boolean = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS === "*"
+    ? (console.warn("[CORS] WARNING: ALLOWED_ORIGINS=* allows all origins. This is insecure."), true)
+    : process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
+  : false; // Default: deny all
 app.use(cors({
   origin: corsOrigins,
 }));
+if (corsOrigins === false) {
+  console.warn("[CORS] WARNING: No ALLOWED_ORIGINS set. CORS is disabled (deny all).");
+}
 app.use(express.json({ limit: "50mb" }));
 
 // API Routes
@@ -109,11 +115,17 @@ app.get("/api/sessions/:projectId/info", (req, res) => {
 const httpServer = createServer(app);
 
 // ── WebSocket Server ──────────────────────────────────
-// WS_ALLOWED_ORIGINS env var (comma-separated origins, or "*" for all). Default: allow all.
-const wsAllowAllOrigins = !process.env.WS_ALLOWED_ORIGINS || process.env.WS_ALLOWED_ORIGINS === "*";
+// WS_ALLOWED_ORIGINS env var (comma-separated origins). Default: deny all.
+const wsAllowAllOrigins = process.env.WS_ALLOWED_ORIGINS === "*";
 const wsAllowedOrigins: string[] = (!wsAllowAllOrigins && process.env.WS_ALLOWED_ORIGINS)
   ? process.env.WS_ALLOWED_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
   : [];
+if (wsAllowAllOrigins) {
+  console.warn("[WS] WARNING: WS_ALLOWED_ORIGINS=* allows all origins. This is insecure.");
+}
+if (wsAllowedOrigins.length === 0 && !wsAllowAllOrigins) {
+  console.warn("[WS] WARNING: No WS_ALLOWED_ORIGINS set. WebSocket connections will be denied except non-browser clients.");
+}
 
 function validateOrigin(origin: string | undefined): boolean {
   if (!origin) return true; // Allow non-browser clients (curl, etc.)
@@ -257,16 +269,27 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
   const projectId = msg.projectId || ws.projectId || "";
 
+  // Helper to validate project exists
+  function getValidatedProject(pid: string): Project | null {
+    if (!pid) {
+      ws.send(JSON.stringify({ type: "error", error: "projectId is required" }));
+      return null;
+    }
+    const project = getProject(pid);
+    if (!project) {
+      ws.send(JSON.stringify({ type: "error", error: `Project not found: ${pid}` }));
+      return null;
+    }
+    return project;
+  }
+
   switch (msg.type) {
     // ── Pi Actions (now project-scoped) ──
     case "pi_start": {
       const pid = msg.projectId || projectId;
-      if (!pid) {
-        ws.send(JSON.stringify({ type: "error", error: "projectId is required" }));
-        return;
-      }
-      const project = getProject(pid);
-      const cwd = project?.cwd || process.cwd();
+      const project = getValidatedProject(pid);
+      if (!project) return;
+      const cwd = project.cwd;
 
       try {
         const state = await createPiSession(cwd, pid, {
@@ -448,10 +471,8 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
     case "pi_prompt": {
       const pid = msg.projectId || projectId;
-      if (!pid) {
-        ws.send(JSON.stringify({ type: "error", error: "projectId is required" }));
-        return;
-      }
+      const project = getValidatedProject(pid);
+      if (!project) return;
       const { message, images } = msg;
       console.log(`[Pi] Prompt received for ${pid}: ${message.substring(0, 80)}${message.length > 80 ? "..." : ""} (images: ${images?.length || 0})`);
       try {
@@ -473,6 +494,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
     case "pi_abort": {
       const pid = msg.projectId || projectId;
+      if (!getValidatedProject(pid)) return;
       // Also abort any running auto-review
       abortAutoReview(pid);
       try {
@@ -487,7 +509,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     case "mode_switch": {
       const pid = msg.projectId || projectId;
       const { mode } = msg;
-      if (!pid || !mode) break;
+      if (!getValidatedProject(pid) || !mode) return;
       try {
         await switchMode(mode, pid);
       } catch (e: any) {
@@ -499,7 +521,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     case "pi_steer": {
       const pid = msg.projectId || projectId;
       const { message } = msg;
-      if (!message) break;
+      if (!getValidatedProject(pid) || !message) return;
       try {
         await steerPrompt(message, pid);
       } catch (e: any) {
