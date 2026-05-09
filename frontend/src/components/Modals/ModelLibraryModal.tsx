@@ -378,6 +378,9 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   const [providerFilterAvailable, setProviderFilterAvailable] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
   const [providerFilterSelected, setProviderFilterSelected] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
 
+  // Composite key helper: `${providerId}::${modelId}`
+  const compKey = (provId: string, modelId: string) => `${provId}::${modelId}`;
+
   // Sync filters when providers change (add new, remove gone)
   useEffect(() => {
     setProviderFilterAvailable(prev => {
@@ -394,26 +397,51 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     });
   }, [providers]);
 
-  // All discovered models across all providers (cached) — each enriched with _providerId
+  // All discovered models across all providers (cached) — deduplicated by composite key
   const [allDiscovered, setAllDiscovered] = useState<DiscoveredModel[]>(() => {
+    const seen = new Set<string>();
     const cache: DiscoveredModel[] = [];
     for (const p of providers) {
       if (p.discoveredModels) {
         for (const dm of p.discoveredModels) {
-          cache.push({ ...dm, _providerId: p.id } as any);
+          const key = `${p.id}::${dm.id}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            cache.push({ ...dm, _providerId: p.id } as any);
+          }
         }
       }
     }
     return cache;
   });
 
-  // Composite keys for deduplication: `${providerId}:${modelId}`
-  const configuredCompositeIds = new Set(library.models.map(m => `${m.providerId}:${m.modelId}`));
+  // Keep allDiscovered in sync when providers change
+  useEffect(() => {
+    setAllDiscovered(prev => {
+      const existingKeys = new Set(prev.map(dm => `${(dm as any)._providerId}::${dm.id}`));
+      const updated = prev.filter(dm => providers.some(p => p.id === (dm as any)._providerId));
+      for (const p of providers) {
+        if (p.discoveredModels) {
+          for (const dm of p.discoveredModels) {
+            const key = `${p.id}::${dm.id}`;
+            if (!existingKeys.has(key)) {
+              updated.push({ ...dm, _providerId: p.id } as any);
+              existingKeys.add(key);
+            }
+          }
+        }
+      }
+      return updated.length !== prev.length ? updated : prev;
+    });
+  }, [providers]);
+
+  // Composite keys for deduplication
+  const configuredCompositeIds = new Set(library.models.map(m => compKey(m.providerId, m.modelId)));
 
   const filteredAvailable = allDiscovered
     .filter(dm => {
       const provId = (dm as any)._providerId as string | undefined;
-      return !configuredCompositeIds.has(`${provId}:${dm.id}`);
+      return !configuredCompositeIds.has(compKey(provId || "", dm.id));
     })
     .filter(dm => {
       const provId = (dm as any)._providerId as string | undefined;
@@ -443,6 +471,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     setScanning(true);
     setError("");
     try {
+      const seen = new Set<string>();
       const newDiscovered: DiscoveredModel[] = [];
       for (const p of providers) {
         try {
@@ -450,7 +479,11 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
           const data = await res.json();
           if (data.ok && data.models) {
             for (const m of data.models) {
-              newDiscovered.push({ ...m, _providerId: p.id } as any);
+              const key = `${p.id}::${m.id}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                newDiscovered.push({ ...m, _providerId: p.id } as any);
+              }
             }
           }
         } catch (e: any) {
@@ -459,10 +492,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
       }
       setAllDiscovered(newDiscovered);
       // Refresh providers (to cache discovered models)
-      const refreshRes = await fetch("/api/providers");
-      if (refreshRes.ok) {
-        // Optionally update parent state but not critical
-      }
+      await fetch("/api/providers").catch(() => {});
       setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)`);
     } catch (e: any) { setError(e.message); }
     finally { setScanning(false); }
@@ -472,9 +502,13 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   const handleAddSelected = async () => {
     if (selectedAvailable.size === 0) return;
     const models: Omit<RegisteredModel, "id">[] = [];
-    for (const modelId of selectedAvailable) {
-      const dm = allDiscovered.find(m => m.id === modelId);
-      const provId = (dm as any)?._providerId || "unknown";
+    for (const compKeyVal of selectedAvailable) {
+      // Parse composite key: "providerId::modelId"
+      const sepIdx = compKeyVal.indexOf("::");
+      if (sepIdx < 0) continue;
+      const provId = compKeyVal.slice(0, sepIdx);
+      const modelId = compKeyVal.slice(sepIdx + 2);
+      const dm = allDiscovered.find(m => (m as any)._providerId === provId && m.id === modelId);
       models.push({
         providerId: provId,
         modelId,
@@ -500,9 +534,9 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     setSelectedConfigured(new Set());
   };
 
-  const toggleAvailable = (id: string) => {
+  const toggleAvailable = (compKeyVal: string) => {
     const next = new Set(selectedAvailable);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(compKeyVal)) next.delete(compKeyVal); else next.add(compKeyVal);
     setSelectedAvailable(next);
   };
 
@@ -534,68 +568,6 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         )}
       </div>
 
-      {/* Provider filter checkboxes — two rows: Available (top) / Selected (bottom) */}
-      {providers.length > 1 && (
-        <div className="space-y-0.5 mb-1 px-1">
-          {/* Available providers */}
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-            <span className="text-[10px] text-hacker-text-dim mr-1">AVAIL:</span>
-            {providers.map(p => {
-              const checked = providerFilterAvailable.has(p.id);
-              const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id && !configuredCompositeIds.has(`${p.id}:${dm.id}`)).length;
-              return (
-                <label key={`avail-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      setProviderFilterAvailable(prev => {
-                        const next = new Set(prev);
-                        if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                        return next;
-                      });
-                    }}
-                    className="accent-[var(--accent)] w-3 h-3"
-                  />
-                  <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
-                    {p.name || p.type}
-                  </span>
-                  {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
-                </label>
-              );
-            })}
-          </div>
-          {/* Selected providers */}
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-            <span className="text-[10px] text-hacker-text-dim mr-1">SEL:</span>
-            {providers.map(p => {
-              const checked = providerFilterSelected.has(p.id);
-              const count = library.models.filter(m => m.providerId === p.id).length;
-              return (
-                <label key={`sel-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      setProviderFilterSelected(prev => {
-                        const next = new Set(prev);
-                        if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                        return next;
-                      });
-                    }}
-                    className="accent-[var(--accent)] w-3 h-3"
-                  />
-                  <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
-                    {p.name || p.type}
-                  </span>
-                  {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Three-column layout: available | actions | selected */}
       <div className="flex gap-1 min-h-[300px]">
         {/* Left column: Available models */}
@@ -608,6 +580,36 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
               <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> UPDATE
             </button>
           </div>
+          {/* Available provider filter (above list) */}
+          {providers.length > 1 && (
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
+              <span className="text-[9px] text-hacker-text-dim mr-1">filter:</span>
+              {providers.map(p => {
+                const checked = providerFilterAvailable.has(p.id);
+                const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id && !configuredCompositeIds.has(compKey(p.id, dm.id))).length;
+                return (
+                  <label key={`avail-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setProviderFilterAvailable(prev => {
+                          const next = new Set(prev);
+                          if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                          return next;
+                        });
+                      }}
+                      className="accent-[var(--accent)] w-3 h-3"
+                    />
+                    <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                      {p.name || p.type}
+                    </span>
+                    {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                  </label>
+                );
+              })}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredAvailable.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
@@ -615,10 +617,12 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
               </div>
             ) : (
               filteredAvailable.map(dm => {
-                const isSelected = selectedAvailable.has(dm.id);
+                const provId = (dm as any)._providerId as string || "";
+                const ck = compKey(provId, dm.id);
+                const isSelected = selectedAvailable.has(ck);
                 const provName = getProviderNameForDiscovered(dm);
                 return (
-                  <button key={dm.id} onClick={() => toggleAvailable(dm.id)}
+                  <button key={ck} onClick={() => toggleAvailable(ck)}
                     className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
                       isSelected ? "bg-hacker-accent/10 text-hacker-accent" : "text-hacker-text-dim hover:bg-hacker-border/30"
                     }`}>
@@ -653,6 +657,36 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
             <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">SELECTED</span>
             <span className="text-hacker-text-dim text-[11px]">{filteredConfigured.length}</span>
           </div>
+          {/* Selected provider filter (above list) */}
+          {providers.length > 1 && (
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
+              <span className="text-[9px] text-hacker-text-dim mr-1">filter:</span>
+              {providers.map(p => {
+                const checked = providerFilterSelected.has(p.id);
+                const count = library.models.filter(m => m.providerId === p.id).length;
+                return (
+                  <label key={`sel-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setProviderFilterSelected(prev => {
+                          const next = new Set(prev);
+                          if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                          return next;
+                        });
+                      }}
+                      className="accent-[var(--accent)] w-3 h-3"
+                    />
+                    <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                      {p.name || p.type}
+                    </span>
+                    {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                  </label>
+                );
+              })}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredConfigured.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
@@ -662,7 +696,6 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
               filteredConfigured.map(m => {
                 const isSelected = selectedConfigured.has(m.id);
                 const isDef = m.id === library.defaultModelId;
-                
                 return (
                   <div key={m.id}>
                     <button onClick={() => toggleConfigured(m.id)}
