@@ -561,18 +561,20 @@ function App() {
     return () => channel.close();
   }, [activeProject, handleReferenceFile, panels, savePanels]);
 
-  // ── Memoized panel content (avoids remounting on layout change)
-  const panelContent = useMemo(() => ({
-    pi: (
-      <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
-    ),
-    terminal: (
-      <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
-    ),
-    files: (
-      <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
-    ),
-  }), [send, on, activeProject, isStreaming, session, panels.terminal?.visible, panels.terminal?.floating, handleReferenceFile]);
+  // ── Memoized panel content — one per panel, avoids remounting on layout change
+  const piContent = useMemo(() => (
+    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+  ), [send, on, activeProject, isStreaming, session]);
+
+  const terminalContent = useMemo(() => (
+    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
+  ), [send, on, activeProject, panels.terminal?.visible, panels.terminal?.floating]);
+
+  const filesContent = useMemo(() => (
+    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+  ), [activeProject, handleReferenceFile]);
+
+  const panelContent = { pi: piContent, terminal: terminalContent, files: filesContent };
 
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)
