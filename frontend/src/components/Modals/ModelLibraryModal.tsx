@@ -378,27 +378,24 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
   const [providerFilterAvailable, setProviderFilterAvailable] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
   const [providerFilterSelected, setProviderFilterSelected] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
 
-  // Sync filters when providers change
+  // Sync filters when providers change (add new, remove gone)
   useEffect(() => {
     setProviderFilterAvailable(prev => {
-      const next = new Set<string>();
-      for (const p of providers) {
-        if (prev.has(p.id)) next.add(p.id);
-      }
+      const next = new Set(prev);
+      for (const p of providers) { if (!next.has(p.id)) next.add(p.id); }
+      for (const id of next) { if (!providers.find(p => p.id === id)) next.delete(id); }
       return next;
     });
     setProviderFilterSelected(prev => {
-      const next = new Set<string>();
-      for (const p of providers) {
-        if (prev.has(p.id)) next.add(p.id);
-      }
+      const next = new Set(prev);
+      for (const p of providers) { if (!next.has(p.id)) next.add(p.id); }
+      for (const id of next) { if (!providers.find(p => p.id === id)) next.delete(id); }
       return next;
     });
   }, [providers]);
 
-  // All discovered models across all providers (cached)
+  // All discovered models across all providers (cached) — each enriched with _providerId
   const [allDiscovered, setAllDiscovered] = useState<DiscoveredModel[]>(() => {
-    // Initialize from providers' cached discoveredModels
     const cache: DiscoveredModel[] = [];
     for (const p of providers) {
       if (p.discoveredModels) {
@@ -410,10 +407,14 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     return cache;
   });
 
-  // Available = discovered models that are NOT in the library AND match provider filter (Available)
-  const configuredIds = new Set(library.models.map(m => m.modelId));
+  // Composite keys for deduplication: `${providerId}:${modelId}`
+  const configuredCompositeIds = new Set(library.models.map(m => `${m.providerId}:${m.modelId}`));
+
   const filteredAvailable = allDiscovered
-    .filter(dm => !configuredIds.has(dm.id))
+    .filter(dm => {
+      const provId = (dm as any)._providerId as string | undefined;
+      return !configuredCompositeIds.has(`${provId}:${dm.id}`);
+    })
     .filter(dm => {
       const provId = (dm as any)._providerId as string | undefined;
       if (!provId) return true;
@@ -423,7 +424,7 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 
   const filteredConfigured = library.models
-    .filter(m => providerFilterSelected.has(m.providerId) || !providers.find(p => p.id === m.providerId))
+    .filter(m => providerFilterSelected.has(m.providerId))
     .filter(m => !modelFilter || (m.name || m.modelId).toLowerCase().includes(modelFilter.toLowerCase()))
     .sort((a, b) => (a.name || a.modelId).localeCompare(b.name || b.modelId));
 
@@ -533,33 +534,65 @@ function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault
         )}
       </div>
 
-      {/* Provider filter checkboxes */}
+      {/* Provider filter checkboxes — two rows: Available (top) / Selected (bottom) */}
       {providers.length > 1 && (
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1 px-1">
-          {providers.map(p => {
-            const checked = providerFilterAvailable.has(p.id);
-            const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id).length;
-            return (
-              <label key={p.id} className="flex items-center gap-1 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => {
-                    setProviderFilterAvailable(prev => {
-                      const next = new Set(prev);
-                      if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                      return next;
-                    });
-                  }}
-                  className="accent-[var(--accent)] w-3 h-3"
-                />
-                <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
-                  {p.name || p.type}
-                </span>
-                {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
-              </label>
-            );
-          })}
+        <div className="space-y-0.5 mb-1 px-1">
+          {/* Available providers */}
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+            <span className="text-[10px] text-hacker-text-dim mr-1">AVAIL:</span>
+            {providers.map(p => {
+              const checked = providerFilterAvailable.has(p.id);
+              const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id && !configuredCompositeIds.has(`${p.id}:${dm.id}`)).length;
+              return (
+                <label key={`avail-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setProviderFilterAvailable(prev => {
+                        const next = new Set(prev);
+                        if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                        return next;
+                      });
+                    }}
+                    className="accent-[var(--accent)] w-3 h-3"
+                  />
+                  <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                    {p.name || p.type}
+                  </span>
+                  {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                </label>
+              );
+            })}
+          </div>
+          {/* Selected providers */}
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+            <span className="text-[10px] text-hacker-text-dim mr-1">SEL:</span>
+            {providers.map(p => {
+              const checked = providerFilterSelected.has(p.id);
+              const count = library.models.filter(m => m.providerId === p.id).length;
+              return (
+                <label key={`sel-${p.id}`} className="flex items-center gap-1 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setProviderFilterSelected(prev => {
+                        const next = new Set(prev);
+                        if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                        return next;
+                      });
+                    }}
+                    className="accent-[var(--accent)] w-3 h-3"
+                  />
+                  <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                    {p.name || p.type}
+                  </span>
+                  {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                </label>
+              );
+            })}
+          </div>
         </div>
       )}
 

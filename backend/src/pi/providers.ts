@@ -129,11 +129,42 @@ export function updateProvider(id: string, updates: Partial<Omit<ProviderConfig,
   return providers[idx];
 }
 
-export function deleteProvider(id: string): void {
+export async function deleteProvider(id: string): Promise<void> {
   const providers = loadProviders();
   const filtered = providers.filter((p) => p.id !== id);
   if (filtered.length === providers.length) throw new Error(`Provider not found: ${id}`);
   saveProviders(filtered);
+
+  // Clean up models belonging to this provider from model library
+  try {
+    const { loadModelLibrary, saveModelLibrary } = await import("../pi/model-library.js");
+    const library = loadModelLibrary();
+    const before = library.models.length;
+    library.models = library.models.filter((m: any) => m.providerId !== id);
+    // Also clear default/commit if they referenced removed models
+    if (library.defaultModelId && !library.models.find((m: any) => m.id === library.defaultModelId)) {
+      library.defaultModelId = null;
+    }
+    if (library.commitModelId && !library.models.find((m: any) => m.id === library.commitModelId)) {
+      library.commitModelId = null;
+    }
+    // Clean project mode configs
+    if (library.projectModes) {
+      for (const [projectId, modes] of Object.entries(library.projectModes)) {
+        const m = modes as any;
+        for (const mode of ["code", "plan", "review"]) {
+          if (m[mode]?.modelId) {
+            const stillExists = library.models.some((mod: any) => mod.id === m[mode].modelId);
+            if (!stillExists) m[mode].modelId = null;
+          }
+        }
+      }
+    }
+    saveModelLibrary(library);
+    console.log(`[providers] Cleaned up ${before - library.models.length} models from deleted provider ${id}`);
+  } catch (e) {
+    console.warn("[providers] Failed to clean up models for deleted provider:", e);
+  }
 }
 
 export function getProvider(id: string): ProviderConfig | undefined {

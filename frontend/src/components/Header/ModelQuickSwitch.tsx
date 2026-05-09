@@ -160,10 +160,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const getProviderName = (providerId: string): string => {
     const p = providers.find(p => p.id === providerId);
-    const name = p?.name || providerId;
-    // Truncate provider name: full name if short, first word + "…" otherwise
-    if (name.length <= 10) return name;
-    return name.split(/[\s-_]/)[0] + "…";
+    if (!p) return "";
+    const name = p.name || p.type || providerId;
+    if (name.length <= 15) return name;
+    return name.slice(0, 12) + "…";
   };
 
   const modes: AgentMode[] = ["code", "plan", "review"];
@@ -264,7 +264,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                           }`}>
                           <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                           <span className="truncate flex-1">{m.name}</span>
-                          {m.providerId && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                          {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
                           {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
                         </button>
                       );
@@ -348,7 +348,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                       }`}>
                       <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                       <span className="truncate flex-1">{m.name}</span>
-                      {m.providerId && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                      {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
                       {isSelected && <span className="text-hacker-accent text-[10px] shrink-0">●</span>}
                     </button>
                   );

@@ -78,9 +78,22 @@ router.put("/:id", (req: Request, res: Response) => {
 
 // ── DELETE provider ───────────────────────────────────
 
-router.delete("/:id", (req: Request, res: Response) => {
+router.delete("/:id", async (req: Request, res: Response) => {
   try {
-    deleteProvider(req.params.id);
+    await deleteProvider(req.params.id);
+
+    // Regenerate models.json for Pi SDK after cleanup
+    try {
+      const { writeModelsJson } = await import("../pi/sync-providers.js");
+      const { loadProviders: lp } = await import("../pi/providers.js");
+      const { loadModelLibrary } = await import("../pi/model-library.js");
+      await writeModelsJson(lp(), loadModelLibrary());
+      const { reloadModelRegistry } = await import("../pi/session.js");
+      reloadModelRegistry();
+    } catch (e) {
+      console.warn("[providers] Failed to sync models.json after delete:", e);
+    }
+
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
