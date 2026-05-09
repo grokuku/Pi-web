@@ -11,9 +11,9 @@ import { SettingsModal } from "./components/Modals/SettingsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
-import { LayoutRenderer, loadLayoutConfig, saveLayoutConfig } from "./components/Layout/LayoutRenderer";
-import { ExternalLink, X } from "lucide-react";
-import type { Project } from "./types";
+import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
+import { X } from "lucide-react";
+import type { Project, PanelId } from "./types";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -55,7 +55,6 @@ function App() {
   const [scanlines, setScanlines] = useState(() => localStorage.getItem("pi-web-scanlines") !== "false");
 
   // ── Panel State ──
-  type PanelId = "pi" | "terminal" | "files";
   interface PanelState { visible: boolean; floating: boolean; }
   const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
     const saved = localStorage.getItem("pi-web-panels");
@@ -146,19 +145,50 @@ function App() {
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
   // ── Layout config (persisted) ──
-  const [layoutConfig, setLayoutConfig] = useState(() => {
-    const saved = loadLayoutConfig();
+  const [layoutCfg, setLayoutCfg] = useState(() => {
+    const saved = loadPersistedLayout();
     if (saved) return saved;
-    return { type: "horizontal-2" as const, slots: ["pi" as PanelId, "terminal" as PanelId], sizes: [0.6, 0.4] };
+    return {
+      layout2: "horizontal-2" as const,
+      layout3: "horizontal-3" as const,
+      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId],
+      sizes: {} as Record<string, number[]>,
+    };
   });
 
-  const handleLayoutSizesChange = useCallback((sizes: number[]) => {
-    setLayoutConfig(prev => {
-      const next = { ...prev, sizes };
-      saveLayoutConfig(next);
+  const activeDocked = (["pi", "terminal", "files"] as PanelId[])
+    .filter(id => panels[id]?.visible && !panels[id]?.floating);
+
+  // Ordered panels for LayoutRenderer
+  const orderedPanels = layoutCfg.slotOrder.filter(id => activeDocked.includes(id));
+
+  // Active layout type based on count
+  const activeLayoutType = orderedPanels.length <= 1 ? "single" :
+    orderedPanels.length === 2 ? layoutCfg.layout2 : layoutCfg.layout3;
+
+  const handleSwap = (fromIdx: number, toIdx: number) => {
+    setLayoutCfg(prev => {
+      const newOrder = [...prev.slotOrder];
+      // Swap: put the panel at fromIdx to toIdx, and move what was at toIdx to fromIdx
+      // But orderedPanels is a subset of slotOrder — we need to swap in the full slotOrder
+      const fromPanel = orderedPanels[fromIdx];
+      const toPanel = orderedPanels[toIdx];
+      const realFromIdx = prev.slotOrder.indexOf(fromPanel);
+      const realToIdx = prev.slotOrder.indexOf(toPanel);
+      [newOrder[realFromIdx], newOrder[realToIdx]] = [newOrder[realToIdx], newOrder[realFromIdx]];
+      const next = { ...prev, slotOrder: newOrder };
+      savePersistedLayout(next);
       return next;
     });
-  }, []);
+  };
+
+  const handleLayoutSizesChange = (layoutKey: string, newSizes: number[]) => {
+    setLayoutCfg(prev => {
+      const next = { ...prev, sizes: { ...prev.sizes, [layoutKey]: newSizes } };
+      savePersistedLayout(next);
+      return next;
+    });
+  };
 
   // ── Helpers ──
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
@@ -682,70 +712,23 @@ function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Docked Panels Area — layout-driven */}
           <LayoutRenderer
-            activePanels={(
-              ["pi", "terminal", "files"] as PanelId[]
-            ).filter(id => panels[id].visible && !panels[id].floating)}
-            config={{
-              type: layoutConfig.type,
-              slots: layoutConfig.slots,
-              sizes: layoutConfig.sizes,
-            }}
-            panels={{
+            orderedPanels={orderedPanels}
+            layoutType={activeLayoutType}
+            sizes={layoutCfg.sizes}
+            panelContent={{
               pi: (
-                <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-                    <span className="text-xs font-bold text-hacker-accent">PI</span>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-                        <ExternalLink size={12} />
-                      </button>
-                      <button onClick={() => undockPanel("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-                        <ExternalLink size={12} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
-                  </div>
-                </div>
+                <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
               ),
               terminal: (
-                <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-                    <span className="text-xs font-bold text-hacker-accent">TERMINAL</span>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-                        <ExternalLink size={12} />
-                      </button>
-                      <button onClick={() => undockPanel("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-                        <ExternalLink size={12} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal.visible && !panels.terminal.floating} />
-                  </div>
-                </div>
+                <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
               ),
               files: (
-                <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-                    <span className="text-xs font-bold text-hacker-accent">FILES</span>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => openInNewWindow("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-                        <ExternalLink size={12} />
-                      </button>
-                      <button onClick={() => undockPanel("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-                        <ExternalLink size={12} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
-                  </div>
-                </div>
+                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
               ),
             }}
+            onSwap={handleSwap}
+            onDetach={undockPanel}
+            onNewWindow={openInNewWindow}
             onSizesChange={handleLayoutSizesChange}
           />
 
