@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, Component, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
@@ -561,6 +561,19 @@ function App() {
     return () => channel.close();
   }, [activeProject, handleReferenceFile, panels, savePanels]);
 
+  // ── Memoized panel content (avoids remounting on layout change)
+  const panelContent = useMemo(() => ({
+    pi: (
+      <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+    ),
+    terminal: (
+      <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
+    ),
+    files: (
+      <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+    ),
+  }), [send, on, activeProject, isStreaming, session, panels.terminal?.visible, panels.terminal?.floating, handleReferenceFile]);
+
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)
   if (isStandalone && standalonePanel) {
@@ -617,8 +630,7 @@ function App() {
       </div>
     );
   }
-
-  // Normal mode: full interface
+  // ── RENDER ──
   return (
     <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
       <div className="matrix-bg" />
@@ -723,17 +735,7 @@ function App() {
             orderedPanels={orderedPanels}
             layoutType={activeLayoutType}
             sizes={layoutCfg.sizes}
-            panelContent={{
-              pi: (
-                <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
-              ),
-              terminal: (
-                <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
-              ),
-              files: (
-                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
-              ),
-            }}
+            panelContent={panelContent}
             onSwap={handleSwap}
             onDetach={undockPanel}
             onNewWindow={openInNewWindow}
