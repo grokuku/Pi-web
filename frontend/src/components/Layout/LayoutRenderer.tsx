@@ -18,7 +18,18 @@ export function loadPersistedLayout(): PersistedLayout | null {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // Migration: old format { type, slots, sizes } → new format
+    if (parsed && !parsed.slotOrder && parsed.slots) {
+      return {
+        layout2: "horizontal-2",
+        layout3: "horizontal-3",
+        slotOrder: Array.isArray(parsed.slots) ? parsed.slots : ["pi", "terminal", "files"],
+        sizes: typeof parsed.sizes === "object" && !Array.isArray(parsed.sizes) ? parsed.sizes : {},
+      };
+    }
+    if (parsed && Array.isArray(parsed.slotOrder)) return parsed;
+    return null;
   } catch { return null; }
 }
 
@@ -29,22 +40,14 @@ export function savePersistedLayout(cfg: PersistedLayout) {
 // ── Props ────────────────────────────────────────────
 
 interface Props {
-  /** Ordered list of active panel IDs (from slotOrder filtered by active panels) */
   orderedPanels: PanelId[];
-  /** Active layout type */
   layoutType: LayoutType;
-  /** Per-layout-type sizes */
   sizes: Record<string, number[]>;
-  /** Panel content renderers (keyed by PanelId) */
   panelContent: Record<PanelId, ReactNode>;
-  /** Called when user swaps two panels via dropdown */
   onSwap: (fromIndex: number, toIndex: number) => void;
-  /** Called when user clicks detach */
   onDetach: (id: PanelId) => void;
-  /** Called when user clicks open-in-new-window */
   onNewWindow: (id: PanelId) => void;
-  /** Called when sizes change (after drag) */
-  onSizesChange: (layoutType: LayoutType, newSizes: number[]) => void;
+  onSizesChange: (layoutType: string, newSizes: number[]) => void;
 }
 
 // ── Layout Renderer ──────────────────────────────────
@@ -62,9 +65,8 @@ export function LayoutRenderer({
   const containerRef = useRef<HTMLDivElement>(null);
   const count = orderedPanels.length;
   const layoutKey = count <= 1 ? "single" : layoutType;
-  const currentSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
-
-  const [localSizes, setLocalSizes] = useState<number[]>(currentSizes);
+  const persistedSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
+  const [localSizes, setLocalSizes] = useState<number[]>(persistedSizes);
   const [isDragging, setIsDragging] = useState(false);
   const sizesRef = useRef(localSizes);
   sizesRef.current = localSizes;
@@ -78,7 +80,7 @@ export function LayoutRenderer({
 
   // Sync sizes from parent when layout type changes (not during drag)
   useEffect(() => {
-    if (!isDragging) setLocalSizes(currentSizes);
+    if (!isDragging) setLocalSizes(persistedSizes);
   }, [layoutKey, isDragging]);
 
   // ── Resize ──
@@ -100,20 +102,31 @@ export function LayoutRenderer({
     if (!isDragging) return;
     const handleMove = (e: MouseEvent) => {
       const d = dragRef.current!;
-      const delta = (d.axis === "x" ? e.clientX : e.clientY) - d.startPos;
+      const currentPos = d.axis === "x" ? e.clientX : e.clientY;
+      const delta = currentPos - d.startPos;
       const frac = delta / d.containerSize;
       const newSizes = [...d.startSizes];
+      const idx = d.dividerIndex;
       const minSize = 0.1;
-      const maxDelta = Math.max(minSize - newSizes[d.dividerIndex], frac);
-      const clampedDelta = Math.min(newSizes[d.dividerIndex + 1] - minSize, maxDelta);
-      newSizes[d.dividerIndex] -= clampedDelta;
-      newSizes[d.dividerIndex + 1] += clampedDelta;
+      // Clamp: don't let panels get smaller than 10%
+      let clamped = frac;
+      if (newSizes[idx] + clamped < minSize) clamped = minSize - newSizes[idx];
+      if (newSizes[idx + 1] - clamped < minSize) clamped = newSizes[idx + 1] - minSize;
+      newSizes[idx] += clamped;
+      newSizes[idx + 1] -= clamped;
+      // Normalize to sum = 1
+      const sum = newSizes.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < newSizes.length; i++) newSizes[i] /= sum;
       setLocalSizes(newSizes);
     };
     const handleUp = () => {
       setIsDragging(false);
       if (dragRef.current) {
-        onSizesChange(layoutKey, [...sizesRef.current]);
+        const s = sizesRef.current;
+        // Normalize before saving
+        const sum = s.reduce((a, b) => a + b, 0);
+        const normalized = s.map(v => v / sum);
+        onSizesChange(layoutKey, normalized);
       }
       dragRef.current = null;
     };
@@ -125,58 +138,23 @@ export function LayoutRenderer({
     };
   }, [isDragging, layoutKey, onSizesChange]);
 
-  // ── Panel slot rendering ──
-  const PanelSlot = ({ idx, style }: { idx: number; style: React.CSSProperties }) => {
-    const panelId = orderedPanels[idx];
-    const content = panelContent[panelId];
-    const allActive = orderedPanels;
+  // ── Render helpers ──
 
-    return (
-      <div style={style} className="overflow-hidden flex flex-col">
-        {/* Header with dropdown + buttons */}
-        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-          <select
-            value={panelId}
-            onChange={e => {
-              const newId = e.target.value as PanelId;
-              const targetIdx = orderedPanels.indexOf(newId);
-              if (targetIdx >= 0) onSwap(idx, targetIdx);
-            }}
-            className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
-          >
-            {allActive.map(p => (
-              <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
-                {PANEL_LABELS[p]}
-              </option>
-            ))}
-          </select>
-          <div className="flex items-center gap-1">
-            <button onClick={() => onNewWindow(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-              <ExternalLink size={12} />
-            </button>
-            <button onClick={() => onDetach(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-              <ExternalLink size={12} />
-            </button>
-          </div>
-        </div>
-        {/* Content */}
-        <div className="flex-1 overflow-hidden">{content}</div>
-      </div>
-    );
-  };
-
-  const Divider = ({ idx, axis }: { idx: number; axis: "x" | "y" }) => (
+  const Divider = ({ axis }: { axis: "x" | "y" }) => (
     <div
-      onMouseDown={e => handleDividerDown(e, idx, axis)}
-      className={`shrink-0 transition-colors ${
+      className={`shrink-0 bg-hacker-border/30 transition-colors ${
         axis === "x"
-          ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-          : "h-1.5 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+          ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/40 active:bg-hacker-accent/60"
+          : "h-1.5 cursor-row-resize hover:bg-hacker-accent/40 active:bg-hacker-accent/60"
       }`}
     />
   );
 
-  // ── Empty state (0 panels) ──
+  const ThinDivider = ({ axis }: { axis: "x" | "y" }) => (
+    <div className={`shrink-0 bg-hacker-border/20 ${axis === "x" ? "w-px" : "h-px"}`} />
+  );
+
+  // ── Empty state ──
   if (count === 0) {
     return (
       <div className="flex-1 flex items-center justify-center opacity-20 select-none pointer-events-none">
@@ -185,109 +163,185 @@ export function LayoutRenderer({
     );
   }
 
+  // ── Build slot array: each slot has { panelId, flexStyle }
+  const s = localSizes;
+  const slots: { id: PanelId; style: React.CSSProperties }[] = [];
+
+  if (count === 1) {
+    slots.push({ id: orderedPanels[0], style: { width: "100%", height: "100%" } });
+  } else if (count === 2) {
+    if (layoutType === "vertical-2") {
+      slots.push({ id: orderedPanels[0], style: { height: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { height: `${s[1] * 100}%` } });
+    } else {
+      slots.push({ id: orderedPanels[0], style: { width: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { width: `${s[1] * 100}%` } });
+    }
+  } else if (count === 3) {
+    if (layoutType === "horizontal-3") {
+      slots.push({ id: orderedPanels[0], style: { width: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { width: `${s[1] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { width: `${s[2] * 100}%` } });
+    } else if (layoutType === "vertical-3") {
+      slots.push({ id: orderedPanels[0], style: { height: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { height: `${s[1] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { height: `${s[2] * 100}%` } });
+    } else if (layoutType === "top-2-bottom-1") {
+      slots.push({ id: orderedPanels[0], style: { width: "50%", height: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { width: "50%", height: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { height: `${s[1] * 100}%` } });
+    } else if (layoutType === "top-1-bottom-2") {
+      slots.push({ id: orderedPanels[0], style: { height: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { width: "50%", height: `${s[1] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { width: "50%", height: `${s[1] * 100}%` } });
+    } else if (layoutType === "left-2-right-1") {
+      slots.push({ id: orderedPanels[0], style: { height: "50%", width: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[1], style: { height: "50%", width: `${s[0] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { width: `${s[1] * 100}%`, height: "100%" } });
+    } else { // left-1-right-2
+      slots.push({ id: orderedPanels[0], style: { width: `${s[0] * 100}%`, height: "100%" } });
+      slots.push({ id: orderedPanels[1], style: { height: "50%", width: `${s[1] * 100}%` } });
+      slots.push({ id: orderedPanels[2], style: { height: "50%", width: `${s[1] * 100}%` } });
+    }
+  }
+
+  // ── Render a single slot ──
+  const renderSlot = (slot: { id: PanelId; style: React.CSSProperties }, idx: number) => (
+    <div key={slot.id} style={slot.style} className="overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
+        <select
+          value={slot.id}
+          onChange={e => {
+            const newId = e.target.value as PanelId;
+            const targetIdx = orderedPanels.indexOf(newId);
+            if (targetIdx >= 0) onSwap(idx, targetIdx);
+          }}
+          className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
+        >
+          {orderedPanels.map(p => (
+            <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
+              {PANEL_LABELS[p]}
+            </option>
+          ))}
+        </select>
+        <div className="flex items-center gap-1">
+          <button onClick={() => onNewWindow(slot.id)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
+            <ExternalLink size={12} />
+          </button>
+          <button onClick={() => onDetach(slot.id)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
+            <ExternalLink size={12} />
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-hidden">{panelContent[slot.id]}</div>
+    </div>
+  );
+
   // ── 1 panel ──
   if (count === 1) {
     return (
       <div ref={containerRef} className="flex-1 overflow-hidden">
-        <PanelSlot idx={0} style={{ width: "100%", height: "100%" }} />
+        {renderSlot(slots[0], 0)}
       </div>
     );
   }
-
-  const s = localSizes;
 
   // ── 2 panels ──
   if (count === 2) {
-    if (layoutType === "vertical-2") {
-      return (
-        <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-          <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-          <Divider idx={0} axis="y" />
-          <PanelSlot idx={1} style={{ height: `${s[1] * 100}%` }} />
-        </div>
-      );
-    }
-    // horizontal-2
+    const isVertical = layoutType === "vertical-2";
     return (
-      <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        <PanelSlot idx={0} style={{ width: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={1} style={{ width: `${s[1] * 100}%` }} />
+      <div ref={containerRef} className={`flex-1 flex ${isVertical ? "flex-col" : ""} overflow-hidden`}>
+        {renderSlot(slots[0], 0)}
+        <div onMouseDown={e => handleDividerDown(e, 0, isVertical ? "y" : "x")}>
+          <Divider axis={isVertical ? "y" : "x"} />
+        </div>
+        {renderSlot(slots[1], 1)}
       </div>
     );
   }
 
-  // ── 3 panels ──
+  // ── 3 panels: horizontal-3 ──
   if (layoutType === "horizontal-3") {
     return (
       <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        <PanelSlot idx={0} style={{ width: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={1} style={{ width: `${s[1] * 100}%` }} />
-        <Divider idx={1} axis="x" />
-        <PanelSlot idx={2} style={{ width: `${s[2] * 100}%` }} />
+        {renderSlot(slots[0], 0)}
+        <div onMouseDown={e => handleDividerDown(e, 0, "x")}><Divider axis="x" /></div>
+        {renderSlot(slots[1], 1)}
+        <div onMouseDown={e => handleDividerDown(e, 1, "x")}><Divider axis="x" /></div>
+        {renderSlot(slots[2], 2)}
       </div>
     );
   }
+
+  // ── 3 panels: vertical-3 ──
   if (layoutType === "vertical-3") {
     return (
       <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="y" />
-        <PanelSlot idx={1} style={{ height: `${s[1] * 100}%` }} />
-        <Divider idx={1} axis="y" />
-        <PanelSlot idx={2} style={{ height: `${s[2] * 100}%` }} />
+        {renderSlot(slots[0], 0)}
+        <div onMouseDown={e => handleDividerDown(e, 0, "y")}><Divider axis="y" /></div>
+        {renderSlot(slots[1], 1)}
+        <div onMouseDown={e => handleDividerDown(e, 1, "y")}><Divider axis="y" /></div>
+        {renderSlot(slots[2], 2)}
       </div>
     );
   }
+
+  // ── 3 panels: top-2-bottom-1 ──
   if (layoutType === "top-2-bottom-1") {
     return (
       <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
         <div className="flex overflow-hidden" style={{ height: `${s[0] * 100}%` }}>
-          <PanelSlot idx={0} style={{ width: "50%", height: "100%" }} />
-          <div className="w-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={1} style={{ width: "50%", height: "100%" }} />
+          {renderSlot(slots[0], 0)}
+          <ThinDivider axis="x" />
+          {renderSlot(slots[1], 1)}
         </div>
-        <Divider idx={0} axis="y" />
-        <PanelSlot idx={2} style={{ height: `${(1 - s[0]) * 100}%` }} />
+        <div onMouseDown={e => handleDividerDown(e, 0, "y")}><Divider axis="y" /></div>
+        <div className="flex-1 overflow-hidden">{renderSlot(slots[2], 2)}</div>
       </div>
     );
   }
+
+  // ── 3 panels: top-1-bottom-2 ──
   if (layoutType === "top-1-bottom-2") {
     return (
       <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="y" />
-        <div className="flex overflow-hidden" style={{ height: `${(1 - s[0]) * 100}%` }}>
-          <PanelSlot idx={1} style={{ width: "50%", height: "100%" }} />
-          <div className="w-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={2} style={{ width: "50%", height: "100%" }} />
+        <div style={{ height: `${s[0] * 100}%`, overflow: "hidden" }}>
+          {renderSlot(slots[0], 0)}
+        </div>
+        <div onMouseDown={e => handleDividerDown(e, 0, "y")}><Divider axis="y" /></div>
+        <div className="flex flex-1 overflow-hidden">
+          {renderSlot(slots[1], 1)}
+          <ThinDivider axis="x" />
+          {renderSlot(slots[2], 2)}
         </div>
       </div>
     );
   }
+
+  // ── 3 panels: left-2-right-1 ──
   if (layoutType === "left-2-right-1") {
     return (
       <div ref={containerRef} className="flex-1 flex overflow-hidden">
         <div className="flex flex-col overflow-hidden" style={{ width: `${s[0] * 100}%`, height: "100%" }}>
-          <PanelSlot idx={0} style={{ height: "50%" }} />
-          <div className="h-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={1} style={{ height: "50%" }} />
+          <div style={{ height: "50%", overflow: "hidden" }}>{renderSlot(slots[0], 0)}</div>
+          <ThinDivider axis="y" />
+          <div style={{ height: "50%", overflow: "hidden" }}>{renderSlot(slots[1], 1)}</div>
         </div>
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={2} style={{ width: `${(1 - s[0]) * 100}%`, height: "100%" }} />
+        <div onMouseDown={e => handleDividerDown(e, 0, "x")}><Divider axis="x" /></div>
+        <div style={{ width: `${s[1] * 100}%`, height: "100%", overflow: "hidden" }}>{renderSlot(slots[2], 2)}</div>
       </div>
     );
   }
-  // left-1-right-2
+
+  // ── 3 panels: left-1-right-2 ──
   return (
     <div ref={containerRef} className="flex-1 flex overflow-hidden">
-      <PanelSlot idx={0} style={{ width: `${s[0] * 100}%`, height: "100%" }} />
-      <Divider idx={0} axis="x" />
-      <div className="flex flex-col overflow-hidden" style={{ width: `${(1 - s[0]) * 100}%`, height: "100%" }}>
-        <PanelSlot idx={1} style={{ height: "50%" }} />
-        <div className="h-px shrink-0 bg-hacker-border/50" />
-        <PanelSlot idx={2} style={{ height: "50%" }} />
+      <div style={{ width: `${s[0] * 100}%`, height: "100%", overflow: "hidden" }}>{renderSlot(slots[0], 0)}</div>
+      <div onMouseDown={e => handleDividerDown(e, 0, "x")}><Divider axis="x" /></div>
+      <div className="flex flex-col overflow-hidden" style={{ width: `${s[1] * 100}%`, height: "100%" }}>
+        <div style={{ height: "50%", overflow: "hidden" }}>{renderSlot(slots[1], 1)}</div>
+        <ThinDivider axis="y" />
+        <div style={{ height: "50%", overflow: "hidden" }}>{renderSlot(slots[2], 2)}</div>
       </div>
     </div>
   );
@@ -299,6 +353,5 @@ function defaultSizes(layoutKey: string, count: number): number[] {
   if (count <= 1) return [1];
   if (count === 2) return [0.6, 0.4];
   if (layoutKey === "horizontal-3" || layoutKey === "vertical-3") return [0.4, 0.3, 0.3];
-  // For compound layouts (top-2-bottom-1 etc), primary split
-  return [0.5, 0.5];
+  return [0.5, 0.5]; // compound layouts
 }

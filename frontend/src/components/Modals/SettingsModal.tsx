@@ -54,11 +54,12 @@ interface Props {
   onClose: () => void;
   session: any;
   onModelApplied?: () => void;
+  onLayoutChange?: () => void;
 }
 
 // ── Main Component ─────────────────────────────────────
 
-export function SettingsModal({ onClose, session, onModelApplied }: Props) {
+export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange }: Props) {
   const [tab, setTab] = useState<TabId>("models");
 
   // ── Model Library state ──
@@ -492,7 +493,7 @@ export function SettingsModal({ onClose, session, onModelApplied }: Props) {
 
           {/* Layout Tab */}
           {tab === "layout" && (
-            <LayoutTab onLayoutChange={() => {}} />
+            <LayoutTab onLayoutChange={onLayoutChange || (() => {})} />
           )}
         </div>
       </div>
@@ -580,11 +581,16 @@ function LayoutTab({ onLayoutChange }: { onLayoutChange: () => void }) {
 
   const save = (updates: Partial<typeof cfg>) => {
     setCfg(prev => {
+      const hasChange = Object.entries(updates).some(([k, v]) => {
+        const key = k as keyof typeof cfg;
+        if (key === "sizes" || key === "slotOrder") return false;
+        return prev[key] !== v;
+      });
       const next = { ...prev, ...updates };
       savePersistedLayout(next);
+      if (hasChange) onLayoutChange();
       return next;
     });
-    onLayoutChange();
   };
 
   return (

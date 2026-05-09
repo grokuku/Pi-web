@@ -88,8 +88,10 @@ function App() {
     url.searchParams.set('standalone', 'true');
     url.searchParams.set('panel', id);
     const win = window.open(url.toString(), `pi-web-${id}`, features);
-      // Hide the panel in the main interface to avoid duplicates
+    if (win) {
+      win.document.title = `Pi-Web - ${id.toUpperCase()}`;
       hidePanel(id);
+    }
     if (win) {
       win.document.title = `Pi-Web - ${id.toUpperCase()}`;
     }
@@ -166,13 +168,14 @@ function App() {
   const activeLayoutType = orderedPanels.length <= 1 ? "single" :
     orderedPanels.length === 2 ? layoutCfg.layout2 : layoutCfg.layout3;
 
-  const handleSwap = (fromIdx: number, toIdx: number) => {
+  const handleSwap = useCallback((fromIdx: number, toIdx: number) => {
     setLayoutCfg(prev => {
+      // Compute ordered panels from latest state to avoid stale closures
+      const ordered = prev.slotOrder.filter(id => activeDocked.includes(id));
+      const fromPanel = ordered[fromIdx];
+      const toPanel = ordered[toIdx];
+      if (!fromPanel || !toPanel) return prev;
       const newOrder = [...prev.slotOrder];
-      // Swap: put the panel at fromIdx to toIdx, and move what was at toIdx to fromIdx
-      // But orderedPanels is a subset of slotOrder — we need to swap in the full slotOrder
-      const fromPanel = orderedPanels[fromIdx];
-      const toPanel = orderedPanels[toIdx];
       const realFromIdx = prev.slotOrder.indexOf(fromPanel);
       const realToIdx = prev.slotOrder.indexOf(toPanel);
       [newOrder[realFromIdx], newOrder[realToIdx]] = [newOrder[realToIdx], newOrder[realFromIdx]];
@@ -180,7 +183,12 @@ function App() {
       savePersistedLayout(next);
       return next;
     });
-  };
+  }, [activeDocked]);
+
+  const reloadLayout = useCallback(() => {
+    const saved = loadPersistedLayout();
+    if (saved) setLayoutCfg(saved);
+  }, []);
 
   const handleLayoutSizesChange = (layoutKey: string, newSizes: number[]) => {
     setLayoutCfg(prev => {
@@ -791,6 +799,7 @@ function App() {
           onClose={() => setShowSettings(false)}
           session={session}
           onModelApplied={handleModelApplied}
+          onLayoutChange={reloadLayout}
         />
       )}
     </div>

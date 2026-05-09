@@ -155,8 +155,8 @@ class CredentialStore {
       // Remove the file if no credentials left
       try {
         unlinkSync(ENCRYPTED_CREDENTIALS_PATH);
-      } catch {
-        // file may not exist
+      } catch (e: any) {
+        if (e.code !== "ENOENT") throw e;
       }
       return;
     }
