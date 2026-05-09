@@ -60,6 +60,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "delete-project": { w: 800, h: 500 },
   "file-viewer": { w: 900, h: 700 },
   "extensions": { w: 900, h: 700 },
+  "settings": { w: 1200, h: 800 },
 };
 
 // ── Resize handle positions ──
@@ -180,12 +181,14 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       const dy = e.clientY - dragState.current.startY;
       const newX = Math.max(0, Math.min(window.innerWidth - 100, dragState.current.origX + dx));
       const newY = Math.max(0, Math.min(window.innerHeight - 40, dragState.current.origY + dy));
+      // Update ref synchronously so forceSaveGeometry has latest values
+      posRef.current = { x: newX, y: newY };
       setPos({ x: newX, y: newY });
     };
     const handleUp = () => {
       setIsDragging(false);
       dragState.current = null;
-      forceSaveGeometry(); // Save immediately on drop
+      forceSaveGeometry();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -214,16 +217,18 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       if (s.edge.includes("w")) { newW = Math.max(MIN_W, s.origW - dx); newX = s.origX + (s.origW - newW); }
       if (s.edge.includes("s")) newH = Math.max(MIN_H, s.origH + dy);
       if (s.edge.includes("n")) { newH = Math.max(MIN_H, s.origH - dy); newY = s.origY + (s.origH - newH); }
-      // Clamp position
       newX = Math.max(0, newX);
       newY = Math.max(0, newY);
+      // Update refs synchronously so forceSaveGeometry has latest values
+      posRef.current = { x: newX, y: newY };
+      sizeRef.current = { w: newW, h: newH };
       setPos({ x: newX, y: newY });
       setSize({ w: newW, h: newH });
     };
     const handleUp = () => {
       setIsResizing(false);
       resizeState.current = null;
-      forceSaveGeometry(); // Save immediately on resize end
+      forceSaveGeometry();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);

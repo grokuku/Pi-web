@@ -151,7 +151,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
 // ── Providers Tab ─────────────────────────────────────────
 
-function ProvidersTab({ providers, setProviders, setError }: {
+export function ProvidersTab({ providers, setProviders, setError }: {
   providers: ProviderConfig[];
   setProviders: (p: ProviderConfig[]) => void;
   setError: (e: string) => void;
@@ -357,7 +357,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
 // ── Models Tab (two-column selector) ───────────────────────
 
-function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault, loading, setLoading, setError, setStatus }: {
+export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault, loading, setLoading, setError, setStatus }: {
   library: ModelLibrary;
   providers: ProviderConfig[];
   onAdd: (models: Omit<RegisteredModel, "id">[]) => Promise<void>;

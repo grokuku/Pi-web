@@ -7,8 +7,7 @@ import { TerminalView } from "./components/Terminal/TerminalView";
 import { FileExplorer } from "./components/Files/FileExplorer";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
-import { ModelLibraryModal } from "./components/Modals/ModelLibraryModal";
-import { ExtensionsModal } from "./components/Modals/ExtensionsModal";
+import { SettingsModal } from "./components/Modals/SettingsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
@@ -141,8 +140,7 @@ function App() {
   const [showProjectSwitch, setShowProjectSwitch] = useState(false);
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
-  const [showModelLibrary, setShowModelLibrary] = useState(false);
-  const [showExtensions, setShowExtensions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
@@ -257,8 +255,7 @@ function App() {
           e.preventDefault();
           send({ type: "pi_abort", projectId: activeProject.id });
         }
-        if (showModelLibrary) { e.preventDefault(); setShowModelLibrary(false); }
-        else if (showExtensions) { e.preventDefault(); setShowExtensions(false); }
+        if (showSettings) { e.preventDefault(); setShowSettings(false); }
         else if (showAddProject) { e.preventDefault(); setShowAddProject(false); }
         else if (showProjectSwitch) { e.preventDefault(); setShowProjectSwitch(false); }
         return;
@@ -266,14 +263,14 @@ function App() {
 
       if (mod && e.key === "l") {
         e.preventDefault();
-        setShowModelLibrary(true);
+        setShowSettings(true);
         return;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [isStreaming, send, showModelLibrary, showAddProject, showProjectSwitch, activeProject]);
+  }, [isStreaming, send, showSettings, showAddProject, showProjectSwitch, activeProject]);
 
   // ── Load projects ──
   const loadProjects = useCallback(async () => {
@@ -627,10 +624,7 @@ function App() {
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
-        <button onClick={() => setShowExtensions(true)} className="btn-hacker text-xs px-2 py-1" title="Extensions & Skills">
-          📦
-        </button>
-        <button onClick={() => setShowModelLibrary(true)} className="btn-hacker text-xs px-2 py-1" title="Model library (Ctrl+L)">
+        <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title="Settings (Ctrl+L)">
           ⚙
         </button>
       </header>
@@ -800,17 +794,11 @@ function App() {
         />
       )}
 
-      {showModelLibrary && (
-        <ModelLibraryModal
-          onClose={() => setShowModelLibrary(false)}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
           session={session}
           onModelApplied={handleModelApplied}
-        />
-      )}
-
-      {showExtensions && (
-        <ExtensionsModal
-          onClose={() => setShowExtensions(false)}
         />
       )}
     </div>
