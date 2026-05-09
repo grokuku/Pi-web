@@ -187,3 +187,35 @@ export interface ModelLibrary {
   commitModelId: string | null;
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }
+
+// ── Layout ─────────────────────────────────────────────
+
+export type LayoutType =
+  | "single"           // 1 panel: PI only
+  | "horizontal-2"     // 2 panels: side by side
+  | "vertical-2"       // 2 panels: stacked
+  | "horizontal-3"     // 3 panels: side by side
+  | "vertical-3"       // 3 panels: stacked
+  | "top-2-bottom-1"   // 2 top, 1 bottom
+  | "top-1-bottom-2"   // 1 top, 2 bottom
+  | "left-2-right-1"   // 2 left (stacked), 1 right
+  | "left-1-right-2";  // 1 left, 2 right (stacked)
+
+export type PanelId = "pi" | "terminal" | "files";
+
+export interface LayoutConfig {
+  type: LayoutType;
+  slots: PanelId[];    // which panel in each position (length = 2 or 3)
+  sizes: number[];     // fractional sizes (e.g., [0.5, 0.5] or [0.33, 0.33, 0.34])
+}
+
+export const DEFAULT_LAYOUTS: Record<string, LayoutConfig> = {
+  "horizontal-2":   { type: "horizontal-2",   slots: ["pi", "terminal"], sizes: [0.6, 0.4] },
+  "vertical-2":     { type: "vertical-2",     slots: ["pi", "terminal"], sizes: [0.6, 0.4] },
+  "horizontal-3":   { type: "horizontal-3",   slots: ["pi", "terminal", "files"], sizes: [0.4, 0.3, 0.3] },
+  "vertical-3":     { type: "vertical-3",     slots: ["pi", "terminal", "files"], sizes: [0.4, 0.3, 0.3] },
+  "top-2-bottom-1": { type: "top-2-bottom-1", slots: ["pi", "terminal", "files"], sizes: [0.5, 0.5, 0.5] },
+  "top-1-bottom-2": { type: "top-1-bottom-2", slots: ["pi", "terminal", "files"], sizes: [0.5, 0.5, 0.5] },
+  "left-2-right-1": { type: "left-2-right-1", slots: ["pi", "terminal", "files"], sizes: [0.5, 0.5, 0.5] },
+  "left-1-right-2": { type: "left-1-right-2", slots: ["pi", "terminal", "files"], sizes: [0.5, 0.5, 0.5] },
+};

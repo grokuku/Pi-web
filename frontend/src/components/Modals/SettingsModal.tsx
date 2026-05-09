@@ -5,7 +5,8 @@ import {
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
-import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel } from "../../types";
+import { loadLayoutConfig, saveLayoutConfig } from "../Layout/LayoutRenderer";
+import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, LayoutType, PanelId, LayoutConfig } from "../../types";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -488,14 +489,9 @@ export function SettingsModal({ onClose, session, onModelApplied }: Props) {
             </div>
           )}
 
-          {/* Layout Tab (placeholder) */}
+          {/* Layout Tab */}
           {tab === "layout" && (
-            <div className="p-3">
-              <div className="text-[11px] text-hacker-text-dim text-center py-12 border border-hacker-border/30 border-dashed">
-                Layout settings coming soon.<br />
-                <span className="text-[10px]">Panel positions, sidebar preferences, etc.</span>
-              </div>
-            </div>
+            <LayoutTab onLayoutChange={() => {}} />
           )}
         </div>
       </div>
@@ -550,6 +546,183 @@ function ResourceSection({ type, items, available, onToggle, onAdd, disabled }: 
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Layout Tab ─────────────────────────────────────────
+
+const LAYOUT_LABELS: Record<LayoutType, string> = {
+  "single": "Single panel",
+  "horizontal-2": "Side by side",
+  "vertical-2": "Stacked",
+  "horizontal-3": "3 columns",
+  "vertical-3": "3 rows",
+  "top-2-bottom-1": "2 top / 1 bottom",
+  "top-1-bottom-2": "1 top / 2 bottom",
+  "left-2-right-1": "2 left / 1 right",
+  "left-1-right-2": "1 left / 2 right",
+};
+
+const LAYOUT_PREVIEW: Record<LayoutType, string> = {
+  "single": "■",
+  "horizontal-2": "◫",
+  "vertical-2": "⬜\n⬜",
+  "horizontal-3": "◫◫◫",
+  "vertical-3": "⬜\n⬜\n⬜",
+  "top-2-bottom-1": "◫◫\n ⬜",
+  "top-1-bottom-2": " ⬜\n◫◫",
+  "left-2-right-1": "⬜◫\n⬜◫",
+  "left-1-right-2": "◫⬜\n◫⬜",
+};
+
+const PANEL_LABELS: Record<PanelId, string> = {
+  pi: "PI (Chat)",
+  terminal: "Terminal",
+  files: "Files",
+};
+
+function LayoutTab({ onLayoutChange }: { onLayoutChange: () => void }) {
+  const [config, setConfig] = useState<LayoutConfig>(() => {
+    const saved = loadLayoutConfig();
+    return saved || { type: "horizontal-2", slots: ["pi", "terminal"], sizes: [0.6, 0.4] };
+  });
+
+  // Read active panels from localStorage
+  const activePanels = (() => {
+    try {
+      const raw = localStorage.getItem("pi-web-panels");
+      if (raw) {
+        const p = JSON.parse(raw);
+        return (["pi", "terminal", "files"] as PanelId[]).filter(id => p[id]?.visible && !p[id]?.floating);
+      }
+    } catch {}
+    return ["pi"] as PanelId[];
+  })();
+
+  const activeCount = activePanels.length;
+
+  // Available layouts for the current panel count
+  const availableLayouts = (() => {
+    if (activeCount <= 1) return ["single"] as LayoutType[];
+    if (activeCount === 2) return ["horizontal-2", "vertical-2"] as LayoutType[];
+    return ["horizontal-3", "vertical-3", "top-2-bottom-1", "top-1-bottom-2", "left-2-right-1", "left-1-right-2"] as LayoutType[];
+  })();
+
+  const handleTypeChange = (type: LayoutType) => {
+    const newConfig: LayoutConfig = {
+      type,
+      slots: type === "single" ? ["pi"] : config.slots.slice(0, type.startsWith("single") ? 1 : 2).length < (type.endsWith("3") || type.includes("3") ? 3 : 2)
+        ? [...activePanels.slice(0, type.endsWith("3") || type.includes("3") ? 3 : 2)]
+        : config.slots.slice(0, type.endsWith("3") || type.includes("3") ? 3 : 2),
+      sizes: new Array(type.endsWith("3") || type.includes("3") ? 3 : type === "single" ? 1 : 2).fill(0).map((_, i, arr) => 1 / arr.length),
+    };
+    // Ensure 'pi' is always in the slots
+    if (!newConfig.slots.includes("pi")) {
+      newConfig.slots[0] = "pi";
+    }
+    // Ensure unique slots
+    const seen = new Set<PanelId>();
+    newConfig.slots = newConfig.slots.filter(s => {
+      if (seen.has(s)) return false;
+      seen.add(s);
+      return true;
+    });
+    // Fill remaining with active panels not yet assigned
+    for (const p of activePanels) {
+      if (!newConfig.slots.includes(p) && newConfig.slots.length < (newConfig.type === "single" ? 1 : newConfig.type.endsWith("3") || newConfig.type.includes("3") ? 3 : 2)) {
+        newConfig.slots.push(p);
+      }
+    }
+    setConfig(newConfig);
+    saveLayoutConfig(newConfig);
+    onLayoutChange();
+  };
+
+  const handleSlotChange = (idx: number, panelId: PanelId) => {
+    const newSlots = [...config.slots];
+    // Swap: put the replaced panel in the slot that had this panel
+    const oldPanel = newSlots[idx];
+    const swapIdx = newSlots.indexOf(panelId);
+    if (swapIdx >= 0) {
+      newSlots[swapIdx] = oldPanel;
+    }
+    newSlots[idx] = panelId;
+    const newConfig = { ...config, slots: newSlots };
+    setConfig(newConfig);
+    saveLayoutConfig(newConfig);
+    onLayoutChange();
+  };
+
+  const slotCount = config.type === "single" ? 1 : (config.type.endsWith("3") || config.type.includes("3")) ? 3 : 2;
+
+  return (
+    <div className="p-3 space-y-4">
+      {/* Info */}
+      <div className="text-[11px] text-hacker-text-dim">
+        Active panels: <span className="text-hacker-accent">{activeCount}</span>
+        {activeCount === 1 && " — Only PI (Chat) is shown."}
+      </div>
+
+      {/* Layout type selector */}
+      <div className="border border-hacker-border bg-hacker-surface/50">
+        <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50">
+          <span className="text-xs font-bold text-hacker-accent tracking-wider">LAYOUT TYPE</span>
+        </div>
+        <div className="p-2 grid grid-cols-2 gap-2">
+          {availableLayouts.map(type => {
+            const isActive = config.type === type;
+            return (
+              <button
+                key={type}
+                onClick={() => handleTypeChange(type)}
+                className={`text-left px-3 py-2 text-xs border transition-colors whitespace-pre ${
+                  isActive
+                    ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                    : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50 hover:text-hacker-text"
+                }`}
+              >
+                <div className="font-mono text-sm mb-0.5">{LAYOUT_PREVIEW[type]}</div>
+                <div>{LAYOUT_LABELS[type]}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Slot assignment (for 2-3 panels) */}
+      {slotCount > 1 && (
+        <div className="border border-hacker-border bg-hacker-surface/50">
+          <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50">
+            <span className="text-xs font-bold text-hacker-accent tracking-wider">PANEL ASSIGNMENT</span>
+          </div>
+          <div className="p-2 space-y-2">
+            {config.slots.slice(0, slotCount).map((slot, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <span className="text-[11px] text-hacker-text-dim w-16 shrink-0">
+                  Slot {idx + 1}:
+                </span>
+                <select
+                  value={slot}
+                  onChange={e => handleSlotChange(idx, e.target.value as PanelId)}
+                  className="select-hacker flex-1 text-xs py-1"
+                >
+                  {activePanels.map(p => (
+                    <option key={p} value={p}>
+                      {PANEL_LABELS[p]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="text-[10px] text-hacker-text-dim italic">
+        Switch panels ON/OFF via the header buttons to change the number of active panels.
+        Drag dividers between panels to resize.
+      </div>
     </div>
   );
 }

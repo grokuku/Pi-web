@@ -11,7 +11,8 @@ import { SettingsModal } from "./components/Modals/SettingsModal";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
-import { ExternalLink } from "lucide-react";
+import { LayoutRenderer, loadLayoutConfig, saveLayoutConfig } from "./components/Layout/LayoutRenderer";
+import { ExternalLink, X } from "lucide-react";
 import type { Project } from "./types";
 
 // ── Error boundary to prevent white/dark screen of death ──
@@ -143,6 +144,21 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
+
+  // ── Layout config (persisted) ──
+  const [layoutConfig, setLayoutConfig] = useState(() => {
+    const saved = loadLayoutConfig();
+    if (saved) return saved;
+    return { type: "horizontal-2" as const, slots: ["pi" as PanelId, "terminal" as PanelId], sizes: [0.6, 0.4] };
+  });
+
+  const handleLayoutSizesChange = useCallback((sizes: number[]) => {
+    setLayoutConfig(prev => {
+      const next = { ...prev, sizes };
+      saveLayoutConfig(next);
+      return next;
+    });
+  }, []);
 
   // ── Helpers ──
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
@@ -664,13 +680,20 @@ function App() {
 
         {/* MAIN CONTENT AREA */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Docked Panels Area (side-by-side) */}
-          <div className="flex-1 flex overflow-hidden">
-            {/* Docked PI Panel */}
-            {panels.pi.visible && !panels.pi.floating && (
-              <div className="flex-1 min-w-0 border-r border-hacker-border">
+          {/* Docked Panels Area — layout-driven */}
+          <LayoutRenderer
+            activePanels={(
+              ["pi", "terminal", "files"] as PanelId[]
+            ).filter(id => panels[id].visible && !panels[id].floating)}
+            config={{
+              type: layoutConfig.type,
+              slots: layoutConfig.slots,
+              sizes: layoutConfig.sizes,
+            }}
+            panels={{
+              pi: (
                 <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
                     <span className="text-xs font-bold text-hacker-accent">PI</span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => openInNewWindow("pi")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
@@ -682,24 +705,13 @@ function App() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    <ChatView
-                      send={send}
-                      on={on}
-                      activeProject={activeProject}
-                      isStreaming={isStreaming}
-                      session={session}
-                      projectId={activeProject?.id || ""}
-                    />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Docked Terminal Panel */}
-            {panels.terminal.visible && !panels.terminal.floating && (
-              <div className="flex-1 min-w-0 border-r border-hacker-border">
+              ),
+              terminal: (
                 <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
                     <span className="text-xs font-bold text-hacker-accent">TERMINAL</span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => openInNewWindow("terminal")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
@@ -714,14 +726,10 @@ function App() {
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal.visible && !panels.terminal.floating} />
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Docked Files Panel */}
-            {panels.files.visible && !panels.files.floating && (
-              <div className="flex-1 min-w-0">
+              ),
+              files: (
                 <div className="h-full flex flex-col">
-                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50">
+                  <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
                     <span className="text-xs font-bold text-hacker-accent">FILES</span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => openInNewWindow("files")} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
@@ -736,9 +744,10 @@ function App() {
                     <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              ),
+            }}
+            onSizesChange={handleLayoutSizesChange}
+          />
 
           {/* StatusBar (always at bottom of main area) */}
           <StatusBar
