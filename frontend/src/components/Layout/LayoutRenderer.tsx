@@ -123,10 +123,17 @@ export function LayoutRenderer({
       const frac = delta / d.containerSize;
       const newSizes = [...d.startSizes];
       const minSize = 0.05;
-      const maxDelta = Math.max(minSize - newSizes[d.dividerIndex], frac);
-      const clampedDelta = Math.min(newSizes[d.dividerIndex + 1] - minSize, maxDelta);
-      newSizes[d.dividerIndex] -= clampedDelta;
-      newSizes[d.dividerIndex + 1] += clampedDelta;
+      // Clamp: left/top panel cannot go below minSize
+      let clamped = frac;
+      if (newSizes[d.dividerIndex] + clamped < minSize) {
+        clamped = minSize - newSizes[d.dividerIndex];
+      }
+      // Clamp: right/bottom panel cannot go below minSize
+      if (newSizes[d.dividerIndex + 1] - clamped < minSize) {
+        clamped = newSizes[d.dividerIndex + 1] - minSize;
+      }
+      newSizes[d.dividerIndex] += clamped;
+      newSizes[d.dividerIndex + 1] -= clamped;
       if (d.type === "inner") {
         setInnerSizes(newSizes);
       } else {
