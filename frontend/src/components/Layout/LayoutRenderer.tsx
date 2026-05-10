@@ -107,6 +107,7 @@ export function LayoutRenderer({
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const sizes = type === "inner" ? [...innerSizesRef.current] : [...localSizes];
+    console.log("[resize:down]", { type, container: !!container, elTag: el.tagName, elClass: el.className.slice(0, 40), rectWidth: rect.width, rectHeight: rect.height, sizes });
     dragRef.current = {
       type,
       dividerIndex,
@@ -141,6 +142,7 @@ export function LayoutRenderer({
         }
         newSizes[d.dividerIndex] += clamped;
         newSizes[d.dividerIndex + 1] -= clamped;
+        console.log("[resize:move]", { type: d.type, delta, containerSize: d.containerSize, frac, clamped, newSizes });
         if (d.type === "inner") {
           setInnerSizes(newSizes);
         } else {
