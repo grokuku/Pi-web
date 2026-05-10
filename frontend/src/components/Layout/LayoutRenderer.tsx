@@ -248,12 +248,16 @@ export function LayoutRenderer({
   const Divider = ({ axis, dIdx, type = "outer", container }: { axis: "x" | "y"; dIdx: number; type?: "outer" | "inner"; container?: HTMLElement | null }) => (
     <div
       onMouseDown={(e) => handleDividerDown(e, dIdx, axis, type, container || undefined)}
-      className={`shrink-0 transition-colors ${
+      className={`shrink-0 flex items-center justify-center group ${
         axis === "x"
-          ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-          : "h-1.5 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+          ? "w-1.5 cursor-col-resize flex-col"
+          : "h-1.5 cursor-row-resize flex-row"
       }`}
-    />
+    >
+      <div className={`bg-hacker-border/50 group-hover:bg-hacker-accent/60 transition-colors rounded-full ${
+        axis === "x" ? "w-0.5 h-10" : "h-0.5 w-10"
+      }`} />
+    </div>
   );
 
   // ── Compound layouts ──
