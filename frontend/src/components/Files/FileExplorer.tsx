@@ -432,14 +432,14 @@ export function FileExplorer({ project }: Props) {
 
   if (!project) {
     return (
-      <div className="h-full flex items-center justify-center text-hacker-text-dim">
+      <div className="flex-1 min-h-0 flex items-center justify-center text-hacker-text-dim">
         <span>Select a project to browse files...</span>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex">
+    <div className="flex-1 min-h-0 flex">
       {/* Tree panel */}
       <div style={{ width: treeWidth }} className="shrink-0 border-r border-hacker-border-bright bg-hacker-surface/50 flex flex-col relative">
         <div className="flex items-center justify-between px-2 py-1.5 border-b border-hacker-border">

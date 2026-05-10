@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, PictureInPicture2 } from "lucide-react";
 import type { LayoutType, PanelId } from "../../types";
 import { PANEL_LABELS } from "../../types";
 
@@ -63,8 +63,12 @@ export function LayoutRenderer({
 
   const handleDividerDown = (e: React.MouseEvent, dIdx: number, axis: "x"|"y") => {
     e.preventDefault(); e.stopPropagation();
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    // Use the divider's parent as the resize container.
+    // For flat layouts this is the main container; for compound layouts
+    // sub-dividers get their sub-region, which is the correct reference.
+    const parent = e.currentTarget.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
     dragRef.current = { dIdx, axis, startPos: axis==="x"?e.clientX:e.clientY, startSizes:[...flexSizes],
       containerSize: axis==="x"?rect.width:rect.height };
     setIsDragging(true);
@@ -94,17 +98,26 @@ export function LayoutRenderer({
 
   const Slot = ({ pid, idx }: { pid: PanelId; idx: number }) => (
     <div key={pid} className="overflow-hidden flex flex-col min-w-0 min-h-0">
-      <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-        <select value={pid} onChange={e => { const nid = e.target.value as PanelId; const ti = orderedPanels.indexOf(nid); if (ti>=0) onSwap(idx, ti); }}
-          className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded">
-          {orderedPanels.map(p => <option key={p} value={p} className="bg-hacker-surface text-hacker-text">{PANEL_LABELS[p]}</option>)}
-        </select>
+      <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-surface shrink-0">
+        <div className="flex items-center gap-1">
+          <span className="text-xs font-bold text-hacker-accent px-1 select-none">{PANEL_LABELS[pid]}</span>
+          {orderedPanels.length > 1 && (
+            <select
+              value={pid}
+              onChange={e => { const nid = e.target.value as PanelId; const ti = orderedPanels.indexOf(nid); if (ti>=0) onSwap(idx, ti); }}
+              className="select-hacker text-[10px] py-0 px-1 border-hacker-border"
+              title="Swap panel position"
+            >
+              {orderedPanels.map(p => <option key={p} value={p}>{PANEL_LABELS[p]}</option>)}
+            </select>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           <button onClick={() => onNewWindow(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window"><ExternalLink size={12}/></button>
-          <button onClick={() => onDetach(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach"><ExternalLink size={12}/></button>
+          <button onClick={() => onDetach(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach as floating window"><PictureInPicture2 size={12}/></button>
         </div>
       </div>
-      <div className="flex-1 overflow-hidden min-h-0">{panelContent[pid]}</div>
+      <div className="flex-1 overflow-hidden min-h-0 flex flex-col">{panelContent[pid]}</div>
     </div>
   );
 

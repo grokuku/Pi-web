@@ -155,6 +155,9 @@ function App() {
     };
   });
 
+  const panelsRef = useRef(panels);
+  panelsRef.current = panels;
+
   const activeDocked = (["pi", "terminal", "files"] as PanelId[])
     .filter(id => panels[id]?.visible && !panels[id]?.floating);
 
@@ -167,8 +170,11 @@ function App() {
 
   const handleSwap = useCallback((fromIdx: number, toIdx: number) => {
     setLayoutCfg(prev => {
-      // Compute ordered panels from latest state to avoid stale closures
-      const ordered = prev.slotOrder.filter(id => activeDocked.includes(id));
+      // Use ref to always read latest panels state (avoids stale closure)
+      const p = panelsRef.current;
+      const activeIds = (["pi", "terminal", "files"] as PanelId[])
+        .filter(id => p[id]?.visible && !p[id]?.floating);
+      const ordered = prev.slotOrder.filter(id => activeIds.includes(id));
       const fromPanel = ordered[fromIdx];
       const toPanel = ordered[toIdx];
       if (!fromPanel || !toPanel) return prev;
@@ -180,7 +186,7 @@ function App() {
       savePersistedLayout(next);
       return next;
     });
-  }, [activeDocked]);
+  }, []); // No deps — reads latest panels from ref
 
   const reloadLayout = useCallback(() => {
     const saved = loadPersistedLayout();

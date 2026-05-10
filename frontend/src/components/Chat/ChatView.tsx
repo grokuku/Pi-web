@@ -503,7 +503,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   if (!activeProject) {
     return (
-      <div className="h-full flex items-center justify-center text-hacker-text-dim">
+      <div className="flex-1 min-h-0 flex items-center justify-center text-hacker-text-dim">
         <div className="text-center">
           <div className="text-hacker-accent text-5xl mb-4 glitch">⚡</div>
           <p className="text-lg mb-2">PI CODING AGENT</p>
@@ -517,7 +517,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   return (
     <div
-      className="h-full flex flex-col"
+      className="flex-1 min-h-0 flex flex-col"
     >
       {/* Messages */}
       {hasContent ? (
