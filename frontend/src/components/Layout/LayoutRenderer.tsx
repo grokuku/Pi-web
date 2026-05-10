@@ -212,7 +212,8 @@ export function LayoutRenderer({
         }}
         className="flex flex-col min-w-0 min-h-0"
       >
-        {/* Header */}
+        {/* Header — only when multiple panels visible */}
+        {count > 1 && (
         <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-accent/20 bg-hacker-accent-dim/10 shrink-0">
           <select
             value={panelId}
@@ -238,6 +239,7 @@ export function LayoutRenderer({
             </button>
           </div>
         </div>
+        )}
         {/* Content — always mounted */}
         <div className="flex-1 overflow-hidden">{content}</div>
       </div>
