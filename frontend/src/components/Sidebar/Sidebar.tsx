@@ -36,7 +36,7 @@ export function Sidebar({
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateAvailable, setUpdataAvailable] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [piWebVersion, setPiWebVersion] = useState("?");
 
@@ -46,7 +46,7 @@ export function Sidebar({
       setPiWebVersion(data.piWeb || "?");
     }).catch(() => {});
     fetch("/api/settings/update-check").then(r => r.json()).then(data => {
-      setUpdateAvailable(!!data.updateAvailable);
+      setUpdataAvailable(!!data.updateAvailable);
     }).catch(() => {});
   }, []);
 
@@ -55,7 +55,7 @@ export function Sidebar({
     fetch("/api/settings/update", { method: "POST" })
       .then(r => r.json())
       .then(() => {
-        setUpdateAvailable(false);
+        setUpdataAvailable(false);
         setUpdating(false);
       })
       .catch(() => setUpdating(false));

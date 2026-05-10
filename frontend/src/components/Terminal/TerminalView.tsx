@@ -186,14 +186,14 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
 
   if (!activeProject) {
     return (
-      <div className="flex-1 min-h-0 flex items-center justify-center text-hacker-text-dim">
+      <div className="h-full flex items-center justify-center text-hacker-text-dim">
         <span>Select a project to open terminal...</span>
       </div>
     );
   }
 
   return (
-    <div className="min-h-0 w-full flex flex-col">
+    <div className="h-full w-full flex flex-col">
       <div
         ref={containerRef}
         className="flex-1 min-h-0 border-terminal bg-[#0a0a0a]"

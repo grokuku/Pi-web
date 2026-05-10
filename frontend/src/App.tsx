@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, Component, type ReactNode } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
@@ -88,9 +88,10 @@ function App() {
     url.searchParams.set('standalone', 'true');
     url.searchParams.set('panel', id);
     const win = window.open(url.toString(), `pi-web-${id}`, features);
+      // Hide the panel in the main interface to avoid duplicates
+      hidePanel(id);
     if (win) {
       win.document.title = `Pi-Web - ${id.toUpperCase()}`;
-      hidePanel(id);
     }
   };
 
@@ -155,9 +156,6 @@ function App() {
     };
   });
 
-  const panelsRef = useRef(panels);
-  panelsRef.current = panels;
-
   const activeDocked = (["pi", "terminal", "files"] as PanelId[])
     .filter(id => panels[id]?.visible && !panels[id]?.floating);
 
@@ -168,17 +166,13 @@ function App() {
   const activeLayoutType = orderedPanels.length <= 1 ? "single" :
     orderedPanels.length === 2 ? layoutCfg.layout2 : layoutCfg.layout3;
 
-  const handleSwap = useCallback((fromIdx: number, toIdx: number) => {
+  const handleSwap = (fromIdx: number, toIdx: number) => {
     setLayoutCfg(prev => {
-      // Use ref to always read latest panels state (avoids stale closure)
-      const p = panelsRef.current;
-      const activeIds = (["pi", "terminal", "files"] as PanelId[])
-        .filter(id => p[id]?.visible && !p[id]?.floating);
-      const ordered = prev.slotOrder.filter(id => activeIds.includes(id));
-      const fromPanel = ordered[fromIdx];
-      const toPanel = ordered[toIdx];
-      if (!fromPanel || !toPanel) return prev;
       const newOrder = [...prev.slotOrder];
+      // Swap: put the panel at fromIdx to toIdx, and move what was at toIdx to fromIdx
+      // But orderedPanels is a subset of slotOrder — we need to swap in the full slotOrder
+      const fromPanel = orderedPanels[fromIdx];
+      const toPanel = orderedPanels[toIdx];
       const realFromIdx = prev.slotOrder.indexOf(fromPanel);
       const realToIdx = prev.slotOrder.indexOf(toPanel);
       [newOrder[realFromIdx], newOrder[realToIdx]] = [newOrder[realToIdx], newOrder[realFromIdx]];
@@ -186,12 +180,7 @@ function App() {
       savePersistedLayout(next);
       return next;
     });
-  }, []); // No deps — reads latest panels from ref
-
-  const reloadLayout = useCallback(() => {
-    const saved = loadPersistedLayout();
-    if (saved) setLayoutCfg(saved);
-  }, []);
+  };
 
   const handleLayoutSizesChange = (layoutKey: string, newSizes: number[]) => {
     setLayoutCfg(prev => {
@@ -564,33 +553,6 @@ function App() {
     return () => channel.close();
   }, [activeProject, handleReferenceFile, panels, savePanels]);
 
-  // ── Memoized panel content — one per panel, avoids remounting on layout change
-  const piContent = useMemo(() => (
-    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
-  ), [send, on, activeProject, isStreaming, session]);
-
-  const terminalContent = useMemo(() => (
-    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
-  ), [send, on, activeProject, panels.terminal?.visible, panels.terminal?.floating]);
-
-  const filesContent = useMemo(() => (
-    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
-  ), [activeProject, handleReferenceFile]);
-
-  const panelContent = { pi: piContent, terminal: terminalContent, files: filesContent };
-
-  // ── Restore panel if standalone tab is closed via browser close
-  useEffect(() => {
-    if (!isStandalone || !standalonePanel) return;
-    const handleBeforeUnload = () => {
-      const channel = new BroadcastChannel('pi-web-file-ref');
-      channel.postMessage({ type: 'restore-panel', panelId: standalonePanel });
-      channel.close();
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isStandalone, standalonePanel]);
-
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)
   if (isStandalone && standalonePanel) {
@@ -616,7 +578,7 @@ function App() {
         </div>
         <div className="flex-1 overflow-hidden">
           {standalonePanel === "pi" && (
-            <div className="flex flex-col min-h-0">
+            <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
                 <ChatView
                   send={send}
@@ -630,14 +592,14 @@ function App() {
             </div>
           )}
           {standalonePanel === "terminal" && (
-            <div className="flex flex-col min-h-0">
+            <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
                 <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
               </div>
             </div>
           )}
           {standalonePanel === "files" && (
-            <div className="flex flex-col min-h-0">
+            <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
                 <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
               </div>
@@ -647,7 +609,8 @@ function App() {
       </div>
     );
   }
-  // ── RENDER ──
+
+  // Normal mode: full interface
   return (
     <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
       <div className="matrix-bg" />
@@ -752,7 +715,17 @@ function App() {
             orderedPanels={orderedPanels}
             layoutType={activeLayoutType}
             sizes={layoutCfg.sizes}
-            panelContent={panelContent}
+            panelContent={{
+              pi: (
+                <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+              ),
+              terminal: (
+                <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
+              ),
+              files: (
+                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+              ),
+            }}
             onSwap={handleSwap}
             onDetach={undockPanel}
             onNewWindow={openInNewWindow}
@@ -818,7 +791,6 @@ function App() {
           onClose={() => setShowSettings(false)}
           session={session}
           onModelApplied={handleModelApplied}
-          onLayoutChange={reloadLayout}
         />
       )}
     </div>

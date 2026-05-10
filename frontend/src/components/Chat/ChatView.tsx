@@ -503,7 +503,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   if (!activeProject) {
     return (
-      <div className="flex-1 min-h-0 flex items-center justify-center text-hacker-text-dim">
+      <div className="h-full flex items-center justify-center text-hacker-text-dim">
         <div className="text-center">
           <div className="text-hacker-accent text-5xl mb-4 glitch">⚡</div>
           <p className="text-lg mb-2">PI CODING AGENT</p>
@@ -516,10 +516,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const hasContent = messages.length > 0 || streamingContent || streamingThinking || currentToolCalls.length > 0;
 
   return (
-    <div className="min-h-0 flex flex-col">
+    <div
+      className="h-full flex flex-col"
+    >
       {/* Messages */}
       {hasContent ? (
-        <div className="flex-1 overflow-y-auto p-4 chat-messages relative" onScroll={handleScroll}>
+        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`} onScroll={handleScroll}>
 
 
         {error && (

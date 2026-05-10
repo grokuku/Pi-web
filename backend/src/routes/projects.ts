@@ -217,9 +217,8 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     if (result.commitResult || result.pushResult) {
       const commitHash = result.commitHash || "";
       const remoteUrl = result.remoteUrl || "";
-      const truncatedBody = body ? (body.length > 500 ? body.slice(0, 500) + "..." : body) : "";
       const notification = `✅ Code successfully pushed to GitHub.
-Commit: ${subject}${truncatedBody ? "\n" + truncatedBody : ""}
+Commit: ${subject}${body ? "\n" + body : ""}
 Hash: ${commitHash}
 Remote: ${remoteUrl || "origin"}
 
