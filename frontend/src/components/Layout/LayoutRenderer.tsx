@@ -65,10 +65,14 @@ export function LayoutRenderer({
   const currentSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
 
   const [localSizes, setLocalSizes] = useState<number[]>(currentSizes);
+  const [innerSizes, setInnerSizes] = useState<number[]>([0.5, 0.5]);
+  const innerSizesRef = useRef(innerSizes);
+  innerSizesRef.current = innerSizes;
   const [isDragging, setIsDragging] = useState(false);
   const sizesRef = useRef(localSizes);
   sizesRef.current = localSizes;
   const dragRef = useRef<{
+    type: "outer" | "inner";
     dividerIndex: number;
     axis: "x" | "y";
     startPos: number;
@@ -81,16 +85,31 @@ export function LayoutRenderer({
     if (!isDragging) setLocalSizes(currentSizes);
   }, [layoutKey, isDragging]);
 
+  // Detect compound layouts
+  const isCompound =
+    layoutType === "top-2-bottom-1" ||
+    layoutType === "top-1-bottom-2" ||
+    layoutType === "left-2-right-1" ||
+    layoutType === "left-1-right-2";
+
   // ── Resize ──
-  const handleDividerDown = (e: React.MouseEvent, dividerIndex: number, axis: "x" | "y") => {
+  const handleDividerDown = (
+    e: React.MouseEvent,
+    dividerIndex: number,
+    axis: "x" | "y",
+    type: "outer" | "inner",
+  ) => {
     e.preventDefault();
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    const parent = (e.currentTarget as HTMLElement).parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const sizes = type === "inner" ? [...innerSizesRef.current] : [...localSizes];
     dragRef.current = {
+      type,
       dividerIndex,
       axis,
       startPos: axis === "x" ? e.clientX : e.clientY,
-      startSizes: [...localSizes],
+      startSizes: sizes,
       containerSize: axis === "x" ? rect.width : rect.height,
     };
     setIsDragging(true);
@@ -103,17 +122,23 @@ export function LayoutRenderer({
       const delta = (d.axis === "x" ? e.clientX : e.clientY) - d.startPos;
       const frac = delta / d.containerSize;
       const newSizes = [...d.startSizes];
-      const minSize = 0.1;
+      const minSize = 0.05;
       const maxDelta = Math.max(minSize - newSizes[d.dividerIndex], frac);
       const clampedDelta = Math.min(newSizes[d.dividerIndex + 1] - minSize, maxDelta);
       newSizes[d.dividerIndex] -= clampedDelta;
       newSizes[d.dividerIndex + 1] += clampedDelta;
-      setLocalSizes(newSizes);
+      if (d.type === "inner") {
+        setInnerSizes(newSizes);
+      } else {
+        setLocalSizes(newSizes);
+      }
     };
     const handleUp = () => {
       setIsDragging(false);
       if (dragRef.current) {
-        onSizesChange(layoutKey, [...sizesRef.current]);
+        if (dragRef.current.type === "outer") {
+          onSizesChange(layoutKey, [...sizesRef.current]);
+        }
       }
       dragRef.current = null;
     };
@@ -125,19 +150,8 @@ export function LayoutRenderer({
     };
   }, [isDragging, layoutKey, onSizesChange]);
 
-  // ── Single render path: always all 3 slots in the DOM ──
-  // This keeps ChatView/TerminalView/FileExplorer mounted across layout changes,
-  // preventing message loss when toggling panels or changing layouts.
+  // ── All 3 slots ALWAYS in the DOM (display:none when inactive) ──
   const ALL_PANELS: PanelId[] = ["pi", "terminal", "files"];
-
-  // Derived: is the layout horizontal or vertical?
-  const isHorizontal =
-    layoutType === "horizontal-2" ||
-    layoutType === "horizontal-3" ||
-    layoutType === "left-2-right-1" ||
-    layoutType === "left-1-right-2";
-  const isVertical = !isHorizontal || count <= 1;
-  const axis = isVertical ? "y" : "x";
 
   if (count === 0) {
     return (
@@ -149,84 +163,147 @@ export function LayoutRenderer({
 
   const s = localSizes;
 
-  return (
-    <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isVertical ? "flex-col" : ""}`}>
-      {[0, 1, 2].map((slotIndex) => {
-        const panelId = ALL_PANELS[slotIndex];
-        const panelIdx = orderedPanels.indexOf(panelId);
-        const visible = panelIdx >= 0;
-        const content = panelContent[panelId];
+  // ── Shared slot renderer ──
+  const renderSlot = (slotIndex: number, flexOverride?: number) => {
+    const panelId = ALL_PANELS[slotIndex];
+    const panelIdx = orderedPanels.indexOf(panelId);
+    const visible = panelIdx >= 0;
+    const content = panelContent[panelId];
+    const flexVal =
+      flexOverride !== undefined
+        ? flexOverride
+        : visible
+          ? count === 1
+            ? 1
+            : s[panelIdx]
+          : 0;
 
-        const prevPanelId = slotIndex > 0 ? ALL_PANELS[slotIndex - 1] : null;
-        const prevVisible = prevPanelId ? orderedPanels.indexOf(prevPanelId) >= 0 : false;
-        const showDivider = slotIndex > 0 && (visible || prevVisible);
-        const dividerHidden = slotIndex > 0 && !(visible && prevVisible);
+    return (
+      <div
+        key={panelId}
+        style={{
+          flex: visible ? `${flexVal} 1 0%` : "0 0 0px",
+          display: visible ? undefined : "none",
+          overflow: "hidden",
+        }}
+        className="flex flex-col min-w-0 min-h-0"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
+          <select
+            value={panelId}
+            onChange={(e) => {
+              const newId = e.target.value as PanelId;
+              const targetIdx = orderedPanels.indexOf(newId);
+              if (targetIdx >= 0) onSwap(panelIdx, targetIdx);
+            }}
+            className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
+          >
+            {orderedPanels.map((p) => (
+              <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
+                {PANEL_LABELS[p]}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1">
+            <button onClick={() => onNewWindow(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
+              <ExternalLink size={12} />
+            </button>
+            <button onClick={() => onDetach(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
+              <ExternalLink size={12} />
+            </button>
+          </div>
+        </div>
+        {/* Content — always mounted */}
+        <div className="flex-1 overflow-hidden">{content}</div>
+      </div>
+    );
+  };
 
-        return (
+  // Divider component
+  const Divider = ({ axis, dIdx, type = "outer" }: { axis: "x" | "y"; dIdx: number; type?: "outer" | "inner" }) => (
+    <div
+      onMouseDown={(e) => handleDividerDown(e, dIdx, axis, type)}
+      className={`shrink-0 transition-colors ${
+        axis === "x"
+          ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+          : "h-1.5 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+      }`}
+    />
+  );
+
+  // ── Compound layouts ──
+  if (isCompound) {
+    const outerDir =
+      layoutType === "left-2-right-1" || layoutType === "left-1-right-2" ? "row" : "col";
+    const innerDir = outerDir === "row" ? "col" : "row";
+    const innerAxis: "x" | "y" = innerDir === "row" ? "x" : "y";
+    const outerAxis: "x" | "y" = outerDir === "row" ? "x" : "y";
+
+    // Which 2 slots are paired, which one is solo
+    let pairedSlots: [number, number];
+    let soloSlot: number;
+    if (layoutType === "top-2-bottom-1" || layoutType === "left-2-right-1") {
+      pairedSlots = [0, 1];
+      soloSlot = 2;
+    } else {
+      // top-1-bottom-2, left-1-right-2
+      pairedSlots = [1, 2];
+      soloSlot = 0;
+    }
+    const pairFirst = pairedSlots[0] < soloSlot;
+
+    return (
+      <div
+        ref={containerRef}
+        className={`flex-1 overflow-hidden flex ${outerDir === "col" ? "flex-col" : ""}`}
+      >
+        {pairFirst ? (
           <>
-            {slotIndex > 0 && (
-              <div
-                onMouseDown={showDivider ? (e) => handleDividerDown(e, slotIndex - 1, axis) : undefined}
-                style={{ display: dividerHidden ? "none" : undefined }}
-                className={`shrink-0 ${axis === "x" ? "w-1.5" : "h-1.5"} ${
-                  showDivider
-                    ? axis === "x"
-                      ? "cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-                      : "cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-                    : ""
-                }`}
-              />
-            )}
+            {/* Paired sub-container */}
             <div
-              style={{
-                flex: visible ? (count === 1 ? "1 1 0%" : `${s[panelIdx]} 1 0%`) : "0 0 0%",
-                display: visible ? undefined : "none",
-                overflow: "hidden",
-                minWidth: visible && !isVertical ? 0 : undefined,
-                minHeight: visible && isVertical ? 0 : undefined,
-              }}
-              className="flex flex-col"
+              className={`flex overflow-hidden ${innerDir === "col" ? "flex-col" : ""}`}
+              style={{ flex: `${s[0]} 1 0%`, minWidth: 0, minHeight: 0 }}
             >
-              {/* Header */}
-              <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-                <select
-                  value={panelId}
-                  onChange={(e) => {
-                    const newId = e.target.value as PanelId;
-                    const targetIdx = orderedPanels.indexOf(newId);
-                    if (targetIdx >= 0) onSwap(panelIdx, targetIdx);
-                  }}
-                  className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
-                >
-                  {orderedPanels.map((p) => (
-                    <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
-                      {PANEL_LABELS[p]}
-                    </option>
-                  ))}
-                </select>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => onNewWindow(panelId)}
-                    className="p-1 text-hacker-text-dim hover:text-hacker-accent"
-                    title="Open in new window"
-                  >
-                    <ExternalLink size={12} />
-                  </button>
-                  <button
-                    onClick={() => onDetach(panelId)}
-                    className="p-1 text-hacker-text-dim hover:text-hacker-accent"
-                    title="Detach"
-                  >
-                    <ExternalLink size={12} />
-                  </button>
-                </div>
-              </div>
-              {/* Content — always mounted, hidden via display:none when inactive */}
-              <div className="flex-1 overflow-hidden">{content}</div>
+              {renderSlot(pairedSlots[0], innerSizes[0])}
+              <Divider axis={innerAxis} dIdx={0} type="inner" />
+              {renderSlot(pairedSlots[1], innerSizes[1])}
+            </div>
+            <Divider axis={outerAxis} dIdx={0} type="outer" />
+            {renderSlot(soloSlot, s[1])}
+          </>
+        ) : (
+          <>
+            {renderSlot(soloSlot, s[0])}
+            <Divider axis={outerAxis} dIdx={0} type="outer" />
+            {/* Paired sub-container */}
+            <div
+              className={`flex overflow-hidden ${innerDir === "col" ? "flex-col" : ""}`}
+              style={{ flex: `${s[1]} 1 0%`, minWidth: 0, minHeight: 0 }}
+            >
+              {renderSlot(pairedSlots[0], innerSizes[0])}
+              <Divider axis={innerAxis} dIdx={0} type="inner" />
+              {renderSlot(pairedSlots[1], innerSizes[1])}
             </div>
           </>
-        );
-      })}
+        )}
+      </div>
+    );
+  }
+
+  // ── Flat layouts (horizontal-2/3, vertical-2/3) ──
+  const isFlatHorizontal =
+    layoutType === "horizontal-2" || layoutType === "horizontal-3";
+  const isFlatVertical = !isFlatHorizontal || count <= 1;
+  const flatAxis: "x" | "y" = isFlatVertical ? "y" : "x";
+
+  return (
+    <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isFlatVertical ? "flex-col" : ""}`}>
+      {renderSlot(0)}
+      <Divider axis={flatAxis} dIdx={0} type="outer" />
+      {renderSlot(1)}
+      <Divider axis={flatAxis} dIdx={1} type="outer" />
+      {renderSlot(2)}
     </div>
   );
 }
@@ -237,6 +314,6 @@ function defaultSizes(layoutKey: string, count: number): number[] {
   if (count <= 1) return [1];
   if (count === 2) return [0.6, 0.4];
   if (layoutKey === "horizontal-3" || layoutKey === "vertical-3") return [0.4, 0.3, 0.3];
-  // For compound layouts (top-2-bottom-1 etc), primary split
-  return [0.5, 0.5];
+  // Compound: sizes = [subContainerFlex, soloFlex] (inner split uses separate state)
+  return [0.55, 0.45];
 }
