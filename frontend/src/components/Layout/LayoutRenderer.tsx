@@ -213,7 +213,7 @@ export function LayoutRenderer({
         className="flex flex-col min-w-0 min-h-0"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
+        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-accent/20 bg-hacker-accent-dim/10 shrink-0">
           <select
             value={panelId}
             onChange={(e) => {
