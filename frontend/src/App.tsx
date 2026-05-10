@@ -616,7 +616,7 @@ function App() {
         </div>
         <div className="flex-1 overflow-hidden">
           {standalonePanel === "pi" && (
-            <div className="h-full flex flex-col">
+            <div className="flex flex-col min-h-0">
               <div className="flex-1 overflow-hidden">
                 <ChatView
                   send={send}
@@ -630,14 +630,14 @@ function App() {
             </div>
           )}
           {standalonePanel === "terminal" && (
-            <div className="h-full flex flex-col">
+            <div className="flex flex-col min-h-0">
               <div className="flex-1 overflow-hidden">
                 <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
               </div>
             </div>
           )}
           {standalonePanel === "files" && (
-            <div className="h-full flex flex-col">
+            <div className="flex flex-col min-h-0">
               <div className="flex-1 overflow-hidden">
                 <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
               </div>

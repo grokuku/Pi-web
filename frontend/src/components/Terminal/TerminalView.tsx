@@ -193,7 +193,7 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
   }
 
   return (
-    <div className="flex-1 min-h-0 w-full flex flex-col">
+    <div className="min-h-0 w-full flex flex-col">
       <div
         ref={containerRef}
         className="flex-1 min-h-0 border-terminal bg-[#0a0a0a]"

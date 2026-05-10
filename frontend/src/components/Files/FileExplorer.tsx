@@ -439,7 +439,7 @@ export function FileExplorer({ project }: Props) {
   }
 
   return (
-    <div className="flex-1 min-h-0 flex">
+    <div className="min-h-0 flex">
       {/* Tree panel */}
       <div style={{ width: treeWidth }} className="shrink-0 border-r border-hacker-border-bright bg-hacker-surface/50 flex flex-col relative">
         <div className="flex items-center justify-between px-2 py-1.5 border-b border-hacker-border">
