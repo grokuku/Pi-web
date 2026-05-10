@@ -255,7 +255,7 @@ export function LayoutRenderer({
       }`}
     >
       <div className={`bg-hacker-border/50 group-hover:bg-hacker-accent/60 transition-colors rounded-full ${
-        axis === "x" ? "w-0.5 h-10" : "h-0.5 w-10"
+        axis === "x" ? "w-0.5 h-full" : "h-0.5 w-full"
       }`} />
     </div>
   );
