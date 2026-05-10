@@ -98,11 +98,14 @@ export function LayoutRenderer({
     dividerIndex: number,
     axis: "x" | "y",
     type: "outer" | "inner",
+    container?: HTMLElement,
   ) => {
     e.preventDefault();
-    const parent = (e.currentTarget as HTMLElement).parentElement;
-    if (!parent) return;
-    const rect = parent.getBoundingClientRect();
+    // Use explicit container for outer dividers (consistent across layouts),
+    // fall back to parentElement for inner dividers (sub-container).
+    const el = container || (e.currentTarget as HTMLElement).parentElement;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
     const sizes = type === "inner" ? [...innerSizesRef.current] : [...localSizes];
     dragRef.current = {
       type,
@@ -117,28 +120,33 @@ export function LayoutRenderer({
 
   useEffect(() => {
     if (!isDragging) return;
+    let rafId = 0;
     const handleMove = (e: MouseEvent) => {
-      const d = dragRef.current!;
-      const delta = (d.axis === "x" ? e.clientX : e.clientY) - d.startPos;
-      const frac = delta / d.containerSize;
-      const newSizes = [...d.startSizes];
-      const minSize = 0.05;
-      // Clamp: left/top panel cannot go below minSize
-      let clamped = frac;
-      if (newSizes[d.dividerIndex] + clamped < minSize) {
-        clamped = minSize - newSizes[d.dividerIndex];
-      }
-      // Clamp: right/bottom panel cannot go below minSize
-      if (newSizes[d.dividerIndex + 1] - clamped < minSize) {
-        clamped = newSizes[d.dividerIndex + 1] - minSize;
-      }
-      newSizes[d.dividerIndex] += clamped;
-      newSizes[d.dividerIndex + 1] -= clamped;
-      if (d.type === "inner") {
-        setInnerSizes(newSizes);
-      } else {
-        setLocalSizes(newSizes);
-      }
+      if (rafId) return; // throttle to one update per animation frame
+      const clientPos = dragRef.current!.axis === "x" ? e.clientX : e.clientY;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        const d = dragRef.current;
+        if (!d) return;
+        const delta = clientPos - d.startPos;
+        const frac = delta / d.containerSize;
+        const newSizes = [...d.startSizes];
+        const minSize = 0.05;
+        let clamped = frac;
+        if (newSizes[d.dividerIndex] + clamped < minSize) {
+          clamped = minSize - newSizes[d.dividerIndex];
+        }
+        if (newSizes[d.dividerIndex + 1] - clamped < minSize) {
+          clamped = newSizes[d.dividerIndex + 1] - minSize;
+        }
+        newSizes[d.dividerIndex] += clamped;
+        newSizes[d.dividerIndex + 1] -= clamped;
+        if (d.type === "inner") {
+          setInnerSizes(newSizes);
+        } else {
+          setLocalSizes(newSizes);
+        }
+      });
     };
     const handleUp = () => {
       setIsDragging(false);
@@ -227,10 +235,10 @@ export function LayoutRenderer({
     );
   };
 
-  // Divider component
-  const Divider = ({ axis, dIdx, type = "outer" }: { axis: "x" | "y"; dIdx: number; type?: "outer" | "inner" }) => (
+  // Divider component — outer dividers use containerRef for consistent sizing
+  const Divider = ({ axis, dIdx, type = "outer", container }: { axis: "x" | "y"; dIdx: number; type?: "outer" | "inner"; container?: HTMLElement | null }) => (
     <div
-      onMouseDown={(e) => handleDividerDown(e, dIdx, axis, type)}
+      onMouseDown={(e) => handleDividerDown(e, dIdx, axis, type, container || undefined)}
       className={`shrink-0 transition-colors ${
         axis === "x"
           ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
@@ -276,13 +284,13 @@ export function LayoutRenderer({
               <Divider axis={innerAxis} dIdx={0} type="inner" />
               {renderSlot(pairedSlots[1], innerSizes[1])}
             </div>
-            <Divider axis={outerAxis} dIdx={0} type="outer" />
+            <Divider axis={outerAxis} dIdx={0} type="outer" container={containerRef.current} />
             {renderSlot(soloSlot, s[1])}
           </>
         ) : (
           <>
             {renderSlot(soloSlot, s[0])}
-            <Divider axis={outerAxis} dIdx={0} type="outer" />
+            <Divider axis={outerAxis} dIdx={0} type="outer" container={containerRef.current} />
             {/* Paired sub-container */}
             <div
               className={`flex overflow-hidden ${innerDir === "col" ? "flex-col" : ""}`}
@@ -307,9 +315,9 @@ export function LayoutRenderer({
   return (
     <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isFlatVertical ? "flex-col" : ""}`}>
       {renderSlot(0)}
-      <Divider axis={flatAxis} dIdx={0} type="outer" />
+      <Divider axis={flatAxis} dIdx={0} type="outer" container={containerRef.current} />
       {renderSlot(1)}
-      <Divider axis={flatAxis} dIdx={1} type="outer" />
+      <Divider axis={flatAxis} dIdx={1} type="outer" container={containerRef.current} />
       {renderSlot(2)}
     </div>
   );
