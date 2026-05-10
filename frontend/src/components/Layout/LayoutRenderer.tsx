@@ -62,7 +62,14 @@ export function LayoutRenderer({
   const containerRef = useRef<HTMLDivElement>(null);
   const count = orderedPanels.length;
   const layoutKey = count <= 1 ? "single" : layoutType;
-  const currentSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
+  const rawCurrentSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
+
+  // Compound layouts use exactly 2 values [main, solo] that must sum to 1
+  const currentSizes =
+    layoutType === "top-2-bottom-1" || layoutType === "top-1-bottom-2" ||
+    layoutType === "left-2-right-1" || layoutType === "left-1-right-2"
+      ? normalizeSizes(rawCurrentSizes.slice(0, 2))
+      : rawCurrentSizes;
 
   const [localSizes, setLocalSizes] = useState<number[]>(currentSizes);
   const [innerSizes, setInnerSizes] = useState<number[]>([0.5, 0.5]);
@@ -333,4 +340,11 @@ function defaultSizes(layoutKey: string, count: number): number[] {
   if (layoutKey === "horizontal-3" || layoutKey === "vertical-3") return [0.4, 0.3, 0.3];
   // Compound: sizes = [subContainerFlex, soloFlex] (inner split uses separate state)
   return [0.55, 0.45];
+}
+
+/** Ensure size array values sum to 1 (for compound layouts with exactly 2 elements). */
+function normalizeSizes(sizes: number[]): number[] {
+  const sum = sizes.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return sizes.map((_, i) => (i === 0 ? 0.55 : 0.45));
+  return sizes.map((v) => v / sum);
 }
