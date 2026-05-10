@@ -125,58 +125,20 @@ export function LayoutRenderer({
     };
   }, [isDragging, layoutKey, onSizesChange]);
 
-  // ── Panel slot rendering ──
-  const PanelSlot = ({ idx, style }: { idx: number; style: React.CSSProperties }) => {
-    const panelId = orderedPanels[idx];
-    const content = panelContent[panelId];
-    const allActive = orderedPanels;
+  // ── Single render path: always all 3 slots in the DOM ──
+  // This keeps ChatView/TerminalView/FileExplorer mounted across layout changes,
+  // preventing message loss when toggling panels or changing layouts.
+  const ALL_PANELS: PanelId[] = ["pi", "terminal", "files"];
 
-    return (
-      <div style={style} className="overflow-hidden flex flex-col">
-        {/* Header with dropdown + buttons */}
-        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-          <select
-            value={panelId}
-            onChange={e => {
-              const newId = e.target.value as PanelId;
-              const targetIdx = orderedPanels.indexOf(newId);
-              if (targetIdx >= 0) onSwap(idx, targetIdx);
-            }}
-            className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
-          >
-            {allActive.map(p => (
-              <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
-                {PANEL_LABELS[p]}
-              </option>
-            ))}
-          </select>
-          <div className="flex items-center gap-1">
-            <button onClick={() => onNewWindow(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-              <ExternalLink size={12} />
-            </button>
-            <button onClick={() => onDetach(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-              <ExternalLink size={12} />
-            </button>
-          </div>
-        </div>
-        {/* Content */}
-        <div className="flex-1 overflow-hidden">{content}</div>
-      </div>
-    );
-  };
+  // Derived: is the layout horizontal or vertical?
+  const isHorizontal =
+    layoutType === "horizontal-2" ||
+    layoutType === "horizontal-3" ||
+    layoutType === "left-2-right-1" ||
+    layoutType === "left-1-right-2";
+  const isVertical = !isHorizontal || count <= 1;
+  const axis = isVertical ? "y" : "x";
 
-  const Divider = ({ idx, axis }: { idx: number; axis: "x" | "y" }) => (
-    <div
-      onMouseDown={e => handleDividerDown(e, idx, axis)}
-      className={`shrink-0 transition-colors ${
-        axis === "x"
-          ? "w-1.5 cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-          : "h-1.5 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
-      }`}
-    />
-  );
-
-  // ── Empty state (0 panels) ──
   if (count === 0) {
     return (
       <div className="flex-1 flex items-center justify-center opacity-20 select-none pointer-events-none">
@@ -185,110 +147,86 @@ export function LayoutRenderer({
     );
   }
 
-  // ── 1 panel ──
-  if (count === 1) {
-    return (
-      <div ref={containerRef} className="flex-1 overflow-hidden">
-        <PanelSlot idx={0} style={{ width: "100%", height: "100%" }} />
-      </div>
-    );
-  }
-
   const s = localSizes;
 
-  // ── 2 panels ──
-  if (count === 2) {
-    if (layoutType === "vertical-2") {
-      return (
-        <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-          <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-          <Divider idx={0} axis="y" />
-          <PanelSlot idx={1} style={{ height: `${s[1] * 100}%` }} />
-        </div>
-      );
-    }
-    // horizontal-2
-    return (
-      <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        <PanelSlot idx={0} style={{ width: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={1} style={{ width: `${s[1] * 100}%` }} />
-      </div>
-    );
-  }
-
-  // ── 3 panels ──
-  if (layoutType === "horizontal-3") {
-    return (
-      <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        <PanelSlot idx={0} style={{ width: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={1} style={{ width: `${s[1] * 100}%` }} />
-        <Divider idx={1} axis="x" />
-        <PanelSlot idx={2} style={{ width: `${s[2] * 100}%` }} />
-      </div>
-    );
-  }
-  if (layoutType === "vertical-3") {
-    return (
-      <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="y" />
-        <PanelSlot idx={1} style={{ height: `${s[1] * 100}%` }} />
-        <Divider idx={1} axis="y" />
-        <PanelSlot idx={2} style={{ height: `${s[2] * 100}%` }} />
-      </div>
-    );
-  }
-  if (layoutType === "top-2-bottom-1") {
-    return (
-      <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex overflow-hidden" style={{ height: `${s[0] * 100}%` }}>
-          <PanelSlot idx={0} style={{ width: "50%", height: "100%" }} />
-          <div className="w-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={1} style={{ width: "50%", height: "100%" }} />
-        </div>
-        <Divider idx={0} axis="y" />
-        <PanelSlot idx={2} style={{ height: `${(1 - s[0]) * 100}%` }} />
-      </div>
-    );
-  }
-  if (layoutType === "top-1-bottom-2") {
-    return (
-      <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        <PanelSlot idx={0} style={{ height: `${s[0] * 100}%` }} />
-        <Divider idx={0} axis="y" />
-        <div className="flex overflow-hidden" style={{ height: `${(1 - s[0]) * 100}%` }}>
-          <PanelSlot idx={1} style={{ width: "50%", height: "100%" }} />
-          <div className="w-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={2} style={{ width: "50%", height: "100%" }} />
-        </div>
-      </div>
-    );
-  }
-  if (layoutType === "left-2-right-1") {
-    return (
-      <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        <div className="flex flex-col overflow-hidden" style={{ width: `${s[0] * 100}%`, height: "100%" }}>
-          <PanelSlot idx={0} style={{ height: "50%" }} />
-          <div className="h-px shrink-0 bg-hacker-border/50" />
-          <PanelSlot idx={1} style={{ height: "50%" }} />
-        </div>
-        <Divider idx={0} axis="x" />
-        <PanelSlot idx={2} style={{ width: `${(1 - s[0]) * 100}%`, height: "100%" }} />
-      </div>
-    );
-  }
-  // left-1-right-2
   return (
-    <div ref={containerRef} className="flex-1 flex overflow-hidden">
-      <PanelSlot idx={0} style={{ width: `${s[0] * 100}%`, height: "100%" }} />
-      <Divider idx={0} axis="x" />
-      <div className="flex flex-col overflow-hidden" style={{ width: `${(1 - s[0]) * 100}%`, height: "100%" }}>
-        <PanelSlot idx={1} style={{ height: "50%" }} />
-        <div className="h-px shrink-0 bg-hacker-border/50" />
-        <PanelSlot idx={2} style={{ height: "50%" }} />
-      </div>
+    <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isVertical ? "flex-col" : ""}`}>
+      {[0, 1, 2].map((slotIndex) => {
+        const panelId = ALL_PANELS[slotIndex];
+        const panelIdx = orderedPanels.indexOf(panelId);
+        const visible = panelIdx >= 0;
+        const content = panelContent[panelId];
+
+        const prevPanelId = slotIndex > 0 ? ALL_PANELS[slotIndex - 1] : null;
+        const prevVisible = prevPanelId ? orderedPanels.indexOf(prevPanelId) >= 0 : false;
+        const showDivider = slotIndex > 0 && (visible || prevVisible);
+        const dividerHidden = slotIndex > 0 && !(visible && prevVisible);
+
+        return (
+          <>
+            {slotIndex > 0 && (
+              <div
+                onMouseDown={showDivider ? (e) => handleDividerDown(e, slotIndex - 1, axis) : undefined}
+                style={{ display: dividerHidden ? "none" : undefined }}
+                className={`shrink-0 ${axis === "x" ? "w-1.5" : "h-1.5"} ${
+                  showDivider
+                    ? axis === "x"
+                      ? "cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+                      : "cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50"
+                    : ""
+                }`}
+              />
+            )}
+            <div
+              style={{
+                flex: visible ? (count === 1 ? "1 1 0%" : `${s[panelIdx]} 1 0%`) : "0 0 0%",
+                display: visible ? undefined : "none",
+                overflow: "hidden",
+                minWidth: visible && !isVertical ? 0 : undefined,
+                minHeight: visible && isVertical ? 0 : undefined,
+              }}
+              className="flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
+                <select
+                  value={panelId}
+                  onChange={(e) => {
+                    const newId = e.target.value as PanelId;
+                    const targetIdx = orderedPanels.indexOf(newId);
+                    if (targetIdx >= 0) onSwap(panelIdx, targetIdx);
+                  }}
+                  className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
+                >
+                  {orderedPanels.map((p) => (
+                    <option key={p} value={p} className="bg-hacker-surface text-hacker-text">
+                      {PANEL_LABELS[p]}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => onNewWindow(panelId)}
+                    className="p-1 text-hacker-text-dim hover:text-hacker-accent"
+                    title="Open in new window"
+                  >
+                    <ExternalLink size={12} />
+                  </button>
+                  <button
+                    onClick={() => onDetach(panelId)}
+                    className="p-1 text-hacker-text-dim hover:text-hacker-accent"
+                    title="Detach"
+                  >
+                    <ExternalLink size={12} />
+                  </button>
+                </div>
+              </div>
+              {/* Content — always mounted, hidden via display:none when inactive */}
+              <div className="flex-1 overflow-hidden">{content}</div>
+            </div>
+          </>
+        );
+      })}
     </div>
   );
 }
