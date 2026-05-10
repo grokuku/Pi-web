@@ -61,7 +61,7 @@ interface Props {
   icon?: ReactNode;
   children: ReactNode;
   onClose: () => void;
-  onDock: () => void; // Bouton pour réintégrer
+  onDock: () => void; // Dock the floating panel back
   defaultW?: number;
   defaultH?: number;
   className?: string;
@@ -193,7 +193,7 @@ export function Window({ id, title, icon, children, onClose, onDock, defaultW = 
           <span className="font-bold tracking-wide">{title}</span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onDock} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Réintégrer">
+          <button onClick={onDock} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Dock">
             <Minimize2 size={12} />
           </button>
           <button onClick={handleClose} className="p-1 text-hacker-text-dim hover:text-hacker-error" title="Fermer">

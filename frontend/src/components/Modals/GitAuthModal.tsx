@@ -108,7 +108,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
             </p>
           )}
           <p className="text-hacker-text-dim/70 text-[10px]">
-            Credentials are stored in memory only and never written to disk permanently.
+            Credentials are encrypted at rest using AES-256-GCM before being stored on disk.
           </p>
         </div>
 

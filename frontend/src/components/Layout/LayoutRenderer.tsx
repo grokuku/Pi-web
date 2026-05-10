@@ -92,26 +92,21 @@ export function LayoutRenderer({
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
   }, [isDragging, layoutKey, onSizesChange]);
 
-  const activeSet = new Set(orderedPanels);
-
-  const Slot = ({ pid, idx }: { pid: PanelId; idx: number }) => {
-    const isActive = activeSet.has(pid);
-    return (
-      <div key={pid} className="overflow-hidden flex flex-col min-w-0 min-h-0" style={isActive ? {} : { display: "none" }}>
-        <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
-          <select value={pid} onChange={e => { const nid = e.target.value as PanelId; const ti = orderedPanels.indexOf(nid); if (ti>=0) onSwap(idx, ti); }}
-            className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded">
-            {orderedPanels.map(p => <option key={p} value={p} className="bg-hacker-surface text-hacker-text">{PANEL_LABELS[p]}</option>)}
-          </select>
-          <div className="flex items-center gap-1">
-            <button onClick={() => onNewWindow(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window"><ExternalLink size={12}/></button>
-            <button onClick={() => onDetach(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach"><ExternalLink size={12}/></button>
-          </div>
+  const Slot = ({ pid, idx }: { pid: PanelId; idx: number }) => (
+    <div key={pid} className="overflow-hidden flex flex-col min-w-0 min-h-0">
+      <div className="flex items-center justify-between px-2 h-8 border-b border-hacker-border bg-hacker-bg/50 shrink-0">
+        <select value={pid} onChange={e => { const nid = e.target.value as PanelId; const ti = orderedPanels.indexOf(nid); if (ti>=0) onSwap(idx, ti); }}
+          className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded">
+          {orderedPanels.map(p => <option key={p} value={p} className="bg-hacker-surface text-hacker-text">{PANEL_LABELS[p]}</option>)}
+        </select>
+        <div className="flex items-center gap-1">
+          <button onClick={() => onNewWindow(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window"><ExternalLink size={12}/></button>
+          <button onClick={() => onDetach(pid)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach"><ExternalLink size={12}/></button>
         </div>
-        <div className="flex-1 overflow-hidden min-h-0">{panelContent[pid]}</div>
       </div>
-    );
-  };
+      <div className="flex-1 overflow-hidden min-h-0">{panelContent[pid]}</div>
+    </div>
+  );
 
   const Divider = ({ axis, dIdx }: { axis: "x"|"y"; dIdx: number }) => (
     <div onMouseDown={e => handleDividerDown(e, dIdx, axis)}

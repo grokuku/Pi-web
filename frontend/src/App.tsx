@@ -92,9 +92,6 @@ function App() {
       win.document.title = `Pi-Web - ${id.toUpperCase()}`;
       hidePanel(id);
     }
-    if (win) {
-      win.document.title = `Pi-Web - ${id.toUpperCase()}`;
-    }
   };
 
   // Helper to render panel buttons in header
@@ -575,6 +572,18 @@ function App() {
   ), [activeProject, handleReferenceFile]);
 
   const panelContent = { pi: piContent, terminal: terminalContent, files: filesContent };
+
+  // ── Restore panel if standalone tab is closed via browser close
+  useEffect(() => {
+    if (!isStandalone || !standalonePanel) return;
+    const handleBeforeUnload = () => {
+      const channel = new BroadcastChannel('pi-web-file-ref');
+      channel.postMessage({ type: 'restore-panel', panelId: standalonePanel });
+      channel.close();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isStandalone, standalonePanel]);
 
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)
