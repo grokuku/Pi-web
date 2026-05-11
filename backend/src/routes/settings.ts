@@ -63,12 +63,11 @@ router.post("/update", async (_req: Request, res: Response) => {
     // Use npm install @latest to force update (npm update respects lockfile and may not upgrade)
     execSync("npm install @mariozechner/pi-coding-agent@latest", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
     const newVersion = getPiAgentVersion();
-    // Dispose all Pi sessions so they reload with the new version on next interaction
-    try {
-      const { disposeAllSessions } = await import("../pi/session.js");
-      await disposeAllSessions();
-    } catch {}
-    res.json({ success: true, newVersion, message: "Update successful. Pi sessions will reload with the new version. Restart the container if issues persist." });
+    // Send response BEFORE exiting — client needs to know the update succeeded
+    res.json({ success: true, newVersion, message: "Update successful. Restarting to load new version…" });
+    // Node.js require() cache holds the OLD module — only a process restart loads the new version.
+    // Docker restart policy will bring the container back up.
+    setTimeout(() => process.exit(0), 500);
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });
   }

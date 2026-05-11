@@ -63,7 +63,12 @@ export function Sidebar({
         setUpdating(false);
         if (data.newVersion) setPiAgentVersion(data.newVersion);
       })
-      .catch(() => setUpdating(false));
+      .catch(() => {
+        // Server is restarting after update — this is expected
+        setUpdataAvailable(false);
+        setPiAgentVersion("(restarting…)");
+        // Connection will drop, page will reconnect after container restarts
+      });
   }, []);
   const [projectListHeight, setProjectListHeight] = useState(() => {
     const saved = localStorage.getItem("pi-web-project-list-height");
