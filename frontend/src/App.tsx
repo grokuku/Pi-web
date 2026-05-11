@@ -619,8 +619,7 @@ function App() {
       {/* ── HEADER ── */}
       <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo + connection */}
-        <PiLogo className="text-hacker-accent w-4 h-4" />
-        <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
+        <PiLogo className="text-hacker-accent w-6 h-6" />
         <span
           className={`text-sm ${connected ? "text-hacker-accent" : "text-hacker-error"} ${connected ? "animate-pulse-subtle" : ""}`}
           title={connected ? "Connected to backend" : "Offline — backend unreachable"}

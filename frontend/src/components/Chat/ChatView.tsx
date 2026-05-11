@@ -576,7 +576,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-20 h-20" /></div>
+            <div className="text-hacker-accent mb-4 flex justify-center"><PiLogo className="w-[25vmin] h-[25vmin]" /></div>
             <p className="text-hacker-text-dim text-sm">Session active — type a message below to start</p>
             <p className="text-hacker-text-dim text-xs mt-2">
               {activeProject?.git?.branch && `git:${activeProject.git.branch} · `}
