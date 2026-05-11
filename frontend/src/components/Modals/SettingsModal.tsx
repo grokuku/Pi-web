@@ -179,6 +179,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const data = await res.json();
       setPkgList(data.packages || []);
       setNewSource("");
+      if (data.warning) setExtError(data.warning);
     } catch (e: any) {
       setExtError(e.message);
     } finally {
@@ -342,6 +343,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           {/* Extensions & Skills Tab */}
           {tab === "extensions" && (
             <div className="p-3">
+              <div className="mb-3 text-[11px] text-hacker-text-dim border border-hacker-warn/20 bg-hacker-warn/5 p-2 rounded">
+                Extensions and skills are loaded when a Pi session starts. Changes will take effect on the next session (new chat or page reload).
+              </div>
               <div className="flex gap-1 mb-3 border-b border-hacker-border pb-1">
                 {(["packages", "resources"] as const).map(st => (
                   <button key={st} onClick={() => setExtSubTab(st)}

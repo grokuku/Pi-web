@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import os from "os";
 
@@ -8,6 +9,7 @@ const router = Router();
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 const SETTINGS_FILE = path.join(AGENT_DIR, "settings.json");
 const PACKAGES_DIR = path.join(AGENT_DIR, "packages");
+const BACKEND_DIR = path.join(process.cwd(), "backend");
 
 // ── Types ──────────────────────────────────────────────
 
@@ -258,7 +260,7 @@ router.put("/", (req: Request, res: Response) => {
   }
 });
 
-// POST install a package (add to settings.packages)
+// POST install a package (add to settings.packages, then npm install)
 router.post("/packages", async (req: Request, res: Response) => {
   try {
     const { source } = req.body;
@@ -279,10 +281,55 @@ router.post("/packages", async (req: Request, res: Response) => {
       return res.status(409).json({ error: "Package already installed" });
     }
 
+    // Install the package via npm or git
+    const pkgType = detectPackageType(source);
+    let installError: string | null = null;
+
+    if (pkgType === "npm") {
+      try {
+        // npm packages are installed in the backend's node_modules
+        const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("@")[0].split("/")[0];
+        console.log(`[pi-settings] Installing npm package: ${pkgName}`);
+        execSync(`npm install ${pkgName}`, {
+          timeout: 120000,
+          encoding: "utf-8",
+          cwd: BACKEND_DIR,
+        });
+      } catch (e: any) {
+        installError = `npm install failed: ${e.message}`;
+        console.error(`[pi-settings] npm install failed:`, e.message);
+      }
+    } else if (pkgType === "git") {
+      try {
+        // Git packages are cloned into ~/.pi/agent/git/
+        const gitDir = path.join(AGENT_DIR, "git");
+        if (!existsSync(gitDir)) mkdirSync(gitDir, { recursive: true });
+        console.log(`[pi-settings] Cloning git package: ${source}`);
+        execSync(`git clone --depth 1 ${source.includes("@") ? source.split("@")[0] : source} ${path.join(gitDir, source.replace(/[^a-zA-Z0-9]/g, "-"))}`, {
+          timeout: 120000,
+          encoding: "utf-8",
+        });
+        // Run npm install in the cloned repo if it has a package.json
+        const cloneDir = path.join(gitDir, source.replace(/[^a-zA-Z0-9]/g, "-"));
+        if (existsSync(path.join(cloneDir, "package.json"))) {
+          execSync("npm install --omit=dev", { timeout: 120000, encoding: "utf-8", cwd: cloneDir });
+        }
+      } catch (e: any) {
+        installError = `git clone failed: ${e.message}`;
+        console.error(`[pi-settings] git clone failed:`, e.message);
+      }
+    }
+    // local paths don't need installation
+
+    // Add to settings regardless of install success (user can fix manually)
     settings.packages.push(source);
     saveSettings(settings);
 
-    res.json({ success: true, packages: listInstalledPackages() });
+    res.json({
+      success: !installError,
+      packages: listInstalledPackages(),
+      ...(installError ? { warning: installError } : {}),
+    });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -331,7 +378,7 @@ router.post("/toggle", (req: Request, res: Response) => {
     saveSettings(settings);
     res.json({ success: true, [type]: list });
   } catch (e: any) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
