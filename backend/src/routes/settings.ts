@@ -25,42 +25,50 @@ const PI_WEB_VERSION = (() => {
   } catch { return "unknown"; }
 })();
 
-const PI_AGENT_VERSION = (() => {
+// Read pi-agent version dynamically (recalculated on each call)
+function getPiAgentVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
     return pkg.version || "unknown";
   } catch { return "unknown"; }
-})();
+}
 
 router.get("/version", (_req: Request, res: Response) => {
   res.json({
     piWeb: PI_WEB_VERSION,
-    piAgent: PI_AGENT_VERSION,
+    piAgent: getPiAgentVersion(),
   });
 });
 
 // Check for pi-agent update
 router.get("/update-check", async (_req: Request, res: Response) => {
   try {
+    const currentVersion = getPiAgentVersion();
     const result = execSync("npm view @mariozechner/pi-coding-agent version", { timeout: 15000, encoding: "utf-8" }).trim();
     const latestVersion = result;
     res.json({
-      current: PI_AGENT_VERSION,
+      current: currentVersion,
       latest: latestVersion,
-      updateAvailable: latestVersion !== PI_AGENT_VERSION,
+      updateAvailable: latestVersion !== currentVersion,
     });
   } catch (e: any) {
-    res.json({ current: PI_AGENT_VERSION, latest: PI_AGENT_VERSION, updateAvailable: false, error: e.message });
+    const currentVersion = getPiAgentVersion();
+    res.json({ current: currentVersion, latest: currentVersion, updateAvailable: false, error: e.message });
   }
 });
 
 // Update pi-agent
 router.post("/update", async (_req: Request, res: Response) => {
   try {
-    // Update the package in the backend directory
-    execSync("npm update @mariozechner/pi-coding-agent", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
-    const newPkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
-    res.json({ success: true, newVersion: newPkg.version, message: "Update successful. Please restart Pi-Web." });
+    // Use npm install @latest to force update (npm update respects lockfile and may not upgrade)
+    execSync("npm install @mariozechner/pi-coding-agent@latest", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
+    const newVersion = getPiAgentVersion();
+    // Dispose all Pi sessions so they reload with the new version on next interaction
+    try {
+      const { disposeAllSessions } = await import("../pi/session.js");
+      await disposeAllSessions();
+    } catch {}
+    res.json({ success: true, newVersion, message: "Update successful. Pi sessions will reload with the new version. Restart the container if issues persist." });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });
   }

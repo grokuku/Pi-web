@@ -58,9 +58,10 @@ export function Sidebar({
     setUpdating(true);
     fetch("/api/settings/update", { method: "POST" })
       .then(r => r.json())
-      .then(() => {
+      .then((data) => {
         setUpdataAvailable(false);
         setUpdating(false);
+        if (data.newVersion) setPiAgentVersion(data.newVersion);
       })
       .catch(() => setUpdating(false));
   }, []);
