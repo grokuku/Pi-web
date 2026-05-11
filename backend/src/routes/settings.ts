@@ -16,16 +16,18 @@ import { join } from "path";
 const router = Router();
 
 // ── Version info ──
+const BACKEND_DIR = join(process.cwd(), "backend");
+
 const PI_WEB_VERSION = (() => {
   try {
-    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync(join(BACKEND_DIR, "package.json"), "utf-8"));
     return pkg.version || "unknown";
   } catch { return "unknown"; }
 })();
 
 const PI_AGENT_VERSION = (() => {
   try {
-    const pkg = JSON.parse(readFileSync(join(process.cwd(), "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
     return pkg.version || "unknown";
   } catch { return "unknown"; }
 })();
@@ -52,12 +54,12 @@ router.get("/update-check", async (_req: Request, res: Response) => {
   }
 });
 
-// Update pi-agent and restart
+// Update pi-agent
 router.post("/update", async (_req: Request, res: Response) => {
   try {
-    // Update the package
-    execSync("npm update @mariozechner/pi-coding-agent", { timeout: 120000, encoding: "utf-8" });
-    const newPkg = JSON.parse(readFileSync(join(process.cwd(), "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
+    // Update the package in the backend directory
+    execSync("npm update @mariozechner/pi-coding-agent", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
+    const newPkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
     res.json({ success: true, newVersion: newPkg.version, message: "Update successful. Please restart Pi-Web." });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });

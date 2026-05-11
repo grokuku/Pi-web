@@ -39,14 +39,18 @@ export function Sidebar({
   const [updateAvailable, setUpdataAvailable] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [piWebVersion, setPiWebVersion] = useState("?");
+  const [piAgentVersion, setPiAgentVersion] = useState("?");
+  const [piAgentLatest, setPiAgentLatest] = useState("");
 
   // Check for updates on mount
   useEffect(() => {
     fetch("/api/settings/version").then(r => r.json()).then(data => {
       setPiWebVersion(data.piWeb || "?");
+      setPiAgentVersion(data.piAgent || "?");
     }).catch(() => {});
     fetch("/api/settings/update-check").then(r => r.json()).then(data => {
       setUpdataAvailable(!!data.updateAvailable);
+      if (data.latest) setPiAgentLatest(data.latest);
     }).catch(() => {});
   }, []);
 
@@ -256,20 +260,34 @@ export function Sidebar({
       </div>
 
       {/* ── Version footer ── */}
-      <div className="h-8 border-t border-hacker-border-bright bg-hacker-surface/50 flex items-center px-2 gap-2 text-[10px] text-hacker-text-dim shrink-0">
-        <span>pi-web</span>
-        <span className="text-hacker-text-dim/50">v{piWebVersion}</span>
-        {updateAvailable && (
-          <button
-            onClick={handleUpdate}
-            disabled={updating}
-            className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5"
-            title="Update available! Click to update"
-          >
-            <ArrowUpCircle size={10} />
-            {updating ? "Updating..." : "Update"}
-          </button>
-        )}
+      <div className="border-t border-hacker-border-bright bg-hacker-surface/50 flex flex-col shrink-0">
+        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim">
+          <span>pi-web</span>
+          <span className="text-hacker-text-dim/50">v{piWebVersion}</span>
+        </div>
+        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim border-t border-hacker-border/30">
+          <span className="flex items-center gap-1">
+            pi-agent
+            {updateAvailable && (
+              <span className="text-hacker-warn font-bold text-[9px]" title={`Update available: ${piAgentLatest}`}>
+                {piAgentLatest ? `→${piAgentLatest}` : "new!"}
+              </span>
+            )}
+          </span>
+          {updateAvailable ? (
+            <button
+              onClick={handleUpdate}
+              disabled={updating}
+              className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
+              title="Update pi-agent"
+            >
+              <ArrowUpCircle size={10} />
+              {updating ? "..." : "Update"}
+            </button>
+          ) : (
+            <span className="text-hacker-text-dim/50">v{piAgentVersion}</span>
+          )}
+        </div>
       </div>
 
       {/* ── Delete project modal ── */}
