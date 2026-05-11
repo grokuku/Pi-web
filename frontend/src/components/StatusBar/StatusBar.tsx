@@ -1,4 +1,5 @@
 import type { Project } from "../../types";
+import { PiLogo } from "../common/PiLogo";
 
 interface Props {
   activeProject: Project | null;
@@ -64,7 +65,7 @@ export function StatusBar({
       {activeMode && activeMode !== "code" && (
         <>
           <span className={activeMode === "review" ? "text-hacker-warn" : activeMode === "plan" ? "text-hacker-info" : "text-hacker-accent"}>
-            {activeMode === "review" ? "📋" : activeMode === "plan" ? "🗺" : "⚡"} {activeMode.toUpperCase()}
+            {activeMode === "review" ? "📋" : activeMode === "plan" ? "🗺" : <PiLogo className="w-3 h-3 inline" />} {activeMode.toUpperCase()}
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

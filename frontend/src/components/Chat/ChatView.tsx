@@ -3,6 +3,7 @@ import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
+import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
 
 // ── Memoized ReactMarkdown to avoid re-parsing on every render ──
@@ -503,7 +504,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return (
       <div className="h-full flex items-center justify-center text-hacker-text-dim">
         <div className="text-center">
-          <div className="text-hacker-accent text-5xl mb-4 glitch">⚡</div>
+          <div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-16 h-16" /></div>
           <p className="text-lg mb-2">PI CODING AGENT</p>
           <p className="text-sm">Select or create a project to begin...</p>
         </div>
@@ -527,7 +528,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         )}
 
         {thinkingToast && (
-          <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5">⚡ {thinkingToast}</div>
+          <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>
         )}
 
         {/* Global thinking toggle */}
@@ -575,7 +576,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-hacker-accent text-6xl mb-4 glitch">⚡</div>
+            <div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-20 h-20" /></div>
             <p className="text-hacker-text-dim text-sm">Session active — type a message below to start</p>
             <p className="text-hacker-text-dim text-xs mt-2">
               {activeProject?.git?.branch && `git:${activeProject.git.branch} · `}

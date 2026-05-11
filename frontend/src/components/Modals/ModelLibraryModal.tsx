@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { PiLogo } from "../common/PiLogo";
 import {
   X, Wifi, Plus, Trash2, Star, Check, RefreshCw,
   Edit2, Key, Power, Settings, TestTube2, Eye, EyeOff,
@@ -104,7 +105,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
       <div className="max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
-          <span className="text-hacker-accent font-bold text-sm tracking-wider">⚡ MODEL LIBRARY</span>
+          <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> MODEL LIBRARY</span>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
         </div>
 
@@ -773,7 +774,7 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
-            <span className="text-hacker-accent font-bold text-sm tracking-wider">⚡ EDIT MODEL</span>
+            <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> EDIT MODEL</span>
             <div className="text-hacker-text text-sm font-bold mt-0.5">{model.name}</div>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>

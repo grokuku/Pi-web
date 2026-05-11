@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
+import { PiLogo } from "../common/PiLogo";
 import type { LayoutType, PanelId } from "../../types";
 import { PANEL_LABELS } from "../../types";
 
@@ -180,7 +181,7 @@ export function LayoutRenderer({
   if (count === 0) {
     return (
       <div className="flex-1 flex items-center justify-center opacity-20 select-none pointer-events-none">
-        <span className="text-[12rem] leading-none glitch">⚡</span>
+        <PiLogo className="w-[12rem] h-[12rem] glitch" />
       </div>
     );
   }

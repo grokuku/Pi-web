@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { PiLogo } from "../common/PiLogo";
 import {
   X, Package, Puzzle, Lightbulb, Palette, Plus, Trash2,
   ToggleLeft, ToggleRight, RefreshCw, Key, Eye, EyeOff, Shield,
@@ -245,8 +246,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   };
 
   // ── Tabs ──
-  const TABS: { id: TabId; icon: string; label: string }[] = [
-    { id: "models", icon: "⚡", label: "Model Library" },
+  const TABS: { id: TabId; icon: React.ReactNode; label: string }[] = [
+    { id: "models", icon: <PiLogo className="w-4 h-4 inline" />, label: "Model Library" },
     { id: "extensions", icon: "📦", label: "Extensions & Skills" },
     { id: "general", icon: "⚙", label: "General Parameters" },
     { id: "layout", icon: "⊞", label: "Layout" },
@@ -262,7 +263,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-hacker-border shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-hacker-accent text-sm font-bold tracking-wider">⚡ SETTINGS</span>
+            <span className="text-hacker-accent text-sm font-bold tracking-wider"><PiLogo className="w-4 h-4 inline" /> SETTINGS</span>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-error">

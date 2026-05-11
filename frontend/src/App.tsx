@@ -8,6 +8,7 @@ import { FileExplorer } from "./components/Files/FileExplorer";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
+import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
@@ -618,7 +619,7 @@ function App() {
       {/* ── HEADER ── */}
       <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo + connection */}
-        <span className="text-hacker-accent text-sm glitch select-none">⚡</span>
+        <PiLogo className="text-hacker-accent w-4 h-4" />
         <span className="text-hacker-accent text-xs font-bold tracking-widest select-none">PI</span>
         <span
           className={`text-sm ${connected ? "text-hacker-accent" : "text-hacker-error"} ${connected ? "animate-pulse-subtle" : ""}`}
@@ -632,7 +633,7 @@ function App() {
         {/* Background streaming count */}
         {backgroundStreamingProjects.length > 0 && (
           <>
-            <span className="text-xs text-hacker-warn">⚡{backgroundStreamingProjects.length} bg</span>
+            <span className="text-xs text-hacker-warn"><PiLogo className="w-3.5 h-3.5 inline" />{backgroundStreamingProjects.length} bg</span>
             <div className="w-px h-4 bg-hacker-border-right" />
           </>
         )}
@@ -747,7 +748,7 @@ function App() {
 
       {/* FLOATING PANELS (Windows) */}
       {panels.pi.visible && panels.pi.floating && (
-        <Window id="pi-float" title="PI" icon="⚡" onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
+        <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
           <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
         </Window>
       )}

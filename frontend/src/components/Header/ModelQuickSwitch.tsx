@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star, GitCommit } from "lucide-react";
+import { PiLogo } from "../common/PiLogo";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
 
-const MODE_CONFIG: Record<AgentMode, { icon: string; label: string; color: string; activeBg: string; activeBorder: string }> = {
-  code:   { icon: "⚡", label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
+const MODE_CONFIG: Record<AgentMode, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
+  code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
   plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/20",    activeBorder: "border-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
 };
