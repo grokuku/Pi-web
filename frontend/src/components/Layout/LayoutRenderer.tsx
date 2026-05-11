@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import React, { useState, useRef, useEffect, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import type { LayoutType, PanelId } from "../../types";
@@ -189,26 +189,23 @@ export function LayoutRenderer({
   const s = localSizes;
 
   // ── Shared slot renderer ──
-  const renderSlot = (slotIndex: number, flexOverride?: number) => {
-    const panelId = ALL_PANELS[slotIndex];
-    const panelIdx = orderedPanels.indexOf(panelId);
-    const visible = panelIdx >= 0;
+  const renderSlot = (position: number, flexOverride?: number) => {
+    // position = visual position in the layout (0 = left/top, 1 = next, 2 = right/bottom)
+    const panelId = orderedPanels[position]; // which panel appears at this position
+    if (!panelId) return null;
     const content = panelContent[panelId];
     const flexVal =
       flexOverride !== undefined
         ? flexOverride
-        : visible
-          ? count === 1
-            ? 1
-            : s[panelIdx]
-          : 0;
+        : count === 1
+          ? 1
+          : s[position] || 1;
 
     return (
       <div
         key={panelId}
         style={{
-          flex: visible ? `${flexVal} 1 0%` : "0 0 0px",
-          display: visible ? undefined : "none",
+          flex: `${flexVal} 1 0%`,
           overflow: "hidden",
         }}
         className="flex flex-col min-w-0 min-h-0"
@@ -221,7 +218,7 @@ export function LayoutRenderer({
             onChange={(e) => {
               const newId = e.target.value as PanelId;
               const targetIdx = orderedPanels.indexOf(newId);
-              if (targetIdx >= 0) onSwap(panelIdx, targetIdx);
+              if (targetIdx >= 0) onSwap(position, targetIdx);
             }}
             className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
           >
@@ -330,11 +327,12 @@ export function LayoutRenderer({
 
   return (
     <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isFlatVertical ? "flex-col" : ""}`}>
-      {renderSlot(0)}
-      <Divider axis={flatAxis} dIdx={0} type="outer" container={containerRef.current} />
-      {renderSlot(1)}
-      <Divider axis={flatAxis} dIdx={1} type="outer" container={containerRef.current} />
-      {renderSlot(2)}
+      {orderedPanels.map((_, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <Divider axis={flatAxis} dIdx={i - 1} type="outer" container={containerRef.current} />}
+          {renderSlot(i)}
+        </React.Fragment>
+      ))}
     </div>
   );
 }
