@@ -189,23 +189,29 @@ export function LayoutRenderer({
   const s = localSizes;
 
   // ── Shared slot renderer ──
-  const renderSlot = (position: number, flexOverride?: number) => {
-    // position = visual position in the layout (0 = left/top, 1 = next, 2 = right/bottom)
-    const panelId = orderedPanels[position]; // which panel appears at this position
-    if (!panelId) return null;
+  // Always render ALL 3 panel slots (stable keys = stable React state).
+  // Hidden slots use display:none so they stay mounted but invisible.
+  // CSS `order` reorders visible slots after swaps.
+  const renderSlot = (slotIndex: number, flexOverride?: number) => {
+    const panelId = ALL_PANELS[slotIndex]; // stable key — never changes
+    const visible = orderedPanels.includes(panelId);
+    const position = visible ? orderedPanels.indexOf(panelId) : slotIndex + count; // hidden slots go after visible ones
     const content = panelContent[panelId];
-    const flexVal =
-      flexOverride !== undefined
-        ? flexOverride
-        : count === 1
-          ? 1
-          : s[position] || 1;
+    const flexVal = flexOverride !== undefined
+      ? flexOverride
+      : count === 1
+        ? 1
+        : visible
+          ? s[position] || 1
+          : 0;
 
     return (
       <div
         key={panelId}
         style={{
-          flex: `${flexVal} 1 0%`,
+          flex: visible ? `${flexVal} 1 0%` : "0 0 0px",
+          display: visible ? undefined : "none",
+          order: position,
           overflow: "hidden",
         }}
         className="flex flex-col min-w-0 min-h-0"
@@ -217,8 +223,9 @@ export function LayoutRenderer({
             value={panelId}
             onChange={(e) => {
               const newId = e.target.value as PanelId;
-              const targetIdx = orderedPanels.indexOf(newId);
-              if (targetIdx >= 0) onSwap(position, targetIdx);
+              const fromIdx = orderedPanels.indexOf(panelId);
+              const toIdx = orderedPanels.indexOf(newId);
+              if (fromIdx >= 0 && toIdx >= 0) onSwap(fromIdx, toIdx);
             }}
             className="bg-transparent text-xs font-bold text-hacker-accent border-none outline-none cursor-pointer hover:bg-hacker-border/30 px-1 py-0.5 rounded"
           >
@@ -294,7 +301,7 @@ export function LayoutRenderer({
               style={{ flex: `${s[0]} 1 0%`, minWidth: 0, minHeight: 0 }}
             >
               {renderSlot(pairedSlots[0], innerSizes[0])}
-              <Divider axis={innerAxis} dIdx={0} type="inner" />
+              {orderedPanels.includes(ALL_PANELS[pairedSlots[1]]) && orderedPanels.includes(ALL_PANELS[pairedSlots[0]]) && <Divider axis={innerAxis} dIdx={0} type="inner" />}
               {renderSlot(pairedSlots[1], innerSizes[1])}
             </div>
             <Divider axis={outerAxis} dIdx={0} type="outer" container={containerRef.current} />
@@ -310,7 +317,7 @@ export function LayoutRenderer({
               style={{ flex: `${s[1]} 1 0%`, minWidth: 0, minHeight: 0 }}
             >
               {renderSlot(pairedSlots[0], innerSizes[0])}
-              <Divider axis={innerAxis} dIdx={0} type="inner" />
+              {orderedPanels.includes(ALL_PANELS[pairedSlots[1]]) && orderedPanels.includes(ALL_PANELS[pairedSlots[0]]) && <Divider axis={innerAxis} dIdx={0} type="inner" />}
               {renderSlot(pairedSlots[1], innerSizes[1])}
             </div>
           </>
@@ -327,12 +334,18 @@ export function LayoutRenderer({
 
   return (
     <div ref={containerRef} className={`flex-1 overflow-hidden flex ${isFlatVertical ? "flex-col" : ""}`}>
-      {orderedPanels.map((_, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <Divider axis={flatAxis} dIdx={i - 1} type="outer" container={containerRef.current} />}
-          {renderSlot(i)}
-        </React.Fragment>
-      ))}
+      {ALL_PANELS.map((panelId, i) => {
+        const visible = orderedPanels.includes(panelId);
+        const pos = visible ? orderedPanels.indexOf(panelId) : i + count;
+        // Insert divider before each visible slot (except the first visible one)
+        const showDivider = visible && orderedPanels.indexOf(panelId) > 0;
+        return (
+          <React.Fragment key={panelId}>
+            {showDivider && <Divider axis={flatAxis} dIdx={orderedPanels.indexOf(panelId) - 1} type="outer" container={containerRef.current} />}
+            {renderSlot(i)}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
