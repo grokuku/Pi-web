@@ -56,11 +56,12 @@ interface Props {
   session: any;
   onModelApplied?: () => void;
   onLayoutChange?: () => void;
+  activeProjectId?: string;
 }
 
 // ── Main Component ─────────────────────────────────────
 
-export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange }: Props) {
+export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange, activeProjectId }: Props) {
   const [tab, setTab] = useState<TabId>("models");
 
   // ── Model Library state ──
@@ -138,6 +139,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [piSettings, setPiSettings] = useState<Record<string, any>>({});
   const [newSource, setNewSource] = useState("");
   const [extError, setExtError] = useState<string | null>(null);
+  const [reloadStatus, setReloadStatus] = useState<string | null>(null);
 
   const loadExtData = useCallback(async () => {
     setLoading(true);
@@ -227,6 +229,30 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const currentSkills: string[] = piSettings.skills || [];
   const currentPrompts: string[] = piSettings.prompts || [];
   const currentThemes: string[] = piSettings.themes || [];
+
+  // Reload Pi session after extension/skill changes
+  const reloadSession = useCallback(async () => {
+    if (!activeProjectId) return;
+    setReloadStatus("reloading");
+    try {
+      const res = await fetch("/api/pi/reload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId }),
+      });
+      if (res.ok) {
+        setReloadStatus("done");
+        setTimeout(() => setReloadStatus(null), 3000);
+      } else {
+        const data = await res.json();
+        setReloadStatus(null);
+        setExtError(data.error || "Failed to reload session");
+      }
+    } catch (e: any) {
+      setReloadStatus(null);
+      setExtError(e.message);
+    }
+  }, [activeProjectId]);
 
   // ── General parameters state ──
   const [authUser, setAuthUser] = useState(() => localStorage.getItem("pi-web-auth-user") || "");
@@ -343,8 +369,19 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           {/* Extensions & Skills Tab */}
           {tab === "extensions" && (
             <div className="p-3">
-              <div className="mb-3 text-[11px] text-hacker-text-dim border border-hacker-warn/20 bg-hacker-warn/5 p-2 rounded">
-                Extensions and skills are loaded when a Pi session starts. Changes will take effect on the next session (new chat or page reload).
+              <div className="mb-3 border border-hacker-warn/20 bg-hacker-warn/5 p-2 rounded">
+                <div className="text-[11px] text-hacker-text-dim mb-1.5">
+                  Extensions and skills are loaded when a Pi session starts. Changes require a session reload.
+                </div>
+                <button
+                  onClick={reloadSession}
+                  disabled={reloadStatus === "reloading" || !activeProjectId}
+                  className={`btn-hacker text-[10px] px-2 py-0.5 ${
+                    reloadStatus === "done" ? "!bg-green-600/20 !border-green-600/50 !text-green-400" : ""
+                  }`}
+                >
+                  {reloadStatus === "reloading" ? "Reloading…" : reloadStatus === "done" ? "✓ Reloaded" : "Reload session"}
+                </button>
               </div>
               <div className="flex gap-1 mb-3 border-b border-hacker-border pb-1">
                 {(["packages", "resources"] as const).map(st => (

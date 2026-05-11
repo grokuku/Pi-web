@@ -791,6 +791,7 @@ function App() {
           onClose={() => setShowSettings(false)}
           session={session}
           onModelApplied={handleModelApplied}
+          activeProjectId={activeProject?.id}
           onLayoutChange={() => {
             const saved = loadPersistedLayout();
             if (saved) setLayoutCfg(saved);

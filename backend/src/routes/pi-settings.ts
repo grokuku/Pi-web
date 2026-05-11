@@ -335,12 +335,39 @@ router.post("/packages", async (req: Request, res: Response) => {
   }
 });
 
-// DELETE uninstall a package (remove from settings.packages)
-router.delete("/packages/:source", (req: Request, res: Response) => {
+// DELETE uninstall a package (remove from settings.packages and uninstall)
+router.delete("/packages/:source", async (req: Request, res: Response) => {
   try {
     const source = decodeURIComponent(req.params.source);
     const settings = loadSettings();
+    const pkgType = detectPackageType(source);
+    let uninstallWarning: string | null = null;
 
+    // Uninstall npm package
+    if (pkgType === "npm") {
+      try {
+        const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/").split("@")[0] : source.split("@")[0].split("/")[0];
+        console.log(`[pi-settings] Uninstalling npm package: ${pkgName}`);
+        execSync(`npm uninstall ${pkgName}`, { timeout: 60000, encoding: "utf-8", cwd: BACKEND_DIR });
+      } catch (e: any) {
+        uninstallWarning = `npm uninstall failed: ${e.message}`;
+        console.error(`[pi-settings] npm uninstall failed:`, e.message);
+      }
+    } else if (pkgType === "git") {
+      // Remove cloned git repo
+      const repoDir = path.join(AGENT_DIR, "git", source.replace(/[^a-zA-Z0-9]/g, "-"));
+      try {
+        if (existsSync(repoDir)) {
+          const { rmSync } = await import("fs");
+          rmSync(repoDir, { recursive: true, force: true });
+          console.log(`[pi-settings] Removed git package: ${repoDir}`);
+        }
+      } catch (e: any) {
+        uninstallWarning = `Failed to remove git repo: ${e.message}`;
+      }
+    }
+
+    // Remove from settings regardless of uninstall success
     if (settings.packages) {
       settings.packages = settings.packages.filter(p => {
         const s = typeof p === "string" ? p : p.source;
@@ -349,13 +376,27 @@ router.delete("/packages/:source", (req: Request, res: Response) => {
     }
 
     saveSettings(settings);
-    res.json({ success: true, packages: listInstalledPackages() });
+    res.json({ success: true, packages: listInstalledPackages(), ...(uninstallWarning ? { warning: uninstallWarning } : {}) });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
 });
 
-// POST toggle an extension/skill/prompt/theme
+// POST reload Pi session for a project (picks up extension/skill changes)
+router.post("/reload", async (req: Request, res: Response) => {
+  try {
+    const { projectId } = req.body as { projectId?: string };
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId is required" });
+    }
+    const { disposeSession } = await import("../pi/session.js");
+    await disposeSession(projectId);
+    // The session will be recreated on next user message, loading fresh settings
+    res.json({ success: true, message: "Session disposed. It will reload on next interaction." });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 router.post("/toggle", (req: Request, res: Response) => {
   try {
     const { type, source, enabled } = req.body as { type: "extensions" | "skills" | "prompts" | "themes"; source: string; enabled: boolean };
