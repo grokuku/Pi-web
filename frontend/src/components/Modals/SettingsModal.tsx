@@ -54,11 +54,12 @@ interface Props {
   onClose: () => void;
   session: any;
   onModelApplied?: () => void;
+  onLayoutChange?: () => void;
 }
 
 // ── Main Component ─────────────────────────────────────
 
-export function SettingsModal({ onClose, session, onModelApplied }: Props) {
+export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange }: Props) {
   const [tab, setTab] = useState<TabId>("models");
 
   // ── Model Library state ──
@@ -492,7 +493,7 @@ export function SettingsModal({ onClose, session, onModelApplied }: Props) {
 
           {/* Layout Tab */}
           {tab === "layout" && (
-            <LayoutTab onLayoutChange={() => {}} />
+            <LayoutTab onLayoutChange={() => onLayoutChange?.()} />
           )}
         </div>
       </div>

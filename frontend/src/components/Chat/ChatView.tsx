@@ -263,17 +263,15 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
       const evt: PiEvent = msg.event;
 
-      // Ignore text message events from auto-review temp sessions
-      // (tool execution events are still forwarded for UI feedback)
+      // Stream auto-review text messages to the chat instead of ignoring them
       if (evt._autoReview && (evt.type === "message_start" || evt.type === "message_update" || evt.type === "message_end")) {
-        // For auto-review, only show a brief indicator, don't add to message history
         if (evt.type === "message_start" && evt.message?.role === "assistant") {
           setAutoReviewStreaming(true);
         }
         if (evt.type === "message_end" && evt.message?.role === "assistant") {
           setAutoReviewStreaming(false);
         }
-        return;
+        // Fall through to normal message handling below
       }
 
       switch (evt.type) {

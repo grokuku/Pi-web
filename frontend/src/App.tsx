@@ -791,6 +791,10 @@ function App() {
           onClose={() => setShowSettings(false)}
           session={session}
           onModelApplied={handleModelApplied}
+          onLayoutChange={() => {
+            const saved = loadPersistedLayout();
+            if (saved) setLayoutCfg(saved);
+          }}
         />
       )}
     </div>
