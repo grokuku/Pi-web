@@ -41,6 +41,7 @@ export function Sidebar({
   const [piWebVersion, setPiWebVersion] = useState("?");
   const [piAgentVersion, setPiAgentVersion] = useState("?");
   const [piAgentLatest, setPiAgentLatest] = useState("");
+  const [restartPending, setRestartPending] = useState(false);
 
   // Check for updates on mount
   useEffect(() => {
@@ -56,20 +57,38 @@ export function Sidebar({
 
   const handleUpdate = useCallback(() => {
     setUpdating(true);
+    setRestartPending(false);
     fetch("/api/settings/update", { method: "POST" })
       .then(r => r.json())
       .then((data) => {
         setUpdataAvailable(false);
         setUpdating(false);
+        setRestartPending(true);
         if (data.newVersion) setPiAgentVersion(data.newVersion);
       })
       .catch(() => {
-        // Server is restarting after update — this is expected
         setUpdataAvailable(false);
-        setPiAgentVersion("(restarting…)");
-        // Connection will drop, page will reconnect after container restarts
+        setUpdating(false);
+        setRestartPending(true);
+        setPiAgentVersion("restarting...");
       });
   }, []);
+
+  // Auto-reload page once the server comes back online after an update
+  useEffect(() => {
+    if (!restartPending) return;
+    const interval = setInterval(() => {
+      fetch("/api/settings/version", { method: "GET" })
+        .then(() => {
+          // Server is back online — reload page to pick up new Pi agent version
+          window.location.reload();
+        })
+        .catch(() => {
+          // Server still restarting, keep polling
+        });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [restartPending]);
   const [projectListHeight, setProjectListHeight] = useState(() => {
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
@@ -274,13 +293,18 @@ export function Sidebar({
         <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim border-t border-hacker-border/30">
           <span className="flex items-center gap-1">
             pi-agent
-            {updateAvailable && (
+            {updateAvailable && !restartPending && (
               <span className="text-hacker-warn font-bold text-[9px]" title={`Update available: ${piAgentLatest}`}>
                 {piAgentLatest ? `→${piAgentLatest}` : "new!"}
               </span>
             )}
           </span>
-          {updateAvailable ? (
+          {restartPending ? (
+            <span className="text-hacker-warn flex items-center gap-1">
+              <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" />
+              Restarting…
+            </span>
+          ) : updateAvailable ? (
             <button
               onClick={handleUpdate}
               disabled={updating}
