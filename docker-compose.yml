@@ -16,3 +16,8 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+    networks:
+      - dockercustom
+networks:
+  dockercustom:
+    external: true
