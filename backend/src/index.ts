@@ -180,15 +180,6 @@ app.get("/api/status/update", async (_req, res) => {
   }
 });
 
-// Serve frontend in production
-const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
-if (existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(frontendDist, "index.html"));
-  });
-}
-
 // ── REST API for session history (for reconnection) ──
 app.get("/api/sessions/:projectId/history", (req, res) => {
   const { projectId } = req.params;
@@ -201,6 +192,15 @@ app.get("/api/sessions/:projectId/info", (req, res) => {
   const info = getSessionInfo(projectId);
   res.json(info);
 });
+
+// Serve frontend in production
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+if (existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+}
 
 // ─── HTTP Server ───────────────────────────────────────
 const httpServer = createServer(app);
