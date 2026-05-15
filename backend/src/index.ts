@@ -195,6 +195,25 @@ app.get("/api/sessions/:projectId/info", (req, res) => {
   res.json(info);
 });
 
+// Debug: list tools available in a session
+app.get("/api/sessions/:projectId/tools", (req, res) => {
+  const { projectId } = req.params;
+  const state = getSession(projectId);
+  if (!state?.session) {
+    return res.json({ tools: [], activeTools: [], error: "No active session" });
+  }
+  try {
+    const allTools = state.session.getAllTools();
+    const activeToolNames = state.session.getActiveToolNames();
+    res.json({
+      tools: allTools.map((t: any) => ({ name: t.name, label: t.label })),
+      activeTools: activeToolNames,
+    });
+  } catch (err: any) {
+    res.json({ tools: [], activeTools: [], error: err.message });
+  }
+});
+
 // Serve frontend in production
 const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
 if (existsSync(frontendDist)) {
