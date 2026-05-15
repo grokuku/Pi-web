@@ -12,6 +12,8 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+type JSONSchema = { type: string; [key: string]: unknown };
+
 // ─── Config ──────────────────────────────────────────────
 const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
 
@@ -49,7 +51,7 @@ export default function (pi: ExtensionAPI) {
         },
       },
       required: ["file_id"],
-    } as any,
+    } satisfies JSONSchema,
     async execute(_toolCallId: string, params: { file_id: string; query?: string; page?: number }, _signal: AbortSignal, _onUpdate: any, _ctx: any) {
       const { file_id, query, page } = params;
 
@@ -94,6 +96,23 @@ export default function (pi: ExtensionAPI) {
         };
       }
     },
+  });
+
+  // Ensure analyze_file is in the active tools list on session start
+  // The Pi SDK's includeAllExtensionTools should do this, but some configurations
+  // may not activate extension tools automatically.
+  pi.on("session_start", () => {
+    try {
+      const active = pi.getActiveTools();
+      if (!active.includes("analyze_file")) {
+        pi.setActiveTools([...active, "analyze_file"]);
+        console.log("[file-analyzer] Added analyze_file to active tools");
+      } else {
+        console.log("[file-analyzer] analyze_file already in active tools");
+      }
+    } catch (e: any) {
+      console.error("[file-analyzer] Failed to activate tool:", e.message);
+    }
   });
 
   // Also register a command for listing attachments
