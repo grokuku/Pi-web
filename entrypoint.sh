@@ -66,4 +66,5 @@ fi
 # ─── Start ────────────────────────────────────
 echo "[PI-WEB] Starting server..."
 cd /app
-exec env PI_WEB_VERSION="$PI_WEB_VERSION" node backend/dist/index.js
+export PI_WEB_VERSION
+exec node backend/dist/index.js
