@@ -6,15 +6,17 @@
  *
  * The extension calls the Pi-Web backend API to perform the actual analysis
  * (PDF text extraction, image base64, etc.) and returns the result to the LLM.
+ *
+ * Uses plain JSON Schema for parameters (zero dependencies).
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 
 // ─── Config ──────────────────────────────────────────────
 const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
 
 export default function (pi: ExtensionAPI) {
+  console.log("[file-analyzer] Extension loaded, registering analyze_file tool...");
   pi.registerTool({
     name: "analyze_file",
     label: "Analyze File",
@@ -30,17 +32,24 @@ export default function (pi: ExtensionAPI) {
       "For PDFs, the tool extracts text content",
       "For text/code files, the tool returns the file content",
     ],
-    parameters: Type.Object({
-      file_id: Type.String({
-        description: "The ID of the attached file (from the attachment reference in the conversation)",
-      }),
-      query: Type.Optional(Type.String({
-        description: "What you want to know about the file (e.g., 'summarize this document', 'extract key points')",
-      })),
-      page: Type.Optional(Type.Number({
-        description: "For PDFs, specific page number to extract (1-indexed)",
-      })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        file_id: {
+          type: "string",
+          description: "The ID of the attached file (from the attachment reference in the conversation)",
+        },
+        query: {
+          type: "string",
+          description: "What you want to know about the file (e.g., 'summarize this document', 'extract key points')",
+        },
+        page: {
+          type: "number",
+          description: "For PDFs, specific page number to extract (1-indexed)",
+        },
+      },
+      required: ["file_id"],
+    } as any,
     async execute(_toolCallId: string, params: { file_id: string; query?: string; page?: number }, _signal: AbortSignal, _onUpdate: any, _ctx: any) {
       const { file_id, query, page } = params;
 

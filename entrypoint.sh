@@ -110,7 +110,7 @@ if [ -f "$PI_SETTINGS" ]; then
           console.error('[PI-WEB] Could not read manifest for', pkg, ':', e.message);
         }
       }
-      settings.extensions = extensions;
+      settings.extensions = [...new Set(extensions)];
 
       // Add local extensions from /app/extensions/
       const localExtDir = '/app/extensions';
