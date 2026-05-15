@@ -78,11 +78,12 @@ function listInstalledPackages(): PackageInfo[] {
     let installedPath: string | undefined;
 
     if (pkgType === "npm") {
-      // npm package: check node_modules
+      // npm package: check node_modules in persistent dir first, then backend
       const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("@")[0].split("/")[0];
       const modPath = path.join(getPackagesDir(), pkgName);
-      installed = existsSync(modPath);
-      installedPath = installed ? modPath : undefined;
+      const backendPath = path.join(BACKEND_DIR, "node_modules", pkgName);
+      installed = existsSync(modPath) || existsSync(backendPath);
+      installedPath = existsSync(modPath) ? modPath : existsSync(backendPath) ? backendPath : undefined;
     } else if (pkgType === "git") {
       // git package: check extensions/git directory
       const gitDir = path.join(AGENT_DIR, "extensions", "git");
@@ -287,13 +288,13 @@ router.post("/packages", async (req: Request, res: Response) => {
 
     if (pkgType === "npm") {
       try {
-        // npm packages are installed in the backend's node_modules
-        const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("@")[0].split("/")[0];
-        console.log(`[pi-settings] Installing npm package: ${pkgName}`);
-        execSync(`npm install ${pkgName}`, {
+        // Install in ~/.pi/agent/ (persistent volume) instead of /app/backend (lost on restart)
+        if (!existsSync(AGENT_DIR)) mkdirSync(AGENT_DIR, { recursive: true });
+        const pkgSpec = source.startsWith("@") ? source : source.split("@")[0].split("/")[0];
+        console.log(`[pi-settings] Installing npm package: ${pkgSpec}`);
+        execSync(`npm install --prefix ${AGENT_DIR} ${pkgSpec}`, {
           timeout: 120000,
           encoding: "utf-8",
-          cwd: BACKEND_DIR,
         });
       } catch (e: any) {
         installError = `npm install failed: ${e.message}`;
@@ -348,7 +349,7 @@ router.delete("/packages/:source", async (req: Request, res: Response) => {
       try {
         const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/").split("@")[0] : source.split("@")[0].split("/")[0];
         console.log(`[pi-settings] Uninstalling npm package: ${pkgName}`);
-        execSync(`npm uninstall ${pkgName}`, { timeout: 60000, encoding: "utf-8", cwd: BACKEND_DIR });
+        execSync(`npm uninstall --prefix ${AGENT_DIR} ${pkgName}`, { timeout: 60000, encoding: "utf-8" });
       } catch (e: any) {
         uninstallWarning = `npm uninstall failed: ${e.message}`;
         console.error(`[pi-settings] npm uninstall failed:`, e.message);
@@ -389,14 +390,32 @@ router.post("/reload", async (req: Request, res: Response) => {
     if (!projectId) {
       return res.status(400).json({ error: "projectId is required" });
     }
-    const { disposeSession, emitToSubscribers } = await import("../pi/session.js");
+    const { disposeSession, createPiSession, emitToSubscribers, getSession } = await import("../pi/session.js");
+    const { getProject } = await import("../projects/manager.js");
+    const project = getProject(projectId);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    // 1. Dispose the old session
+    console.log(`[pi-settings] Reloading session for project ${projectId} (cwd: ${project.cwd})`);
     await disposeSession(projectId);
-    // Notify the frontend that the session was reloaded
+    console.log(`[pi-settings] Old session disposed`);
+    // 2. Create a fresh session
+    try {
+      await createPiSession(project.cwd, projectId, { resume: false });
+    } catch (e: any) {
+      console.error(`[pi-settings] Failed to create new session:`, e.message);
+      return res.status(500).json({ error: `Failed to create new session: ${e.message}` });
+    }
+    const newState = getSession(projectId);
+    console.log(`[pi-settings] New session created, has session: ${!!newState?.session}`);
+    // 3. Notify frontend
     try {
       emitToSubscribers({ type: "session_reloaded", projectId } as any, projectId);
     } catch {}
     res.json({ success: true, message: "Session reloaded." });
   } catch (e: any) {
+    console.error(`[pi-settings] Reload error:`, e.message);
     res.status(500).json({ error: e.message });
   }
 });
