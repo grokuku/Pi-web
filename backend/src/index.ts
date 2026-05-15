@@ -52,7 +52,7 @@ import {
 } from "./terminal/pty.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { credentialStore } from "./projects/credential-store.js";
-import { readFileSync, existsSync } from "fs";
+
 import os from "os";
 import { syncGitInfo } from "./projects/git.js";
 import { mountAllSmbProjects, unmountAllSmb } from "./projects/smb.js";
