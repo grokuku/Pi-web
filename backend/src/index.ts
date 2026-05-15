@@ -8,7 +8,7 @@ import { setMaxListeners } from "events";
 // Increase max listeners for abort signals (Pi SDK creates many per session)
 setMaxListeners(50);
 import { fileURLToPath } from "url";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 
 import projectsRouter from "./routes/projects.js";
 import settingsRouter from "./routes/settings.js";
@@ -52,7 +52,7 @@ import {
 } from "./terminal/pty.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { credentialStore } from "./projects/credential-store.js";
-import { readFileSync, existsSync } from "fs";
+
 import os from "os";
 import { syncGitInfo } from "./projects/git.js";
 import { mountAllSmbProjects, unmountAllSmb } from "./projects/smb.js";
