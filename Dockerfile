@@ -12,6 +12,7 @@ RUN mkdir -p /projects /sessions /mnt/smb && \
     git config --system --add safe.directory '*'
 
 WORKDIR /app
+COPY VERSION ./VERSION
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY entrypoint.sh ./

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-PI_WEB_VERSION="2.0.0"
+PI_WEB_VERSION=$(cat /app/VERSION 2>/dev/null || echo "unknown")
 
 echo "╔══════════════════════════════════════════╗"
 echo "║  ⚡ PI-WEB  ███▓▓▒▒░░  v${PI_WEB_VERSION}  ░░▒▒▓▓███  ║"

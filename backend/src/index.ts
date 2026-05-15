@@ -8,7 +8,7 @@ import { setMaxListeners } from "events";
 // Increase max listeners for abort signals (Pi SDK creates many per session)
 setMaxListeners(50);
 import { fileURLToPath } from "url";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 
 import projectsRouter from "./routes/projects.js";
 import settingsRouter from "./routes/settings.js";
@@ -86,14 +86,14 @@ app.use("/api/providers", providersRouter);
 app.use("/api/files", filesRouter);
 app.use("/api/pi", piSettingsRouter);
 
-// Serve frontend in production
-const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
-if (existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(frontendDist, "index.html"));
-  });
-}
+// ── Read VERSION file once at startup ──
+let piWebVersion = "unknown";
+try {
+  const versionFile = path.join(__dirname, "..", "..", "VERSION");
+  if (existsSync(versionFile)) {
+    piWebVersion = readFileSync(versionFile, "utf-8").trim();
+  }
+} catch {}
 
 // Health check
 app.get("/api/health", (_req, res) => {
@@ -103,9 +103,6 @@ app.get("/api/health", (_req, res) => {
 // Status/info endpoint (for welcome page)
 app.get("/api/status", (_req, res) => {
   try {
-    // PiWeb version from entrypoint env or package.json
-    const piWebVersion = process.env.PI_WEB_VERSION || "2.0.0";
-
     // Pi SDK version
     let piSdkVersion = "unknown";
     try {
@@ -128,7 +125,6 @@ app.get("/api/status", (_req, res) => {
 
     const pkgSources = (settings.packages || []).map((p: string | { source: string }) => typeof p === "string" ? p : p.source);
     const extensions: { source: string; installed: boolean; error?: string }[] = pkgSources.map(source => {
-      // Check if installed
       let installed = false;
       try {
         const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("@")[0].split("/")[0];
@@ -161,6 +157,37 @@ app.get("/api/status", (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Check latest version from GitHub
+app.get("/api/status/update", async (_req, res) => {
+  try {
+    const upstreamUrl = "https://raw.githubusercontent.com/grokuku/Pi-web/main/VERSION";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(upstreamUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      return res.status(502).json({ error: `GitHub returned ${response.status}` });
+    }
+    const latestVersion = (await response.text()).trim();
+    res.json({
+      currentVersion: piWebVersion,
+      latestVersion,
+      updateAvailable: latestVersion !==> piWebVersion && latestVersion !== "",
+    });
+  } catch (e: any) {
+    res.status(504).json({ error: e.message });
+  }
+});
+
+// Serve frontend in production
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+if (existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+}
 
 // ── REST API for session history (for reconnection) ──
 app.get("/api/sessions/:projectId/history", (req, res) => {
@@ -673,7 +700,7 @@ httpServer.listen(PORT, async () => {
 
   console.log(`
   ╔══════════════════════════════════════════╗
-  ║  ⚡ PI-WEB  ███▓▓▒▒░░  v2.0  ░░▒▒▓▓███  ║
+  ║  ⚡ PI-WEB  ███▓▓▒▒░░  v${piWebVersion}  ░░▒▒▓▓███  ║
   ╠══════════════════════════════════════════╣
   ║  HTTP+WS → http://localhost:${PORT}                  ║
   ║  CORS/WS → ${wsAllowAllOrigins ? "allow all" : wsAllowedOrigins.length + " origins"}                  ║
