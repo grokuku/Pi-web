@@ -24,6 +24,14 @@ else
   echo "[PI-WEB] Backend dependencies up to date"
 fi
 
+# Always update pi-coding-agent to latest ("latest" in package.json)
+echo "[PI-WEB] Checking for pi-coding-agent updates..."
+npm install @earendil-works/pi-coding-agent@latest --no-audit --no-fund --save 2>&1 | tail -3 || true
+
+# Read installed version for display
+PI_SDK_VERSION=$(node -e "try{console.log(require('@earendil-works/pi-coding-agent/package.json').version)}catch(e){console.log('unknown')}" 2>/dev/null)
+echo "[PI-WEB] pi-coding-agent version: ${PI_SDK_VERSION}"
+
 echo "[PI-WEB] Building backend..."
 npm run build
 

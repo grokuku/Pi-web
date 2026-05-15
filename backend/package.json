@@ -9,7 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@earendil-works/pi-coding-agent": "latest",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "multer": "^2.1.1",

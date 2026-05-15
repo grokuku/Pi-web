@@ -28,7 +28,7 @@ const PI_WEB_VERSION = (() => {
 // Read pi-agent version dynamically (recalculated on each call)
 function getPiAgentVersion(): string {
   try {
-    const pkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@mariozechner/pi-coding-agent/package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync(join(BACKEND_DIR, "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf-8"));
     return pkg.version || "unknown";
   } catch { return "unknown"; }
 }
@@ -44,7 +44,7 @@ router.get("/version", (_req: Request, res: Response) => {
 router.get("/update-check", async (_req: Request, res: Response) => {
   try {
     const currentVersion = getPiAgentVersion();
-    const result = execSync("npm view @mariozechner/pi-coding-agent version", { timeout: 15000, encoding: "utf-8" }).trim();
+    const result = execSync("npm view @earendil-works/pi-coding-agent version", { timeout: 15000, encoding: "utf-8" }).trim();
     const latestVersion = result;
     res.json({
       current: currentVersion,
@@ -61,7 +61,7 @@ router.get("/update-check", async (_req: Request, res: Response) => {
 router.post("/update", async (_req: Request, res: Response) => {
   try {
     // Use npm install @latest to force update (npm update respects lockfile and may not upgrade)
-    execSync("npm install @mariozechner/pi-coding-agent@latest", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
+    execSync("npm install @earendil-works/pi-coding-agent@latest", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
     const newVersion = getPiAgentVersion();
     // Send response BEFORE exiting — client needs to know the update succeeded
     res.json({ success: true, newVersion, message: "Update successful. Restarting to load new version…" });

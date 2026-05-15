@@ -106,7 +106,7 @@ app.get("/api/status", (_req, res) => {
     // Pi SDK version
     let piSdkVersion = "unknown";
     try {
-      const pkgPath = path.join(__dirname, "..", "node_modules", "@mariozechner", "pi-coding-agent", "package.json");
+      const pkgPath = path.join(__dirname, "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
       if (existsSync(pkgPath)) {
         piSdkVersion = JSON.parse(readFileSync(pkgPath, "utf-8")).version || "unknown";
       }

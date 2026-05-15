@@ -1,6 +1,6 @@
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
-import { completeSimple } from "@mariozechner/pi-ai";
-import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { completeSimple } from "@earendil-works/pi-ai";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
 import { unlinkSync, existsSync } from "fs";
