@@ -500,6 +500,12 @@ function App() {
     }
   };
 
+  // ── Quit to home screen ──
+  const handleQuit = useCallback(() => {
+    setActiveProject(null);
+    localStorage.removeItem("pi-web-active-project");
+  }, []);
+
   const handleProjectCreated = async (project: Project) => {
     await loadProjects();
     setShowAddProject(false);
@@ -617,7 +623,9 @@ function App() {
       {/* ── HEADER ── */}
       <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
         {/* Logo + connection */}
-        <PiLogo className="text-hacker-accent w-6 h-6" />
+        <div onClick={handleQuit} title="Return to home" className="cursor-pointer hover:opacity-70 transition-opacity">
+          <PiLogo className="text-hacker-accent w-6 h-6" />
+        </div>
         <span
           className={`text-sm ${connected ? "text-hacker-accent" : "text-hacker-error"} ${connected ? "animate-pulse-subtle" : ""}`}
           title={connected ? "Connected to backend" : "Offline — backend unreachable"}
@@ -736,7 +744,7 @@ function App() {
                 sizes={layoutCfg.sizes}
                 panelContent={{
                   pi: (
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} onQuit={handleQuit} />
                   ),
                   terminal: (
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
@@ -769,7 +777,7 @@ function App() {
       {/* FLOATING PANELS (Windows) */}
       {panels.pi.visible && panels.pi.floating && (
         <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
-          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} onQuit={handleQuit} />
         </Window>
       )}
       {panels.terminal.visible && panels.terminal.floating && (

@@ -414,11 +414,15 @@ export async function sendPrompt(
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /clear     — Clear screen (keep session)\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
         return { command: "clear", result: "" };
+      }
+      case "/quit":
+      case "/close": {
+        return { command: "quit", result: "" };
       }
       default: {
         // Unknown command — try extension commands via session.prompt()

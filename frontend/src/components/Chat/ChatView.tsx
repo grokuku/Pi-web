@@ -91,9 +91,10 @@ interface Props {
   isStreaming: boolean;
   session: any;
   projectId: string;
+  onQuit?: () => void;
 }
 
-export function ChatView({ send, on, activeProject, isStreaming, session, projectId }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, session, projectId, onQuit }: Props) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
@@ -449,6 +450,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       // For /new, clear messages (new session)
       if (msg.command === "new") {
         setMessages([]);
+      }
+      // For /quit, return to home screen
+      if (msg.command === "quit") {
+        onQuit?.();
       }
     });
     return () => unsub();

@@ -270,6 +270,7 @@ export function Sidebar({
             { cmd: "/clear", tip: "Clear screen" },
             { cmd: "/plan", tip: "Toggle PLAN mode" },
             { cmd: "/review", tip: "Toggle REVIEW mode" },
+            { cmd: "/quit", tip: "Return to home" },
             { cmd: "/help", tip: "Show help" },
           ].map(({ cmd, tip }) => (
             <button
