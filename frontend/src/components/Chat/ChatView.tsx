@@ -412,6 +412,20 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return () => unsub();
   }, [on, projectId]);
 
+  // ── Handle session reload notification ──
+  useEffect(() => {
+    const unsub = on("pi_event", (msg: any) => {
+      if (msg.projectId && msg.projectId !== projectId) return;
+      if (msg.event?.type === "session_reloaded") {
+        // Reset streaming state and clear current assistant message
+        setStreamingContent("");
+        setStreamingThinking("");
+        setCurrentToolCalls([]);
+      }
+    });
+    return () => unsub();
+  }, [on, projectId]);
+
   // ── Pi command results (/new, /compact, /model, etc.) ──
   useEffect(() => {
     const unsub = on("pi_command_result", (msg: any) => {

@@ -140,6 +140,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [newSource, setNewSource] = useState("");
   const [extError, setExtError] = useState<string | null>(null);
   const [reloadStatus, setReloadStatus] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const loadExtData = useCallback(async () => {
     setLoading(true);
@@ -165,8 +166,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   }, [tab, loadExtData]);
 
   const addPackage = async () => {
-    if (!newSource.trim()) return;
-    setLoading(true);
+    if (!newSource.trim() || adding) return;
+    setAdding(true);
     setExtError(null);
     try {
       const res = await fetch("/api/pi/packages", {
@@ -185,7 +186,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     } catch (e: any) {
       setExtError(e.message);
     } finally {
-      setLoading(false);
+      setAdding(false);
     }
   };
 
@@ -409,10 +410,10 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     />
                     <button
                       onClick={addPackage}
-                      disabled={loading || !newSource.trim()}
+                      disabled={adding || !newSource.trim()}
                       className="btn-hacker text-xs px-3 py-1.5 flex items-center gap-1 shrink-0"
                     >
-                      <Plus size={12} /> ADD
+                      {adding ? "Installing..." : "ADD"}
                     </button>
                   </div>
 

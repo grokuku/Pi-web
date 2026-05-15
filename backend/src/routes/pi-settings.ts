@@ -389,10 +389,13 @@ router.post("/reload", async (req: Request, res: Response) => {
     if (!projectId) {
       return res.status(400).json({ error: "projectId is required" });
     }
-    const { disposeSession } = await import("../pi/session.js");
+    const { disposeSession, emitToSubscribers } = await import("../pi/session.js");
     await disposeSession(projectId);
-    // The session will be recreated on next user message, loading fresh settings
-    res.json({ success: true, message: "Session disposed. It will reload on next interaction." });
+    // Notify the frontend that the session was reloaded
+    try {
+      emitToSubscribers({ type: "session_reloaded", projectId } as any, projectId);
+    } catch {}
+    res.json({ success: true, message: "Session reloaded." });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

@@ -93,7 +93,7 @@ export function subscribeToEvents(callback: EventCallback): () => void {
   return () => { eventCallbacks.delete(callback); };
 }
 
-function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
+export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
   for (const cb of eventCallbacks) {
     try { cb(event, projectId); } catch (e) { console.error("Event callback error:", e); }
   }
@@ -667,9 +667,13 @@ export async function disposeSession(projectId: string): Promise<void> {
   const state = sessionsByProject.get(projectId);
   if (state) {
     if (state.unsubscribe) state.unsubscribe();
-    // Don't dispose the AgentSession - just disconnect from events.
-    // The session file persists on disk for resume.
-    // If we want a full cleanup, call state.session.dispose() explicitly.
+    // Fully dispose the AgentSession so a fresh one is created on next interaction.
+    // This ensures extensions/skills are reloaded from settings.
+    try {
+      if (state.session) await state.session.dispose();
+    } catch (e: any) {
+      console.warn(`[PiSession] Error disposing session for ${projectId}:`, e.message);
+    }
     sessionsByProject.delete(projectId);
   }
 }
