@@ -46,9 +46,14 @@ export interface Attachment {
   name: string;
   mimeType: string;
   size: number;
-  category: "image" | "text" | "audio" | "binary";
+  category: "image" | "text" | "audio" | "video" | "pdf" | "binary";
   data: string; // base64 for images/binary, text content for text/code
   preview?: string; // data URL for images, first lines for text
+  // Server-side attachment ID (after upload)
+  attachmentId?: string;
+  // Upload status
+  uploadStatus?: "pending" | "uploading" | "done" | "error";
+  uploadError?: string;
 }
 
 export interface ChatMessage {
@@ -85,6 +90,8 @@ export interface DisplayMessage {
   images?: { data: string; mimeType: string }[];
   // Text/code files attached to user message
   attachments?: { name: string; content: string; mimeType: string }[];
+  // Attachment references (uploaded file IDs)
+  attachmentRefs?: { id: string; name: string; category: string; size: number }[];
 }
 
 export interface ToolCallInfo {
@@ -185,6 +192,8 @@ export interface ModelLibrary {
   models: RegisteredModel[];
   defaultModelId: string | null;
   commitModelId: string | null;
+  visionModelId: string | null;     // model for image analysis fallback
+  audioModelId: string | null;      // model for audio transcription
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }
 

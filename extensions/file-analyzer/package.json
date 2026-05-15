@@ -1,0 +1,11 @@
+{
+  "name": "file-analyzer",
+  "version": "1.0.0",
+  "description": "Analyze attached files (PDF, images, text, etc.) via Pi-Web backend API",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "name": "file-analyzer",
+    "description": "Analyze files attached to conversations via the Pi-Web attachments system"
+  }
+}

@@ -47,7 +47,7 @@ const RESOURCE_LABELS: Record<ResourceType, string> = {
   themes: "Themes",
 };
 
-type TabId = "models" | "extensions" | "general" | "layout";
+type TabId = "models" | "extensions" | "analysis" | "general" | "layout";
 
 // ── Props ──────────────────────────────────────────────
 
@@ -276,8 +276,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   // ── Tabs ──
   const TABS: { id: TabId; icon: React.ReactNode; label: string }[] = [
     { id: "models", icon: <PiLogo className="w-4 h-4 inline" />, label: "Model Library" },
+    { id: "analysis", icon: "🔬", label: "Analysis Models" },
     { id: "extensions", icon: "📦", label: "Extensions & Skills" },
-    { id: "general", icon: "⚙", label: "General Parameters" },
+    { id: "general", icon: "⚙", label: "General" },
     { id: "layout", icon: "⊞", label: "Layout" },
   ];
 
@@ -364,6 +365,182 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   setStatus={setStatus}
                 />
               )}
+            </div>
+          )}
+
+
+          {/* Analysis Models Tab */}
+          {tab === "analysis" && library && (
+            <div className="p-3 space-y-4">
+              <div className="text-hacker-accent text-sm font-bold mb-2">🔬 Analysis Models</div>
+              <div className="text-xs text-hacker-text-dim mb-4">
+                Configure models used for file analysis (PDFs, images, audio, etc.). 
+                If a model is not set, the main conversation model will be used (or raw extraction for text-based files).
+              </div>
+
+              {/* Vision Model */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>🖼️</span> Vision Model
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Used for image analysis when the main model doesn{"'"}t support vision
+                    </div>
+                  </div>
+                  {library.visionModelId && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/model-library/vision-model", { method: "DELETE" });
+                          if (res.ok) setLibrary(await res.json());
+                        } catch (e: any) { setError(e.message); }
+                      }}
+                      className="text-[10px] text-hacker-text-dim hover:text-hacker-error"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={library.visionModelId || ""}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    if (!id) return;
+                    try {
+                      const res = await fetch(`/api/model-library/vision-model/${encodeURIComponent(id)}`, { method: "PUT" });
+                      if (res.ok) setLibrary(await res.json());
+                      else { const d = await res.json().catch(() => ({})); setError(d.error || "Failed"); }
+                    } catch (e: any) { setError(e.message); }
+                  }}
+                  className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                >
+                  <option value="">— None (use main model) —</option>
+                  {(library.models || [])
+                    .filter(m => m.vision)
+                    .map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id})
+                      </option>
+                    ))}
+                </select>
+                <div className="text-[10px] text-hacker-text-dim mt-1">
+                  {(library.models || []).filter(m => m.vision).length === 0 
+                    ? "No vision-capable models found. Add a model with vision support in Model Library." 
+                    : `${(library.models || []).filter(m => m.vision).length} vision model(s) available`}
+                </div>
+              </div>
+
+              {/* Audio Model */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>🎵</span> Audio / Transcription Model
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Used for audio transcription (requires compatible service)
+                    </div>
+                  </div>
+                  {library.audioModelId && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/model-library/audio-model", { method: "DELETE" });
+                          if (res.ok) setLibrary(await res.json());
+                        } catch (e: any) { setError(e.message); }
+                      }}
+                      className="text-[10px] text-hacker-text-dim hover:text-hacker-error"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={library.audioModelId || ""}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    if (!id) return;
+                    try {
+                      const res = await fetch(`/api/model-library/audio-model/${encodeURIComponent(id)}`, { method: "PUT" });
+                      if (res.ok) setLibrary(await res.json());
+                      else { const d = await res.json().catch(() => ({})); setError(d.error || "Failed"); }
+                    } catch (e: any) { setError(e.message); }
+                  }}
+                  className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                >
+                  <option value="">— Not configured —</option>
+                  {(library.models || [])
+                    .map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id})
+                      </option>
+                    ))}
+                </select>
+                <div className="text-[10px] text-hacker-text-dim mt-1">
+                  Audio transcription requires a Whisper-compatible service. Coming soon.
+                </div>
+              </div>
+
+              {/* Commit Model (existing) */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>📝</span> Commit Message Model
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Used for generating AI commit messages
+                    </div>
+                  </div>
+                  {library.commitModelId && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/model-library/commit-model", { method: "DELETE" });
+                          if (res.ok) setLibrary(await res.json());
+                        } catch (e: any) { setError(e.message); }
+                      }}
+                      className="text-[10px] text-hacker-text-dim hover:text-hacker-error"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={library.commitModelId || ""}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    if (!id) return;
+                    try {
+                      const res = await fetch(`/api/model-library/commit-model/${encodeURIComponent(id)}`, { method: "PUT" });
+                      if (res.ok) setLibrary(await res.json());
+                      else { const d = await res.json().catch(() => ({})); setError(d.error || "Failed"); }
+                    } catch (e: any) { setError(e.message); }
+                  }}
+                  className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                >
+                  <option value="">— Use default model —</option>
+                  {(library.models || [])
+                    .map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* How it works */}
+              <div className="border border-hacker-accent/20 bg-hacker-accent/5 rounded p-3">
+                <div className="text-xs text-hacker-text-bright font-bold mb-2">How file analysis works</div>
+                <div className="text-[11px] text-hacker-text-dim space-y-1.5">
+                  <div><span className="text-green-400">PDFs & Text</span> — Extracted directly, no model needed</div>
+                  <div><span className="text-green-400">Images</span> — Sent to the main model if it supports vision, otherwise sent to the Vision Model above</div>
+                  <div><span className="text-yellow-400">Audio</span> — Requires a transcription service (not yet available)</div>
+                  <div><span className="text-yellow-400">Video</span> — Requires ffmpeg + transcription (not yet available)</div>
+                </div>
+              </div>
             </div>
           )}
 

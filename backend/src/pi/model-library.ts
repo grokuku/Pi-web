@@ -53,6 +53,8 @@ export interface ModelLibrary {
   models: RegisteredModel[];
   defaultModelId: string | null;
   commitModelId: string | null;           // model for AI commit messages (null = use default)
+  visionModelId: string | null;           // model for image/file analysis (null = use default or fallback)
+  audioModelId: string | null;            // model for audio transcription (null = not configured)
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }
 
@@ -73,6 +75,8 @@ function getDefaultLibrary(): ModelLibrary {
     models: [],
     defaultModelId: null,
     commitModelId: null,
+    visionModelId: null,
+    audioModelId: null,
     projectModes: {},
   };
 }
@@ -113,6 +117,8 @@ function migrateLibrary(data: any): ModelLibrary {
     models: (data.models || []).map(migrateModel),
     defaultModelId: data.defaultModelId || null,
     commitModelId: data.commitModelId || null,
+    visionModelId: data.visionModelId || null,
+    audioModelId: data.audioModelId || null,
     projectModes: {},
   };
 
@@ -127,7 +133,7 @@ function migrateLibrary(data: any): ModelLibrary {
 }
 
 function migrateFromOldFormat(data: any): ModelLibrary {
-  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, projectModes: {} };
+  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, projectModes: {} };
 
   // Collect all unique models from all modes
   const seenIds = new Set<string>();

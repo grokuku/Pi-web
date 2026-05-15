@@ -1,0 +1,14 @@
+{
+  "name": "compaction-checkpoint",
+  "version": "1.0.0",
+  "description": "Automatically saves compaction summaries to Pi memory before detail is lost",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "name": "compaction-checkpoint",
+    "description": "Auto-saves compaction checkpoints to @pi-unipi/memory so context survives multiple compactions"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

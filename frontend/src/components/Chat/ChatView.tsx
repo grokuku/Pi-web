@@ -39,25 +39,16 @@ const CODE_EXTENSIONS: Record<string, string> = {
 function categorizeFile(mimeType: string, fileName: string): Attachment["category"] {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf")) return "pdf";
 
   if (mimeType.startsWith("text/") || TEXT_MIME_TYPES.has(mimeType)) return "text";
 
   const ext = fileName.split(".").pop()?.toLowerCase() || "";
   if (CODE_EXTENSIONS[ext]) return "text";
 
-  // Common binary formats that should not be read as text
-  const binaryExts = new Set([
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    "zip", "tar", "gz", "bz2", "7z", "rar",
-    "exe", "dll", "so", "dylib", "o", "a",
-    "mp4", "avi", "mkv", "mov", "wmv", "flv",
-    "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a",
-    "sqlite", "db", "iso", "dmg", "deb", "rpm",
-  ]);
-  if (binaryExts.has(ext)) return "binary";
-
   // Default: try to read as text
-  return "text";
+  return "binary";
 }
 
 function getLanguageTag(fileName: string): string {
@@ -465,38 +456,55 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ── Send message (called by ChatInputArea) ──
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
-    // Collect image attachments for the SDK
-    const imageAttachments = attachments
-      .filter((a) => a.category === "image")
-      .map((a) => ({ data: a.data, mimeType: a.mimeType }));
-
-    // Audio attachments — warn but still send text
-    const audioAttachments = attachments.filter((a) => a.category === "audio");
-    if (audioAttachments.length > 0) {
-      setError(`Audio files are not supported by most AI models. They will be skipped.`);
+    // Check for upload errors
+    const uploadErrors = attachments.filter((a) => a.uploadStatus === "error");
+    if (uploadErrors.length > 0) {
+      setError(`Some files failed to upload: ${uploadErrors.map((a) => a.name).join(", ")}`);
       return;
     }
 
-    // Build final message: user text + text/code file contents
+    // Check for still-uploading files
+    const uploading = attachments.filter((a) => a.uploadStatus === "uploading");
+    if (uploading.length > 0) {
+      setError(`Waiting for ${uploading.length} file(s) to finish uploading...`);
+      return;
+    }
+
+    // Separate uploaded attachments by category
+    const uploadedAttachments = attachments.filter((a) => a.attachmentId && a.uploadStatus === "done");
+    const imageAttachments = uploadedAttachments
+      .filter((a) => a.category === "image")
+      .map((a) => ({ data: a.data, mimeType: a.mimeType }));
+    const attachmentRefs = uploadedAttachments.map((a) => ({
+      id: a.attachmentId!,
+      name: a.name,
+      category: a.category,
+      size: a.size,
+    }));
+
+    // Build message with file references
     let fullMessage = text;
-    const textAttachments = attachments.filter((a) => a.category === "text");
-    if (textAttachments.length > 0) {
-      const filesContent = textAttachments.map((a) => a.data).join("");
+    if (attachmentRefs.length > 0) {
+      const refBlock = attachmentRefs.map((a) => {
+        const icon = a.category === "image" ? "🖼️" : a.category === "pdf" ? "📄" : a.category === "audio" ? "🎵" : a.category === "video" ? "🎬" : "📎";
+        return `${icon} **${a.name}** (id: ${a.id}, ${formatFileSize(a.size)})`;
+      }).join("\n");
       if (text.trim()) {
-        fullMessage = `${filesContent}\n\n${text}`;
+        fullMessage = `${refBlock}\n\n${text}`;
       } else {
-        fullMessage = filesContent;
+        fullMessage = refBlock;
       }
     }
 
-    if (!fullMessage && imageAttachments.length === 0) return;
+    if (!fullMessage) return;
+    if (!text.trim() && attachmentRefs.length === 0) return;
     setError("");
 
     // If it's a slash command, don't add as user message
     const isSlashCommand = fullMessage.trim().startsWith("/");
 
     if (!isSlashCommand) {
-      const displayContent = text || (textAttachments.length > 0 ? textAttachments.map((a) => `📄 ${a.name}`).join(", ") : "");
+      const displayContent = text || (attachmentRefs.length > 0 ? attachmentRefs.map((a) => `📎 ${a.name}`).join(", ") : "");
       setMessages((prev) => [...prev, {
         id: Date.now().toString(),
         role: "user",
@@ -504,8 +512,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         thinking: "",
         toolCalls: [],
         timestamp: Date.now(),
-        images: imageAttachments.length > 0 ? imageAttachments.map((a) => ({ data: a.data, mimeType: a.mimeType })) : undefined,
-        attachments: textAttachments.length > 0 ? textAttachments.map((a) => ({ name: a.name, content: a.data, mimeType: a.mimeType })) : undefined,
+        images: imageAttachments.length > 0 ? imageAttachments : undefined,
+        attachmentRefs: attachmentRefs.length > 0 ? attachmentRefs : undefined,
       }]);
     }
 
@@ -1019,56 +1027,76 @@ const ChatInputArea = memo(function ChatInputArea({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const processFile = useCallback((file: File) => {
+  const processFile = useCallback(async (file: File) => {
     if (attachments.length >= 10) {
       setError("Maximum 10 files per message");
       return;
     }
     const category = categorizeFile(file.type || "application/octet-stream", file.name);
-    if (category === "image" && file.size > MAX_IMAGE_SIZE) {
-      setError(`Image too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_IMAGE_SIZE)}.`);
+
+    // All file sizes up to 100MB are now allowed (server has the limit)
+    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`File too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_FILE_SIZE)}.`);
       return;
     }
-    if (category === "text" && file.size > MAX_TEXT_SIZE) {
-      setError(`Text file too large: ${formatFileSize(file.size)}. Max ${formatFileSize(MAX_TEXT_SIZE)}.`);
-      return;
-    }
-    if (category === "binary") {
-      setError(`Cannot attach binary file: ${file.name}. Only images, text, and code files are supported.`);
-      return;
-    }
-    const reader = new FileReader();
+
     const uid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    if (category === "image") {
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        setAttachments((prev) => [...prev, {
-          id: uid, name: file.name, mimeType: file.type, size: file.size,
-          category, data: base64, preview: reader.result as string,
-        }]);
-      };
-      reader.readAsDataURL(file);
-    } else if (category === "audio") {
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        setAttachments((prev) => [...prev, {
-          id: uid, name: file.name, mimeType: file.type, size: file.size,
-          category, data: base64,
-        }]);
-      };
-      reader.readAsDataURL(file);
-    } else {
-      reader.onload = () => {
-        const text = reader.result as string;
-        const lang = getLanguageTag(file.name);
-        const previewLines = text.split("\n").slice(0, 3).join("\n");
-        setAttachments((prev) => [...prev, {
-          id: uid, name: file.name, mimeType: file.type || "text/plain", size: file.size,
-          category, data: `\n\n📄 **${file.name}**\n\`\`\`${lang}\n${text}\n\`\`\`\n`,
-          preview: previewLines.length > 200 ? previewLines.slice(0, 200) + "..." : previewLines,
-        }]);
-      };
-      reader.readAsText(file);
+
+    // For images, create a local preview for immediate display
+    const localPreview = category === "image"
+      ? URL.createObjectURL(file)
+      : undefined;
+
+    // Add attachment immediately with "uploading" status
+    setAttachments((prev) => [...prev, {
+      id: uid, name: file.name, mimeType: file.type || "application/octet-stream",
+      size: file.size, category,
+      data: "", // Will be filled by server
+      preview: localPreview,
+      uploadStatus: "uploading" as const,
+    }]);
+
+    // Upload to server API
+    try {
+      const formData = new FormData();
+      formData.append("files", file);
+      
+
+      const response = await fetch("/api/attachments/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(errorData.error || `Upload failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const uploaded = data.attachments?.[0];
+
+      if (!uploaded) throw new Error("No attachment data returned");
+
+      // Update attachment with server data
+      setAttachments((prev) => prev.map((a) =>
+        a.id === uid ? {
+          ...a,
+          attachmentId: uploaded.id,
+          uploadStatus: "done" as const,
+          preview: a.preview || URL.createObjectURL(file),
+        } : a
+      ));
+    } catch (err: any) {
+      // Mark as error
+      setAttachments((prev) => prev.map((a) =>
+        a.id === uid ? {
+          ...a,
+          uploadStatus: "error" as const,
+          uploadError: err.message,
+        } : a
+      ));
+      setError(`Upload failed: ${err.message}`);
     }
   }, [attachments.length, setError]);
 
@@ -1127,14 +1155,24 @@ const ChatInputArea = memo(function ChatInputArea({
       {attachments.length > 0 && (
         <div className="flex gap-2 mb-2 flex-wrap">
           {attachments.map((att) => (
-            <div key={att.id} className="flex items-center gap-1.5 text-xs bg-hacker-border/40 border border-hacker-border px-2 py-1.5 rounded group">
-              {att.category === "image" && att.preview ? (
+            <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus === "error" ? "bg-red-500/10 border-red-500/50" : att.uploadStatus === "uploading" ? "bg-hacker-accent/10 border-hacker-accent/30 animate-pulse" : "bg-hacker-border/40 border-hacker-border"}`}>
+              {att.uploadStatus === "uploading" ? (
+                <span className="text-hacker-accent animate-spin">⏳</span>
+              ) : att.uploadStatus === "error" ? (
+                <span className="text-red-400">⚠️</span>
+              ) : att.category === "image" && att.preview ? (
                 <img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />
               ) : (
                 <span className="text-hacker-accent">{getFileExtensionIcon(att.category, att.name)}</span>
               )}
               <span className="truncate max-w-[120px]">{att.name}</span>
               <span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>
+              {att.uploadStatus === "done" && (
+                <span className="text-green-400 text-[9px]">✓</span>
+              )}
+              {att.uploadStatus === "error" && att.uploadError && (
+                <span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>
+              )}
               <button onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
                 className="text-hacker-text-dim hover:text-hacker-error ml-1">
                 <X size={12} />

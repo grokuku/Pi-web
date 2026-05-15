@@ -188,6 +188,60 @@ router.delete("/commit-model", (_req: Request, res: Response) => {
   }
 });
 
+// ── PUT/DELETE set vision model ───────────────────────
+
+router.put("/vision-model/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = loadModelLibrary();
+    library.visionModelId = id;
+    saveModelLibrary(library);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete("/vision-model", (_req: Request, res: Response) => {
+  try {
+    const library = loadModelLibrary();
+    library.visionModelId = null;
+    saveModelLibrary(library);
+    syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── PUT/DELETE set audio model ─────────────────────────
+
+router.put("/audio-model/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = loadModelLibrary();
+    library.audioModelId = id;
+    saveModelLibrary(library);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete("/audio-model", (_req: Request, res: Response) => {
+  try {
+    const library = loadModelLibrary();
+    library.audioModelId = null;
+    saveModelLibrary(library);
+    syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ── GET/PUT project mode config ───────────────────────
 
 router.get("/projects/:projectId/mode", (req: Request, res: Response) => {

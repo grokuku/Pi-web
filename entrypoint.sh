@@ -111,12 +111,59 @@ if [ -f "$PI_SETTINGS" ]; then
         }
       }
       settings.extensions = extensions;
+
+      // Add local extensions from /app/extensions/
+      const localExtDir = '/app/extensions';
+      try {
+        const localExts = fs.readdirSync(localExtDir, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => path.join(localExtDir, d.name, 'index.ts'))
+          .filter(p => fs.existsSync(p));
+        for (const ext of localExts) {
+          if (!extensions.includes(ext)) {
+            extensions.push(ext);
+            settings.extensions.push(ext);
+          }
+        }
+        if (localExts.length > 0) {
+          console.log('[PI-WEB] Added local extensions:', localExts);
+        }
+      } catch(e) {
+        // No local extensions directory — that's fine
+      }
+
       fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-      console.log('[PI-WEB] Updated settings.extensions:', extensions.length, 'entries:', extensions);
+      console.log('[PI-WEB] Updated settings.extensions:', settings.extensions.length, 'entries:', settings.extensions);
     "
   else
     echo "[PI-WEB] No npm/git extensions to reinstall"
   fi
+
+  # Also add local extensions even if no npm packages
+  node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
+    const localExtDir = '/app/extensions';
+    let added = 0;
+    try {
+      const localExts = fs.readdirSync(localExtDir, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => path.join(localExtDir, d.name, 'index.ts'))
+        .filter(p => fs.existsSync(p));
+      for (const ext of localExts) {
+        if (!(settings.extensions || []).includes(ext)) {
+          settings.extensions = settings.extensions || [];
+          settings.extensions.push(ext);
+          added++;
+        }
+      }
+      if (added > 0) fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
+      if (added > 0 || localExts.length > 0) console.log('[PI-WEB] Local extensions:', localExts.length, 'found,', added, 'added');
+    } catch(e) {
+      // No local extensions directory
+    }
+  "
 else
   echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
 fi

@@ -15,6 +15,7 @@ WORKDIR /app
 COPY VERSION ./VERSION
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+COPY extensions/ ./extensions/
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
