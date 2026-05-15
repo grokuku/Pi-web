@@ -384,36 +384,34 @@ router.delete("/packages/:source", async (req: Request, res: Response) => {
 });
 
 // POST reload Pi session for a project (picks up extension/skill changes)
+// Uses the Pi SDK's built-in session.reload() which reloads extensions, skills,
+// prompts, themes, and settings IN-PLACE — preserving conversation history.
 router.post("/reload", async (req: Request, res: Response) => {
   try {
     const { projectId } = req.body as { projectId?: string };
     if (!projectId) {
       return res.status(400).json({ error: "projectId is required" });
     }
-    const { disposeSession, createPiSession, emitToSubscribers, getSession } = await import("../pi/session.js");
-    const { getProject } = await import("../projects/manager.js");
-    const project = getProject(projectId);
-    if (!project) {
-      return res.status(404).json({ error: "Project not found" });
+    const { getSession, emitToSubscribers } = await import("../pi/session.js");
+    const state = getSession(projectId);
+    if (!state?.session) {
+      return res.status(404).json({ error: "No active session for this project" });
     }
-    // 1. Dispose the old session
-    console.log(`[pi-settings] Reloading session for project ${projectId} (cwd: ${project.cwd})`);
-    await disposeSession(projectId);
-    console.log(`[pi-settings] Old session disposed`);
-    // 2. Create a fresh session
+
+    console.log(`[pi-settings] Reloading session in-place for project ${projectId}`);
     try {
-      await createPiSession(project.cwd, projectId, { resume: false });
+      await (state.session as any).reload();
     } catch (e: any) {
-      console.error(`[pi-settings] Failed to create new session:`, e.message);
-      return res.status(500).json({ error: `Failed to create new session: ${e.message}` });
+      console.error(`[pi-settings] session.reload() failed:`, e.message);
+      return res.status(500).json({ error: `Reload failed: ${e.message}` });
     }
-    const newState = getSession(projectId);
-    console.log(`[pi-settings] New session created, has session: ${!!newState?.session}`);
-    // 3. Notify frontend
+    console.log(`[pi-settings] Session reloaded, history preserved`);
+
+    // Notify frontend that extensions/skills have been reloaded
     try {
       emitToSubscribers({ type: "session_reloaded", projectId } as any, projectId);
     } catch {}
-    res.json({ success: true, message: "Session reloaded." });
+    res.json({ success: true, message: "Session reloaded (history preserved)." });
   } catch (e: any) {
     console.error(`[pi-settings] Reload error:`, e.message);
     res.status(500).json({ error: e.message });

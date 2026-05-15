@@ -5,6 +5,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
 import { FileExplorer } from "./components/Files/FileExplorer";
+import { WelcomeView } from "./components/Sidebar/WelcomeView";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
@@ -325,11 +326,8 @@ function App() {
       const res = await fetch("/api/projects");
       const data = await res.json();
       setProjects(data);
-      const savedId = localStorage.getItem("pi-web-active-project");
-      if (savedId && !activeProject) {
-        const saved = data.find((p: Project) => p.id === savedId);
-        if (saved) activateProject(saved);
-      }
+      // No auto-activation — welcome page is shown on load/refresh
+      // User picks a project from the welcome page or sidebar
     } catch (e) {
       console.error("Failed to load projects:", e);
     }
@@ -710,38 +708,61 @@ function App() {
 
         {/* MAIN CONTENT AREA */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Docked Panels Area — layout-driven */}
-          <LayoutRenderer
-            orderedPanels={orderedPanels}
-            layoutType={activeLayoutType}
-            sizes={layoutCfg.sizes}
-            panelContent={{
-              pi: (
-                <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
-              ),
-              terminal: (
-                <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
-              ),
-              files: (
-                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
-              ),
-            }}
-            onSwap={handleSwap}
-            onDetach={undockPanel}
-            onNewWindow={openInNewWindow}
-            onSizesChange={handleLayoutSizesChange}
-          />
+          {!activeProject ? (
+            /* Welcome page when no project is active */
+            <>
+              <div className="flex-1 overflow-auto">
+                <WelcomeView
+                  projects={projects}
+                  onSelectProject={handleSelectProject}
+                  onAddProject={handleAddProject}
+                />
+              </div>
+              <StatusBar
+                activeProject={null}
+                isStreaming={false}
+                stats={null}
+                session={null}
+                connected={connected}
+                activeMode={activeMode}
+              />
+            </>
+          ) : (
+            <>
+              {/* Docked Panels Area — layout-driven */}
+              <LayoutRenderer
+                orderedPanels={orderedPanels}
+                layoutType={activeLayoutType}
+                sizes={layoutCfg.sizes}
+                panelContent={{
+                  pi: (
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} />
+                  ),
+                  terminal: (
+                    <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
+                  ),
+                  files: (
+                    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+                  ),
+                }}
+                onSwap={handleSwap}
+                onDetach={undockPanel}
+                onNewWindow={openInNewWindow}
+                onSizesChange={handleLayoutSizesChange}
+              />
 
-          {/* StatusBar (always at bottom of main area) */}
-          <StatusBar
-            activeProject={activeProject}
-            isStreaming={isStreaming}
-            stats={stats}
-            session={session}
-            connected={connected}
-            activeMode={activeMode}
-            autoReviewState={autoReviewState}
-          />
+              {/* StatusBar (always at bottom of main area) */}
+              <StatusBar
+                activeProject={activeProject}
+                isStreaming={isStreaming}
+                stats={stats}
+                session={session}
+                connected={connected}
+                activeMode={activeMode}
+                autoReviewState={autoReviewState}
+              />
+            </>
+          )}
         </div>
       </div>
 

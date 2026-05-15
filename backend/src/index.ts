@@ -52,6 +52,8 @@ import {
 } from "./terminal/pty.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { credentialStore } from "./projects/credential-store.js";
+import { readFileSync, existsSync } from "fs";
+import os from "os";
 import { syncGitInfo } from "./projects/git.js";
 import { mountAllSmbProjects, unmountAllSmb } from "./projects/smb.js";
 
@@ -96,6 +98,68 @@ if (existsSync(frontendDist)) {
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Status/info endpoint (for welcome page)
+app.get("/api/status", (_req, res) => {
+  try {
+    // PiWeb version from entrypoint env or package.json
+    const piWebVersion = process.env.PI_WEB_VERSION || "2.0.0";
+
+    // Pi SDK version
+    let piSdkVersion = "unknown";
+    try {
+      const pkgPath = path.join(__dirname, "..", "node_modules", "@mariozechner", "pi-coding-agent", "package.json");
+      if (existsSync(pkgPath)) {
+        piSdkVersion = JSON.parse(readFileSync(pkgPath, "utf-8")).version || "unknown";
+      }
+    } catch {}
+
+    // Extensions from settings
+    const agentDir = path.join(os.homedir(), ".pi", "agent");
+    const settingsFile = path.join(agentDir, "settings.json");
+    type PiSettings = { packages?: (string | { source: string })[]; [k: string]: any };
+    let settings: PiSettings = {};
+    try {
+      if (existsSync(settingsFile)) {
+        settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
+      }
+    } catch {}
+
+    const pkgSources = (settings.packages || []).map((p: string | { source: string }) => typeof p === "string" ? p : p.source);
+    const extensions: { source: string; installed: boolean; error?: string }[] = pkgSources.map(source => {
+      // Check if installed
+      let installed = false;
+      try {
+        const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("@")[0].split("/")[0];
+        const modPath = path.join(agentDir, "node_modules", pkgName);
+        const backendPath = path.join(process.cwd(), "node_modules", pkgName);
+        installed = existsSync(modPath) || existsSync(backendPath);
+      } catch {}
+      return { source, installed };
+    });
+
+    // Active sessions count
+    let activeSessions = 0;
+    for (const project of getAllProjects()) {
+      if (getSessionInfo(project.id)) activeSessions++;
+    }
+
+    // Uptime
+    const uptimeSeconds = process.uptime();
+
+    res.json({
+      piWebVersion,
+      piSdkVersion,
+      extensions,
+      activeSessions,
+      uptimeSeconds: Math.floor(uptimeSeconds),
+      projectsCount: getAllProjects().length,
+      nodeVersion: process.version,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── REST API for session history (for reconnection) ──
