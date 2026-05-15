@@ -22,13 +22,13 @@ export default function (pi: ExtensionAPI) {
     label: "Analyze File",
     description:
       "Analyze an attached file by its ID. Returns extracted text (for PDFs/text), " +
-      "image data (for vision models), or a description of the file content. " +
+      "or an image description (via the configured vision model). " +
       "Use this when the user references an attached file or asks about file content. " +
       "The file_id comes from attachment references like 📎 filename.pdf (id: abc123).",
     promptSnippet: "Analyze an attached file by ID",
     promptGuidelines: [
       "Always use analyze_file when the user asks about an attached file",
-      "For images, the tool returns base64 data that the model can see directly",
+      "For images, the tool calls the configured vision model and returns a description",
       "For PDFs, the tool extracts text content",
       "For text/code files, the tool returns the file content",
     ],
@@ -76,29 +76,15 @@ export default function (pi: ExtensionAPI) {
           content: string;
           type: string;
           pages?: number;
-          mimeType?: string;
-          base64?: string;
         };
 
-        // Build the response
-        const parts: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
-
-        // Add text content
-        parts.push({
-          type: "text",
-          text: result.content,
-        });
-
-        // For images, also include the image data so vision models can see it
-        if (result.type === "image" && result.base64 && result.mimeType) {
-          parts.push({
-            type: "image",
-            data: result.base64,
-            mimeType: result.mimeType,
-          } as any);
-        }
-
-        return { content: parts };
+        // Return the analysis result as text
+        return {
+          content: [{
+            type: "text" as const,
+            text: result.content,
+          }],
+        };
       } catch (err: any) {
         return {
           content: [{
