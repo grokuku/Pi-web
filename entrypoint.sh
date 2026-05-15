@@ -70,34 +70,26 @@ if [ -f "$PI_SETTINGS" ]; then
     echo "[PI-WEB] Reinstalling Pi extensions: $PACKAGES"
 
     # Install globally — the Pi SDK resolves packages via npm root -g
+    # Global install compiles native modules (better-sqlite3, sqlite-vec, etc.)
     if npm install -g $PACKAGES --no-audit --no-fund 2>&1; then
       echo "[PI-WEB] Extensions installed globally successfully"
     else
       echo "[PI-WEB] WARNING: Some extensions failed to install globally (see errors above)"
     fi
 
-    # Also install in agent dir for backwards compat and native module resolution
-    mkdir -p "$PI_AGENT_DIR"
-    npm install --prefix "$PI_AGENT_DIR" $PACKAGES --no-audit --no-fund 2>&1 || true
-
-    # Update settings.extensions with resolved paths so Pi SDK can discover them
+    # Update settings.extensions with resolved paths from GLOBAL npm root
+    # (native modules like better-sqlite3 are compiled there, not in agent dir)
     node -e "
       const fs = require('fs');
       const path = require('path');
       const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
       const packages = (settings.packages || []).map(p => typeof p === 'string' ? p : p.source);
-      const extensions = (settings.extensions || []).slice();
-      const extDir = path.join('$PI_AGENT_DIR', 'node_modules');
+      const extensions = [];
+      const globalRoot = '$NPM_GLOBAL_ROOT';
       for (const pkg of packages) {
-        // Read package.json pi manifest to find extension entry points
-        let pkgJsonPath = path.join(extDir, pkg, 'package.json');
-        if (!fs.existsSync(pkgJsonPath)) {
-          // Try scoped package
-          const parts = pkg.split('/');
-          if (pkg.startsWith('@') && parts.length >= 2) {
-            // Already correct
-          }
-        }
+        // Resolve extension entry points from GLOBAL npm root
+        // This is critical: native modules (better-sqlite3, sqlite-vec) are compiled here
+        let pkgJsonPath = path.join(globalRoot, pkg, 'package.json');
         try {
           const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
           const pi = pkgJson.pi || {};
@@ -105,22 +97,70 @@ if [ -f "$PI_SETTINGS" ]; then
           if (pi.extensions) {
             for (const ext of pi.extensions) {
               const extPath = path.resolve(pkgDir, ext);
-              if (fs.existsSync(extPath) && !extensions.includes(extPath)) {
+              if (fs.existsSync(extPath)) {
                 extensions.push(extPath);
               }
             }
           }
-        } catch(e) {}
+          if (pi.skills) {
+            // skills paths are also relative to package dir
+            // Pi SDK resolves them automatically from packages
+          }
+        } catch(e) {
+          console.error('[PI-WEB] Could not read manifest for', pkg, ':', e.message);
+        }
       }
       settings.extensions = extensions;
       fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-      console.log('[PI-WEB] Updated settings.extensions:', extensions.length, 'entries');
+      console.log('[PI-WEB] Updated settings.extensions:', extensions.length, 'entries:', extensions);
     "
   else
     echo "[PI-WEB] No npm/git extensions to reinstall"
   fi
 else
   echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
+fi
+
+# ─── Auto-configure extension API keys from Pi providers ────
+# Extract API keys from models.json and configure extensions automatically
+MODELS_JSON="${PI_AGENT_DIR}/models.json"
+UNIPI_CONFIG_DIR="$(eval echo ~$(whoami))/.unipi/memory"
+UNIPI_CONFIG="${UNIPI_CONFIG_DIR}/config.json"
+
+if [ -f "$MODELS_JSON" ]; then
+  # Extract OpenRouter API key for @pi-unipi/memory embeddings
+  OPENROUTER_KEY=$(node -e "
+    try {
+      const d = JSON.parse(require('fs').readFileSync('$MODELS_JSON', 'utf8'));
+      for (const [pid, prov] of Object.entries(d.providers || {})) {
+        if ((prov.baseUrl || '').toLowerCase().includes('openrouter')) {
+          process.stdout.write(prov.apiKey || '');
+          break;
+        }
+      }
+    } catch(e) {}
+" 2>/dev/null)
+
+  if [ -n "$OPENROUTER_KEY" ]; then
+    mkdir -p "$UNIPI_CONFIG_DIR"
+    # Merge with existing config or create new
+    node -e "
+      const fs = require('fs');
+      const path = '$UNIPI_CONFIG';
+      let config = {};
+      try { config = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
+      config.provider = 'openrouter';
+      config.apiKey = '$OPENROUTER_KEY';
+      if (!config.model) config.model = 'openai/text-embedding-3-small';
+      if (!config.dimensions) config.dimensions = 384;
+      fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+      console.log('[PI-WEB] Configured @pi-unipi/memory embeddings (OpenRouter)');
+    "
+  else
+    echo "[PI-WEB] No OpenRouter provider found in models.json — embeddings will use fuzzy-only mode"
+  fi
+else
+  echo "[PI-WEB] No models.json found, skipping extension API key auto-configure"
 fi
 
 # ─── Start ────────────────────────────────────
