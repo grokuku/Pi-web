@@ -4,6 +4,7 @@ import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
 import { Mutex } from "../utils/mutex.js";
 import { encryptSmbPassword } from "./smb.js";
+import { deleteAttachmentsForProject } from "../routes/attachments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
@@ -218,6 +219,9 @@ export async function deleteProject(id: string, deleteFiles: boolean = false): P
     // Remove from projects list
     const filtered = projects.filter((p) => p.id !== id);
     saveProjects(filtered);
+
+    // Delete associated attachments
+    deleteAttachmentsForProject(id);
 
     // Delete files only if requested AND it's a local project
     if (deleteFiles && storage === "local" && cwd) {

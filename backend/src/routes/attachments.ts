@@ -1,7 +1,7 @@
 /**
  * Attachments API — Upload, serve, and analyze files for Pi-Web.
  *
- * Files are stored persistently in /data/attachments/<id>/<original-name>.
+ * Files are stored persistently in /data/attachments/<id>/<safe-name>.
  * Metadata is stored in /data/attachments/<id>/meta.json.
  * Analysis results are cached in /data/attachments/<id>/cache/.
  *
@@ -10,7 +10,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, createReadStream, unlinkSync, copyFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, createReadStream, unlinkSync, copyFileSync, rmSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import os from "os";
@@ -20,13 +20,37 @@ import { loadModelLibrary } from "../pi/model-library.js";
 const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_FILES_PER_UPLOAD = 20;
+
+// ─── Filename Sanitization ───────────────────────────────
+/**
+ * Sanitize a filename to prevent path traversal and remove dangerous characters.
+ * - Strips directory separators and path traversal patterns
+ * - Replaces spaces and special chars with safe alternatives
+ * - Preserves the file extension
+ */
+function sanitizeFileName(name: string): string {
+  // Get the base name (strip any path components)
+  let safe = path.basename(name);
+  // Remove leading dots (hidden files, traversal)
+  safe = safe.replace(/^\.+/, "");
+  // Replace any character that isn't alphanumeric, dash, underscore, dot, or parentheses
+  safe = safe.replace(/[^a-zA-Z0-9._\-() ]/g, "_");
+  // Collapse multiple underscores/spaces
+  safe = safe.replace(/[_\s]{2,}/g, "_");
+  // Trim
+  safe = safe.trim();
+  // Fallback if nothing left
+  if (!safe || safe.startsWith(".")) safe = "file";
+  return safe;
+}
 const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
 const MODELS_JSON_PATH = path.join(os.homedir(), ".pi", "agent", "models.json");
 
 // ─── Types ───────────────────────────────────────────────
 interface AttachmentMeta {
   id: string;
-  name: string;
+  name: string;           // sanitized filename (on disk)
+  originalName?: string; // original filename as uploaded (before sanitization)
   mimeType: string;
   size: number;
   category: "image" | "text" | "audio" | "video" | "pdf" | "binary";
@@ -267,10 +291,12 @@ router.post("/upload", async (req: Request, res: Response) => {
 
       for (const file of files) {
         const id = randomUUID();
+        const safeName = sanitizeFileName(file.originalname);
         const category = getCategory(file.mimetype || "application/octet-stream", file.originalname);
         const meta: AttachmentMeta = {
           id,
-          name: file.originalname,
+          name: safeName,
+          originalName: file.originalname,
           mimeType: file.mimetype || "application/octet-stream",
           size: file.size,
           category,
@@ -283,7 +309,7 @@ router.post("/upload", async (req: Request, res: Response) => {
         mkdirSync(dir, { recursive: true });
         mkdirSync(path.join(dir, "cache"), { recursive: true });
 
-        const destPath = path.join(dir, file.originalname);
+        const destPath = path.join(dir, safeName);
         copyFileSync(file.path, destPath);
         try { unlinkSync(file.path); } catch {} // Clean up temp file
 
@@ -573,5 +599,37 @@ router.post("/:id/analyze", async (req: Request, res: Response) => {
     res.status(500).json({ error: `Analysis failed: ${error.message}` });
   }
 });
+
+// ─── Cleanup on project delete ──────────────────────────
+/**
+ * Delete all attachments belonging to a project.
+ * Called from project manager when a project is deleted.
+ */
+export function deleteAttachmentsForProject(projectId: string): number {
+  if (!existsSync(ATTACHMENTS_DIR)) return 0;
+  let deleted = 0;
+  try {
+    const dirs = readdirSync(ATTACHMENTS_DIR, { withFileTypes: true });
+    for (const dirent of dirs) {
+      if (!dirent.isDirectory()) continue;
+      const metaPath = path.join(ATTACHMENTS_DIR, dirent.name, "meta.json");
+      try {
+        const meta: AttachmentMeta = JSON.parse(readFileSync(metaPath, "utf-8"));
+        if (meta.projectId === projectId) {
+          rmSync(path.join(ATTACHMENTS_DIR, dirent.name), { recursive: true, force: true });
+          deleted++;
+        }
+      } catch {
+        // Can't read meta — skip
+      }
+    }
+  } catch {
+    // Can't read attachments dir — skip
+  }
+  if (deleted > 0) {
+    console.log(`[Attachments] Deleted ${deleted} attachment(s) for project ${projectId}`);
+  }
+  return deleted;
+}
 
 export default router;

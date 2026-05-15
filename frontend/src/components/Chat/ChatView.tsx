@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff } from "lucide-react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Eye, EyeOff, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -474,7 +474,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const uploadedAttachments = attachments.filter((a) => a.attachmentId && a.uploadStatus === "done");
     const imageAttachments = uploadedAttachments
       .filter((a) => a.category === "image")
-      .map((a) => ({ data: a.data, mimeType: a.mimeType }));
+      .map((a) => ({ attachmentId: a.attachmentId!, name: a.name, mimeType: a.mimeType }));
     const attachmentRefs = uploadedAttachments.map((a) => ({
       id: a.attachmentId!,
       name: a.name,
@@ -521,7 +521,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       type: "pi_prompt",
       projectId,
       message: fullMessage,
-      images: imageAttachments.length > 0 ? imageAttachments : undefined,
+      // Images are no longer sent as base64 — the LLM uses analyze_file to access them
     });
   }, [send, projectId]);
 
@@ -721,27 +721,79 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
         {message.images && message.images.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2">
             {message.images.map((img, i) => (
-              <img
-                key={i}
-                src={`data:${img.mimeType};base64,${img.data}`}
-                alt="Attached image"
-                className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors"
-                onClick={() => onFileClick({ type: "image", src: `data:${img.mimeType};base64,${img.data}`, name: "image" })}
-              />
+              <div key={i} className="relative group">
+                <img
+                  src={`/api/attachments/${img.attachmentId}/file`}
+                  alt={img.name}
+                  className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors"
+                  onClick={() => onFileClick({ type: "image", src: `/api/attachments/${img.attachmentId}/file`, name: img.name })}
+                />
+                <a
+                  href={`/api/attachments/${img.attachmentId}/file`}
+                  download={img.name}
+                  className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Download"
+                >
+                  <Download size={12} />
+                </a>
+              </div>
             ))}
+          </div>
+        )}
+        {message.attachmentRefs && message.attachmentRefs.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {message.attachmentRefs.map((ref, i) => {
+              const icon = ref.category === "image" ? "🖼️" : ref.category === "pdf" ? "📄" : ref.category === "audio" ? "🎵" : ref.category === "video" ? "🎬" : ref.category === "text" ? "📝" : "📎";
+              const fileUrl = `/api/attachments/${ref.id}/file`;
+              return (
+                <div key={i} className="relative group">
+                  <button
+                    className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright"
+                    onClick={() => {
+                      if (ref.category === "image") {
+                        onFileClick({ type: "image", src: fileUrl, name: ref.name });
+                      } else if (ref.category === "pdf") {
+                        window.open(fileUrl, "_blank");
+                      }
+                    }}
+                  >
+                    <span>{icon}</span>
+                    <span>{ref.name}</span>
+                    <span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span>
+                  </button>
+                  <a
+                    href={fileUrl}
+                    download={ref.name}
+                    className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Download"
+                  >
+                    <Download size={10} />
+                  </a>
+                </div>
+              );
+            })}
           </div>
         )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2">
             {message.attachments.map((att, i) => (
-              <button
-                key={i}
-                className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright"
-                onClick={() => onFileClick({ type: "text", content: att.content, name: att.name })}
-              >
-                <FileText size={12} />
-                {att.name}
-              </button>
+              <div key={i} className="relative group">
+                <button
+                  className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright"
+                  onClick={() => onFileClick({ type: "text", content: att.content, name: att.name })}
+                >
+                  <FileText size={12} />
+                  {att.name}
+                </button>
+                <a
+                  href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`}
+                  download={att.name}
+                  className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Download"
+                >
+                  <Download size={10} />
+                </a>
+              </div>
             ))}
           </div>
         )}

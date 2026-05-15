@@ -85,11 +85,14 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         ? msg.content
         : extractTextContent(msg.content);
 
-      // Extract images from content blocks
+      // Extract images from content blocks (legacy base64 format)
       const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
       const images = contentBlocks
-        .filter((b: any) => b.type === "image" && b.data && b.mimeType)
-        .map((b: any) => ({ data: b.data, mimeType: b.mimeType }));
+        .filter((b: any) => b.type === "image" && (b.data || b.attachmentId))
+        .map((b: any) => b.attachmentId
+          ? { attachmentId: b.attachmentId, name: b.name || "image", mimeType: b.mimeType }
+          : { attachmentId: "", name: "image", mimeType: b.mimeType || "image/png" }  // legacy base64 — preview lost
+        );
 
       // Skip empty user messages (unless they have images)
       if (!text.trim() && images.length === 0) continue;

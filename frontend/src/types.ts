@@ -86,9 +86,9 @@ export interface DisplayMessage {
   // Custom message metadata (for git_notification, etc.)
   customType?: string;
   display?: boolean;
-  // Images attached to user message
-  images?: { data: string; mimeType: string }[];
-  // Text/code files attached to user message
+  // Images attached to user message (server URLs instead of inline base64)
+  images?: { attachmentId: string; name: string; mimeType: string }[];
+  // Text/code files attached to user message (legacy, kept for old messages)
   attachments?: { name: string; content: string; mimeType: string }[];
   // Attachment references (uploaded file IDs)
   attachmentRefs?: { id: string; name: string; category: string; size: number }[];
