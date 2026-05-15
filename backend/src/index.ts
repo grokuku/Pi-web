@@ -173,7 +173,7 @@ app.get("/api/status/update", async (_req, res) => {
     res.json({
       currentVersion: piWebVersion,
       latestVersion,
-      updateAvailable: latestVersion !==> piWebVersion && latestVersion !== "",
+      updateAvailable: latestVersion !== piWebVersion && latestVersion !== "",
     });
   } catch (e: any) {
     res.status(504).json({ error: e.message });
