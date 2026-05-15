@@ -728,7 +728,22 @@ const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // For review mode: bash allowed but only for read-only exploration
 const REVIEW_TOOLS = ["read", "bash", "grep", "find", "ls"];
-const ALL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+/** Get extension tool names registered in the session */
+function getExtensionToolNames(session: any): string[] {
+  try {
+    const allTools = session.getAllTools?.() ?? [];
+    return allTools
+      .map((t: any) => t.name)
+      .filter((name: string) => !BASE_TOOLS.includes(name));
+  } catch { return []; }
+}
+
+/** Merge base tools + extension tools for a given mode */
+function toolsForMode(session: any, baseTools: string[]): string[] {
+  return [...baseTools, ...getExtensionToolNames(session)];
+}
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
 /**
@@ -993,13 +1008,14 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   }
 
   // ── Apply tool filtering ──
+  // Include extension tools alongside base mode tools
   if (mode === "plan") {
-    (session as any).setActiveToolsByName(PLAN_TOOLS);
+    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS));
   } else if (mode === "review") {
-    (session as any).setActiveToolsByName(REVIEW_TOOLS);
+    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS));
   } else {
-    // Code mode: all tools
-    (session as any).setActiveToolsByName(ALL_TOOLS);
+    // Code mode: all base tools + extension tools
+    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
   }
 
   // ── Inject mode instructions into system prompt ──
@@ -1077,8 +1093,8 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     }
   }
 
-  // Restore all tools
-  (session as any).setActiveToolsByName(ALL_TOOLS);
+  // Restore all tools (base + extension)
+  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
 
   // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
   let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
