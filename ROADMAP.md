@@ -24,22 +24,122 @@
 
 ---
 
+
+- **[?] Historique chat disparait avec 3 panneaux visibles** — Quand on ouvre le 3e module (pi + terminal + files), la conversation semble vide. L'historique est toujours dans le store (useChatHistory), mais ChatView perd son useState interne. Cause probable : remontage de ChatView du au changement de layout (LayoutRenderer change de structure JSX entre 2 et 3 panneaux). Le useState([]) se reinitialise, et le useEffect de restauration ne se declenche pas car projectId n'a pas change. Fix possible : monter ChatView a l'exterieur du LayoutRenderer (toujours visible, display:none gere par CSS), ou monter le state messages au niveau App au lieu de ChatView.
+
+- **[?] Stats du contexte incohérentes dans la StatusBar** — La barre en bas montre `ctx 0.2K   30%   /128K`, mais 0.2K (200 tokens) ne fait pas 30% de 128K (ca serait ~38K). Cause : les trois valeurs viennent de sources differentes :
+  - `tokens` = `u.input` du dernier message (juste le prompt, pas le contexte cumule)
+  - `contextPercent` = `Math.round(lastInputTokens / contextWindow * 100)` — pourcentage du DERNIER prompt, pas du contexte total. En plus il n'augmente que via `Math.max(prevStats.contextPercent, contextPercent)`, donc il reste bloque a son pic historique
+  - `totalTokens` = cumul de tous les tokens (input + output)
+  - `/128K` = `session.model.contextWindow` (la fenetre max du modele)
+  - Les trois ne sont pas lies entre eux, ce qui affiche des chiffres contradictoires. Fix : `tokens` devrait etre le contexte cumule (total des messages dans la session), `contextPercent` le ratio de ce cumule par rapport a `contextWindow`, et `totalTokens` peut rester cumulatif pour le cout.
+
+
+
 ## 💡 Idées pour plus tard
 
 ### UX / Frontend
 
 - **Timestamps relatifs dans le chat** — Afficher `[2min]`, `[1h30]` entre les messages si le délai dépasse 30s. Donne au LLM une notion de chronologie sans polluer le contexte. Format proposé : `[0s] user: ... [45s] assistant: ...` — seulement si gap > 30s.
-- **Onglet Analysis Models dans Settings** — Déjà implémenté (vision model, audio model, commit model). Manque la sélection de modèle audio (Whisper-compatible).
-- **Prévisualisation PDF inline** — Au lieu d'ouvrir dans un nouvel onglet, afficher les PDF dans le viewer modal avec pdf.js.
-- **Drag & drop multiple** — Accepter plusieurs fichiers en même temps (déjà supporté côté backend, à vérifier côté frontend).
+- **Presets de modèles** — Bouton à côté du sélecteur de mode (code/plan/review) pour sauvegarder/recharger des configurations complètes de modèles. Un preset = combinaison de (codeModel, planModel, reviewModel, visionModel, audioTranscriptionModel, audioAnalysisModel, commitModel, niveaux de thinking) associés à un nom. Permet de basculer rapidement entre "full power (cher)", "moyen", "light (gratuit)". Stockage côté backend dans un fichier JSON, switch via un seul appel API qui set tous les modèles d'un coup.
+- **Export / Import de config complète** — Bouton dans Settings → General pour exporter toute la configuration (serveur + localStorage) en un seul fichier JSON, et bouton pour l'importer. Doit inclure : modèles (code/plan/review/vision/audio/commit), presets, thème, raccourcis, préférences UI, niveaux de thinking, providers. L'export télécharge un fichier .json ; l'import le parse et applique tout (appels API pour le serveur, setItem pour le localStorage). Utile pour backup, migration, ou partage de config entre instances.
+- **Onglet Analysis Models dans Settings** — Déjà implémenté (vision model, audio model, commit model). Manque la sélection de modèle audio de transcription et d'analyse (voir section Backend → Analyse Audio).
+- **Pieces jointes multiples** — Accepter plusieurs fichiers en meme temps (deja supporte cote backend, a verifier cote frontend).
+- **Refonte du rendu Thinking + Tools** — Le rendu actuel est brut : <pre> gris pour le thinking, badges 10px pour les outils, JSON brut, word-break: break-all moche. Objectif :
+  - Animations fluides (apparition/disparition des blocs)
+  - Hiérarchie visuelle claire : thinking -> appels d'outils -> résultat -> réponse finale
+  - Icônes par type d'outil (read, bash, edit, grep, find, ls, firecrawl, memory, analyze_file)
+  - Les badges outils transformés en timeline verticale (comme dans les IDEs)
+  - Output des outils : typographie propre, pas de mots coupés, max-height avec scroll smooth
+  - Thinking : fond distinct, possibilité de copier, barre de progression visuelle
+  - Streaming : effet de frappe fluide, pas de sauts
+- **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
+- **ModelQuickSwitch : supprimer le bouton commit** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
+- **Onglet Analysis Models : afficher le nom du provider au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
 
 ### Backend / Architecture
 
-- **Audio transcription (Whisper)** — Endpoint `/analyze` déjà prévu pour le type `audio`, mais pas implémenté. Nécessite un service Whisper (local ou API).
-- **Analyse vidéo** — Extraction de frames via ffmpeg + transcription audio. Structure de cache déjà en place (`/data/attachments/<id>/cache/`).
-- **Cache d'analyse** — Les résultats `analyze_file` pourraient être mis en cache côté backend (déjà prév dans `meta.json` → `analysisCache`) pour éviter de re-analyser le même fichier avec la même query.
-- **Nettoyage automatique des attachments** — Job périodique (cron) pour supprimer les fichiers plus anciens que X jours, ou liés à des projets supprimés.
-- **Rate limiting sur `/api/attachments/upload`** — Protéger contre les abus (limite par IP ou par session).
+#### 🎵 Analyse Audio (deux modes distincts)
+
+**Mode 1 — Transcription (parole → texte)**
+- Modèle dédié type Whisper (configuration : `audioTranscriptionModelId`)
+- Entrée : fichier audio (wav, mp3, ogg, flac, etc.) → sortie : texte brut
+- Options : local (whisper.cpp, faster-whisper) ou API (OpenAI Whisper)
+- Le paramètre `mode: "transcribe"` ou query contenant "transcri" déclenche ce mode
+
+**Mode 2 — Analyse / Compréhension audio (audio → description)**
+- Modèle multimodal capable de traiter l'audio (Gemma 4, GPT-4o-audio, etc.)
+- Entrée : fichier audio → sortie : description riche (émotions, instruments, ambiance, structure)
+- Configuration : `audioAnalysisModelId` (peut être le même que le modèle de transcription)
+- Comprend la musique, les sons ambiants, les dialogues
+- Déclenché par défaut, ou via `mode: "describe"`
+
+**Architecture proposée :**
+```
+analyze_file(file_id, query, mode?)
+               │
+      ┌────────┴────────┐
+      │                  │
+mode: transcribe    mode: analyze (default)
+      │                  │
+ Modèle de           Modèle d'analyse
+ transcription       audio (multimodal)
+ (Whisper, etc.)     (Gemma 4, etc.)
+      │                  │
+      ▼                  ▼
+ Texte brut         Description riche
+ "Bonjour, je       "Saxo jazz doux,
+  voudrais..."       ambiance nocturne,
+                     tempo lent..."
+```
+
+**Configuration dans Settings :**
+| Champ | Endpoint | Modèle typique |
+|---|---|---|
+| `audioTranscriptionModelId` | `PUT /api/model-library/audio-transcription/:id` | whisper-large-v3 |
+| `audioAnalysisModelId` | `PUT /api/model-library/audio-analysis/:id` | gemma4:31b, gpt-4o-audio |
+
+**Implémentation backend :**
+- Endpoint `POST /api/attachments/:id/analyze` déjà existant, ajout du dispatch audio
+- Si MIME type commence par `audio/` :
+  - Si `query` contient "transcri" ou `mode === "transcribe"` → transcription
+  - Sinon → analyse via modèle multimodal
+- Les deux modèles sont optionnels — si non configurés, retourner un message clair
+- Résultat mis en cache dans `meta.json` → `analysisCache` (future optimisation)
+
+---
+
+#### 📄 Analyse PDF visuelle (texte + images)
+
+**Principe :** extraire à la fois le texte ET les images de chaque page, et lier les images dans le texte via leur `attachmentRef` (id) pour que le LLM puisse décider d'appeler `analyze_file` ou non.
+
+**Architecture proposée :**
+```
+PDF uploadé
+     │
+     ├── pdf-parse ──────────────► Texte extrait
+     ├── Rendu des pages en       │
+     │   images (pdfjs-dist ou   Les 📎 page-N.png sont
+     │   poppler-utils)          placées dans le texte
+     ├── OCR (Tesseract.js) ──►  Si PDF scanné, fallback
+```
+
+**Stockage :**
+- Même système que les uploads : `/data/attachments/<uuid>/`
+- Chaque image de page devient un attachment avec `parentId: <uuid-du-pdf>` dans `meta.json`
+- Le résultat d'analyse est un texte enrichi : `"...le graphique montre...\n📎 page-3.png (id: xyz, 1.2 MB)\n...comme illustré ci-dessus"`
+- L'extraction est **paresseuse** : déclenchée à l'appel de `analyze_file`, pas à l'upload
+
+**Comportement :**
+- PDF textuel → `pdf-parse` + images des pages (liées)
+- PDF scanné (peu de texte) → OCR Tesseract + images des pages
+- Le LLM reçoit le texte avec les refs et appelle `analyze_file` sur une image si nécessaire
+
+---
+
+### Autres idées Backend
+- **Statistiques d utilisation des tokens** — Enregistrer chaque turn dans un fichier JSON (`/data/usage/YYYY-MM-DD.json`) avec : modele, provider, tokens input/output, cout, timestamp. API pour interroger les stats par jour/semaine/mois, par modele ou global. Frontend : page de stats dans Settings ou modal dedie. Permet de comparer le cout reel des providers et d optimiser ses reglages.
+
 
 ### Extensions Pi
 
@@ -65,7 +165,8 @@
 | Analyse PDF | ✅ | `pdf-parse`, extraction de texte |
 | Analyse images | ✅ | Fallback via modèle vision configuré |
 | Analyse texte/code | ✅ | Lecture directe du fichier |
-| Analyse audio | ⏳ | Placeholder, pas encore implémenté |
+| Analyse audio — transcription | ⏳ | Whisper ou autre modèle de STT configurable |
+| Analyse audio — description | ⏳ | Modèle multimodal (Gemma 4, GPT-4o-audio) |
 | Analyse vidéo | ⏳ | Placeholder, pas encore implémenté |
 | Download bouton | ✅ | Hover sur les pièces jointes, `<a download>` |
 | Suppression avec projet | ✅ | `deleteAttachmentsForProject()` |
@@ -85,7 +186,8 @@
 | Type | Config | Endpoint |
 |---|---|---|
 | Vision model | `visionModelId` dans ModelLibrary | `PUT /api/model-library/vision-model/:id` |
-| Audio model | `audioModelId` dans ModelLibrary | `PUT /api/model-library/audio-model/:id` |
+| Audio transcription | `audioTranscriptionModelId` dans ModelLibrary | `PUT /api/model-library/audio-transcription/:id` |
+| Audio analysis | `audioAnalysisModelId` dans ModelLibrary | `PUT /api/model-library/audio-analysis/:id` |
 | Commit model | `commitModelId` dans ModelLibrary | `PUT /api/model-library/commit-model/:id` |
 
 ---
@@ -113,3 +215,29 @@ Stockage
       ├── meta.json          ← {id, name, originalName, mimeType, projectId, ...}
       └── cache/            ← résultats d'analyse (futur)
 ```
+
+---
+
+## 📊 Résumé succinct des bugs et features
+
+| # | Type | Description |
+|---|------|-------------|
+| 1 | 🟡 Bug | **Historique chat disparait** avec 3 panneaux visibles |
+| 2 | 🟡 Bug | **Stats contexte incohérentes** dans la StatusBar |
+| 3 | 💡 | **Timestamps relatifs** dans le chat |
+| 4 | 💡 | **Presets de modèles** (sauver/charger des configs complètes) |
+| 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
+| 6 | 💡 | **Analyse audio** — transcription (Whisper) + description (multimodal) |
+| 7 | 💡 | **Analyse PDF visuelle** — texte + images des pages liées |
+| 8 | 💡 | **Refonte rendu Thinking + Tools** — timeline, icônes, animations |
+| 9 | 💡 | **Provider name** au lieu de l'ID dans Analysis Models |
+| 10 | 💡 | **Tri alphabétique** des modèles dans ModelQuickSwitch |
+| 11 | 💡 | **Supprimer bouton commit** du header |
+| 12 | 💡 | **Prévisualisation PDF inline** |
+| 13 | 💡 | **Cache d'analyse** des fichiers |
+| 14 | 💡 | **Nettoyage auto** des attachments |
+| 15 | 💡 | **Rate limiting** upload |
+| 16 | 💡 | **Extensions** Slack/Discord, Git hooks, Skill revue de code |
+| 17 | 💡 | **Streaming** résultats d'analyse (gros PDFs) |
+| 18 | 💡 | **Mise à jour progressive** des attachments (WebSocket) |
+| 19 | 💡 | **Stats d'utilisation** des tokens (jour/semaine/mois, par modèle/providers) |
