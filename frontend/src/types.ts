@@ -101,6 +101,7 @@ export interface ToolCallInfo {
   output: string;
   isError: boolean;
   isStreaming: boolean;
+  startTime?: number;
 }
 
 // ── Providers ─────────────────────────────────────────

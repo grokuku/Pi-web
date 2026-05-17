@@ -45,14 +45,12 @@
 - **Export / Import de config complète** — Bouton dans Settings → General pour exporter toute la configuration (serveur + localStorage) en un seul fichier JSON, et bouton pour l'importer. Doit inclure : modèles (code/plan/review/vision/audio/commit), presets, thème, raccourcis, préférences UI, niveaux de thinking, providers. L'export télécharge un fichier .json ; l'import le parse et applique tout (appels API pour le serveur, setItem pour le localStorage). Utile pour backup, migration, ou partage de config entre instances.
 - **Onglet Analysis Models dans Settings** — Déjà implémenté (vision model, audio model, commit model). Manque la sélection de modèle audio de transcription et d'analyse (voir section Backend → Analyse Audio).
 - **Pieces jointes multiples** — Accepter plusieurs fichiers en meme temps (deja supporte cote backend, a verifier cote frontend).
-- **Refonte du rendu Thinking + Tools** — Le rendu actuel est brut : <pre> gris pour le thinking, badges 10px pour les outils, JSON brut, word-break: break-all moche. Objectif :
-  - Animations fluides (apparition/disparition des blocs)
-  - Hiérarchie visuelle claire : thinking -> appels d'outils -> résultat -> réponse finale
-  - Icônes par type d'outil (read, bash, edit, grep, find, ls, firecrawl, memory, analyze_file)
-  - Les badges outils transformés en timeline verticale (comme dans les IDEs)
-  - Output des outils : typographie propre, pas de mots coupés, max-height avec scroll smooth
-  - Thinking : fond distinct, possibilité de copier, barre de progression visuelle
-  - Streaming : effet de frappe fluide, pas de sauts
+- ✅ **Refonte du rendu Thinking + Tools** — Fait le 2026-05-17. Nouveaux composants `ThinkingBlock` et `ToolTimeline` :
+  - ThinkingBlock : fond distinct avec bordure gauche, bouton copier, barre de progression pendant le streaming
+  - ToolTimeline : timeline verticale avec icônes par type d'outil, arguments formatés, toggle individuel par outil
+  - Mode compact (badges) et mode détaillé (timeline) pour les outils
+  - CSS : `word-break: break-word` au lieu de `break-all`, animations `fadeIn`/`slideDown`/`toolPulse`
+  - Anciens composants `ToolCallCard`, `getToolShortLabel`, `extractToolArgs` supprimés
 - **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
 - ✅ **ModelQuickSwitch : supprimer le bouton commit**** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
 - ✅ **Onglet Analysis Models : afficher le nom du provider** au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
@@ -229,7 +227,7 @@ Stockage
 | 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
 | 6 | 💡 | **Analyse audio** — transcription (Whisper) + description (multimodal) |
 | 7 | 💡 | **Analyse PDF visuelle** — texte + images des pages liées |
-| 8 | 💡 | **Refonte rendu Thinking + Tools** — timeline, icônes, animations |
+| 8 | ✅ Done | **Refonte rendu Thinking + Tools** — timeline, icônes, animations |
 | 9 | ✅ Done | **Provider name** au lieu de l'ID dans Analysis Models |
 | 10 | ✅ Done | **Tri alphabétique** des modèles dans ModelQuickSwitch |
 | 11 | ✅ Done | **Supprimer bouton commit** du header |

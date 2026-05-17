@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { ToolTimeline } from "./ToolTimeline";
 
 // ── Memoized ReactMarkdown to avoid re-parsing on every render ──
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
@@ -287,7 +289,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
             setStreamingThinking((prev) => prev + delta.delta);
           }
           if (delta.type === "toolcall_start") {
-            const startArgs = extractToolArgs(delta.args);
+            const startArgs = delta.args?.arguments ?? delta.args?.input ?? delta.args ?? {};
             setCurrentToolCalls((prev) => {
               if (prev.some((tc) => tc.id === delta.toolCallId)) return prev;
               return [...prev, {
@@ -297,12 +299,13 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
             });
           }
           if (delta.type === "toolcall_delta") {
+            const deltaArgs = delta.argsDelta?.arguments ?? delta.argsDelta?.input ?? delta.argsDelta ?? {};
             setCurrentToolCalls((prev) => prev.map((tc) =>
               tc.id === delta.toolCallId
-                ? { ...tc, args: { ...tc.args, ...extractToolArgs(delta.argsDelta) } } : tc));
+                ? { ...tc, args: { ...tc.args, ...deltaArgs } } : tc));
           }
           if (delta.type === "toolcall_end") {
-            const endArgs = extractToolArgs(delta.toolCall);
+            const endArgs = delta.toolCall?.arguments ?? delta.toolCall?.input ?? delta.toolCall ?? {};
             setCurrentToolCalls((prev) => prev.map((tc) =>
               tc.id === delta.toolCallId
                 ? { ...tc, args: endArgs, isStreaming: false } : tc));
@@ -312,7 +315,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
         case "tool_execution_start": {
           setCurrentToolCalls((prev) => prev.map((tc) =>
-            tc.id === evt.toolCallId ? { ...tc, isStreaming: true } : tc));
+            tc.id === evt.toolCallId ? { ...tc, isStreaming: true, startTime: tc.startTime || Date.now() } : tc));
           break;
         }
 
@@ -812,8 +815,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
   showAllThinking: boolean;
   expandTools: boolean;
 }) {
-  const [localShow, setLocalShow] = useState(showAllThinking);
-  useEffect(() => { setLocalShow(showAllThinking); }, [showAllThinking]);
+  const [localToolsExpanded, setLocalToolsExpanded] = useState(false);
 
   // Collect all thinking, all tool calls, and the last meaningful text content
   const allThinking: string[] = [];
@@ -837,43 +839,41 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
   const hasThinking = allThinking.length > 0;
   const hasTools = allTools.length > 0;
 
-  // Build a combined label for the collapsible zone
-  const collapsibleLabel = [
-    hasThinking ? `THINKING (${allThinking.length})` : null,
-    hasTools ? `TOOLS (${allTools.length})` : null,
-  ].filter(Boolean).join(" · ");
-
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
-        {/* Thinking + Tools — collapsible zone (the "internal reasoning" block) */}
-        {(hasThinking || hasTools) && (
-          <div className="px-3 pt-2 pb-1">
-            {/* Single toggle button that mentions both thinking and tools */}
-            {collapsibleLabel && (
-              <button onClick={() => setLocalShow(!localShow)}
-                className="text-[10px] text-hacker-warn hover:underline mb-1">
-                {localShow ? "▼" : "▶"} {collapsibleLabel}
+        {/* Thinking — show/hide based on global toggle */}
+        {hasThinking && showAllThinking && (
+          <div className="px-3 pt-2">
+            <ThinkingBlock thinking={mergedThinking} />
+          </div>
+        )}
+        {hasThinking && !showAllThinking && (
+          <div className="px-3 pt-1">
+            <span className="text-[10px] text-hacker-text-dim italic">
+              Thinking hidden ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
+            </span>
+          </div>
+        )}
+
+        {/* Tools — compact badges or expanded timeline */}
+        {hasTools && (
+          <div className="px-3 pt-1 pb-1">
+            <div className="flex items-center gap-2 mb-1">
+              <button onClick={() => setLocalToolsExpanded(!localToolsExpanded)}
+                className="text-[10px] text-hacker-warn hover:underline">
+                {localToolsExpanded ? "▼" : "▶"} TOOLS ({allTools.length})
               </button>
-            )}
-            {localShow && (
-              <>
-                {hasThinking && (
-                  <pre className="text-hacker-text-dim text-xs bg-hacker-bg/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
-                    {mergedThinking}
-                  </pre>
-                )}
-                {hasTools && (
-                  <div className="space-y-1">
-                    {allTools.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
-                  </div>
-                )}
-              </>
+            </div>
+            {localToolsExpanded ? (
+              <ToolTimeline tools={allTools} />
+            ) : (
+              <ToolTimeline tools={allTools} compact onExpand={() => setLocalToolsExpanded(true)} />
             )}
           </div>
         )}
 
-        {/* Final text — ReactMarkdown for formatting, <pre> for code blocks */}
+        {/* Final text */}
         {finalText && (
           <div className="px-3 py-2 prose-hacker">
             <MemoizedReactMarkdown>{finalText}</MemoizedReactMarkdown>
@@ -899,43 +899,39 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
   showAllThinking: boolean;
   expandTools: boolean;
 }) {
-  const [localShow, setLocalShow] = useState(showAllThinking);
-  useEffect(() => { setLocalShow(showAllThinking); }, [showAllThinking]);
+  const [localToolsExpanded, setLocalToolsExpanded] = useState(true);
 
   const hasThinking = !!thinking;
   const hasTools = toolCalls.length > 0;
 
-  // Combined label
-  const collapsibleLabel = [
-    hasThinking ? "THINKING" : null,
-    hasTools ? `TOOLS (${toolCalls.length})` : null,
-  ].filter(Boolean).join(" · ");
-
   return (
     <div className="flex justify-start mb-3">
       <div className="max-w-[95%] bg-hacker-surface border border-hacker-border rounded-r-lg rounded-bl-lg">
-        {/* Thinking + Tool calls — collapsible zone */}
-        {(hasThinking || hasTools) && (
-          <div className="px-3 pt-2 pb-1">
-            {collapsibleLabel && (
-              <button onClick={() => setLocalShow(!localShow)}
-                className="text-[10px] text-hacker-warn hover:underline mb-1">
-                {localShow ? "▼" : "▶"} {collapsibleLabel}
+        {/* Thinking — visible if global toggle on + has content */}
+        {hasThinking && showAllThinking && (
+          <div className="px-3 pt-2">
+            <ThinkingBlock thinking={thinking} isStreaming />
+          </div>
+        )}
+        {hasThinking && !showAllThinking && (
+          <div className="px-3 pt-1">
+            <span className="text-[10px] text-hacker-text-dim italic">Thinking hidden</span>
+          </div>
+        )}
+
+        {/* Tools — compact badges or expanded timeline */}
+        {hasTools && (
+          <div className="px-3 pt-1 pb-1">
+            <div className="flex items-center gap-2 mb-1">
+              <button onClick={() => setLocalToolsExpanded(!localToolsExpanded)}
+                className="text-[10px] text-hacker-warn hover:underline">
+                {localToolsExpanded ? "▼" : "▶"} TOOLS ({toolCalls.length})
               </button>
-            )}
-            {localShow && (
-              <>
-                {hasThinking && (
-                  <pre className="text-hacker-text-dim text-xs bg-hacker-bg/30 border border-hacker-border p-2 italic whitespace-pre-wrap max-h-60 overflow-y-auto rounded-sm font-mono mb-2">
-                    {thinking}
-                  </pre>
-                )}
-                {hasTools && (
-                  <div className="space-y-1">
-                    {toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} defaultExpanded={expandTools} />)}
-                  </div>
-                )}
-              </>
+            </div>
+            {localToolsExpanded ? (
+              <ToolTimeline tools={toolCalls} />
+            ) : (
+              <ToolTimeline tools={toolCalls} compact onExpand={() => setLocalToolsExpanded(true)} />
             )}
           </div>
         )}
@@ -956,111 +952,6 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
   );
 })
 
-// ── Tool Call Card ─────────────────────────────────────
-// Two modes:
-// - "badge" (default for completed tools): tiny inline pill like  ✓ bash  ✓ edit src/file.ts
-// - "detail" (for streaming or when user clicks): full card with args/output
-const ToolCallCard = memo(function ToolCallCard({ toolCall, defaultExpanded = true, forceBadge = false }: {
-  toolCall: ToolCallInfo;
-  defaultExpanded?: boolean;
-  forceBadge?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  // Auto-collapse when tool finishes running (isStreaming goes from true → false)
-  const wasStreaming = useRef(toolCall.isStreaming);
-  useEffect(() => {
-    if (wasStreaming.current && !toolCall.isStreaming) {
-      // Tool just finished — collapse it
-      setExpanded(false);
-    }
-    wasStreaming.current = toolCall.isStreaming;
-  }, [toolCall.isStreaming]);
-
-  // Sync with global toggle (only expand, never force-collapse)
-  useEffect(() => { if (defaultExpanded) setExpanded(true); }, [defaultExpanded]);
-
-  const displayArgs = extractToolArgs(toolCall.args);
-  const isRunning = toolCall.isStreaming;
-  const isDone = !isRunning && (toolCall.output || !toolCall.isError);
-  const shortLabel = getToolShortLabel(toolCall.name, displayArgs);
-
-  // Badge mode: compact pill for completed tools
-  if (!isRunning && !expanded && (isDone || toolCall.isError)) {
-    return (
-      <button onClick={() => setExpanded(true)}
-        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm border mr-1 mb-1 ${
-          toolCall.isError
-            ? "border-hacker-error/40 text-hacker-error bg-hacker-error/5"
-            : "border-hacker-border text-hacker-text-dim bg-hacker-bg/50 hover:bg-hacker-border/30"
-        }`}
-        title={toolCall.output ? toolCall.output.slice(0, 200) : undefined}>
-        {toolCall.isError ? "✕" : "✓"} {shortLabel}
-      </button>
-    );
-  }
-
-  // Detail mode: full card
-  return (
-    <div className="mt-2 border border-hacker-border bg-hacker-bg/50 overflow-hidden">
-      <button onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-hacker-info hover:bg-hacker-border/50">
-        <span>{expanded ? "▼" : "▶"}</span>
-        <span className="font-bold">{toolCall.name}</span>
-        {isRunning && <span className="text-hacker-accent">⟳</span>}
-        {toolCall.isError && <span className="text-hacker-error">✕ error</span>}
-        {!isRunning && !toolCall.isError && toolCall.output && <span className="text-hacker-text-dim">✓</span>}
-      </button>
-      {expanded && (
-        <div>
-          {displayArgs && typeof displayArgs === "object" && Object.keys(displayArgs).length > 0 && (
-            <div className="px-3 py-1 text-[10px] text-hacker-text-dim">
-              {JSON.stringify(displayArgs, null, 2)}
-            </div>
-          )}
-          {toolCall.output && (
-            <div className={`tool-output ${toolCall.isError ? "text-hacker-error" : ""}`}>{toolCall.output}</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-})
-
-/** Short label for a tool call badge, e.g. "bash", "edit src/app.tsx", "read README.md" */
-function getToolShortLabel(name: string, args: any): string {
-  if (!args || typeof args !== "object") return name;
-  // Try to find a filename-like argument
-  const fileKeys = ["file_path", "filePath", "path", "filename", "file", "directory", "dir"];
-  for (const key of fileKeys) {
-    if (args[key] && typeof args[key] === "string") {
-      const f = args[key] as string;
-      // Show just the basename
-      const base = f.split("/").pop() || f;
-      return `${name} ${base}`;
-    }
-  }
-  // Try command
-  if (args.command && typeof args.command === "string") {
-    const cmd = (args.command as string).slice(0, 30);
-    return `${name} ${cmd}${(args.command as string).length > 30 ? "…" : ""}`;
-  }
-  // Try query/pattern
-  if (args.pattern && typeof args.pattern === "string") {
-    return `${name} ${args.pattern}`;
-  }
-  return name;
-}
-
-/** Extract the actual arguments from a potentially-wrapped tool call object. */
-function extractToolArgs(args: any): any {
-  if (!args || typeof args !== "object") return args;
-  if ("arguments" in args && typeof args.arguments === "object") return args.arguments;
-  if ("input" in args && typeof args.input === "object") return args.input;
-  const { type, id, name, ...rest } = args;
-  if (Object.keys(rest).length > 0) return rest;
-  return args;
-}
 // ── ChatInputArea (isolated to prevent re-renders on every keystroke) ──
 
 const ChatInputArea = memo(function ChatInputArea({
