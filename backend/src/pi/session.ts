@@ -197,7 +197,7 @@ export async function createPiSession(
               .join("");
           }
         }
-      } else if (event.type === "agent_start") {
+      console.log("[event]", event.type);
         const state = sessionsByProject.get(projectId);
         if (state) state.isStreaming = true;
         emitSessionUpdate(projectId);
@@ -232,6 +232,7 @@ export async function createPiSession(
 
       // Forward to WebSocket subscribers (with projectId for routing)
       emitToSubscribers(event, projectId);
+      
     });
 
     const newSession: PiSessionState = {
