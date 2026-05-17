@@ -465,7 +465,9 @@ export async function sendPrompt(
     try { await state.session.abort(); } catch {}
     const options: any = {};
     options.images = imageAttachments;
+    console.log("[prompt] Calling session.prompt()...");
     await state.session.prompt(message, options);
+    console.log("[prompt] session.prompt() returned!");
   } else if (state.isStreaming) {
     await state.session.steer(message);
   } else {
@@ -473,7 +475,9 @@ export async function sendPrompt(
     if (imageAttachments && imageAttachments.length > 0) {
       options.images = imageAttachments;
     }
+    console.log("[prompt] Calling session.prompt()...");
     await state.session.prompt(message, options);
+    console.log("[prompt] session.prompt() returned!");
   }
 
   // ── Trigger auto-review if applicable ──
