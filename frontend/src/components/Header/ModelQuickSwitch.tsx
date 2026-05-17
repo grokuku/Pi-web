@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ChevronDown, Power, Star, GitCommit } from "lucide-react";
+import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
 
@@ -18,7 +18,7 @@ interface Props {
 }
 
 export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied }: Props) {
-  const [openMode, setOpenMode] = useState<AgentMode | "commit" | null>(null);
+  const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const ref = useRef<HTMLDivElement>(null);
@@ -69,15 +69,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return library?.models[0] || null;
   };
 
-  const getCommitModel = (): RegisteredModel | null => {
-    if (!library) return null;
-    if (library.commitModelId) {
-      const m = library.models.find(m => m.id === library.commitModelId);
-      if (m) return m;
-    }
-    return library.models.find(m => m.id === library.defaultModelId) || library.models[0] || null;
-  };
-
   const handleSelectModel = async (mode: AgentMode, modelId: string) => {
     if (!activeProjectId) return;
     try {
@@ -89,26 +80,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       await loadLibrary();
       onModelApplied?.();
     } catch (e) { console.error("handleSelectModel error:", e); }
-    setOpenMode(null);
-  };
-
-  const handleSetCommitModel = async (modelId: string) => {
-    try {
-      await fetch(`/api/model-library/commit-model/${encodeURIComponent(modelId)}`, {
-        method: "PUT",
-      });
-      await loadLibrary();
-      onModelApplied?.();
-    } catch (e) { console.error("handleSetCommitModel error:", e); }
-    setOpenMode(null);
-  };
-
-  const handleClearCommitModel = async () => {
-    try {
-      await fetch("/api/model-library/commit-model", { method: "DELETE" });
-      await loadLibrary();
-      onModelApplied?.();
-    } catch (e) { console.error("handleClearCommitModel error:", e); }
     setOpenMode(null);
   };
 
@@ -149,7 +120,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("handleMaxReviews error:", e); }
   };
 
-  const handleChipClick = (mode: AgentMode | "commit") => {
+  const handleChipClick = (mode: AgentMode) => {
     if (openMode === mode) { setOpenMode(null); return; }
     setOpenMode(mode);
   };
@@ -251,7 +222,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 {/* Model list — always shown */}
                 {library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
-                    {library.models.map((m) => {
+                    {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
                       const isDefault = m.id === library.defaultModelId;
                       return (
@@ -308,61 +279,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
         );
       })}
 
-      {/* Commit model button */}
-      <div className="relative">
-        <button
-          className="flex items-center gap-1.5 px-2 py-1 border border-hacker-border/40 rounded text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border transition-all"
-          onClick={() => handleChipClick("commit")}
-        >
-          <GitCommit size={12} />
-          <span className="text-xs font-bold tracking-wide">{getShortModelName(getCommitModel())}</span>
-          <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${openMode === "commit" ? "rotate-180" : ""}`} />
-        </button>
-
-        {openMode === "commit" && library && (
-          <div className="absolute top-full right-0 mt-1 w-[350px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
-              <span className="text-xs font-bold tracking-wider text-hacker-text-dim">
-                <GitCommit size={10} className="inline mr-1" />COMMIT MODEL
-              </span>
-              {library.commitModelId && (
-                <button
-                  onClick={handleClearCommitModel}
-                  className="text-[10px] text-hacker-text-dim hover:text-hacker-warm"
-                  title="Reset to default"
-                >✕ reset</button>
-              )}
-            </div>
-            {library.models.length > 0 ? (
-              <div className="max-h-[300px] overflow-y-auto">
-                {library.models.map((m) => {
-                  const isSelected = m.id === library.commitModelId;
-                  const isDefault = m.id === library.defaultModelId;
-                  return (
-                    <button
-                      key={m.id}
-                      onClick={() => handleSetCommitModel(m.id)}
-                      className={`w-full text-left px-3 py-1 text-xs flex items-center gap-1.5 ${
-                        isSelected
-                          ? "bg-hacker-accent/10 text-hacker-accent"
-                          : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
-                      }`}>
-                      <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
-                      <span className="truncate flex-1">{m.name}</span>
-                      {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
-                      {isSelected && <span className="text-hacker-accent text-[10px] shrink-0">●</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic">
-                No models configured
-              </div>
-            )}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

@@ -421,7 +421,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     .filter(m => m.vision)
                     .map(m => (
                       <option key={m.id} value={m.id}>
-                        {m.name} ({m.id})
+                        {m.name}
                       </option>
                     ))}
                 </select>
@@ -474,7 +474,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   {(library.models || [])
                     .map(m => (
                       <option key={m.id} value={m.id}>
-                        {m.name} ({m.id})
+                        {m.name}
                       </option>
                     ))}
                 </select>
@@ -525,7 +525,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   {(library.models || [])
                     .map(m => (
                       <option key={m.id} value={m.id}>
-                        {m.name} ({m.id})
+                        {m.name}
                       </option>
                     ))}
                 </select>

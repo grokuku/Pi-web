@@ -54,8 +54,8 @@
   - Thinking : fond distinct, possibilité de copier, barre de progression visuelle
   - Streaming : effet de frappe fluide, pas de sauts
 - **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
-- **ModelQuickSwitch : supprimer le bouton commit** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
-- **Onglet Analysis Models : afficher le nom du provider au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
+- ✅ **ModelQuickSwitch : supprimer le bouton commit**** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
+- ✅ **Onglet Analysis Models : afficher le nom du provider** au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
 
 ### Backend / Architecture
 
@@ -230,9 +230,9 @@ Stockage
 | 6 | 💡 | **Analyse audio** — transcription (Whisper) + description (multimodal) |
 | 7 | 💡 | **Analyse PDF visuelle** — texte + images des pages liées |
 | 8 | 💡 | **Refonte rendu Thinking + Tools** — timeline, icônes, animations |
-| 9 | 💡 | **Provider name** au lieu de l'ID dans Analysis Models |
-| 10 | 💡 | **Tri alphabétique** des modèles dans ModelQuickSwitch |
-| 11 | 💡 | **Supprimer bouton commit** du header |
+| 9 | ✅ Done | **Provider name** au lieu de l'ID dans Analysis Models |
+| 10 | ✅ Done | **Tri alphabétique** des modèles dans ModelQuickSwitch |
+| 11 | ✅ Done | **Supprimer bouton commit** du header |
 | 12 | 💡 | **Prévisualisation PDF inline** |
 | 13 | 💡 | **Cache d'analyse** des fichiers |
 | 14 | 💡 | **Nettoyage auto** des attachments |
