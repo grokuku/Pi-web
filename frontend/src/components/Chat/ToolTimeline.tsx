@@ -111,8 +111,22 @@ const ToolBadge = memo(function ToolBadge({ tool, onClick }: {
 }) {
   const Icon = getToolIcon(tool.name).component;
   const color = getToolIcon(tool.name).color;
+  const [timedOut, setTimedOut] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const status = tool.isStreaming ? "running"
+  // Safety timeout: stop pulse after 90s if tool never finishes
+  useEffect(() => {
+    if (tool.isStreaming) {
+      const timer = setTimeout(() => setTimedOut(true), 90000);
+      timerRef.current = timer;
+      return () => clearTimeout(timer);
+    } else {
+      setTimedOut(false);
+    }
+  }, [tool.isStreaming]);
+
+  const status = timedOut ? "stale"
+    : tool.isStreaming ? "running"
     : tool.isError ? "error"
     : "success";
 
@@ -128,6 +142,7 @@ const ToolBadge = memo(function ToolBadge({ tool, onClick }: {
       {status === "success" && <span style={{ color }}>✓</span>}
       {status === "error" && <span>✕</span>}
       {status === "running" && <span style={{ color }}>⟳</span>}
+      {status === "stale" && <span style={{ opacity: 0.4 }}>?</span>}
     </button>
   );
 });
@@ -135,6 +150,8 @@ const ToolBadge = memo(function ToolBadge({ tool, onClick }: {
 // ── Tool timeline item ─────────────────────────────────
 const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const Icon = getToolIcon(tool.name).component;
   const color = getToolIcon(tool.name).color;
   const outputRef = useRef<HTMLDivElement>(null);
@@ -153,10 +170,20 @@ const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }
   useEffect(() => {
     if (tool.isStreaming && !wasStreaming.current) {
       setExpanded(true);
+      // Safety timeout: if tool stays streaming > 90s with no output, mark as timed out
+      const timer = setTimeout(() => {
+        // Don't actually modify the tool — just stop the local visual pulse.
+        // The isStreaming stays true on the tool object, but we use a local override.
+        setTimedOut(true);
+      }, 90000);
+      timerRef.current = timer;
     } else if (!tool.isStreaming && wasStreaming.current) {
       setExpanded(false);
+      setTimedOut(false);
+      if (timerRef.current) clearTimeout(timerRef.current);
     }
     wasStreaming.current = tool.isStreaming;
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [tool.isStreaming]);
 
   // Scroll output to bottom on streaming
@@ -166,7 +193,10 @@ const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }
     }
   }, [tool.output, expanded, tool.isStreaming]);
 
-  const status = tool.isStreaming ? "running" : tool.isError ? "error" : "success";
+  const status = timedOut ? "stale"
+    : tool.isStreaming ? "running"
+    : tool.isError ? "error"
+    : "success";
   const args = formatToolArgs(tool.args);
   const hasArgs = args.length > 0;
   const hasOutput = !!tool.output;
@@ -190,6 +220,7 @@ const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }
           {status === "running" && <span style={{ color: "var(--accent)" }}>⟳</span>}
           {status === "success" && <span style={{ color }}>✓</span>}
           {status === "error" && <span style={{ color: "var(--error)" }}>✕</span>}
+          {status === "stale" && <span style={{ color: "var(--text-dim)", opacity: 0.4 }}>?</span>}
         </span>
       </div>
 

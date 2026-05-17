@@ -761,6 +761,11 @@ body {
   background: var(--error);
   border-color: var(--error);
 }
+.tool-timeline-dot.stale {
+  background: var(--text-dim);
+  border-color: var(--text-dim);
+  opacity: 0.5;
+}
 .tool-timeline-header {
   display: flex;
   align-items: center;
@@ -830,9 +835,9 @@ body {
 .tool-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.65rem;
-  padding: 1px 6px;
+  gap: 4px;
+  font-size: 0.72rem;
+  padding: 2px 7px;
   border-radius: 2px;
   border: 1px solid;
   cursor: pointer;
@@ -844,14 +849,17 @@ body {
 }
 .tool-badge.running {
   animation: toolPulse 1.2s ease-in-out infinite;
-}
-.tool-badge.success { border-color: rgba(var(--accent-rgb), 0.4); color: var(--text-dim); }
-.tool-badge.error   { border-color: rgba(var(--error), 0.5); color: var(--error); }
-.tool-badge.running {
   border-color: var(--accent);
   color: var(--accent);
   background: rgba(var(--accent-rgb), 0.08);
 }
+.tool-badge.stale {
+  border-color: rgba(var(--text-dim-rgb, 100,100,100), 0.3);
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+.tool-badge.success { border-color: rgba(var(--accent-rgb), 0.4); color: var(--text-dim); }
+.tool-badge.error   { border-color: rgba(var(--error), 0.5); color: var(--error); }
 .tool-badge-icon {
   display: flex;
   align-items: center;

@@ -34,7 +34,26 @@
   - `/128K` = `session.model.contextWindow` (la fenetre max du modele)
   - Les trois ne sont pas lies entre eux, ce qui affiche des chiffres contradictoires. Fix : `tokens` devrait etre le contexte cumule (total des messages dans la session), `contextPercent` le ratio de ce cumule par rapport a `contextWindow`, et `totalTokens` peut rester cumulatif pour le cout.
 
+---
 
+**🟡 Conflits raccourcis clavier avec le navigateur**
+
+| Raccourci | Pi-Web | Chrome / Firefox | Conflit |
+|-----------|--------|------------------|---------|
+| **Ctrl+L** | Ouvrir Settings / modele | Focus barre d'adresse | 🔴 OUI |
+| **Ctrl+T** | Afficher/Masquer tous les Thinkings | Nouvel onglet | 🔴 OUI |
+| **Ctrl+O** | Expand/Collapse tous les outils | Ouvrir fichier | 🔴 OUI |
+| **Shift+Tab** | Cycle niveau thinking (off→high) | Focus element precedent | 🟡 Partiel (hors inputs) |
+| **Esc** | Abort / fermer modales / viewer | Stop / fermer dialogue | 🟢 Non |
+| **Enter** | Envoyer message (textarea) | — | 🟢 Non |
+| **Shift+Enter** | Nouvelle ligne (textarea) | — | 🟢 Non |
+
+**Probleme :** Ctrl+L/T/O sont interceptes par le navigateur avant la page. Pistes de fix :
+- `Ctrl+Shift+T` pour thinking, `Ctrl+Shift+O` pour outils, `Ctrl+Shift+L` pour settings
+- Ou `F1` settings, `Ctrl+.` thinking, `Ctrl+/` outils
+- Ou proposer une app Electron / PWA kiosk
+
+---
 
 ## 💡 Idées pour plus tard
 
