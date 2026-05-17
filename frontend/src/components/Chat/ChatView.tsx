@@ -575,13 +575,13 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
         {/* Messages — grouped: consecutive assistants are merged into one block */}
         <GroupedMessages messages={messages} showAllThinking={showAllThinking}
-          expandTools={expandTools} onFileClick={setViewerFile} />
+          expandTools={expandTools} onFileClick={setViewerFile} onToggleThinking={toggleAllThinking} />
 
         {/* Streaming block */}
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
           <StreamingBlock content={streamingContent} thinking={streamingThinking}
             toolCalls={currentToolCalls} showAllThinking={showAllThinking}
-            expandTools={expandTools} />
+            expandTools={expandTools} onToggleThinking={toggleAllThinking} />
         )}
 
         <div ref={chatEndRef} />
@@ -667,11 +667,12 @@ interface AssistantMsg {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools, onFileClick }: {
+const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools, onFileClick, onToggleThinking }: {
   messages: DisplayMessage[];
   showAllThinking: boolean;
   expandTools: boolean;
   onFileClick: (file: { type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string }) => void;
+  onToggleThinking: () => void;
 }) {
   const groups: DisplayMessage[][] = [];
   for (const msg of messages) {
@@ -689,7 +690,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinkin
         return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       }
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]}
-        showAllThinking={showAllThinking} expandTools={expandTools} />;
+        showAllThinking={showAllThinking} expandTools={expandTools} onToggleThinking={onToggleThinking} />;
     })}
   </>;
 })
@@ -802,7 +803,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
         )}
         {message.usage && (
           <span className="text-[9px] text-hacker-text-dim shrink-0">
-            {message.usage.input + message.usage.output}t · ${message.usage.cost.total.toFixed(4)}
+            {message.usage.input + message.usage.output}t
           </span>
         )}
       </div>
@@ -810,10 +811,11 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
   );
 })
 
-const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking, expandTools }: {
+const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking, expandTools, onToggleThinking }: {
   messages: AssistantMsg[];
   showAllThinking: boolean;
   expandTools: boolean;
+  onToggleThinking: () => void;
 }) {
   const [localToolsExpanded, setLocalToolsExpanded] = useState(false);
 
@@ -850,9 +852,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         )}
         {hasThinking && !showAllThinking && (
           <div className="px-3 pt-1">
-            <span className="text-[10px] text-hacker-text-dim italic">
+            <button onClick={onToggleThinking} className="text-[10px] text-hacker-text-dim italic hover:text-hacker-warn hover:underline" title="Show thinking (Ctrl+T)">
               Thinking hidden ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
-            </span>
+            </button>
           </div>
         )}
 
@@ -883,7 +885,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         {/* Usage footer */}
         {totalUsage && (
           <div className="px-3 pb-2 text-[9px] text-hacker-text-dim border-t border-hacker-border pt-1.5">
-            {totalUsage.input + totalUsage.output} tok · ${totalUsage.cost.total.toFixed(4)}
+            {totalUsage.input + totalUsage.output} tok
           </div>
         )}
       </div>
@@ -892,12 +894,13 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
 })
 
 // ── Streaming Block ────────────────────────────────────
-const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools }: {
+const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools, onToggleThinking }: {
   content: string;
   thinking: string;
   toolCalls: ToolCallInfo[];
   showAllThinking: boolean;
   expandTools: boolean;
+  onToggleThinking: () => void;
 }) {
   const [localToolsExpanded, setLocalToolsExpanded] = useState(true);
 
@@ -915,7 +918,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
         )}
         {hasThinking && !showAllThinking && (
           <div className="px-3 pt-1">
-            <span className="text-[10px] text-hacker-text-dim italic">Thinking hidden</span>
+            <button onClick={onToggleThinking} className="text-[10px] text-hacker-text-dim italic hover:text-hacker-warn hover:underline" title="Show thinking (Ctrl+T)">Thinking hidden</button>
           </div>
         )}
 
