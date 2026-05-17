@@ -323,10 +323,12 @@ export async function sendPrompt(
       if (needsUpdate) {
         console.log(`[prompt] Model mismatch! Applying ${desiredModel.providerId}/${desiredModel.modelId}...`);
         await applyModeToSession(currentMode, projectId);
+        console.log("[prompt] Model applied, continuing to send...");
       }
     } else if (desiredModel && !currentModel) {
       console.log(`[prompt] No model on session, applying ${desiredModel.providerId}/${desiredModel.modelId}`);
       await applyModeToSession(currentMode, projectId);
+        console.log("[prompt] Model applied, continuing to send...");
     }
   } catch (e: any) {
     console.warn(`[prompt] Failed to sync model:`, e.message);
@@ -1010,6 +1012,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
           const updatedModel = sharedModelRegistry.find(model.providerId, model.modelId);
           if (updatedModel) {
             await session.setModel(updatedModel);
+          console.log("[mode] Model set to (updated):", (session as any).model?.id);
           } else {
             await session.setModel(piModel);
           }
@@ -1025,6 +1028,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
       await setThinkingLevel(model.thinkingLevel || DEFAULT_THINKING[mode] || "medium", projectId);
     } catch (e: any) {
       console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
+      console.log("[mode] Model switch FAILED, session model is now:", (session as any).model?.id || "unknown");
     }
   }
 
