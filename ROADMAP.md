@@ -145,6 +145,13 @@ PDF uploadé
 - **Extension Git hooks** — Déclencher des analayses automatiques sur push (lint, tests, review).
 - **Skill de revue de code** — Compétence Pi qui analyse automatiquement les diffs d'un commit.
 
+### Agent
+
+- **LLM conscient de son mode (plan/analyse vs code)** — Quand l'utilisateur passe en mode plan/analyse, le LLM doit savoir qu'il est dans ce mode et adapter son comportement :
+  - En mode **plan/analyse** : le LLM ne doit **jamais** proposer de modifier le code ni donner des instructions pour le faire. Il fait uniquement de la planification (architecture, design) ou de l'analyse (debug, investigation). Il ne produit pas de code.
+  - En mode **code** : comportement normal avec les outils d'édition (read, edit, write, bash).
+  - Implémentation : passer un indicateur `mode` dans le prompt système (via `applyModeToSession` déjà appelé après chaque switch), ou utiliser le `SystemPromptManager` pour activer/désactiver les outils d'édition selon le mode.
+
 ### Performance
 
 - **Streaming des résultats d'analyse** — Pour les gros PDFs, streamer le texte extrait au lieu de tout retourner d'un coup.
@@ -239,3 +246,4 @@ Stockage
 | 17 | 💡 | **Streaming** résultats d'analyse (gros PDFs) |
 | 18 | 💡 | **Mise à jour progressive** des attachments (WebSocket) |
 | 19 | ✅ Done | **Stats d'utilisation** (par jour/mois, graphs, modal) des tokens (jour/semaine/mois, par modèle/providers) |
+| 20 | 💡 | **LLM conscient du mode** — en plan/analyse, ne jamais proposer du code, juste planifier/analyser |

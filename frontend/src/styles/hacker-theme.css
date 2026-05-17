@@ -669,6 +669,18 @@ body {
   color: var(--warn);
   text-transform: uppercase;
 }
+.thinking-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.thinking-toggle-btn:hover {
+  opacity: 0.7;
+}
 .thinking-copy-btn {
   background: none;
   border: 1px solid var(--border);

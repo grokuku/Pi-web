@@ -845,7 +845,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         {/* Thinking — show/hide based on global toggle */}
         {hasThinking && showAllThinking && (
           <div className="px-3 pt-2">
-            <ThinkingBlock thinking={mergedThinking} />
+            <ThinkingBlock thinking={mergedThinking} defaultExpanded={showAllThinking} />
           </div>
         )}
         {hasThinking && !showAllThinking && (
@@ -910,7 +910,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
         {/* Thinking — visible if global toggle on + has content */}
         {hasThinking && showAllThinking && (
           <div className="px-3 pt-2">
-            <ThinkingBlock thinking={thinking} isStreaming />
+            <ThinkingBlock thinking={thinking} isStreaming defaultExpanded={showAllThinking} />
           </div>
         )}
         {hasThinking && !showAllThinking && (
