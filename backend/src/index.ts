@@ -17,6 +17,7 @@ import modelLibraryRouter from "./routes/model-library.js";
 import providersRouter from "./routes/providers.js";
 import filesRouter from "./routes/files.js";
 import attachmentsRouter from "./routes/attachments.js";
+import { usageRouter, recordUsage } from "./routes/usage.js";
 import piSettingsRouter from "./routes/pi-settings.js";
 import type { Project } from "./projects/manager.js";
 import {
@@ -86,6 +87,7 @@ app.use("/api/model-library", modelLibraryRouter);
 app.use("/api/providers", providersRouter);
 app.use("/api/files", filesRouter);
 app.use("/api/attachments", attachmentsRouter);
+app.use("/api/usage", usageRouter);
 app.use("/api/pi", piSettingsRouter);
 
 // ── Read VERSION file once at startup ──

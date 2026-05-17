@@ -27,7 +27,7 @@
 
 - **[?] Historique chat disparait avec 3 panneaux visibles** — Quand on ouvre le 3e module (pi + terminal + files), la conversation semble vide. L'historique est toujours dans le store (useChatHistory), mais ChatView perd son useState interne. Cause probable : remontage de ChatView du au changement de layout (LayoutRenderer change de structure JSX entre 2 et 3 panneaux). Le useState([]) se reinitialise, et le useEffect de restauration ne se declenche pas car projectId n'a pas change. Fix possible : monter ChatView a l'exterieur du LayoutRenderer (toujours visible, display:none gere par CSS), ou monter le state messages au niveau App au lieu de ChatView.
 
-- **[?] Stats du contexte incohérentes dans la StatusBar** — La barre en bas montre `ctx 0.2K   30%   /128K`, mais 0.2K (200 tokens) ne fait pas 30% de 128K (ca serait ~38K). Cause : les trois valeurs viennent de sources differentes :
+- **[FIXED] Stats du contexte incoherentes** — La barre en bas montre `ctx 0.2K   30%   /128K`, mais 0.2K (200 tokens) ne fait pas 30% de 128K (ca serait ~38K). Cause : les trois valeurs viennent de sources differentes :
   - `tokens` = `u.input` du dernier message (juste le prompt, pas le contexte cumule)
   - `contextPercent` = `Math.round(lastInputTokens / contextWindow * 100)` — pourcentage du DERNIER prompt, pas du contexte total. En plus il n'augmente que via `Math.max(prevStats.contextPercent, contextPercent)`, donc il reste bloque a son pic historique
   - `totalTokens` = cumul de tous les tokens (input + output)
@@ -223,7 +223,7 @@ Stockage
 | # | Type | Description |
 |---|------|-------------|
 | 1 | 🟡 Bug | **Historique chat disparait** avec 3 panneaux visibles |
-| 2 | 🟡 Bug | **Stats contexte incohérentes** dans la StatusBar |
+| 2 | ✅ Fixed | **Stats contexte incohérentes** dans la StatusBar |
 | 3 | 💡 | **Timestamps relatifs** dans le chat |
 | 4 | 💡 | **Presets de modèles** (sauver/charger des configs complètes) |
 | 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
@@ -240,4 +240,4 @@ Stockage
 | 16 | 💡 | **Extensions** Slack/Discord, Git hooks, Skill revue de code |
 | 17 | 💡 | **Streaming** résultats d'analyse (gros PDFs) |
 | 18 | 💡 | **Mise à jour progressive** des attachments (WebSocket) |
-| 19 | 💡 | **Stats d'utilisation** des tokens (jour/semaine/mois, par modèle/providers) |
+| 19 | ✅ Done | **Stats d'utilisation** (par jour/mois, graphs, modal) des tokens (jour/semaine/mois, par modèle/providers) |

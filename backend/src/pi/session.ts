@@ -200,6 +200,26 @@ export async function createPiSession(
         const state = sessionsByProject.get(projectId);
         if (state) state.isStreaming = true;
         emitSessionUpdate(projectId);
+      } else if (event.type === "turn_end") {
+        // Record usage for statistics
+        const usage = (event as any).message?.usage;
+        if (usage?.input || usage?.output) {
+          const state = sessionsByProject.get(projectId);
+          const model = (state?.session as any)?.model || {};
+          const { recordUsage: record } = require("../routes/usage.js");
+          try {
+            record({
+              timestamp: new Date().toISOString(),
+              modelId: (model as any).modelId || (model as any).id || "unknown",
+              providerId: (model as any).provider || "unknown",
+              modelName: (model as any).name || "unknown",
+              mode: state?.activeMode || "code",
+              inputTokens: usage.input || 0,
+              outputTokens: usage.output || 0,
+              projectId,
+            });
+          } catch {}
+        }
       } else if (event.type === "agent_end") {
         const state = sessionsByProject.get(projectId);
         if (state) state.isStreaming = false;
@@ -661,6 +681,7 @@ export function getSessionInfo(projectId?: string) {
       id: m.id,
     })) || [],
     activeMode: state.activeMode || "code",
+    contextUsage: (state.session as any).getContextUsage?.() || null,
   };
 }
 

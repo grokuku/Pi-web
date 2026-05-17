@@ -9,6 +9,7 @@ import { WelcomeView } from "./components/Sidebar/WelcomeView";
 import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
+import { UsageStatsModal } from "./components/Modals/UsageStatsModal";
 import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
@@ -143,6 +144,7 @@ function App() {
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showUsageStats, setShowUsageStats] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
@@ -376,26 +378,33 @@ function App() {
             const u = evt.message.usage;
             const state = getProjectSession(projectId);
             const prevStats = state.stats || { tokens: 0, contextPercent: 0, totalTokens: 0 };
-            // tokens = current context size (last input), totalTokens = cumulative
             const lastInputTokens = u.input || 0;
             const lastOutputTokens = u.output || 0;
-            const contextWindow = state.session?.model?.contextWindow || 200000;
-            const contextPercent = Math.round((lastInputTokens / contextWindow) * 100);
-            const newStats = {
-              tokens: lastInputTokens, // Current context size (what fills the window)
-              contextPercent: Math.max(prevStats.contextPercent, contextPercent), // Only increase
-              totalTokens: prevStats.totalTokens + lastInputTokens + lastOutputTokens, // Cumulative for cost info
-            };
-            updateProjectSession(projectId, { stats: newStats });
+            // Only accumulate totalTokens for cost tracking here.
+            // Context tokens & percent come from contextUsage (emitted via session_update).
+            const totalTokens = prevStats.totalTokens + lastInputTokens + lastOutputTokens;
+            updateProjectSession(projectId, {
+              stats: { ...prevStats, totalTokens },
+            });
           }
           break;
         }
         case "session_update": {
           if (evt.session) {
-            // Initialize stats to zero when session is first created
             const state = getProjectSession(projectId);
+            // Initialize stats to zero when session is first created
             if (!state.stats) {
               state.stats = { tokens: 0, contextPercent: 0, totalTokens: 0 };
+            }
+            // Use contextUsage from the Pi SDK for accurate context stats
+            const cu = evt.session.contextUsage;
+            if (cu && cu.tokens !== null && cu.contextWindow > 0) {
+              const prevStats = state.stats;
+              state.stats = {
+                tokens: cu.tokens,
+                contextPercent: Math.round(cu.percent ?? 0),
+                totalTokens: prevStats.totalTokens,
+              };
             }
             updateProjectSession(projectId, { session: evt.session });
             // Sync active mode from backend
@@ -768,6 +777,7 @@ function App() {
                 connected={connected}
                 activeMode={activeMode}
                 autoReviewState={autoReviewState}
+                onOpenUsage={() => setShowUsageStats(true)}
               />
             </>
           )}
@@ -826,6 +836,9 @@ function App() {
             if (saved) setLayoutCfg(saved);
           }}
         />
+      )}
+      {showUsageStats && (
+        <UsageStatsModal onClose={() => setShowUsageStats(false)} />
       )}
     </div>
   );

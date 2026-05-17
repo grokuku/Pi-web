@@ -9,6 +9,7 @@ interface Props {
   connected: boolean;
   activeMode?: string;
   autoReviewState?: { inProgress: boolean; cycle: number; maxReviews: number; phase?: string } | null;
+  onOpenUsage?: () => void;
 }
 
 export function StatusBar({
@@ -19,6 +20,7 @@ export function StatusBar({
   connected,
   activeMode = "code",
   autoReviewState,
+  onOpenUsage,
 }: Props) {
   // Show zero stats when a session exists but stats haven't been populated yet
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
@@ -131,6 +133,12 @@ export function StatusBar({
               </span>
             )}
           </div>
+          <span className="text-hacker-border-bright">│</span>
+          {onOpenUsage && (
+            <button onClick={onOpenUsage} className="text-hacker-text-dim hover:text-hacker-accent flex items-center gap-0.5" title="Token usage stats">
+              📊
+            </button>
+          )}
           <span className="text-hacker-border-bright">│</span>
         </>
       )}
