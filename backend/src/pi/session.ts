@@ -14,6 +14,7 @@ import {
 }
 from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
+import { recordUsage } from "../routes/usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -206,9 +207,8 @@ export async function createPiSession(
         if (usage?.input || usage?.output) {
           const state = sessionsByProject.get(projectId);
           const model = (state?.session as any)?.model || {};
-          const { recordUsage: record } = require("../routes/usage.js");
           try {
-            record({
+            recordUsage({
               timestamp: new Date().toISOString(),
               modelId: (model as any).modelId || (model as any).id || "unknown",
               providerId: (model as any).provider || "unknown",

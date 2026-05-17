@@ -24,7 +24,7 @@ interface AggregatedBucket {
 
 // ── Storage ──────────────────────────────────────────
 
-const USAGE_DIR = join(process.cwd(), "..", "data", "usage");
+const USAGE_DIR = process.env.USAGE_DIR || "/data/usage";
 
 function ensureDir() {
   if (!existsSync(USAGE_DIR)) {
