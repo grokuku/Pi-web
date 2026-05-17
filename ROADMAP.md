@@ -71,7 +71,13 @@
   - CSS : `word-break: break-word` au lieu de `break-all`, animations `fadeIn`/`slideDown`/`toolPulse`
   - Anciens composants `ToolCallCard`, `getToolShortLabel`, `extractToolArgs` supprimés
 - **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
-- ✅ **ModelQuickSwitch : supprimer le bouton commit**** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
+- ✅ **ModelQuickSwitch : supprimer le bouton commit** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
+- 💡 **Thinking : titre sticky au scroll** — Quand on scrolle dans un bloc thinking, le titre "THINKING" et le bouton copier doivent rester visibles en haut. Permet de minimiser sans remonter.
+- 💡 **Paramètre global "Think expand" par défaut** — Ajouter dans Settings → General un toggle "Expand thinking by default" (compact/dévellopé). Contrôle le `defaultExpanded` de tous les ThinkingBlock.
+- 💡 **Améliorer l'auto-scroll des messages** — L'auto-scroll est trop souvent désactivé (une micro-remontée le coupe). Revoir le seuil (actuellement 80px) et/ou utiliser `IntersectionObserver`. Le bouton "retour au dernier message" existe déjà (flèche ↓) mais n'est peut-être pas assez visible.
+- 💡 **Onglet Raccourcis clavier dans Settings** — Permettre à l'utilisateur de visualiser et reconfigurer les raccourcis clavier. Stockage localStorage. Remplacer les Ctrl+L/T/O qui sont en conflit avec le navigateur.
+- 💡 **Badge outil → expand individuel** — En mode compact, cliquer sur le toggle "▶ TOOLS (3)" ouvre tous les outils en timeline. Mais cliquer sur un badge d'outil spécifique devrait ouvrir **seulement cet outil** dans la timeline (les autres restent en badges).
+- 💡 **Indicateur connexion backend texte** — Le point vert/rouge en haut à gauche indique la connexion WebSocket. Ajouter un texte "Connecté" / "Hors ligne" à côté pour plus de clarté.
 - ✅ **Onglet Analysis Models : afficher le nom du provider** au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
 
 ### Backend / Architecture
@@ -266,3 +272,9 @@ Stockage
 | 18 | 💡 | **Mise à jour progressive** des attachments (WebSocket) |
 | 19 | ✅ Done | **Stats d'utilisation** (par jour/mois, graphs, modal) des tokens (jour/semaine/mois, par modèle/providers) |
 | 20 | 💡 | **LLM conscient du mode** — en plan/analyse, ne jamais proposer du code, juste planifier/analyser |
+| 21 | 💡 | **Thinking : titre sticky** au scroll (titre + copier restent visibles) |
+| 22 | 💡 | **Paramètre "Think expand"** par défaut dans Settings → General |
+| 23 | 💡 | **Auto-scroll messages** — seuil trop sensible, améliorer détection |
+| 24 | 💡 | **Onglet Raccourcis clavier** dans Settings (visu + reconfiguration) |
+| 25 | 💡 | **Badge outil → expand individuel** (pas tous les outils d'un coup) |
+| 26 | 💡 | **Indicateur connexion** — ajouter texte "Connecté" / "Hors ligne" |
