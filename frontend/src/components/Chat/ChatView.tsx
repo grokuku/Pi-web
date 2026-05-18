@@ -234,29 +234,22 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     chatEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
-  // Track whether user is at the bottom via IntersectionObserver (reliable, no jitter)
-  useEffect(() => {
-    const target = chatEndRef.current;
-    if (!target) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        const visible = entry.isIntersecting;
-        isAtBottomRef.current = visible;
-        setShowScrollBtn(!visible);
-        if (visible) setUnreadCount(0);
-      },
-      { threshold: 0.1 } // visible when at least 10% of the sentinel is in viewport
-    );
-    observer.observe(target);
-    return () => observer.disconnect();
+  // Track whether user is at the bottom of the scrollable container
+  const handleScroll = useCallback(() => {
+    const el = chatEndRef.current?.parentElement;
+    if (!el) return;
+    const threshold = 30; // px from bottom
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
+    if (atBottom) setUnreadCount(0);
   }, []);
 
-  // Track unread count: new assistant messages while scrolled up
+  // Track unread count: new messages while scrolled up
   const prevMsgCountRef = useRef(messages.length);
   useEffect(() => {
     if (!isAtBottomRef.current && messages.length > prevMsgCountRef.current) {
-      const newMsgs = messages.length - prevMsgCountRef.current;
-      setUnreadCount((prev) => prev + newMsgs);
+      setUnreadCount((prev) => prev + (messages.length - prevMsgCountRef.current));
     }
     prevMsgCountRef.current = messages.length;
   }, [messages.length]);
@@ -568,7 +561,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     >
       {/* Messages */}
       {hasContent ? (
-        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`}>
+        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`} onScroll={handleScroll}>
 
 
         {error && (
