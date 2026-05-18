@@ -21,4 +21,5 @@ RUN chmod +x entrypoint.sh
 
 EXPOSE 3000
 ENV HOME=/root
+ENV USAGE_DIR=/app/.data/usage
 ENTRYPOINT ["./entrypoint.sh"]
