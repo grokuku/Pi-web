@@ -373,7 +373,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
                 role: "assistant",
                 content: finalContent,
                 thinking: finalThinking,
-                toolCalls: [...ct],
+                toolCalls: [...ct].map(tc => ({ ...tc, isStreaming: false })),
                 timestamp: Date.now(),
                 usage: msgUsage ? {
                   input: msgUsage.input || 0,

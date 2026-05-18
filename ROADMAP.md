@@ -72,12 +72,12 @@
   - Anciens composants `ToolCallCard`, `getToolShortLabel`, `extractToolArgs` supprimés
 - **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
 - ✅ **ModelQuickSwitch : supprimer le bouton commit** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
-- 💡 **Thinking : titre sticky au scroll** — Quand on scrolle dans un bloc thinking, le titre "THINKING" et le bouton copier doivent rester visibles en haut. Permet de minimiser sans remonter.
+- ✅ **Thinking : titre sticky au scroll** — Quand on scrolle dans un bloc thinking, le titre "THINKING" et le bouton copier restent visibles en haut (sticky + backdrop blur). Permet de minimiser sans remonter.
 - 💡 **Paramètre global "Think expand" par défaut** — Ajouter dans Settings → General un toggle "Expand thinking by default" (compact/dévellopé). Contrôle le `defaultExpanded` de tous les ThinkingBlock.
-- 💡 **Améliorer l'auto-scroll des messages** — L'auto-scroll est trop souvent désactivé (une micro-remontée le coupe). Revoir le seuil (actuellement 80px) et/ou utiliser `IntersectionObserver`. Le bouton "retour au dernier message" existe déjà (flèche ↓) mais n'est peut-être pas assez visible.
+- ✅ **Améliorer l'auto-scroll des messages** — Seuil réduit de 80px à 30px. Bouton sticky ↓ avec compteur "N nouveaux messages" quand on remonte. IntersectionObserver remplacé par onScroll (fiable avec overflow-y-auto).
 - 💡 **Onglet Raccourcis clavier dans Settings** — Permettre à l'utilisateur de visualiser et reconfigurer les raccourcis clavier. Stockage localStorage. Remplacer les Ctrl+L/T/O qui sont en conflit avec le navigateur.
-- 💡 **Badge outil → expand individuel** — En mode compact, cliquer sur le toggle "▶ TOOLS (3)" ouvre tous les outils en timeline. Mais cliquer sur un badge d'outil spécifique devrait ouvrir **seulement cet outil** dans la timeline (les autres restent en badges).
-- 💡 **Indicateur connexion backend texte** — Le point vert/rouge en haut à gauche indique la connexion WebSocket. Ajouter un texte "Connecté" / "Hors ligne" à côté pour plus de clarté.
+- ✅ **Badge outil → expand individuel** — En mode compact, cliquer sur un badge d'outil specifique expand **seulement cet outil** en timeline (les autres restent en badges). Bouton ✕ pour refermer l'outil individuellement. Le toggle global "▶ TOOLS (N)" fonctionne toujours (expand tout).
+- ✅ **Indicateur connexion texte** - Le point vert/rouge en haut a gauche indique la connexion WebSocket. Texte "Connecté" / "Hors ligne" ajoute a cote pour plus de clarte.
 - ✅ **Onglet Analysis Models : afficher le nom du provider** au lieu de son ID** — Dans Settings → Analysis Models, les dropdowns montrent les providers avec leur ID technique (ex: provider_abc123) illisible. Il faut afficher le name ou le label du provider a la place, et garder l'ID uniquement en valeur interne.
 
 ### Backend / Architecture
@@ -164,11 +164,11 @@ PDF uploadé
 - **Statistiques d utilisation des tokens** — Enregistrer chaque turn dans un fichier JSON (`/data/usage/YYYY-MM-DD.json`) avec : modele, provider, tokens input/output, cout, timestamp. API pour interroger les stats par jour/semaine/mois, par modele ou global. Frontend : page de stats dans Settings ou modal dedie. Permet de comparer le cout reel des providers et d optimiser ses reglages.
 
 
-### Extensions Pi
+### Extensions Pi (🔽 priorité très basse)
 
-- **Extension Slack/Discord** — Pousser les notifications de build/déploiement vers un channel.
-- **Extension Git hooks** — Déclencher des analayses automatiques sur push (lint, tests, review).
-- **Skill de revue de code** — Compétence Pi qui analyse automatiquement les diffs d'un commit.
+- ~~**Skill de revue de code** — Déjà couvert par le mode REVIEW natif de Pi. Pas de doublon nécessaire.~~
+- **Extension Slack/Discord** — Pousser les notifications de build/déploiement vers un channel. Priorité basse.
+- **Extension Git hooks** — Déclencher des analyses automatiques sur push (lint, tests, review). Priorité basse.
 
 ### Agent
 
@@ -267,14 +267,14 @@ Stockage
 | 13 | 💡 | **Cache d'analyse** des fichiers |
 | 14 | 💡 | **Nettoyage auto** des attachments |
 | 15 | 💡 | **Rate limiting** upload |
-| 16 | 💡 | **Extensions** Slack/Discord, Git hooks, Skill revue de code |
+| 16 | 🔽 Basse | **Extensions** Slack/Discord, Git hooks (revue de code déjà couverte par mode REVIEW) |
 | 17 | 💡 | **Streaming** résultats d'analyse (gros PDFs) |
 | 18 | 💡 | **Mise à jour progressive** des attachments (WebSocket) |
 | 19 | ✅ Done | **Stats d'utilisation** (par jour/mois, graphs, modal) des tokens (jour/semaine/mois, par modèle/providers) |
 | 20 | 💡 | **LLM conscient du mode** — en plan/analyse, ne jamais proposer du code, juste planifier/analyser |
-| 21 | 💡 | **Thinking : titre sticky** au scroll (titre + copier restent visibles) |
+| 21 | ✅ Done | **Thinking : titre sticky** au scroll (titre + copier restent visibles) |
 | 22 | 💡 | **Paramètre "Think expand"** par défaut dans Settings → General |
-| 23 | 💡 | **Auto-scroll messages** — seuil trop sensible, améliorer détection |
+| 23 | ✅ Done | **Auto-scroll messages** — seuil 30px, bouton sticky ↓ avec compteur |
 | 24 | 💡 | **Onglet Raccourcis clavier** dans Settings (visu + reconfiguration) |
-| 25 | 💡 | **Badge outil → expand individuel** (pas tous les outils d'un coup) |
-| 26 | 💡 | **Indicateur connexion** — ajouter texte "Connecté" / "Hors ligne" |
+| 25 | ✅ Done | **Badge outil → expand individuel** (✕ pour refermer) |
+| 26 | ✅ Done | **Indicateur connexion** — texte "Connecté" / "Hors ligne" ajouté |

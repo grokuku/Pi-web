@@ -148,7 +148,7 @@ const ToolBadge = memo(function ToolBadge({ tool, onClick }: {
 });
 
 // ── Tool timeline item ─────────────────────────────────
-const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }) {
+const TimelineItem = memo(function TimelineItem({ tool, onClose }: { tool: ToolCallInfo; onClose?: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -222,6 +222,15 @@ const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }
           {status === "error" && <span style={{ color: "var(--error)" }}>✕</span>}
           {status === "stale" && <span style={{ color: "var(--text-dim)", opacity: 0.4 }}>?</span>}
         </span>
+        {onClose && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            className="ml-1 text-hacker-text-dim hover:text-hacker-warn transition-colors"
+            title="Collapse tool"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Expanded: args + output */}
@@ -252,14 +261,42 @@ const TimelineItem = memo(function TimelineItem({ tool }: { tool: ToolCallInfo }
 export const ToolTimeline = memo(function ToolTimeline({ tools, compact, onExpand }: Props) {
   if (!tools || tools.length === 0) return null;
 
-  // Compact mode: render badges, click to expand
+  const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(new Set());
+
+  // Compact mode: render badges, click to expand one tool individually
   if (compact) {
+    const hasExpandedSome = expandedToolIds.size > 0;
+    const regular = tools.filter(tc => !expandedToolIds.has(tc.id));
+    const expanded = tools.filter(tc => expandedToolIds.has(tc.id));
+
     return (
-      <div className="tool-badges">
-        {tools.map((tc) => (
-          <ToolBadge key={tc.id} tool={tc} onClick={() => onExpand?.()} />
-        ))}
-      </div>
+      <>
+        {regular.length > 0 && (
+          <div className="tool-badges">
+            {regular.map((tc) => (
+              <ToolBadge key={tc.id} tool={tc} onClick={() => {
+                setExpandedToolIds(prev => new Set(prev).add(tc.id));
+              }} />
+            ))}
+          </div>
+        )}
+        {hasExpandedSome && (
+          <div className="tool-timeline">
+            <div className="tool-timeline-line" />
+            {expanded.map((tc) => (
+              <div key={tc.id}>
+                <TimelineItem key={tc.id} tool={tc} onClose={() => {
+                  setExpandedToolIds(prev => {
+                    const next = new Set(prev);
+                    next.delete(tc.id);
+                    return next;
+                  });
+                }} />
+              </div>
+            ))}
+          </div>
+        )}
+      </>
     );
   }
 
