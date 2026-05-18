@@ -106,6 +106,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const currentAssistantIdRef = useRef<string | null>(null);
 
   // Refs to avoid stale closures in WS handler
@@ -233,15 +234,32 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     chatEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
-  // Track whether user is at the bottom of the chat
-  const handleScroll = useCallback(() => {
-    const el = chatEndRef.current?.parentElement;
-    if (!el) return;
-    const threshold = 80; // px from bottom to consider "at bottom"
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    isAtBottomRef.current = atBottom;
-    setShowScrollBtn(!atBottom);
+  // Track whether user is at the bottom via IntersectionObserver (reliable, no jitter)
+  useEffect(() => {
+    const target = chatEndRef.current;
+    if (!target) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const visible = entry.isIntersecting;
+        isAtBottomRef.current = visible;
+        setShowScrollBtn(!visible);
+        if (visible) setUnreadCount(0);
+      },
+      { threshold: 0.1 } // visible when at least 10% of the sentinel is in viewport
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
   }, []);
+
+  // Track unread count: new assistant messages while scrolled up
+  const prevMsgCountRef = useRef(messages.length);
+  useEffect(() => {
+    if (!isAtBottomRef.current && messages.length > prevMsgCountRef.current) {
+      const newMsgs = messages.length - prevMsgCountRef.current;
+      setUnreadCount((prev) => prev + newMsgs);
+    }
+    prevMsgCountRef.current = messages.length;
+  }, [messages.length]);
 
   // Auto scroll only when user is at the bottom
   useEffect(() => {
@@ -546,11 +564,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   return (
     <div
-      className="h-full flex flex-col"
+      className="h-full flex flex-col relative"
     >
       {/* Messages */}
       {hasContent ? (
-        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`} onScroll={handleScroll}>
+        <>
+        <div className={`flex-1 overflow-y-auto p-4 chat-messages relative`}>
 
 
         {error && (
@@ -585,24 +604,31 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         )}
 
         <div ref={chatEndRef} />
-
-        {/* Scroll to bottom button */}
-        {showScrollBtn && (
-          <button
-            onClick={() => {
-              scrollToBottom("smooth");
-              isAtBottomRef.current = true;
-              setShowScrollBtn(false);
-            }}
-            className="absolute bottom-4 right-4 z-10 w-9 h-9 flex items-center justify-center rounded-full border border-hacker-border bg-hacker-surface/90 text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-accent/50 transition-all shadow-lg"
-            title="Scroll to bottom"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 6l4 4 4-4" />
-            </svg>
-          </button>
-        )}
       </div>
+
+      {/* Scroll to bottom button — outside scrollable so it stays visible */}
+      {showScrollBtn && (
+        <button
+          onClick={() => {
+            scrollToBottom("smooth");
+            isAtBottomRef.current = true;
+            setShowScrollBtn(false);
+            setUnreadCount(0);
+          }}
+          className="scroll-to-bottom-btn absolute bottom-20 right-6 z-20 flex items-center gap-2 px-3 py-1.5 rounded-full border border-hacker-accent/30 bg-hacker-surface/95 backdrop-blur-sm text-hacker-accent text-xs font-medium shadow-lg shadow-hacker-accent/5 hover:bg-hacker-accent/10 hover:border-hacker-accent/50 transition-all animate-fade-in-up"
+          title="Retour aux derniers messages"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+          {unreadCount > 0 && (
+            <span className="bg-hacker-accent/20 text-hacker-accent text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none min-w-[18px] text-center">
+              {unreadCount}
+            </span>
+          )}
+        </button>
+      )}
+        </>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
