@@ -1,5 +1,6 @@
 import { memo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   thinking: string;
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming, defaultExpanded = true }: Props) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState(false);
   const hasContent = thinking.length > 0;
@@ -29,11 +31,11 @@ export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming
           className="thinking-toggle-btn"
         >
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          <span className="thinking-block-label">THINKING</span>
+          <span className="thinking-block-label">{t('thinkingBlock.thinking')}</span>
         </button>
-        <button onClick={handleCopy} className="thinking-copy-btn" title="Copy thinking">
+        <button onClick={handleCopy} className="thinking-copy-btn" title={t('thinkingBlock.copy')}>
           {copied ? <Check size={10} /> : <Copy size={10} />}
-          {copied ? " Copied" : " Copy"}
+          {copied ? t('thinkingBlock.copied') : t('thinkingBlock.copy')}
         </button>
       </div>
       {expanded && (

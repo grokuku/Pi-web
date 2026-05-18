@@ -3,6 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useEffect, useRef } from "react";
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function TerminalView({ send, on, activeProject, isActive }: Props) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XtermTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 
 interface Props {
@@ -14,6 +15,7 @@ type VersioningType = "git" | "standalone";
 type GitProvider = "github" | "gitlab" | "other";
 
 export function AddProjectModal({ onClose, onCreated }: Props) {
+  const { t } = useTranslation();
   // ── Wizard ──
   const [step, setStep] = useState<1 | 2>(1);
 
@@ -254,7 +256,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                     {s === "local" && <FolderOpen size={14} />}
                     {s === "ssh" && "🔗"}
                     {s === "smb" && "💾"}
-                    <span>{s === "local" ? "Local" : s === "ssh" ? "SSH" : "SMB/NAS"}</span>
+                    <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : "SMB/NAS"}</span>
                   </button>
                 ))}
               </div>
@@ -410,7 +412,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   >
                     {v === "git" && <GitBranch size={14} />}
                     {v === "standalone" && "📂"}
-                    <span>{v === "git" ? "Git Repository" : "Standalone"}</span>
+                    <span>{v === "git" ? t('addProject.git') : t('addProject.standalone')}</span>
                   </button>
                 ))}
               </div>
@@ -486,7 +488,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 </span></div>
                 <div>Path: <span className="text-hacker-accent truncate block">{effectiveCwd || "(none)"}</span></div>
                 <div>Versioning: <span className="text-hacker-accent">
-                  {versioning === "git" ? `${detectedProvider} · ${gitBranch || "main"}` : "Standalone"}
+                  {versioning === "git" ? `${detectedProvider} · ${gitBranch || "main"}` : t('addProject.standalone')}
                 </span></div>
               </div>
             </div>
@@ -527,7 +529,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 className="btn-hacker text-xs"
                 disabled={loading}
               >
-                {loading ? "CREATING..." : "CREATE PROJECT"}
+                {loading ? t('common.loading').toUpperCase() + '...' : t('addProject.create')}
               </button>
             )}
           </div>

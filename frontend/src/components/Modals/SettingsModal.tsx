@@ -279,11 +279,11 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
 
   // ── Tabs ──
   const TABS: { id: TabId; icon: React.ReactNode; label: string }[] = [
-    { id: "models", icon: <PiLogo className="w-4 h-4 inline" />, label: "Model Library" },
-    { id: "analysis", icon: "🔬", label: "Analysis Models" },
-    { id: "extensions", icon: "📦", label: "Extensions & Skills" },
-    { id: "general", icon: "⚙", label: "General" },
-    { id: "layout", icon: "⊞", label: "Layout" },
+    { id: "models", icon: <PiLogo className="w-4 h-4 inline" />, label: t('settings.tabs.models') },
+    { id: "analysis", icon: "🔬", label: t('settings.tabs.analysis') },
+    { id: "extensions", icon: "📦", label: t('settings.tabs.extensions') },
+    { id: "general", icon: "⚙", label: t('settings.tabs.general') },
+    { id: "layout", icon: "⊞", label: t('settings.tabs.layout') },
   ];
 
   // Sub-tab state for Model Library (persists across main tab switches)

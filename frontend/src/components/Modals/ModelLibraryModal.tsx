@@ -7,6 +7,7 @@ import {
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
 import { PROVIDER_PRESETS } from "../../types";
+import { useTranslation } from "../../i18n";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
@@ -21,6 +22,7 @@ interface Props {
 // ── Main Component ────────────────────────────────────────
 
 export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<"providers" | "models">("providers");
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -157,6 +159,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
   setProviders: (p: ProviderConfig[]) => void;
   setError: (e: string) => void;
 }) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -271,6 +274,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
   onSave: (config: any) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const isEdit = !!provider;
   const preset = provider ? PROVIDER_PRESETS[provider.type] : null;
 
@@ -370,6 +374,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
   setError: (e: string) => void;
   setStatus: (s: string) => void;
 }) {
+  const { t } = useTranslation();
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
@@ -574,11 +579,11 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         {/* Left column: Available models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">AVAILABLE</span>
+            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">{t('modelLibrary.available')}</span>
             <span className="text-hacker-text-dim text-[11px]">{filteredAvailable.length}</span>
             <button onClick={handleScanAll} disabled={scanning}
-              className="btn-hacker text-[11px] px-1.5 py-0.5 flex items-center gap-0.5" title="Rescan all providers">
-              <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> UPDATE
+              className="btn-hacker text-[11px] px-1.5 py-0.5 flex items-center gap-0.5" title={t('modelLibrary.rescan')}>
+              <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> {t('modelLibrary.update')}
             </button>
           </div>
           {/* Available provider filter (above list) */}
@@ -614,7 +619,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredAvailable.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
-                {allDiscovered.length === 0 ? "Click UPDATE to scan providers" : modelFilter ? "No matches" : "All models already added"}
+                {allDiscovered.length === 0 ? t('modelLibrary.clickUpdate') : modelFilter ? t('modelLibrary.noMatches') : t('modelLibrary.allAdded')}
               </div>
             ) : (
               filteredAvailable.map(dm => {
@@ -642,12 +647,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         <div className="flex flex-col justify-center gap-1 px-0.5">
           <button onClick={handleAddSelected} disabled={selectedAvailable.size === 0}
             className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
-            title="Add selected models">
+            title={t('modelLibrary.addSelected')}>
             ▶
           </button>
           <button onClick={handleRemoveSelected} disabled={selectedConfigured.size === 0}
             className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
-            title="Remove selected models">
+            title={t('modelLibrary.removeSelected')}>
             ◀
           </button>
         </div>
@@ -655,7 +660,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         {/* Right column: Configured models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">SELECTED</span>
+            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">{t('modelLibrary.selected')}</span>
             <span className="text-hacker-text-dim text-[11px]">{filteredConfigured.length}</span>
           </div>
           {/* Selected provider filter (above list) */}
@@ -691,7 +696,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredConfigured.length === 0 ? (
               <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
-                {library.models.length === 0 ? "No models selected yet" : "No matches"}
+                {library.models.length === 0 ? t('modelLibrary.noSelected') : t('modelLibrary.noMatches')}
               </div>
             ) : (
               filteredConfigured.map(m => {
@@ -750,6 +755,7 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
   isOllama: boolean;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   // Local state for context window input (in K) — synced with model prop
   const [contextK, setContextK] = useState<string>(String(Math.round(model.contextWindow / 1024)));
   const [contextCustom, setContextCustom] = useState(false);
@@ -917,7 +923,7 @@ function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
             });
           }}
             className="btn-hacker text-sm px-3 py-2 flex items-center justify-center gap-1.5 text-hacker-text-dim"
-            title="Reset to auto-detected defaults">
+            title={t('modelLibrary.resetDefaults')}>
             ↺ RESET
           </button>
           <div className="flex-1" />

@@ -4,6 +4,7 @@ import {
   Image, Code, FileText, Edit3, Save, X, Download, Upload, CheckSquare, Square,
   CheckCheck,
 } from "lucide-react";
+import { useTranslation } from "../../i18n";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -191,6 +192,7 @@ function DirNode({
 
 // ── Main File Explorer ──
 export function FileExplorer({ project }: Props) {
+  const { t } = useTranslation();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<FileContent | null>(null);

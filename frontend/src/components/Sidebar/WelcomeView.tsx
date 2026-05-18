@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { PiLogo } from "../common/PiLogo";
 import { Package, AlertTriangle, CheckCircle, Clock, Cpu, FolderOpen, Plus, RefreshCw, ArrowUpCircle } from "lucide-react";
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 
 // ── Types ──────────────────────────────────────────────
@@ -46,6 +47,7 @@ interface Props {
 }
 
 export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<StatusInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -87,9 +89,9 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
         {/* Logo + Title */}
         <div className="text-center space-y-1.5">
           <PiLogo className="w-14 h-14 mx-auto text-hacker-accent" />
-          <h1 className="text-hacker-accent text-lg font-bold tracking-widest">PI-WEB</h1>
+          <h1 className="text-hacker-accent text-lg font-bold tracking-widest">{t('welcome.title')}</h1>
           <p className="text-hacker-text-dim text-[11px]">
-            Web interface for the Pi Coding Agent
+            {t('welcome.subtitle')}
           </p>
         </div>
 
@@ -98,15 +100,15 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
           <div className="border border-hacker-border bg-hacker-surface/30 rounded p-2.5">
             <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-[11px]">
               <div className="flex items-center gap-1.5">
-                <span className="text-hacker-text-dim">Pi-Web</span>
+                <span className="text-hacker-text-dim">{t('welcome.piWeb')}</span>
                 <span className="text-hacker-accent font-mono">v{status.piWebVersion}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-hacker-text-dim">Pi SDK</span>
+                <span className="text-hacker-text-dim">{t('welcome.piSdk')}</span>
                 <span className="text-hacker-accent font-mono">v{status.piSdkVersion}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-hacker-text-dim">Node</span>
+                <span className="text-hacker-text-dim">{t('welcome.node')}</span>
                 <span className="text-hacker-text-bright font-mono">{status.nodeVersion}</span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -115,11 +117,11 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
               </div>
               <div className="flex items-center gap-1.5">
                 <Cpu size={9} className="text-hacker-text-dim" />
-                <span className="text-hacker-text-bright font-mono">{status.activeSessions} session{status.activeSessions !== 1 ? "s" : ""}</span>
+                <span className="text-hacker-text-bright font-mono">{t('welcome.sessions', status.activeSessions)}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <FolderOpen size={9} className="text-hacker-text-dim" />
-                <span className="text-hacker-text-bright font-mono">{status.projectsCount} project{status.projectsCount !== 1 ? "s" : ""}</span>
+                <span className="text-hacker-text-bright font-mono">{t('welcome.projectsCount', status.projectsCount)}</span>
               </div>
             </div>
 
@@ -127,18 +129,18 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
             <div className="mt-1.5 pt-1.5 border-t border-hacker-border/50 flex items-center justify-center gap-2 text-[10px]">
               {checkingUpdate ? (
                 <span className="text-hacker-text-dim flex items-center gap-1">
-                  <RefreshCw size={9} className="animate-spin" /> Checking for updates...
+                  <RefreshCw size={9} className="animate-spin" /> {t('welcome.checkingUpdates')}
                 </span>
               ) : updateInfo ? (
                 updateInfo.updateAvailable ? (
                   <span className="text-hacker-warn flex items-center gap-1">
                     <ArrowUpCircle size={10} />
-                    Update available: v{updateInfo.latestVersion}
+                    {t('welcome.updateAvailable', updateInfo.latestVersion)}
                   </span>
                 ) : (
                   <span className="text-green-400 flex items-center gap-1">
                     <CheckCircle size={10} />
-                    Up to date
+                    {t('welcome.upToDate')}
                   </span>
                 )
               ) : (
@@ -146,7 +148,7 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
                   onClick={checkForUpdate}
                   className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
                 >
-                  Check for updates
+                  {t('welcome.checkForUpdates')}
                 </button>
               )}
             </div>
@@ -156,7 +158,7 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
         {/* Error loading status */}
         {error && (
           <div className="border border-hacker-error/30 bg-hacker-error/5 rounded p-2 text-xs text-hacker-error flex items-center gap-2">
-            <AlertTriangle size={12} /> Failed to load status: {error}
+            <AlertTriangle size={12} /> {t('welcome.failedToLoad')}: {error}
           </div>
         )}
 
@@ -165,7 +167,7 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
           <div className="border border-hacker-border bg-hacker-surface/30 rounded px-3 py-2">
             <div className="flex items-center gap-1.5 mb-1">
               <Package size={11} className="text-hacker-accent" />
-              <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">EXTENSIONS</span>
+              <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">{t('welcome.extensions')}</span>
               <span className="text-[9px] text-hacker-text-dim">({status.extensions.length})</span>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-0.5">
@@ -190,8 +192,7 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
           <div className="border border-hacker-warn/30 bg-hacker-warn/5 rounded p-2 text-[11px] text-hacker-warn flex items-center gap-2">
             <AlertTriangle size={13} className="shrink-0" />
             <span>
-              {issues.length} extension{issues.length > 1 ? "s" : ""} not installed —
-              Settings → Extensions & Skills → Reload session
+              {t('welcome.issuesWarning', issues.length)}
             </span>
           </div>
         )}
@@ -199,22 +200,22 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
         {/* Project grid */}
         <div className="border border-hacker-border bg-hacker-surface/30 rounded p-2.5">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">PROJECTS</span>
+            <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">{t('welcome.projects')}</span>
             <button
               onClick={onAddProject}
               className="flex items-center gap-1 text-[10px] px-2 py-0.5 border border-hacker-accent/50 text-hacker-accent hover:bg-hacker-accent/10 rounded transition-colors"
             >
-              <Plus size={9} /> ADD
+              <Plus size={9} /> {t('welcome.addBtn')}
             </button>
           </div>
           {projects.length === 0 ? (
             <div className="space-y-2 py-4 text-center">
-              <p className="text-xs text-hacker-text-dim">No projects yet.</p>
+              <p className="text-xs text-hacker-text-dim">{t('welcome.noProject')}</p>
               <button
                 onClick={onAddProject}
                 className="btn-hacker text-xs px-4 py-2"
               >
-                + Add your first project
+                {t('welcome.addFirstProject')}
               </button>
             </div>
           ) : (
@@ -240,13 +241,13 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
 
         {/* Shortcuts */}
         <div className="text-center text-[10px] text-hacker-text-dim flex items-center justify-center gap-2">
-          <span>Select a project to start</span>
+          <span>{t('welcome.selectProject')}</span>
           <span className="text-hacker-border">|</span>
           <kbd className="px-1 border border-hacker-border text-hacker-accent">Ctrl+L</kbd>
-          <span>Settings</span>
+          <span>{t('welcome.shortcutSettings')}</span>
           <span className="text-hacker-border">·</span>
           <kbd className="px-1 border border-hacker-border text-hacker-accent">Esc</kbd>
-          <span>Abort</span>
+          <span>{t('welcome.shortcutAbort')}</span>
         </div>
       </div>
     </div>

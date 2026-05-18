@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Folder, File, ChevronRight, Plus, FolderPlus, Check, RefreshCw, AlertTriangle } from "lucide-react";
+import { useTranslation } from "../../i18n";
 
 interface FileEntry {
   name: string;
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Props) {
+  const { t } = useTranslation();
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [parent, setParent] = useState<string | null>(null);

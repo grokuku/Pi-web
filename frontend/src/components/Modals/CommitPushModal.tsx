@@ -3,6 +3,7 @@ import {
   X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu,
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
 import { GitAuthModal } from "./GitAuthModal";
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function CommitPushModal({ project, onClose, onDone }: Props) {
+  const { t } = useTranslation();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -257,7 +259,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
                           ? "border-hacker-accent/50 text-hacker-accent hover:bg-hacker-accent/10"
                           : "border-hacker-border text-hacker-text-dim/50 cursor-not-allowed"
                     }`}
-                    title={!canGenerateAi ? "No AI model configured" : "Generate commit message with AI"}
+                    title={!canGenerateAi ? t('commitPush.aiDisabled') : t('commitPush.generate')}
                   >
                     {aiLoading ? (
                       <RefreshCw size={10} className="animate-spin" />
@@ -289,8 +291,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
                             : "border-hacker-border/50 text-hacker-text-dim"
                         }`}
                       >
-                        {modelInfo.source === "commit-mode" ? "commit mode" :
-                         modelInfo.source === "session" ? "session" : "registry"}
+                        {modelInfo.source === "commit-mode" ? t('commitPush.commitMode') :
+                         modelInfo.source === "session" ? t('commitPush.session') : t('commitPush.registry')}
                       </span>
                     </div>
                   )}
@@ -372,7 +374,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
               ) : (
                 <ArrowUp size={12} />
               )}
-              {loading === "push" ? "PUSHING..." : "PUSH"}
+              {loading === "push" ? t('commitPush.pushing') : t('commitPush.push')}
             </button>
           </div>
         )}

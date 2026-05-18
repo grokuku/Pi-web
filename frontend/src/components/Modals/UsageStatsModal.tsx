@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { BarChart3, X, Clock, Calendar, Brain, Hash } from "lucide-react";
+import { useTranslation } from "../../i18n";
 
 interface UsageBucket {
   key: string;
@@ -141,6 +142,7 @@ function BarChart({
 // ── Main Modal ─────────────────────────────────────────
 
 export function UsageStatsModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const [period, setPeriod] = useState<Period>("week");
   const [groupBy, setGroupBy] = useState<GroupBy>("day");
   const [data, setData] = useState<UsageResponse | null>(null);
@@ -180,7 +182,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between px-4 py-3 border-b border-hacker-border">
           <div className="flex items-center gap-2 text-hacker-accent font-bold text-sm">
             <BarChart3 size={16} />
-            Token Usage Stats
+            {t('usage.title')}
           </div>
           <button
             onClick={onClose}
@@ -230,9 +232,9 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
                     ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
                     : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
                 }`}
-                title={disabled ? "Disponible uniquement sur Aujourd'hui" : undefined}
+                title={disabled ? t('usage.hourDisabled') : undefined}
               >
-                {g === "hour" ? "Heure" : g === "day" ? "Jour" : "Modèle"}
+                {g === "hour" ? t('usage.hour') : g === "day" ? t('usage.day') : t('usage.model')}
               </button>
             );
           })}
@@ -287,16 +289,16 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
                   <thead className="sticky top-0 bg-hacker-surface">
                     <tr className="text-hacker-text-dim border-b border-hacker-border">
                       <th className="text-left py-1 pr-3 font-medium">
-                        {effectiveGroupBy === "model" ? "Modèle" : "Période"}
+                        {effectiveGroupBy === "model" ? t('usage.model') : t('usage.period')}
                       </th>
                       <th className="text-right py-1 px-2 font-medium w-[70px]">
-                        Input
+                        {t('usage.inputTokens')}
                       </th>
                       <th className="text-right py-1 px-2 font-medium w-[70px]">
-                        Output
+                        {t('usage.outputTokens')}
                       </th>
                       <th className="text-right py-1 pl-2 font-medium w-[70px]">
-                        Total
+                        {t('usage.totalTokens')}
                       </th>
                     </tr>
                   </thead>

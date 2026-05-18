@@ -3,6 +3,7 @@ import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, 
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
+import { useTranslation } from "../../i18n";
 
 interface GitStatusFull {
   branch: string;
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export function GitPanel({ project, onRefresh }: Props) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<ActionType | null>(null);

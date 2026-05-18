@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
+import { useTranslation } from "../../i18n";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
 
 const MODE_CONFIG: Record<AgentMode, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied }: Props) {
+  const { t } = useTranslation();
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -187,7 +189,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                       ? `border-hacker-border/60 ${cfg.color}`
                       : "border-hacker-border/20 text-hacker-text-dim/30 hover:text-hacker-text-dim"
                   }`}
-                  title={isEnabled ? `Disable ${cfg.label}` : `Enable ${cfg.label}`}
+                  title={isEnabled ? t('modelSwitch.disable', t('modelSwitch.' + mode)) : t('modelSwitch.enable', t('modelSwitch.' + mode))}
                 >
                   <Power size={10} />
                 </div>
@@ -200,7 +202,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 <span className={`text-xs font-bold tracking-wide ${
                   isVisuallyActive ? cfg.color : "text-hacker-text-dim"
                 }`}>
-                  {cfg.label}
+                  {t('modelSwitch.' + mode)}
                 </span>
                 {isVisuallyActive && (
                   <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
@@ -215,7 +217,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 {/* Header */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
                   <span className={`text-xs font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
-                    {cfg.icon} {cfg.label} {isCode ? "(always on)" : isEnabled ? "● ON" : "○ OFF"}
+                    {cfg.icon} {t('modelSwitch.' + mode)} {isCode ? t('modelSwitch.alwaysOn') : isEnabled ? "● ON" : "○ OFF"}
                   </span>
                 </div>
 
@@ -253,7 +255,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   <button
                     onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
                     className={`w-full text-left px-3 py-1.5 text-xs ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
-                    → Switch to {cfg.label}
+                    → {t('modelSwitch.switchTo', t('modelSwitch.' + mode))}
                   </button>
                 )}
 
