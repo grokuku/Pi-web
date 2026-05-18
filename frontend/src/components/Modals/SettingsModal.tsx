@@ -9,6 +9,7 @@ import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
 import { loadPersistedLayout, savePersistedLayout } from "../Layout/LayoutRenderer";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, LayoutType, PanelId } from "../../types";
 import { PANEL_LABELS } from "../../types";
+import { useTranslation } from "../../i18n";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -272,6 +273,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     setAuthSaved(true);
     setTimeout(() => setAuthSaved(false), 2000);
   };
+
+  // ── i18n ──
+  const { t, lang, setLang, supportedLanguages } = useTranslation();
 
   // ── Tabs ──
   const TABS: { id: TabId; icon: React.ReactNode; label: string }[] = [
@@ -704,9 +708,30 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                 </div>
               </div>
 
+              {/* Language Section */}
+              <div className="border border-hacker-border bg-hacker-surface/50">
+                <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🌐 {t('settings.general.title')}</span>
+                </div>
+                <div className="p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-hacker-text-dim text-xs">{t('settings.general.language')}</label>
+                    <select
+                      value={lang}
+                      onChange={e => setLang(e.target.value as "fr" | "en")}
+                      className="bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                    >
+                      <option value="">— {t('settings.general.systemDefault')} —</option>
+                      <option value="fr">Français</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               {/* Placeholder for future options */}
               <div className="text-[11px] text-hacker-text-dim text-center py-4 border border-hacker-border/30 border-dashed">
-                Additional parameters will be added here as needed.
+                {t('settings.general.additional')}
               </div>
             </div>
           )}

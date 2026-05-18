@@ -7,6 +7,7 @@ import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolTimeline } from "./ToolTimeline";
+import { useTranslation } from "../../i18n";
 
 // ── Memoized ReactMarkdown to avoid re-parsing on every render ──
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
@@ -88,6 +89,7 @@ interface Props {
 }
 
 export function ChatView({ send, on, activeProject, isStreaming, session, projectId, onQuit }: Props) {
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
@@ -579,12 +581,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
               className="flex items-center gap-1 text-[10px] text-hacker-text-dim hover:text-hacker-text border border-hacker-border px-2 py-0.5"
             >
               {showAllThinking ? <EyeOff size={10} /> : <Eye size={10} />}
-              {showAllThinking ? "Hide all thinking" : "Show all thinking"}
+              {showAllThinking ? t('chat.hideThinking') : t('chat.showThinking')}
             </button>
           </div>
         )}
 
-        {/* Messages — grouped: consecutive assistants are merged into one block */}
+        {/* Messages — grouped */}
         <GroupedMessages messages={messages} showAllThinking={showAllThinking}
           expandTools={expandTools} onFileClick={setViewerFile} onToggleThinking={toggleAllThinking} />
 
@@ -836,6 +838,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
   expandTools: boolean;
   onToggleThinking: () => void;
 }) {
+  const { t } = useTranslation();
   const [localToolsExpanded, setLocalToolsExpanded] = useState(false);
 
   // Collect all thinking, all tool calls, and the last meaningful text content
@@ -872,7 +875,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         {hasThinking && !showAllThinking && (
           <div className="px-3 pt-1">
             <button onClick={onToggleThinking} className="text-[10px] text-hacker-text-dim italic hover:text-hacker-warn hover:underline" title="Show thinking (Ctrl+T)">
-              Thinking hidden ({allThinking.length} block{allThinking.length > 1 ? "s" : ""})
+              {t('chat.thinkingHidden')} ({t('chat.nBlocks', allThinking.length)})
             </button>
           </div>
         )}
@@ -883,7 +886,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
             <div className="flex items-center gap-2 mb-1">
               <button onClick={() => setLocalToolsExpanded(!localToolsExpanded)}
                 className="text-[10px] text-hacker-warn hover:underline">
-                {localToolsExpanded ? "▼" : "▶"} TOOLS ({allTools.length})
+                {localToolsExpanded ? "▼" : "▶"} {t('chat.tools')} ({allTools.length})
               </button>
             </div>
             {localToolsExpanded ? (
@@ -921,6 +924,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
   expandTools: boolean;
   onToggleThinking: () => void;
 }) {
+  const { t } = useTranslation();
   const [localToolsExpanded, setLocalToolsExpanded] = useState(true);
 
   const hasThinking = !!thinking;
@@ -937,7 +941,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
         )}
         {hasThinking && !showAllThinking && (
           <div className="px-3 pt-1">
-            <button onClick={onToggleThinking} className="text-[10px] text-hacker-text-dim italic hover:text-hacker-warn hover:underline" title="Show thinking (Ctrl+T)">Thinking hidden</button>
+            <button onClick={onToggleThinking} className="text-[10px] text-hacker-text-dim italic hover:text-hacker-warn hover:underline" title="Show thinking (Ctrl+T)">{t('chat.thinkingHidden')}</button>
           </div>
         )}
 
@@ -947,7 +951,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
             <div className="flex items-center gap-2 mb-1">
               <button onClick={() => setLocalToolsExpanded(!localToolsExpanded)}
                 className="text-[10px] text-hacker-warn hover:underline">
-                {localToolsExpanded ? "▼" : "▶"} TOOLS ({toolCalls.length})
+                {localToolsExpanded ? "▼" : "▶"} {t('chat.tools')} ({toolCalls.length})
               </button>
             </div>
             {localToolsExpanded ? (
@@ -986,6 +990,7 @@ const ChatInputArea = memo(function ChatInputArea({
   gitBranch?: string;
   setError: (e: string) => void;
 }) {
+  const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -1148,17 +1153,17 @@ const ChatInputArea = memo(function ChatInputArea({
       )}
 
       <div className="text-hacker-text-dim text-[10px] mb-1 flex justify-between">
-        <span>📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±</span>
+        <span>{t('chat.keyboardHints')}</span>
         <span className="flex items-center gap-2">
           {gitBranch && <span>git:{gitBranch}</span>}
           {autoReviewStreaming && (
             <span className="text-hacker-warn flex items-center gap-1">
-              <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> reviewing…
+              <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> {t('autoReview.inProgress')}
             </span>
           )}
           {isStreaming && !autoReviewStreaming && (
             <span className="text-hacker-accent flex items-center gap-1">
-              <span className="pulse-dot w-1.5 h-1.5" /> generating…
+              <span className="pulse-dot w-1.5 h-1.5" /> {t('common.loading')}
             </span>
           )}
         </span>
@@ -1174,17 +1179,17 @@ const ChatInputArea = memo(function ChatInputArea({
             target.style.height = Math.min(target.scrollHeight, maxH) + 'px';
           }}
           onKeyDown={handleKeyDown}
-          placeholder={isStreaming ? "Queue message (steer)..." : "Type your message... (Shift+Enter for newline)"}
+          placeholder={isStreaming ? t('chat.queueMessage') : t('chat.typeMessage')}
           className="input-hacker flex-1 resize-none overflow-y-auto" rows={2}
           style={{ minHeight: '3rem', maxHeight: '10rem' }}
         />
 
         <div className="flex flex-col gap-1">
           <button onClick={handleSendClick} className="btn-hacker flex-1 px-4"
-            disabled={!input.trim() && attachments.length === 0}>SEND</button>
+            disabled={!input.trim() && attachments.length === 0}>{t('chat.send')}</button>
           <div className="flex gap-1">
             <button onClick={() => fileInputRef.current?.click()}
-              className="btn-hacker px-2 text-xs" title="Attach file">
+              className="btn-hacker px-2 text-xs" title={t('common.add')}>
               <Paperclip size={14} />
             </button>
             {isStreaming && (

@@ -1,5 +1,6 @@
 import type { Project } from "../../types";
 import { PiLogo } from "../common/PiLogo";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   activeProject: Project | null;
@@ -22,6 +23,7 @@ export function StatusBar({
   autoReviewState,
   onOpenUsage,
 }: Props) {
+  const { t } = useTranslation();
   // Show zero stats when a session exists but stats haven't been populated yet
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
 
@@ -77,7 +79,7 @@ export function StatusBar({
       {autoReviewState?.inProgress && (
         <>
           <span className="text-hacker-warn animate-pulse">
-            🔄 {autoReviewState.phase === "reviewing" ? "Reviewing" : "Fixing"} ({autoReviewState.cycle}/{autoReviewState.maxReviews})
+            🔄 {autoReviewState.phase === "reviewing" ? t('autoReview.inProgress') : t('autoReview.fix')} ({autoReviewState.cycle}/{autoReviewState.maxReviews})
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>
@@ -97,7 +99,7 @@ export function StatusBar({
       {isStreaming && (
         <>
           <span className="text-hacker-accent flex items-center gap-1">
-            <span className="pulse-dot w-1.5 h-1.5" /> streaming
+            <span className="pulse-dot w-1.5 h-1.5" /> {t('common.loading').toLowerCase()}
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

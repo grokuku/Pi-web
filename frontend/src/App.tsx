@@ -17,6 +17,7 @@ import { Window } from "./components/common/Window";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
 import { X } from "lucide-react";
 import type { Project, PanelId } from "./types";
+import { I18nProvider, useTranslation } from "./i18n";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -47,6 +48,7 @@ interface ProjectSessionState {
 }
 
 function App() {
+  const { t } = useTranslation();
   const { connected, send, on } = useWebSocket();
 
   // ── State ──
@@ -637,12 +639,12 @@ function App() {
         </div>
         <span
           className={`text-sm ${connected ? "text-hacker-accent" : "text-hacker-error"} ${connected ? "animate-pulse-subtle" : ""}`}
-          title={connected ? "Connected to backend" : "Offline — backend unreachable"}
+          title={connected ? t('header.connected') : t('header.offline')}
         >
           {connected ? "●" : "○"}
         </span>
         <span className="text-[10px] text-hacker-text-dim">
-          {connected ? "Connecté" : "Hors ligne"}
+          {connected ? t('header.connected') : t('header.offline')}
         </span>
 
         <div className="w-px h-4 bg-hacker-border-right" />
@@ -688,7 +690,7 @@ function App() {
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
-        <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title="Settings (Ctrl+L)">
+        <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title={`${t('header.settings')} (Ctrl+L)`}>
           ⚙
         </button>
       </header>
@@ -849,5 +851,5 @@ function App() {
 
 // Wrap with ErrorBoundary to prevent dark screen of death
 export default function AppWithBoundary() {
-  return <ErrorBoundary><App /></ErrorBoundary>;
+  return <ErrorBoundary><I18nProvider><App /></I18nProvider></ErrorBoundary>;
 }
