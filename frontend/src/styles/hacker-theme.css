@@ -670,6 +670,11 @@ body {
   margin-bottom: 6px;
   padding-bottom: 4px;
   border-bottom: 1px dashed var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(10, 12, 18, 0.92);
+  backdrop-filter: blur(6px);
 }
 .thinking-block-label {
   font-size: 0.65rem;

@@ -641,6 +641,9 @@ function App() {
         >
           {connected ? "●" : "○"}
         </span>
+        <span className="text-[10px] text-hacker-text-dim">
+          {connected ? "Connecté" : "Hors ligne"}
+        </span>
 
         <div className="w-px h-4 bg-hacker-border-right" />
 

@@ -174,10 +174,17 @@ app.get("/api/status/update", async (_req, res) => {
       return res.status(502).json({ error: `GitHub returned ${response.status}` });
     }
     const latestVersion = (await response.text()).trim();
+
+    // Strip pre-release suffixes (-beta, -alpha, -rc, -dev) for comparison
+    const stripPreRelease = (v: string) => v.replace(/[-].*$/, "").trim();
+    const currentBase = stripPreRelease(piWebVersion);
+    const latestBase = stripPreRelease(latestVersion);
+    const updateAvailable = latestBase !== "" && latestBase !== currentBase;
+
     res.json({
       currentVersion: piWebVersion,
       latestVersion,
-      updateAvailable: latestVersion !== piWebVersion && latestVersion !== "",
+      updateAvailable,
     });
   } catch (e: any) {
     res.status(504).json({ error: e.message });
