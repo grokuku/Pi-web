@@ -11,8 +11,10 @@ interface Props {
 }
 
 export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
-  const [model1Id, setModel1Id] = useState(config.model1?.modelId || config.model1?.providerId + "__" + config.model1?.modelId || "");
-  const [model2Id, setModel2Id] = useState(config.model2?.modelId || config.model2?.providerId + "__" + config.model2?.modelId || "");
+  const initModel1Id = config.model1 ? (config.model1.modelId || `${config.model1.providerId}__${config.model1.modelId}`) : "";
+  const initModel2Id = config.model2 ? (config.model2.modelId || `${config.model2.providerId}__${config.model2.modelId}`) : "";
+  const [model1Id, setModel1Id] = useState(initModel1Id);
+  const [model2Id, setModel2Id] = useState(initModel2Id);
   const [planCycles, setPlanCycles] = useState(config.planCycles || 2);
   const [codeCycles, setCodeCycles] = useState(config.codeCycles || 2);
   const [globalCycles, setGlobalCycles] = useState(config.globalCycles || 1);

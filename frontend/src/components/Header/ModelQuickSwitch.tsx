@@ -231,7 +231,30 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 </div>
 
                 {/* Model list — always shown */}
-                {library && library.models.length > 0 ? (
+                {mode === "yolo" ? (
+                  <div className="px-3 py-3 space-y-2">
+                    <p className="text-[11px] text-hacker-text-dim">
+                      YOLO uses two AI agents debating together. Configure both models and debate cycles.
+                    </p>
+                    {pm.yolo?.config?.model1 ? (
+                      <div className="text-[11px] text-hacker-text-dim">
+                        Agent 1: <span className="text-hacker-accent">{library?.models.find(m => m.providerId === pm.yolo.config.model1?.providerId && m.modelId === pm.yolo.config.model1?.modelId)?.name || `${pm.yolo.config.model1.providerId}/${pm.yolo.config.model1.modelId}`}</span>
+                        <br />
+                        Agent 2: <span className="text-hacker-accent">{library?.models.find(m => m.providerId === pm.yolo.config.model2?.providerId && m.modelId === pm.yolo.config.model2?.modelId)?.name || `${pm.yolo.config.model2?.providerId}/${pm.yolo.config.model2?.modelId}`}</span>
+                        <br />
+                        Plan: <span className="text-hacker-accent">{pm.yolo.config.planCycles}x</span> · Code: <span className="text-hacker-accent">{pm.yolo.config.codeCycles}x</span> · Global: <span className="text-hacker-accent">{pm.yolo.config.globalCycles}x</span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-hacker-text-dim italic">Not configured yet.</p>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setOpenMode(null); setShowYoloConfig(true); }}
+                      className="w-full btn-hacker text-xs px-3 py-1.5"
+                    >
+                      ⚙ CONFIGURE YOLO
+                    </button>
+                  </div>
+                ) : library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
                     {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
@@ -260,7 +283,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 )}
 
                 {/* Switch to mode button (if enabled and not active) */}
-                {isEnabled && !isActive && model && (
+                {isEnabled && !isActive && (model || mode === "yolo") && (
                   <button
                     onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
                     className={`w-full text-left px-3 py-1.5 text-xs ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
