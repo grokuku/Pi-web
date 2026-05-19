@@ -243,7 +243,7 @@ Stockage
   /data/attachments/<uuid>/
       ├── <nom-sanitizé>    ← fichier original
       ├── meta.json          ← {id, name, originalName, mimeType, projectId, ...}
-      └── cache/            ← résultats d'analyse (futur)
+      └── cache/            ← résultats d'analyse (cache ✅)
 ```
 
 ---
@@ -264,7 +264,7 @@ Stockage
 | 10 | ✅ Done | **Tri alphabétique** des modèles dans ModelQuickSwitch |
 | 11 | ✅ Done | **Supprimer bouton commit** du header |
 | 12 | 💡 | **Prévisualisation PDF inline** |
-| 13 | 💡 | **Cache d'analyse** des fichiers |
+| 13 | ✅ Done | **Cache d'analyse** (hash query+page) |
 | 14 | 💡 | **Nettoyage auto** des attachments |
 | 15 | 💡 | **Rate limiting** upload |
 | 16 | 🔽 Basse | **Extensions** Slack/Discord, Git hooks (revue de code déjà couverte par mode REVIEW) |

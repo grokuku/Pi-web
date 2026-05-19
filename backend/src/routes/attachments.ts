@@ -203,6 +203,18 @@ function getCacheDir(id: string): string {
   return path.join(ATTACHMENTS_DIR, id, "cache");
 }
 
+/** Simple hash for cache keys based on query + page */
+function hashCacheKey(query: string, page?: number): string {
+  let hash = 0;
+  const key = `${query}|${page ?? ""}`;
+  for (let i = 0; i < key.length; i++) {
+    const chr = key.charCodeAt(i);
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0; // 32-bit
+  }
+  return Math.abs(hash).toString(16).padStart(8, "0");
+}
+
 function readMeta(id: string): AttachmentMeta | null {
   try {
     const raw = readFileSync(getMetaPath(id), "utf-8");
@@ -419,7 +431,7 @@ router.delete("/:id", (req: Request, res: Response) => {
  */
 router.post("/:id/analyze", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { query, page } = req.body as { query?: string; page?: number };
+  const { query, page, force } = req.body as { query?: string; page?: number; force?: boolean };
 
   const meta = readMeta(id);
   if (!meta) {
@@ -429,6 +441,22 @@ router.post("/:id/analyze", async (req: Request, res: Response) => {
   const filePath = path.join(getAttachmentDir(id), meta.name);
   if (!existsSync(filePath)) {
     return res.status(404).json({ error: "File not found on disk" });
+  }
+
+  // ── Cache check ──
+  const effectiveQuery = query || "describe this file";
+  const cacheKey = hashCacheKey(effectiveQuery, page);
+  const cacheDir = getCacheDir(id);
+  const cacheFile = path.join(cacheDir, `${cacheKey}.json`);
+
+  if (!force && existsSync(cacheFile)) {
+    try {
+      const cached = JSON.parse(readFileSync(cacheFile, "utf-8"));
+      console.log(`[attachments] Cache hit for ${id} (${cacheKey})`);
+      return res.json(cached);
+    } catch {
+      console.warn(`[attachments] Corrupt cache for ${id}, re-analyzing...`);
+    }
   }
 
   try {
@@ -536,10 +564,8 @@ router.post("/:id/analyze", async (req: Request, res: Response) => {
 
     // Cache the result
     try {
-      const cacheKey = `analyze${page ? `-p${page}` : ""}`;
-      const cacheDir = getCacheDir(id);
       if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
-      writeFileSync(path.join(cacheDir, `${cacheKey}.json`), JSON.stringify(result), "utf-8");
+      writeFileSync(cacheFile, JSON.stringify(result), "utf-8");
 
       // Update metadata
       meta.analyzedAt = new Date().toISOString();

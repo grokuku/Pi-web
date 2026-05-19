@@ -33,6 +33,7 @@ export default function (pi: ExtensionAPI) {
       "For images, the tool calls the configured vision model and returns a description",
       "For PDFs, the tool extracts text content",
       "For text/code files, the tool returns the file content",
+      "Use force: true when the user explicitly asks to re-analyze or refresh a file",
     ],
     parameters: {
       type: "object",
@@ -49,11 +50,15 @@ export default function (pi: ExtensionAPI) {
           type: "number",
           description: "For PDFs, specific page number to extract (1-indexed)",
         },
+        force: {
+          type: "boolean",
+          description: "Set to true to force a fresh analysis, bypassing any cached result",
+        },
       },
       required: ["file_id"],
     } satisfies JSONSchema,
-    async execute(_toolCallId: string, params: { file_id: string; query?: string; page?: number }, _signal: AbortSignal, _onUpdate: any, _ctx: any) {
-      const { file_id, query, page } = params;
+    async execute(_toolCallId: string, params: { file_id: string; query?: string; page?: number; force?: boolean }, _signal: AbortSignal, _onUpdate: any, _ctx: any) {
+      const { file_id, query, page, force } = params;
 
       try {
         // Call the Pi-Web backend API
@@ -61,7 +66,7 @@ export default function (pi: ExtensionAPI) {
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: query || "describe this file", page }),
+          body: JSON.stringify({ query: query || "describe this file", page, force }),
         });
 
         if (!response.ok) {
