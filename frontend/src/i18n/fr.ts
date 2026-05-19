@@ -91,6 +91,8 @@ export const fr = {
       title: "Général",
       language: "Langue",
       systemDefault: "Langue du système",
+      thinkExpand: "Déplier la réflexion par défaut",
+      thinkExpandDesc: "Quand la réflexion est visible, déplier les blocs automatiquement",
       auth: {
         title: "AUTHENTIFICATION DE L'INTERFACE WEB",
         description: "Définissez des identifiants pour protéger l'interface web avec l'authentification HTTP Basic. Laissez vide pour désactiver.",

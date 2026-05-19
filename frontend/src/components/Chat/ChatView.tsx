@@ -102,6 +102,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [currentToolCalls, setCurrentToolCalls] = useState<ToolCallInfo[]>([]);
   const [expandTools, setExpandTools] = useState(true);
   const [showAllThinking, setShowAllThinking] = useState(false);
+  const [thinkDefaultExpanded, setThinkDefaultExpanded] = useState(() => {
+    const saved = localStorage.getItem("pi-web-thinking-expand");
+    return saved === null ? true : saved === "true";
+  });
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
 
   // File viewer overlay state
@@ -593,12 +597,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         )}
 
         {/* Messages — grouped */}
-        <GroupedMessages messages={messages} showAllThinking={showAllThinking}
+        <GroupedMessages messages={messages} showAllThinking={showAllThinking} thinkDefaultExpanded={thinkDefaultExpanded}
           expandTools={expandTools} onFileClick={setViewerFile} onToggleThinking={toggleAllThinking} />
 
         {/* Streaming block */}
         {(streamingContent || streamingThinking || currentToolCalls.length > 0) && (
-          <StreamingBlock content={streamingContent} thinking={streamingThinking}
+          <StreamingBlock content={streamingContent} thinking={streamingThinking} thinkDefaultExpanded={thinkDefaultExpanded}
             toolCalls={currentToolCalls} showAllThinking={showAllThinking}
             expandTools={expandTools} onToggleThinking={toggleAllThinking} />
         )}
@@ -695,10 +699,11 @@ interface AssistantMsg {
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
-const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools, onFileClick, onToggleThinking }: {
+const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinking, expandTools, thinkDefaultExpanded, onFileClick, onToggleThinking }: {
   messages: DisplayMessage[];
   showAllThinking: boolean;
   expandTools: boolean;
+  thinkDefaultExpanded: boolean;
   onFileClick: (file: { type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string }) => void;
   onToggleThinking: () => void;
 }) {
@@ -717,7 +722,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, showAllThinkin
       if (first.role === "user") {
         return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       }
-      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]}
+      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} thinkDefaultExpanded={thinkDefaultExpanded}
         showAllThinking={showAllThinking} expandTools={expandTools} onToggleThinking={onToggleThinking} />;
     })}
   </>;
@@ -844,10 +849,11 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
   );
 })
 
-const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking, expandTools, onToggleThinking }: {
+const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking, expandTools, thinkDefaultExpanded, onToggleThinking }: {
   messages: AssistantMsg[];
   showAllThinking: boolean;
   expandTools: boolean;
+  thinkDefaultExpanded: boolean;
   onToggleThinking: () => void;
 }) {
   const { t } = useTranslation();
@@ -881,7 +887,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         {/* Thinking — show/hide based on global toggle */}
         {hasThinking && showAllThinking && (
           <div className="px-3 pt-2">
-            <ThinkingBlock thinking={mergedThinking} defaultExpanded={showAllThinking} />
+            <ThinkingBlock thinking={mergedThinking} defaultExpanded={thinkDefaultExpanded} />
           </div>
         )}
         {hasThinking && !showAllThinking && (
@@ -929,12 +935,13 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
 })
 
 // ── Streaming Block ────────────────────────────────────
-const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools, onToggleThinking }: {
+const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCalls, showAllThinking, expandTools, thinkDefaultExpanded, onToggleThinking }: {
   content: string;
   thinking: string;
   toolCalls: ToolCallInfo[];
   showAllThinking: boolean;
   expandTools: boolean;
+  thinkDefaultExpanded: boolean;
   onToggleThinking: () => void;
 }) {
   const { t } = useTranslation();
@@ -949,7 +956,7 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
         {/* Thinking — visible if global toggle on + has content */}
         {hasThinking && showAllThinking && (
           <div className="px-3 pt-2">
-            <ThinkingBlock thinking={thinking} isStreaming defaultExpanded={showAllThinking} />
+            <ThinkingBlock thinking={thinking} isStreaming defaultExpanded={thinkDefaultExpanded} />
           </div>
         )}
         {hasThinking && !showAllThinking && (

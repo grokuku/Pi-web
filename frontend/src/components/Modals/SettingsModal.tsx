@@ -261,6 +261,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [authPass, setAuthPass] = useState(() => localStorage.getItem("pi-web-auth-pass") || "");
   const [showPass, setShowPass] = useState(false);
   const [authSaved, setAuthSaved] = useState(false);
+  const [thinkExpand, setThinkExpand] = useState(() => {
+    return localStorage.getItem("pi-web-thinking-expand") !== "false";
+  });
 
   const saveAuth = () => {
     if (authUser) {
@@ -725,6 +728,32 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       <option value="fr">Français</option>
                       <option value="en">English</option>
                     </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Think Expand Default */}
+              <div className="border border-hacker-border bg-hacker-surface/50">
+                <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🧠 {t('settings.general.thinkExpand')}</span>
+                </div>
+                <div className="p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-hacker-text-dim">{t('settings.general.thinkExpandDesc')}</span>
+                    <button
+                      onClick={() => {
+                        const next = !thinkExpand;
+                        setThinkExpand(next);
+                        localStorage.setItem("pi-web-thinking-expand", String(next));
+                      }}
+                      className={`text-xs px-3 py-1 border transition-colors ${
+                        thinkExpand
+                          ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                          : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
+                      }`}
+                    >
+                      {thinkExpand ? t('common.on') : t('common.off')}
+                    </button>
                   </div>
                 </div>
               </div>

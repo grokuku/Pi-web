@@ -91,6 +91,8 @@ export const en = {
       title: "General",
       language: "Language",
       systemDefault: "System default",
+      thinkExpand: "Expand thinking by default",
+      thinkExpandDesc: "When thinking is visible, expand blocks automatically",
       auth: {
         title: "WEB INTERFACE AUTHENTICATION",
         description: "Set credentials to protect the web interface with HTTP Basic Authentication. Leave empty to disable authentication.",

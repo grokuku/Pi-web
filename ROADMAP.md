@@ -73,7 +73,7 @@
 - **ModelQuickSwitch : tri alphabetique des modeles** — Dans les dropdowns sous les boutons CODE/PLAN/REVIEW, les modeles sont listes dans l ordre de `library.models` (ordre du backend). Certains providers renvoient les modeles dans un ordre aleatoire. Ajouter un `.sort((a, b) => a.name.localeCompare(b.name))` avant le `.map()` pour chaque dropdown.
 - ✅ **ModelQuickSwitch : supprimer le bouton commit** — Le bouton commit (a cote de REVIEW) avec son dropdown dedie prend de la place dans le header. Le modele de commit peut toujours etre configure dans Settings → Analysis Models. Supprimer le rendu du bouton commit et son dropdown de ModelQuickSwitch.
 - ✅ **Thinking : titre sticky au scroll** — Quand on scrolle dans un bloc thinking, le titre "THINKING" et le bouton copier restent visibles en haut (sticky + backdrop blur). Permet de minimiser sans remonter.
-- 💡 **Paramètre global "Think expand" par défaut** — Ajouter dans Settings → General un toggle "Expand thinking by default" (compact/dévellopé). Contrôle le `defaultExpanded` de tous les ThinkingBlock.
+- ✅ **Paramètre global "Think expand" par défaut** — Toggle dans Settings → General. Stocké dans localStorage.
 - ✅ **Améliorer l'auto-scroll des messages** — Seuil réduit de 80px à 30px. Bouton sticky ↓ avec compteur "N nouveaux messages" quand on remonte. IntersectionObserver remplacé par onScroll (fiable avec overflow-y-auto).
 - 💡 **Onglet Raccourcis clavier dans Settings** — Permettre à l'utilisateur de visualiser et reconfigurer les raccourcis clavier. Stockage localStorage. Remplacer les Ctrl+L/T/O qui sont en conflit avec le navigateur.
 - ✅ **Badge outil → expand individuel** — En mode compact, cliquer sur un badge d'outil specifique expand **seulement cet outil** en timeline (les autres restent en badges). Bouton ✕ pour refermer l'outil individuellement. Le toggle global "▶ TOOLS (N)" fonctionne toujours (expand tout).
@@ -273,7 +273,7 @@ Stockage
 | 19 | ✅ Done | **Stats d'utilisation** (par jour/mois, graphs, modal) des tokens (jour/semaine/mois, par modèle/providers) |
 | 20 | 💡 | **LLM conscient du mode** — en plan/analyse, ne jamais proposer du code, juste planifier/analyser |
 | 21 | ✅ Done | **Thinking : titre sticky** au scroll (titre + copier restent visibles) |
-| 22 | 💡 | **Paramètre "Think expand"** par défaut dans Settings → General |
+| 22 | ✅ Done | **Paramètre "Think expand"** par défaut dans Settings → General |
 | 23 | ✅ Done | **Auto-scroll messages** — seuil 30px, bouton sticky ↓ avec compteur |
 | 24 | 💡 | **Onglet Raccourcis clavier** dans Settings (visu + reconfiguration) |
 | 25 | ✅ Done | **Badge outil → expand individuel** (✕ pour refermer) |
