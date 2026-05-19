@@ -170,6 +170,20 @@ PDF uploadé
 - **Extension Slack/Discord** — Pousser les notifications de build/déploiement vers un channel. Priorité basse.
 - **Extension Git hooks** — Déclencher des analyses automatiques sur push (lint, tests, review). Priorité basse.
 
+### YOLO Mode (Multi-Agent Debate)
+
+✅ **Mode YOLO — Débat multi-agent**
+
+- Deux IAs discutent et codent en collaboration
+- Phase PLAN (N cycles) : Agent 1 propose → Agent 2 critique → boucle
+- Phase CODE (M cycles) : Agent 1 implémente → Agent 2 débugue → boucle
+- Cycles globaux (P) : plan+code répétés avec réinjection du code produit
+- Backend : orchestration dans session.ts (runYoloSession, runYoloDebate, runYoloAgent)
+- Frontend : bouton YOLO dans le header, streaming du débat
+- Configuration : modèle 1, modèle 2, nombre de cycles plan/code/global
+- Route API : POST /api/pi/yolo
+
+
 ### Agent
 
 - **LLM conscient de son mode (plan/analyse vs code)** — Quand l'utilisateur passe en mode plan/analyse, le LLM doit savoir qu'il est dans ce mode et adapter son comportement :
@@ -278,3 +292,5 @@ Stockage
 | 24 | 💡 | **Onglet Raccourcis clavier** dans Settings (visu + reconfiguration) |
 | 25 | ✅ Done | **Badge outil → expand individuel** (✕ pour refermer) |
 | 26 | ✅ Done | **Indicateur connexion** — texte "Connecté" / "Hors ligne" ajouté |
+| 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, cycles plan/code/global) |
+| 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, N cycles)

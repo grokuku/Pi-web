@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { execSync } from "child_process";
 import path from "path";
 import os from "os";
+import { runYoloSession, type YoloConfig } from "../pi/session.js";
 
 const router = Router();
 
@@ -438,6 +439,51 @@ router.post("/toggle", (req: Request, res: Response) => {
     settings[type] = list;
     saveSettings(settings);
     res.json({ success: true, [type]: list });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/pi/yolo — Launch a YOLO multi-agent session
+ */
+router.post("/yolo", async (req: Request, res: Response) => {
+  try {
+    const { projectId, prompt } = req.body as {
+      projectId: string;
+      prompt: string;
+    };
+
+    if (!projectId || !prompt) {
+      return res.status(400).json({ error: "Missing projectId or prompt" });
+    }
+
+    // Load YOLO config from the model library
+    const { loadModelLibrary, getProjectModeConfig } = await import("../pi/model-library.js");
+    const library = loadModelLibrary();
+    const pm = getProjectModeConfig(library, projectId);
+    const yoloConfig = (pm as any).yolo?.config;
+
+    if (!yoloConfig?.model1 || !yoloConfig?.model2) {
+      return res.status(400).json({ error: "YOLO not configured. Set model1 and model2 in YOLO config." });
+    }
+
+    // Validate cycles
+    const config = {
+      model1: yoloConfig.model1,
+      model2: yoloConfig.model2,
+      planCycles: Math.max(1, Math.min(10, yoloConfig.planCycles || 2)),
+      codeCycles: Math.max(1, Math.min(10, yoloConfig.codeCycles || 2)),
+      globalCycles: Math.max(1, Math.min(5, yoloConfig.globalCycles || 1)),
+    };
+
+    // Respond immediately — YOLO runs in background
+    res.json({ status: "ok", message: "YOLO session started", config });
+
+    // Launch YOLO session asynchronously
+    runYoloSession(projectId, prompt, config).catch(err => {
+      console.error("[yolo] Session error:", err.message);
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

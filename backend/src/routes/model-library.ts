@@ -10,6 +10,7 @@ import {
   setProjectModeModel,
   setProjectModeEnabled,
   setProjectModeMaxReviews,
+  setProjectModeYoloConfig,
   getProjectModeConfig,
   getModel,
   getDefaultModel,
@@ -258,7 +259,7 @@ router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
 router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
   try {
     const { projectId } = req.params;
-    const { mode, modelId, enabled, maxReviews } = req.body;
+    const { mode, modelId, enabled, maxReviews, config } = req.body;
 
     if (mode) validateMode(mode);
 
@@ -267,11 +268,14 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     if (modelId !== undefined) {
       library = setProjectModeModel(projectId, mode, modelId);
     }
-    if (enabled !== undefined && (mode === "plan" || mode === "review")) {
+    if (enabled !== undefined && (mode === "plan" || mode === "review" || mode === "yolo")) {
       library = setProjectModeEnabled(projectId, mode, enabled);
     }
     if (maxReviews !== undefined && mode === "review") {
       library = setProjectModeMaxReviews(projectId, maxReviews);
+    }
+    if (config !== undefined && mode === "yolo") {
+      library = setProjectModeYoloConfig(projectId, config);
     }
 
     res.json(library);

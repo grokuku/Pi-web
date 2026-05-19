@@ -1567,3 +1567,324 @@ export async function generateAiCommitMessage(
     return null;
   }
 }
+
+// ── YOLO Mode — Multi-Agent Debate ───────────────────
+
+export interface YoloConfig {
+  model1: { providerId: string; modelId: string } | null;
+  model2: { providerId: string; modelId: string } | null;
+  planCycles: number;
+  codeCycles: number;
+  globalCycles: number;
+}
+
+const YOLO_PLAN_AGENT1 = `
+## YOLO MODE — PLAN PHASE (Agent 1: Architect)
+
+You are Agent 1 in a collaborative YOLO session. Your role is ARCHITECT.
+
+Rules:
+- Analyze the user's request and propose a detailed implementation PLAN.
+- Do NOT write any code. Only plan.
+- Use read/grep/find/bash to explore the existing codebase.
+- Break the plan into clear steps with file paths.
+- Consider edge cases, error handling, and testing.
+- Keep your plan concise but thorough.
+
+After you propose a plan, Agent 2 will critique it. Then you'll get a chance to improve it.`;
+
+const YOLO_PLAN_AGENT2 = `
+## YOLO MODE — PLAN PHASE (Agent 2: Critic)
+
+You are Agent 2 in a collaborative YOLO session. Your role is CRITIC.
+
+Rules:
+- Evaluate the plan proposed by Agent 1.
+- Identify flaws, missing edge cases, architectural issues.
+- Suggest concrete improvements.
+- Do NOT write any code. Only critique and amending the plan.
+- Be constructive but thorough.`;
+
+const YOLO_CODE_AGENT1 = `
+## YOLO MODE — CODE PHASE (Agent 1: Implementer)
+
+You are Agent 1 in a collaborative YOLO session. Your role is IMPLEMENTER.
+
+Rules:
+- Implement the approved plan using ALL available tools (read, edit, write, bash, grep, find).
+- Write production-quality code.
+- Handle edge cases and errors.
+- Make small atomic edits, one file at a time.
+- After implementing, Agent 2 will review and improve your code.`;
+
+const YOLO_CODE_AGENT2 = `
+## YOLO MODE — CODE PHASE (Agent 2: Reviewer / Debugger)
+
+You are Agent 2 in a collaborative YOLO session. Your role is REVIEWER / DEBUGGER.
+
+Rules:
+- Review the code written by Agent 1.
+- Find bugs, style issues, logic errors, missing edge cases.
+- Fix them directly using edit/write tools.
+- Run the code with bash to test if applicable.
+- Do not change the fundamental approach unless it's broken.
+- Improve readability and performance.`;
+
+/**
+ * Run a YOLO session: two agents debate and iterate on a task.
+ */
+export async function runYoloSession(
+  projectId: string,
+  userPrompt: string,
+  config: YoloConfig
+): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) throw new Error("No active session for project");
+
+  const library = loadModelLibrary();
+  const pm = getProjectModeConfig(library, projectId);
+
+  // Mark that we're in yolo mode to track state
+  const prevMode = state.activeMode;
+  state.activeMode = "yolo";
+  state.isStreaming = true;
+  emitSessionUpdate(projectId);
+
+  try {
+    // ── Global cycles ──
+    let previousCode = "";
+    for (let g = 0; g < config.globalCycles; g++) {
+      if (state.autoReviewAborted) { console.log("[yolo] Aborted by user"); break; }
+
+      // Notify frontend
+      emitYoloStatus(projectId, "plan", g, 0, config);
+
+      // ── Phase 1: PLAN (N cycles of debate) ──
+      const planContext = g === 0
+        ? `## User Request\n\n${userPrompt}\n\nPropose a detailed implementation plan.`
+        : `## User Request (cycle ${g + 1})\n\n${userPrompt}\n\n## Existing implementation from previous cycle\n\`\`\`\n${previousCode.slice(0, 15000)}\n\`\`\`\n\nAnalyze what was built. Propose improvements while staying true to the original request.`;
+
+      let planText = await runYoloDebate(
+        projectId, state, config,
+        "plan", g,
+        config.planCycles,
+        planContext,
+        YOLO_PLAN_AGENT1, YOLO_PLAN_AGENT2,
+        true  // read-only for plan phase
+      );
+
+      if (state.autoReviewAborted) break;
+
+      // ── Phase 2: CODE (M cycles of debate) ──
+      emitYoloStatus(projectId, "code", g, 0, config);
+
+      const codeContext = `## Approved Plan\n\n${planText.slice(0, 10000)}\n\n## Original Request\n\n${userPrompt}\n\nImplement the plan above.`;
+
+      previousCode = await runYoloDebate(
+        projectId, state, config,
+        "code", g,
+        config.codeCycles,
+        codeContext,
+        YOLO_CODE_AGENT1, YOLO_CODE_AGENT2,
+        false  // full tools for code phase
+      );
+    }
+
+    emitYoloStatus(projectId, "done", config.globalCycles - 1, 0, config);
+  } finally {
+    state.activeMode = prevMode;
+    state.isStreaming = false;
+    state.autoReviewAborted = false;
+    emitSessionUpdate(projectId);
+  }
+}
+
+/** Run a single phase's debate cycle: agent1 → agent2 → agent1 → ... */
+async function runYoloDebate(
+  projectId: string,
+  state: PiSessionState,
+  config: YoloConfig,
+  phase: "plan" | "code",
+  globalCycle: number,
+  cycles: number,
+  initialContext: string,
+  systemPrompt1: string,
+  systemPrompt2: string,
+  readOnly: boolean
+): Promise<string> {
+  let agent1Result = "";
+  let agent2Result = "";
+
+  for (let c = 0; c < cycles; c++) {
+    if (state.autoReviewAborted) break;
+
+    // ── Agent 1 produces ──
+    emitYoloStatus(projectId, phase, globalCycle, c + 1, config);
+
+    const agent1Prompt = c === 0
+      ? `${systemPrompt1}\n\n${initialContext}`
+      : `${systemPrompt1}\n\n## Previous proposal by you:\n\n${agent1Result.slice(0, 15000)}\n\n## Critique from Agent 2:\n\n${agent2Result.slice(0, 15000)}\n\nImprove your proposal based on the critique above.`;
+
+    agent1Result = await runYoloAgent(
+      projectId, state, config, config.model1,
+      phase, globalCycle, c, "agent1", agent1Prompt, readOnly
+    );
+
+    if (state.autoReviewAborted) break;
+
+    // ── Agent 2 critiques ──
+    const agent2Prompt = `${systemPrompt2}\n\n## Proposal from Agent 1:\n\n${agent1Result.slice(0, 20000)}\n\nEvaluate this ${phase === "plan" ? "plan" : "code"}. ${phase === "plan" ? "Identify issues and suggest improvements without writing code." : "Find bugs, fix them, and improve the code."}`;
+
+    agent2Result = await runYoloAgent(
+      projectId, state, config, config.model2,
+      phase, globalCycle, c, "agent2", agent2Prompt, readOnly
+    );
+
+    // For the plan phase, the final result is the latest agent1 proposal
+    // For the code phase, the final result is the code as modified by both agents
+  }
+
+  return agent1Result || agent2Result || "";
+}
+
+/** Run a single agent in a temp session and return the response text */
+async function runYoloAgent(
+  projectId: string,
+  state: PiSessionState,
+  config: YoloConfig,
+  modelInfo: { providerId: string; modelId: string } | null,
+  phase: "plan" | "code",
+  globalCycle: number,
+  localCycle: number,
+  agentKey: "agent1" | "agent2",
+  prompt: string,
+  readOnly: boolean
+): Promise<string> {
+  let tempSession: AgentSession | null = null;
+  let tempSessionFile: string | undefined;
+
+  try {
+    const tempSessionManager = SessionManager.create(state.cwd);
+    tempSessionFile = tempSessionManager.getSessionFile();
+    const result = await createAgentSession({
+      cwd: state.cwd,
+      sessionManager: tempSessionManager,
+      authStorage: sharedAuthStorage,
+      modelRegistry: sharedModelRegistry,
+    });
+    tempSession = result.session;
+
+    // Apply model
+    if (modelInfo) {
+      try {
+        const piModel = sharedModelRegistry.find(modelInfo.providerId, modelInfo.modelId);
+        if (piModel) await tempSession.setModel(piModel);
+      } catch (e: any) {
+        console.warn(`[yolo] Could not set model for ${agentKey}:`, e.message);
+      }
+    }
+
+    // Restrict tools if read-only
+    if (readOnly) {
+      (tempSession as any).setActiveToolsByName([
+        "read", "grep", "find", "ls", "list",
+        "firecrawl_scrape", "firecrawl_map", "firecrawl_search",
+        "memory_search", "memory_list", "global_memory_search", "global_memory_list",
+      ]);
+    }
+
+    // Inject system prompt
+    (tempSession as any).agent.state.systemPrompt = prompt;
+
+    // Subscribe to forward events with yolo tags
+    const tempUnsub = tempSession.subscribe((event) => {
+      const taggedEvent = {
+        ...event,
+        _yolo: true,
+        _yoloAgent: agentKey,
+        _yoloPhase: phase,
+        _yoloGlobalCycle: globalCycle,
+        _yoloLocalCycle: localCycle,
+        _readOnly: readOnly,
+      } as any;
+
+      if (event.type === "tool_execution_start") {
+        activeToolCalls.set(event.toolCallId, {
+          toolName: event.toolName,
+          args: event.args,
+          output: "",
+          startTime: Date.now(),
+          projectId,
+        });
+      } else if (event.type === "tool_execution_update") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing && event.partialResult?.content) {
+          existing.output = event.partialResult.content
+            .map((c: any) => c.text || "")
+            .join("");
+        }
+      } else if (event.type === "tool_execution_end") {
+        const existing = activeToolCalls.get(event.toolCallId);
+        if (existing && event.result?.content) {
+          existing.output = event.result.content
+            .map((c: any) => c.text || "")
+            .join("");
+        }
+      }
+
+      emitToSubscribers(taggedEvent, projectId);
+    });
+
+    // Run the prompt
+    await tempSession.prompt(prompt, {});
+
+    // Extract the all assistant messages as the result
+    const messages: any[] = tempSession.messages || [];
+    const assistantMessages = messages
+      .filter((m: any) => m.role === "assistant")
+      .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "");
+    const fullResponse = assistantMessages.join("\n\n");
+
+    // Clean up
+    tempUnsub();
+    try { (tempSession as any).dispose?.(); } catch {}
+    if (tempSessionFile) {
+      try {
+        const { existsSync, unlinkSync, readdirSync, rmdirSync } = require("fs");
+        if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
+        // Clean up the temp session directory
+        const dir = tempSessionFile.replace(/\/[^/]+\.json$/, "");
+        if (existsSync(dir)) {
+          try {
+            const files = readdirSync(dir);
+            for (const f of files) unlinkSync(require("path").join(dir, f));
+            rmdirSync(dir);
+          } catch {}
+        }
+      } catch {}
+    }
+
+    return fullResponse;
+  } catch (err: any) {
+    console.error(`[yolo] Agent ${agentKey} error:`, err.message);
+    return `[Error: ${agentKey} failed — ${err.message}]`;
+  }
+}
+
+function emitYoloStatus(
+  projectId: string,
+  phase: "plan" | "code" | "done",
+  globalCycle: number,
+  localCycle: number,
+  config: YoloConfig
+) {
+  emitToSubscribers({
+    type: "yolo_status",
+    phase,
+    globalCycle,
+    localCycle,
+    globalCycles: config.globalCycles,
+    planCycles: config.planCycles,
+    codeCycles: config.codeCycles,
+  } as any, projectId);
+}

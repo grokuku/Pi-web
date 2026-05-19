@@ -91,10 +91,11 @@ interface Props {
   isStreaming: boolean;
   session: any;
   projectId: string;
+  activeMode?: string;
   onQuit?: () => void;
 }
 
-export function ChatView({ send, on, activeProject, isStreaming, session, projectId, onQuit }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, session, projectId, activeMode, onQuit }: Props) {
   const { t } = useTranslation();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
@@ -107,6 +108,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return saved === null ? true : saved === "true";
   });
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
+  const [yoloStreaming, setYoloStreaming] = useState(false);
+  const [yoloStatus, setYoloStatus] = useState<{ phase: string; globalCycle: number; localCycle: number; agent?: string } | null>(null);
 
   // File viewer overlay state
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
@@ -290,6 +293,34 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           setAutoReviewStreaming(false);
         }
         // Fall through to normal message handling below
+      }
+
+      // YOLO mode events
+      if (evt._yolo) {
+        if (evt.type === "agent_start") {
+          setYoloStreaming(true);
+          setYoloStatus({
+            phase: evt._yoloPhase,
+            globalCycle: (evt._yoloGlobalCycle || 0) + 1,
+            localCycle: (evt._yoloLocalCycle || 0) + 1,
+            agent: evt._yoloAgent,
+          });
+        } else if (evt.type === "agent_end") {
+          setYoloStreaming(false);
+          setYoloStatus(null);
+        } else if (evt.type === "yolo_status") {
+          if (evt.phase === "done") {
+            setYoloStreaming(false);
+            setYoloStatus(null);
+          } else {
+            setYoloStreaming(true);
+            setYoloStatus({
+              phase: evt.phase,
+              globalCycle: (evt.globalCycle || 0) + 1,
+              localCycle: evt.localCycle || 0,
+            });
+          }
+        }
       }
 
       switch (evt.type) {
@@ -482,6 +513,30 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ── Send message (called by ChatInputArea) ──
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
+    // ── YOLO mode: launch multi-agent session ──
+    if (activeMode === "yolo") {
+      const displayContent = text;
+      // Add user message to chat immediately
+      setMessages(prev => [...prev, {
+        id: `msg-${Date.now()}`,
+        role: "user",
+        content: displayContent,
+        thinking: "",
+        toolCalls: [],
+        timestamp: Date.now(),
+      }]);
+      // Launch YOLO session
+      fetch("/api/pi/yolo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          prompt: text,
+        }),
+      }).then(r => r.json()).catch(e => console.error("YOLO launch error:", e));
+      return;
+    }
+
     // Check for upload errors
     const uploadErrors = attachments.filter((a) => a.uploadStatus === "error");
     if (uploadErrors.length > 0) {
@@ -653,6 +708,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         onAbort={() => send({ type: "pi_abort", projectId })}
         isStreaming={isStreaming}
         autoReviewStreaming={autoReviewStreaming}
+        yoloStreaming={yoloStreaming}
+        yoloStatus={yoloStatus}
         gitBranch={activeProject?.git?.branch}
         setError={setError}
       />
@@ -1001,12 +1058,14 @@ const StreamingBlock = memo(function StreamingBlock({ content, thinking, toolCal
 // ── ChatInputArea (isolated to prevent re-renders on every keystroke) ──
 
 const ChatInputArea = memo(function ChatInputArea({
-  onSend, onAbort, isStreaming, autoReviewStreaming, gitBranch, setError,
+  onSend, onAbort, isStreaming, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError,
 }: {
   onSend: (text: string, attachments: Attachment[]) => void;
   onAbort: () => void;
   isStreaming: boolean;
   autoReviewStreaming: boolean;
+  yoloStreaming: boolean;
+  yoloStatus: { phase: string; globalCycle: number; localCycle: number; agent?: string } | null;
   gitBranch?: string;
   setError: (e: string) => void;
 }) {
@@ -1181,7 +1240,14 @@ const ChatInputArea = memo(function ChatInputArea({
               <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" /> {t('autoReview.inProgress')}
             </span>
           )}
-          {isStreaming && !autoReviewStreaming && (
+          {yoloStreaming && yoloStatus && (
+            <span className="text-hacker-accent flex items-center gap-1">
+              <span className="pulse-dot w-1.5 h-1.5" />
+              YOLO {yoloStatus.phase.toUpperCase()} {yoloStatus.agent ? `(${yoloStatus.agent})` : ""} — G{yoloStatus.globalCycle}
+              {yoloStatus.localCycle > 0 && `·${yoloStatus.localCycle}`}
+            </span>
+          )}
+          {isStreaming && !autoReviewStreaming && !yoloStreaming && (
             <span className="text-hacker-accent flex items-center gap-1">
               <span className="pulse-dot w-1.5 h-1.5" /> {t('common.loading')}
             </span>

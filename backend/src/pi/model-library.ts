@@ -37,7 +37,7 @@ export interface RegisteredModel {
   thinkingLevel: string;       // off, minimal, low, medium, high
 }
 
-export type AgentMode = "code" | "review" | "plan";
+export type AgentMode = "code" | "review" | "plan" | "yolo";
 
 export interface ModeConfig {
   modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
@@ -47,6 +47,13 @@ export interface ProjectModeConfig {
   code: ModeConfig;
   plan: ModeConfig & { enabled: boolean };
   review: ModeConfig & { enabled: boolean; maxReviews: number };
+  yolo: ModeConfig & { enabled: boolean; config: {
+    model1: { providerId: string; modelId: string } | null;
+    model2: { providerId: string; modelId: string } | null;
+    planCycles: number;
+    codeCycles: number;
+    globalCycles: number;
+  } };
 }
 
 export interface ModelLibrary {
@@ -67,6 +74,7 @@ function createDefaultProjectMode(): ProjectModeConfig {
     code: { modelId: null },
     plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1 },
+    yolo: { modelId: null, enabled: false, config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
   };
 }
 
@@ -191,6 +199,17 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
       modelId: pm?.review?.modelId ?? d.review.modelId,
       enabled: pm?.review?.enabled ?? d.review.enabled,
       maxReviews: pm?.review?.maxReviews ?? d.review.maxReviews,
+    },
+    yolo: {
+      modelId: pm?.yolo?.modelId ?? d.yolo.modelId,
+      enabled: pm?.yolo?.enabled ?? d.yolo.enabled,
+      config: {
+        model1: pm?.yolo?.config?.model1 ?? null,
+        model2: pm?.yolo?.config?.model2 ?? null,
+        planCycles: pm?.yolo?.config?.planCycles ?? 2,
+        codeCycles: pm?.yolo?.config?.codeCycles ?? 2,
+        globalCycles: pm?.yolo?.config?.globalCycles ?? 1,
+      },
     },
   };
 }
@@ -342,7 +361,7 @@ export function setProjectModeModel(projectId: string, mode: AgentMode, modelId:
   return library;
 }
 
-export function setProjectModeEnabled(projectId: string, mode: "plan" | "review", enabled: boolean): ModelLibrary {
+export function setProjectModeEnabled(projectId: string, mode: "plan" | "review" | "yolo", enabled: boolean): ModelLibrary {
   const library = loadModelLibrary();
   if (!library.projectModes[projectId]) {
     library.projectModes[projectId] = createDefaultProjectMode();
@@ -358,6 +377,32 @@ export function setProjectModeMaxReviews(projectId: string, maxReviews: number):
     library.projectModes[projectId] = createDefaultProjectMode();
   }
   library.projectModes[projectId].review.maxReviews = maxReviews;
+  saveModelLibrary(library);
+  return library;
+}
+
+/** Persist YOLO configuration */
+export function setProjectModeYoloConfig(
+  projectId: string,
+  config: {
+    model1?: { providerId: string; modelId: string } | null;
+    model2?: { providerId: string; modelId: string } | null;
+    planCycles?: number;
+    codeCycles?: number;
+    globalCycles?: number;
+  }
+): ModelLibrary {
+  const library = loadModelLibrary();
+  if (!library.projectModes[projectId]) {
+    library.projectModes[projectId] = createDefaultProjectMode();
+  }
+  const yolo = (library.projectModes[projectId] as any).yolo;
+  if (!yolo.config) yolo.config = {};
+  if (config.model1 !== undefined) yolo.config.model1 = config.model1;
+  if (config.model2 !== undefined) yolo.config.model2 = config.model2;
+  if (config.planCycles !== undefined) yolo.config.planCycles = Math.max(1, Math.min(10, config.planCycles));
+  if (config.codeCycles !== undefined) yolo.config.codeCycles = Math.max(1, Math.min(10, config.codeCycles));
+  if (config.globalCycles !== undefined) yolo.config.globalCycles = Math.max(1, Math.min(5, config.globalCycles));
   saveModelLibrary(library);
   return library;
 }

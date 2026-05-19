@@ -2,10 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
-import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
+import { YoloConfigModal } from "../Modals/YoloConfigModal";
+import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, YoloConfig } from "../../types";
 
 const MODE_CONFIG: Record<AgentMode, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
   code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
+  yolo:   { icon: "🤝", label: "YOLO",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
   plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/20",    activeBorder: "border-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
 };
@@ -21,6 +23,7 @@ interface Props {
 export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied }: Props) {
   const { t } = useTranslation();
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
+  const [showYoloConfig, setShowYoloConfig] = useState(false);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const ref = useRef<HTMLDivElement>(null);
@@ -57,6 +60,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const pm: ProjectModeConfig = activeProjectId
     ? (library?.projectModes?.[activeProjectId] || defaultProjectMode())
     : defaultProjectMode();
+  const yoloConfig: YoloConfig = pm.yolo?.config || { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 };
 
   const getModelForMode = (mode: AgentMode): RegisteredModel | null => {
     const modelId = (pm as any)[mode]?.modelId;
@@ -85,7 +89,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     setOpenMode(null);
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review") => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "yolo") => {
     e.stopPropagation();
     if (!activeProjectId) return;
     const modeCfg = (pm as any)[mode] as { enabled: boolean };
@@ -99,12 +103,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       await loadLibrary();
       onModelApplied?.();
 
-      // If enabling PLAN, also switch to plan mode
-      if (mode === "plan" && newEnabled) {
-        onModeSwitch?.("plan");
+      // If enabling PLAN or YOLO, also switch to that mode
+      if ((mode === "plan" || mode === "yolo") && newEnabled) {
+        onModeSwitch?.(mode);
       }
-      // If disabling PLAN and was active, switch back to code
-      if (mode === "plan" && !newEnabled && activeMode === "plan") {
+      // If disabling and was active, switch back to code
+      if (!newEnabled && activeMode === mode) {
         onModeSwitch?.("code");
       }
     } catch (e) { console.error("handleToggleMode error:", e); }
@@ -123,6 +127,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   };
 
   const handleChipClick = (mode: AgentMode) => {
+    if (mode === "yolo" && pm.yolo?.enabled && activeMode === "yolo") {
+      setShowYoloConfig(true);
+      return;
+    }
     if (openMode === mode) { setOpenMode(null); return; }
     setOpenMode(mode);
   };
@@ -140,9 +148,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return name.slice(0, 12) + "…";
   };
 
-  const modes: AgentMode[] = ["code", "plan", "review"];
+  const modes: AgentMode[] = ["code", "plan", "review", "yolo"];
 
   return (
+    <>
     <div ref={ref} className="flex items-center gap-1.5">
       {modes.map((mode) => {
         const cfg = MODE_CONFIG[mode];
@@ -180,10 +189,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
                 <div
-                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review")}
+                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review" | "yolo")}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review"); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review" | "yolo"); } }}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -282,6 +291,27 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       })}
 
     </div>
+      {showYoloConfig && (
+        <YoloConfigModal
+          onClose={() => setShowYoloConfig(false)}
+          onSave={async (cfg) => {
+            if (!activeProjectId) return;
+            try {
+              await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: "yolo", config: cfg }),
+              });
+              await loadLibrary();
+              onModelApplied?.();
+              setShowYoloConfig(false);
+            } catch (e) { console.error("Save yolo config:", e); }
+          }}
+          models={library?.models || []}
+          config={yoloConfig}
+        />
+      )}
+    </>
   );
 }
 
@@ -290,5 +320,7 @@ function defaultProjectMode(): ProjectModeConfig {
     code: { modelId: null },
     plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1 },
+    yolo: { modelId: null, enabled: false,
+      config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
   };
 }

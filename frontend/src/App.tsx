@@ -603,6 +603,7 @@ function App() {
                   isStreaming={isStreaming}
                   session={session}
                   projectId={activeProject?.id || ""}
+                  activeMode={activeMode}
                 />
               </div>
             </div>
@@ -758,7 +759,7 @@ function App() {
                 sizes={layoutCfg.sizes}
                 panelContent={{
                   pi: (
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} onQuit={handleQuit} />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
                   ),
                   terminal: (
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
@@ -792,7 +793,7 @@ function App() {
       {/* FLOATING PANELS (Windows) */}
       {panels.pi.visible && panels.pi.floating && (
         <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
-          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} onQuit={handleQuit} />
+          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
         </Window>
       )}
       {panels.terminal.visible && panels.terminal.floating && (
