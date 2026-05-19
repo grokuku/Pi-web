@@ -13,6 +13,12 @@ import { useTranslation } from "../../i18n";
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
 });
+
+// ── Time formatting ──
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 import type { Project } from "../../types";
 import { useChatHistory } from "../../hooks/useChatHistory";
 
@@ -685,6 +691,7 @@ interface AssistantMsg {
   content: string;
   thinking: string;
   toolCalls: ToolCallInfo[];
+  timestamp: number;
   usage?: { input: number; output: number; cost: { total: number } };
 }
 
@@ -740,6 +747,11 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
   return (
     <div className="flex justify-end mb-3">
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
+        {message.timestamp ? (
+          <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">
+            {formatTime(message.timestamp)}
+          </div>
+        ) : null}
         {message.content && (
           <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>
         )}
@@ -905,9 +917,10 @@ const AssistantGroup = memo(function AssistantGroup({ messages, showAllThinking,
         )}
 
         {/* Usage footer */}
-        {totalUsage && (
-          <div className="px-3 pb-2 text-[9px] text-hacker-text-dim border-t border-hacker-border pt-1.5">
-            {totalUsage.input + totalUsage.output} tok
+        {(totalUsage || messages[0]?.timestamp) && (
+          <div className="px-3 pb-2 text-[9px] text-hacker-text-dim border-t border-hacker-border pt-1.5 flex justify-between items-center">
+            <span>{messages[0]?.timestamp ? formatTime(messages[0].timestamp) : ""}</span>
+            {totalUsage && <span>{totalUsage.input + totalUsage.output} tok</span>}
           </div>
         )}
       </div>

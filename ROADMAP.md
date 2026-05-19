@@ -59,7 +59,7 @@
 
 ### UX / Frontend
 
-- **Timestamps relatifs dans le chat** — Afficher `[2min]`, `[1h30]` entre les messages si le délai dépasse 30s. Donne au LLM une notion de chronologie sans polluer le contexte. Format proposé : `[0s] user: ... [45s] assistant: ...` — seulement si gap > 30s.
+- ✅ **Timestamps absolus sur les messages** — L'heure (HH:MM) est affichée en haut à droite des messages utilisateur et dans le footer des blocs assistant.
 - **Presets de modèles** — Bouton à côté du sélecteur de mode (code/plan/review) pour sauvegarder/recharger des configurations complètes de modèles. Un preset = combinaison de (codeModel, planModel, reviewModel, visionModel, audioTranscriptionModel, audioAnalysisModel, commitModel, niveaux de thinking) associés à un nom. Permet de basculer rapidement entre "full power (cher)", "moyen", "light (gratuit)". Stockage côté backend dans un fichier JSON, switch via un seul appel API qui set tous les modèles d'un coup.
 - **Export / Import de config complète** — Bouton dans Settings → General pour exporter toute la configuration (serveur + localStorage) en un seul fichier JSON, et bouton pour l'importer. Doit inclure : modèles (code/plan/review/vision/audio/commit), presets, thème, raccourcis, préférences UI, niveaux de thinking, providers. L'export télécharge un fichier .json ; l'import le parse et applique tout (appels API pour le serveur, setItem pour le localStorage). Utile pour backup, migration, ou partage de config entre instances.
 - **Onglet Analysis Models dans Settings** — Déjà implémenté (vision model, audio model, commit model). Manque la sélection de modèle audio de transcription et d'analyse (voir section Backend → Analyse Audio).
@@ -254,7 +254,7 @@ Stockage
 |---|------|-------------|
 | 1 | 🟡 Bug | **Historique chat disparait** avec 3 panneaux visibles |
 | 2 | ✅ Fixed | **Stats contexte incohérentes** dans la StatusBar |
-| 3 | 💡 | **Timestamps relatifs** dans le chat |
+| 3 | ✅ Done | **Timestamps absolus** (HH:MM) sur les messages utilisateur et assistant |
 | 4 | 💡 | **Presets de modèles** (sauver/charger des configs complètes) |
 | 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
 | 6 | 💡 | **Analyse audio** — transcription (Whisper) + description (multimodal) |
