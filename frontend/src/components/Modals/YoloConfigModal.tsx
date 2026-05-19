@@ -1,16 +1,17 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Zap } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
-import type { RegisteredModel, YoloConfig } from "../../types";
+import type { RegisteredModel, YoloConfig, ProviderConfig } from "../../types";
 
 interface Props {
   onClose: () => void;
-  onSave: (config: Partial<YoloConfig>) => void;
+  onChange: (config: Partial<YoloConfig>) => void;
   models: RegisteredModel[];
+  providers: ProviderConfig[];
   config: YoloConfig;
 }
 
-export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
+export function YoloConfigModal({ onClose, onChange, models, providers, config }: Props) {
   const initModel1Id = config.model1 ? (config.model1.modelId || `${config.model1.providerId}__${config.model1.modelId}`) : "";
   const initModel2Id = config.model2 ? (config.model2.modelId || `${config.model2.providerId}__${config.model2.modelId}`) : "";
   const [model1Id, setModel1Id] = useState(initModel1Id);
@@ -18,22 +19,40 @@ export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
   const [planCycles, setPlanCycles] = useState(config.planCycles || 2);
   const [codeCycles, setCodeCycles] = useState(config.codeCycles || 2);
   const [globalCycles, setGlobalCycles] = useState(config.globalCycles || 1);
+  const [saved, setSaved] = useState(false);
 
-  const handleSave = () => {
-    // Find the selected models from the library
-    const m1 = models.find(m => m.id === model1Id);
-    const m2 = models.find(m => m.id === model2Id);
-    onSave({
+  // Debounced auto-save
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const doSave = useCallback(() => {
+    const m1 = models.find(m => m.id === model1Id) || null;
+    const m2 = models.find(m => m.id === model2Id) || null;
+    onChange({
       model1: m1 ? { providerId: m1.providerId, modelId: m1.modelId } : null,
       model2: m2 ? { providerId: m2.providerId, modelId: m2.modelId } : null,
       planCycles,
       codeCycles,
       globalCycles,
     });
-  };
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }, [model1Id, model2Id, planCycles, codeCycles, globalCycles, models, onChange]);
+
+  // Auto-save on any parameter change (debounced 500ms)
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(doSave, 500);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [model1Id, model2Id, planCycles, codeCycles, globalCycles, doSave]);
 
   // Group models by provider for display
   const sortedModels = [...models].sort((a, b) => a.name.localeCompare(b.name));
+
+  function getProviderName(providerId: string): string {
+    const p = providers.find(p => p.id === providerId);
+    if (!p) return providerId;
+    return p.name || p.type || providerId;
+  }
 
   const estimatedTokensMin = planCycles * codeCycles * globalCycles * 2000;
   const estimatedTokensMax = planCycles * codeCycles * globalCycles * 8000;
@@ -45,7 +64,10 @@ export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Zap size={16} className="text-hacker-warn" />
-            <span className="text-hacker-accent text-sm font-bold tracking-wider">YOLO CONFIG</span>
+            <span className="text-hacker-accent text-sm font-bold tracking-wider flex items-center gap-2">
+              YOLO CONFIG
+              {saved && <span className="text-green-400 text-[10px] font-normal">✓ saved</span>}
+            </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-error">
             <X size={16} />
@@ -62,7 +84,7 @@ export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
           >
             <option value="">— Select model —</option>
             {sortedModels.map(m => (
-              <option key={m.id} value={m.id}>{m.name} {m.providerId ? `(${m.providerId})` : ""}</option>
+              <option key={m.id} value={m.id}>{m.name} {m.providerId ? `(${getProviderName(m.providerId)})` : ""}</option>
             ))}
           </select>
         </div>
@@ -77,7 +99,7 @@ export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
           >
             <option value="">— Select model —</option>
             {sortedModels.map(m => (
-              <option key={m.id} value={m.id}>{m.name} {m.providerId ? `(${m.providerId})` : ""}</option>
+              <option key={m.id} value={m.id}>{m.name} {m.providerId ? `(${getProviderName(m.providerId)})` : ""}</option>
             ))}
           </select>
         </div>
@@ -137,16 +159,6 @@ export function YoloConfigModal({ onClose, onSave, models, config }: Props) {
         {/* Cost estimate */}
         <div className="text-[10px] text-hacker-text-dim space-y-1">
           <span>⚠ Estimated tokens: {estimatedTokensMin.toLocaleString()} — {estimatedTokensMax.toLocaleString()}</span>
-        </div>
-
-        {/* Actions */}
-        <div className="flex gap-2 pt-2">
-          <button onClick={handleSave}
-            className="flex-1 btn-hacker text-xs px-4 py-2 flex items-center justify-center gap-1.5"
-            disabled={!model1Id || !model2Id}
-          >
-            <Zap size={12} /> SAVE CONFIG
-          </button>
         </div>
       </div>
     </ModalDialog>

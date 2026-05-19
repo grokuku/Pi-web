@@ -317,7 +317,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       {showYoloConfig && (
         <YoloConfigModal
           onClose={() => setShowYoloConfig(false)}
-          onSave={async (cfg) => {
+          onChange={async (cfg) => {
             if (!activeProjectId) return;
             try {
               await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
@@ -327,10 +327,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               });
               await loadLibrary();
               onModelApplied?.();
-              setShowYoloConfig(false);
             } catch (e) { console.error("Save yolo config:", e); }
           }}
           models={library?.models || []}
+          providers={providers}
           config={yoloConfig}
         />
       )}

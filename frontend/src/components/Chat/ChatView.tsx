@@ -515,6 +515,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     // ── YOLO mode: launch multi-agent session ──
     if (activeMode === "yolo") {
+      console.log("[ChatView] YOLO mode detected, launching session...");
       const displayContent = text;
       // Add user message to chat immediately
       setMessages(prev => [...prev, {
@@ -604,7 +605,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       message: fullMessage,
       // Images are no longer sent as base64 — the LLM uses analyze_file to access them
     });
-  }, [send, projectId]);
+  }, [send, projectId, activeMode]);
 
   // ── Drag & drop ──
 
