@@ -28,7 +28,7 @@ const router = Router();
 
 // ── Helpers ──────────────────────────────────────────
 
-const VALID_MODES: AgentMode[] = ["code", "review", "plan"];
+const VALID_MODES: AgentMode[] = ["code", "review", "plan", "yolo"];
 
 function validateMode(mode: string): AgentMode {
   if (!VALID_MODES.includes(mode as AgentMode)) {
