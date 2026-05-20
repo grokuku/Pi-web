@@ -1798,10 +1798,15 @@ async function runYoloAgent(
 
     // Subscribe to forward events with yolo tags
     const tempUnsub = tempSession.subscribe((event) => {
+      const modelName = modelInfo
+        ? sharedModelRegistry.getAvailable().find((m: any) => m.provider === modelInfo.providerId && m.id === modelInfo.modelId)?.name
+          || `${modelInfo.providerId}/${modelInfo.modelId}`
+        : "unknown";
       const taggedEvent = {
         ...event,
         _yolo: true,
         _yoloAgent: agentKey,
+        _yoloModel: modelName,
         _yoloPhase: phase,
         _yoloGlobalCycle: globalCycle,
         _yoloLocalCycle: localCycle,

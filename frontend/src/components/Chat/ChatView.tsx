@@ -109,7 +109,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   });
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
   const [yoloStreaming, setYoloStreaming] = useState(false);
-  const [yoloStatus, setYoloStatus] = useState<{ phase: string; globalCycle: number; localCycle: number; agent?: string } | null>(null);
+  const [yoloStatus, setYoloStatus] = useState<{ phase: string; globalCycle: number; localCycle: number; agent?: string; model?: string } | null>(null);
 
   // File viewer overlay state
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
@@ -170,6 +170,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     setStreamingContent("");
     setStreamingThinking("");
     setCurrentToolCalls([]);
+    setYoloStreaming(false);
+    setYoloStatus(null);
+    setAutoReviewStreaming(false);
     setError("");
     currentAssistantIdRef.current = null;
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -334,6 +337,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
             globalCycle: (evt._yoloGlobalCycle || 0) + 1,
             localCycle: (evt._yoloLocalCycle || 0) + 1,
             agent: evt._yoloAgent,
+            model: evt._yoloModel,
           });
         } else if (evt.type === "agent_end") {
           setYoloStreaming(false);
@@ -1096,7 +1100,7 @@ const ChatInputArea = memo(function ChatInputArea({
   isStreaming: boolean;
   autoReviewStreaming: boolean;
   yoloStreaming: boolean;
-  yoloStatus: { phase: string; globalCycle: number; localCycle: number; agent?: string } | null;
+  yoloStatus: { phase: string; globalCycle: number; localCycle: number; agent?: string; model?: string } | null;
   gitBranch?: string;
   setError: (e: string) => void;
 }) {
@@ -1274,7 +1278,7 @@ const ChatInputArea = memo(function ChatInputArea({
           {yoloStreaming && yoloStatus && (
             <span className="text-hacker-accent flex items-center gap-1">
               <span className="pulse-dot w-1.5 h-1.5" />
-              YOLO {yoloStatus.phase.toUpperCase()} {yoloStatus.agent ? `(${yoloStatus.agent})` : ""} — G{yoloStatus.globalCycle}
+              YOLO {yoloStatus.phase.toUpperCase()} {yoloStatus.agent ? `(${yoloStatus.agent}${yoloStatus.model ? `: ${yoloStatus.model}` : ""})` : ""} — G{yoloStatus.globalCycle}
               {yoloStatus.localCycle > 0 && `·${yoloStatus.localCycle}`}
             </span>
           )}

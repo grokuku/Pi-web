@@ -213,8 +213,14 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 }`}>
                   {t('modelSwitch.' + mode)}
                 </span>
-                {isVisuallyActive && (
+                {isVisuallyActive && mode !== "yolo" && (
                   <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
+                )}
+                {isVisuallyActive && mode === "yolo" && yoloConfig.model1 && (
+                  <span className="text-xs text-hacker-text-dim max-w-[150px] truncate" title={`Agent 1: ${library?.models.find(m => m.providerId === yoloConfig.model1?.providerId && m.modelId === yoloConfig.model1?.modelId)?.name || "?"}
+Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.providerId && m.modelId === yoloConfig.model2?.modelId)?.name || "?"}`}>
+                    {library?.models.find(m => m.providerId === yoloConfig.model1?.providerId && m.modelId === yoloConfig.model1?.modelId)?.name?.slice(0, 12) || "?"}
+                  </span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
               </div>
