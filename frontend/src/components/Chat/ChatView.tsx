@@ -151,6 +151,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     if (stored.length > 0) {
       setMessages(stored);
     } else {
+      // Try localStorage (catches YOLO and other non-session messages)
+      try {
+        const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            chatHistory.saveMessages(parsed);
+            setMessages(parsed);
+            console.log(`[ChatView] Restored ${parsed.length} messages from localStorage for ${projectId}`);
+            return;
+          }
+        }
+      } catch {}
       setMessages([]);
     }
     // Reset streaming state (project-specific, not transferable)
@@ -164,6 +177,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   // ── Sync messages to per-project store whenever they change ──
   useEffect(() => {
     chatHistory.saveMessages(messages);
+    // Also persist to localStorage (catches YOLO messages not in Pi session)
+    try {
+      localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messages));
+    } catch {}
     messagesRef.current = messages;
   }, [messages, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -181,6 +198,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       if (msg.messages && Array.isArray(msg.messages) && msg.messages.length > 0) {
         console.log(`[ChatView] Restored ${msg.messages.length} messages from session history for project ${projectId}`);
         const restored = chatHistory.handleHistory(msg.messages);
+        // Merge with localStorage messages (YOLO / background sessions)
+        try {
+          const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
+          if (raw) {
+            const localMessages: DisplayMessage[] = JSON.parse(raw);
+            const restoredIds = new Set(restored.map((m: DisplayMessage) => m.id));
+            const extraMessages = localMessages.filter((m: DisplayMessage) => !restoredIds.has(m.id));
+            if (extraMessages.length > 0) {
+              console.log(`[ChatView] Merged ${extraMessages.length} localStorage messages into session history`);
+              restored.push(...extraMessages);
+            }
+          }
+        } catch {}
         setMessages(restored);
       }
     });

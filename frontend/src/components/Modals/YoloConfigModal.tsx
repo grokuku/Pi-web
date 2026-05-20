@@ -12,8 +12,14 @@ interface Props {
 }
 
 export function YoloConfigModal({ onClose, onChange, models, providers, config }: Props) {
-  const initModel1Id = config.model1 ? (config.model1.modelId || `${config.model1.providerId}__${config.model1.modelId}`) : "";
-  const initModel2Id = config.model2 ? (config.model2.modelId || `${config.model2.providerId}__${config.model2.modelId}`) : "";
+  // Find the composite model ID (providerId__modelId) matching stored config
+  const findModelId = (sel: { providerId: string; modelId: string } | null): string => {
+    if (!sel) return "";
+    const found = models.find(m => m.providerId === sel.providerId && m.modelId === sel.modelId);
+    return found?.id || "";
+  };
+  const initModel1Id = findModelId(config.model1);
+  const initModel2Id = findModelId(config.model2);
   const [model1Id, setModel1Id] = useState(initModel1Id);
   const [model2Id, setModel2Id] = useState(initModel2Id);
   const [planCycles, setPlanCycles] = useState(config.planCycles || 2);
