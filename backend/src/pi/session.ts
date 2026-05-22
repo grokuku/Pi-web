@@ -3,7 +3,8 @@ import { completeSimple } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
-import { unlinkSync, existsSync } from "fs";
+import { unlinkSync, existsSync, mkdirSync } from "fs";
+import os from "os";
 import {
   loadModelLibrary,
   getModeModel,
@@ -18,6 +19,20 @@ import { recordUsage } from "../routes/usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
+
+/**
+ * Compute a project-specific session directory.
+ * Uses ~/.pi/agent/sessions/projects/<projectId>/ to isolate sessions
+ * per project, preventing cwd collisions between projects.
+ */
+function getProjectSessionDir(projectId: string): string {
+  const agentDir = path.join(os.homedir(), ".pi", "agent");
+  const dir = path.join(agentDir, "sessions", "projects", projectId);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
 
 export interface PiSessionState {
   session: AgentSession | null;
@@ -136,16 +151,15 @@ export async function createPiSession(
 
   // ── Determine which session to load ──
   let sessionManager: SessionManager;
+  const sessionDir = getProjectSessionDir(projectId);
 
   if (options?.sessionId) {
-    // Resume a specific session by ID
-    // Session files are stored in ~/.pi/agent/sessions/<encoded-cwd>/
-    // We use continueRecent and then find the matching session
+    // Resume a specific session by ID, using project-specific directory
     console.log(`[PiSession] Resuming specific session: ${options.sessionId}`);
-    sessionManager = SessionManager.create(cwd);
+    sessionManager = SessionManager.create(cwd, sessionDir);
     // Find the session file by ID
     try {
-      const sessions = await SessionManager.list(cwd);
+      const sessions = await SessionManager.list(cwd, sessionDir);
       const target = sessions.find(s => s.id === options.sessionId);
       if (target) {
         sessionManager.setSessionFile(target.path);
@@ -154,13 +168,13 @@ export async function createPiSession(
       console.warn(`[PiSession] Could not find session ${options.sessionId}, creating new`);
     }
   } else if (options?.resume !== false) {
-    // Try to continue the most recent session for this cwd
-    console.log(`[PiSession] Attempting to resume recent session for ${cwd}`);
-    sessionManager = SessionManager.continueRecent(cwd);
+    // Try to continue the most recent session for this project
+    console.log(`[PiSession] Attempting to resume recent session for project ${projectId}`);
+    sessionManager = SessionManager.continueRecent(cwd, sessionDir);
   } else {
-    // Create a brand new session
-    console.log(`[PiSession] Creating new session for ${cwd}`);
-    sessionManager = SessionManager.create(cwd);
+    // Create a brand new session for this project
+    console.log(`[PiSession] Creating new session for project ${projectId}`);
+    sessionManager = SessionManager.create(cwd, sessionDir);
   }
 
   try {

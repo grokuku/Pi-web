@@ -142,6 +142,9 @@ export async function createProject(
   if (projects.some((p) => p.name === name)) {
     throw new Error(`Project "${name}" already exists`);
   }
+  if (projects.some((p) => p.cwd === cwd)) {
+    throw new Error(`A project already uses working directory: ${cwd}`);
+  }
 
   // cwd is the full path (frontend already includes the project name as subfolder)
   if (!existsSync(cwd)) {

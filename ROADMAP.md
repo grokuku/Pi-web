@@ -75,6 +75,7 @@
 - ✅ **Thinking : titre sticky au scroll** — Quand on scrolle dans un bloc thinking, le titre "THINKING" et le bouton copier restent visibles en haut (sticky + backdrop blur). Permet de minimiser sans remonter.
 - ✅ **Paramètre global "Think expand" par défaut** — Toggle dans Settings → General. Stocké dans localStorage.
 - ✅ **Améliorer l'auto-scroll des messages** — Seuil réduit de 80px à 30px. Bouton sticky ↓ avec compteur "N nouveaux messages" quand on remonte. IntersectionObserver remplacé par onScroll (fiable avec overflow-y-auto).
+- 💡 **Utiliser Chart.js pour les graphiques** — Remplacer les composants de visualisation actuels par Chart.js (librairie gratuite et légère) pour les stats d'utilisation des tokens, les graphiques de performance, et toute visualisation de données dans l'interface (barres, lignes, camemberts, etc.). Chart.js est gratuit, simple à intégrer, et largement adopté.
 - 💡 **Onglet Raccourcis clavier dans Settings** — Permettre à l'utilisateur de visualiser et reconfigurer les raccourcis clavier. Stockage localStorage. Remplacer les Ctrl+L/T/O qui sont en conflit avec le navigateur.
 - ✅ **Badge outil → expand individuel** — En mode compact, cliquer sur un badge d'outil specifique expand **seulement cet outil** en timeline (les autres restent en badges). Bouton ✕ pour refermer l'outil individuellement. Le toggle global "▶ TOOLS (N)" fonctionne toujours (expand tout).
 - ✅ **Indicateur connexion texte** - Le point vert/rouge en haut a gauche indique la connexion WebSocket. Texte "Connecté" / "Hors ligne" ajoute a cote pour plus de clarte.
@@ -294,3 +295,4 @@ Stockage
 | 26 | ✅ Done | **Indicateur connexion** — texte "Connecté" / "Hors ligne" ajouté |
 | 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, cycles plan/code/global) |
 | 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, N cycles)
+| 28 | 💡 | **Utiliser Chart.js** pour les graphiques (stats tokens, visualisations de données)
