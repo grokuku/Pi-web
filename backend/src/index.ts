@@ -19,6 +19,8 @@ import filesRouter from "./routes/files.js";
 import attachmentsRouter from "./routes/attachments.js";
 import { usageRouter, recordUsage } from "./routes/usage.js";
 import piSettingsRouter from "./routes/pi-settings.js";
+import agentRouter from "./routes/agent.js";
+import agentKeysRouter from "./routes/agent-keys.js";
 import type { Project } from "./projects/manager.js";
 import {
   createPiSession,
@@ -89,6 +91,8 @@ app.use("/api/files", filesRouter);
 app.use("/api/attachments", attachmentsRouter);
 app.use("/api/usage", usageRouter);
 app.use("/api/pi", piSettingsRouter);
+app.use("/api/agent", agentRouter);
+app.use("/api/agent-keys", agentKeysRouter);
 
 // ── Read VERSION file once at startup ──
 let piWebVersion = "unknown";
@@ -102,6 +106,11 @@ try {
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Agent API health (no auth needed)
+app.get("/api/agent/health", (_req, res) => {
+  res.json({ status: "ok", version: piWebVersion, uptime: Math.floor(process.uptime()) });
 });
 
 // Status/info endpoint (for welcome page)

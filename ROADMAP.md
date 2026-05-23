@@ -18,6 +18,8 @@
 
 ## 🟡 Bugs mineurs / améliorations
 
+- **Redimensionnement colonne Files impossible** — Dans le module "Files", la colonne d'arborescence n'est pas redimensionnable. L'utilisateur ne peut pas ajuster la largeur entre l'arbre et le contenu.
+
 - **[?] Bouton download sur les fichiers** — Implémenté mais pas testé en conditions réelles (Docker). Vérifier que `Content-Disposition: attachment` fonctionne bien avec les noms sanitizés.
 - **[?] Extension compaction-checkpoint** — Pas testé en conditions réelles. Vérifier que les résumés de compaction sont bien sauvegardés.
 - **[?] Pi-unipi/memory** — Aucune modification, rester en version vanilla. Ne pas modifier le package npm.
@@ -185,6 +187,8 @@ PDF uploadé
 - Route API : POST /api/pi/yolo
 
 
+- 💡 **API agent externe** — API REST permettant à un agent externe (OpenClaw, Hermes, etc.) d'interagir avec Pi-Web : envoyer des messages, lire les réponses, lister les sessions, gérer les projets. L'utilisateur délègue des tâches à son agent qui pilote Pi-Web via cette API.
+
 ### Agent
 
 - **LLM conscient de son mode (plan/analyse vs code)** — Quand l'utilisateur passe en mode plan/analyse, le LLM doit savoir qu'il est dans ce mode et adapter son comportement :
@@ -272,6 +276,7 @@ Stockage
 | 3 | ✅ Done | **Timestamps absolus** (HH:MM) sur les messages utilisateur et assistant |
 | 4 | 💡 | **Presets de modèles** (sauver/charger des configs complètes) |
 | 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
+| 5b | 🟡 | **Redimensionnement colonne Files** impossible |
 | 6 | 💡 | **Analyse audio** — transcription (Whisper) + description (multimodal) |
 | 7 | 💡 | **Analyse PDF visuelle** — texte + images des pages liées |
 | 8 | ✅ Done | **Refonte rendu Thinking + Tools** — timeline, icônes, animations |
@@ -296,3 +301,4 @@ Stockage
 | 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, cycles plan/code/global) |
 | 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, plan+code, N cycles)
 | 28 | 💡 | **Utiliser Chart.js** pour les graphiques (stats tokens, visualisations de données)
+| 29 | 💡 | **API agent externe** — REST API pour OpenClaw/Hermes/etc.
