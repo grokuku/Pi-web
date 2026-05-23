@@ -370,6 +370,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   setLoading={setLoading}
                   setError={setError}
                   setStatus={setStatus}
+                  refreshLibrary={async () => { await loadLibrary(); }}
                 />
               )}
             </div>

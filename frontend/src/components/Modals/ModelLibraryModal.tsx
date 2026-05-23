@@ -144,6 +144,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
               setLoading={setLoading}
               setError={setError}
               setStatus={setStatus}
+              refreshLibrary={async () => { await loadLibrary(); }}
             />
           )}
         </div>
@@ -362,17 +363,18 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
 // ── Models Tab (two-column selector) ───────────────────────
 
-export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault, loading, setLoading, setError, setStatus }: {
+export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSetDefault, loading, setLoading, setError, setStatus, refreshLibrary }: {
   library: ModelLibrary;
   providers: ProviderConfig[];
   onAdd: (models: Omit<RegisteredModel, "id">[]) => Promise<void>;
-  onUpdate: (id: string, updates: Partial<RegisteredModel>) => void;
+  onUpdate: (id: string, updates: Partial<RegisteredModel>) => Promise<void>;
   onRemove: (id: string) => void;
   onSetDefault: (id: string) => void;
   loading: boolean;
   setLoading: (b: boolean) => void;
   setError: (e: string) => void;
   setStatus: (s: string) => void;
+  refreshLibrary: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
@@ -518,10 +520,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(updates),
               });
-            } catch { /* ignore individual update errors */ }
+            } catch { /* ignore individual update errors during batch scan */ }
           }
         }
       }
+      // Refresh the library state so the configured panel shows updated values
+      if (updatedExisting > 0) await refreshLibrary();
 
       setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)${updatedExisting > 0 ? `, updated ${updatedExisting} existing` : ''}`);
     } catch (e: any) { setError(e.message); }
