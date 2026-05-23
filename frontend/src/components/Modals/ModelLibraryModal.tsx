@@ -519,9 +519,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         modelId,
         name: dm?.name || modelId,
         isDefault: false,
-        reasoning: inferReasoning(modelId),
-        vision: inferVision(modelId),
-        contextWindow: inferContextWindow(modelId),
+        // Use detected capabilities from the provider when available; fall back to heuristics
+        reasoning: dm?.reasoning ?? inferReasoning(modelId),
+        vision: dm?.vision ?? inferVision(modelId),
+        contextWindow: dm?.contextWindow || inferContextWindow(modelId),
         maxTokens: 16384,
         thinkingLevel: "medium",
       });

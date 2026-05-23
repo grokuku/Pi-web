@@ -30,6 +30,10 @@ export interface DiscoveredModel {
   size?: number;            // file size in bytes (for Ollama)
   quantization?: string;   // e.g., "Q4_K_M"
   family?: string;         // model family (e.g., "llama", "gemma")
+  /** Detected from provider API – takes precedence over heuristics */
+  contextWindow?: number;  // real context window in tokens (from model_info)
+  reasoning?: boolean;     // real reasoning support
+  vision?: boolean;        // real vision support
 }
 
 // ── Provider type presets ────────────────────────────
@@ -188,8 +192,8 @@ export function inferContextWindow(modelId: string, family?: string): number {
   const key = (family || modelId).toLowerCase().replace(/[:_]/g, "-");
   const overrides: Record<string, number> = {
     // Google
-    "gemma4": 1048576,
-    "gemma-4": 1048576,
+    "gemma4": 262144,
+    "gemma-4": 262144,
     "gemma3": 128000,
     "gemma2": 128000,
     // Meta
@@ -263,7 +267,7 @@ export function inferContextWindow(modelId: string, family?: string): number {
   if (key.includes("llama3")) return 128000;
   if (key.includes("mistral")) return 128000;
   if (key.includes("mixtral")) return 64000;
-  if (key.includes("gemma4") || key.includes("gemma-4")) return 1048576;
+  if (key.includes("gemma4") || key.includes("gemma-4")) return 262144;
   if (key.includes("gemma3")) return 128000;
   if (key.includes("gemma2")) return 128000;
   if (key.includes("gemma")) return 8192;
@@ -301,6 +305,84 @@ export function inferContextWindow(modelId: string, family?: string): number {
   if (key.includes("embed")) return 8192;
   if (key.includes("gemini")) return 1048576;
   return 128000;
+}
+
+// ── Ollama native API enrichment ────────────────────
+
+/** Derive the native Ollama API base URL from the OpenAI-compatible base URL. */
+function deriveNativeOllamaUrl(baseUrl: string): string {
+  // Remove trailing /v1 or /v1/
+  let url = baseUrl.replace(/\/v1\/?$/, "");
+  // Ensure no trailing slash
+  url = url.replace(/\/+$/, "");
+  return url;
+}
+
+/**
+ * Fetch real model capabilities from the Ollama native /api/show endpoint.
+ * This populates contextWindow, vision, reasoning on DiscoveredModel.
+ */
+async function enrichWithOllamaCapabilities(
+  provider: ProviderConfig,
+  models: DiscoveredModel[]
+): Promise<void> {
+  const nativeUrl = deriveNativeOllamaUrl(provider.baseUrl);
+  const apiKey = provider.apiKey || "ollama";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${apiKey}`,
+  };
+
+  // Query models in parallel with concurrency limit
+  const concurrency = 5;
+  for (let i = 0; i < models.length; i += concurrency) {
+    const batch = models.slice(i, i + concurrency);
+    await Promise.all(batch.map(async (model) => {
+      try {
+        const resp = await fetch(`${nativeUrl}/api/show`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: model.id }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        const modelInfo: Record<string, any> = data.model_info || {};
+
+        // Extract context window from model_info (pattern: <family>.context_length)
+        for (const [key, value] of Object.entries(modelInfo)) {
+          if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+            model.contextWindow = value;
+            break;
+          }
+        }
+
+        // Extract architecture for capability inference
+        const arch = (modelInfo["general.architecture"] || "").toLowerCase();
+        if (arch) {
+          model.family = model.family || arch;
+          // Vision detection from architecture
+          if (/llava|bakllava|moondream|minicpm|pixtral|vision|multimodal|vl/i.test(arch)) {
+            model.vision = true;
+          }
+          // Reasoning detection from architecture
+          if (/reasoning|think|r1|o1|o3|o4/i.test(arch)) {
+            model.reasoning = true;
+          }
+        }
+
+        // Also extract num_ctx from parameters as fallback
+        if (!model.contextWindow) {
+          const params = data.parameters || "";
+          const m = params.match(/num_ctx\s+(\d+)/i);
+          if (m) model.contextWindow = parseInt(m[1], 10);
+        }
+      } catch {
+        // Native API not available – that's OK, heuristics will fill in
+      }
+    }));
+  }
 }
 
 // ── Test connection ───────────────────────────────────
@@ -360,6 +442,11 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
         id: m.name?.replace("models/", "") || m.name || "",
         name: m.displayName || m.name || "",
       })).filter((m: DiscoveredModel) => m.id);
+    }
+
+    // ── Enrich with real capabilities from Ollama native API ──
+    if (provider.type === "ollama" || provider.type === "openai-compatible") {
+      await enrichWithOllamaCapabilities(provider, models);
     }
 
     // Update provider status

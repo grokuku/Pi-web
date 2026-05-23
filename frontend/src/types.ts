@@ -126,6 +126,10 @@ export interface DiscoveredModel {
   size?: number;
   quantization?: string;
   family?: string;
+  /** Detected from provider API – takes precedence over heuristics */
+  contextWindow?: number;
+  reasoning?: boolean;
+  vision?: boolean;
 }
 
 export const PROVIDER_PRESETS: Record<ProviderType, {
