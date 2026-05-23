@@ -636,6 +636,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                     <span className="truncate flex-1">{dm.name || dm.id}</span>
                     {provName && <span className="text-[11px] text-hacker-text-dim">({provName})</span>}
                     {dm.size ? <span className="text-[11px] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
+                    {/* Capability badges */}
+                    <span className="flex items-center gap-1 shrink-0">
+                      {((dm as any).vision ?? inferVision(dm.id)) && <span className="text-[11px]" title="Vision">👁️</span>}
+                      {((dm as any).reasoning ?? inferReasoning(dm.id)) && <span className="text-[11px]" title="Reasoning">🧠</span>}
+                      <span className="text-[9px] text-hacker-text-dim/70" title="Context window">{fmtCtx((dm as any).contextWindow || inferContextWindow(dm.id))}</span>
+                    </span>
                   </button>
                 );
               })
@@ -767,7 +773,7 @@ function inferVision(modelId: string): boolean {
 function inferContextWindow(modelId: string): number {
   const key = modelId.toLowerCase().replace(/[:_]/g, "-");
   const overrides: Record<string, number> = {
-    "gemma4": 1048576, "gemma-4": 1048576,
+    "gemma4": 262144, "gemma-4": 262144,
     "gemma3": 128000, "gemma2": 128000,
     "llama4": 1048576, "llama-4": 1048576,
     "llama4-scout": 10485760, "llama-4-scout": 10485760,
@@ -795,7 +801,7 @@ function inferContextWindow(modelId: string): number {
   if (key.includes("qwen3")) return 128000;
   if (key.includes("qwen2.5")) return 128000;
   if (key.includes("qwen2")) return 128000;
-  if (key.includes("gemma4") || key.includes("gemma-4")) return 1048576;
+  if (key.includes("gemma4") || key.includes("gemma-4")) return 262144;
   if (key.includes("gemma3")) return 128000;
   if (key.includes("gemma2")) return 128000;
   if (key.includes("gemma")) return 8192;
