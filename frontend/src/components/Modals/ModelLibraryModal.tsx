@@ -194,9 +194,9 @@ export function ProvidersTab({ providers, setProviders, setError }: {
               <span className="text-sm">{p.type === "ollama" ? "🦙" : p.type === "anthropic" ? "☁" : p.type === "google" ? "✨" : "🔗"}</span>
               <div className="flex-1 min-w-0">
                 <span className="text-hacker-accent text-xs font-bold">{p.name || p.type}</span>
-                <span className="text-hacker-text-dim text-[11px] ml-2">{p.type}</span>
+                <span className="text-hacker-text-dim text-[0.6875rem] ml-2">{p.type}</span>
               </div>
-              <span className={`text-[11px] px-1.5 py-0.5 border ${
+              <span className={`text-[0.6875rem] px-1.5 py-0.5 border ${
                 p.connectionStatus === "ok" ? "border-hacker-accent/50 text-hacker-accent" :
                 p.connectionStatus === "error" ? "border-hacker-error/50 text-hacker-error" :
                 "border-hacker-border text-hacker-text-dim"
@@ -204,7 +204,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
                 {p.connectionStatus === "ok" ? "✓ CONNECTED" : p.connectionStatus === "error" ? "✗ ERROR" : "? UNTESTED"}
               </span>
               <button onClick={() => handleTest(p.id)}
-                className="btn-hacker text-[11px] px-2 py-0.5 flex items-center gap-1">
+                className="btn-hacker text-[0.6875rem] px-2 py-0.5 flex items-center gap-1">
                 <TestTube2 size={10} /> TEST
               </button>
               <button onClick={() => setEditing(p)}
@@ -212,7 +212,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
               <button onClick={() => handleDelete(p.id)}
                 className="text-hacker-text-dim hover:text-hacker-error"><Trash2 size={11} /></button>
             </div>
-            {p.baseUrl && <div className="px-3 pb-1.5 text-[11px] text-hacker-text-dim truncate">{p.baseUrl}</div>}
+            {p.baseUrl && <div className="px-3 pb-1.5 text-[0.6875rem] text-hacker-text-dim truncate">{p.baseUrl}</div>}
           </div>
         );
       })}
@@ -302,13 +302,13 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
   return (
     <div className="border border-hacker-accent/30 bg-hacker-surface/80 p-3 mt-2">
-      <div className="text-hacker-accent text-[11px] tracking-widest mb-2">
+      <div className="text-hacker-accent text-[0.6875rem] tracking-widest mb-2">
         {isEdit ? "EDIT" : "ADD"} PROVIDER
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-2">
         <div>
-          <label className="text-hacker-accent text-[11px] block mb-1">TYPE</label>
+          <label className="text-hacker-accent text-[0.6875rem] block mb-1">TYPE</label>
           <select value={type} onChange={e => handleTypeChange(e.target.value as ProviderType)}
             className="select-hacker w-full text-xs" disabled={isEdit}>
             {Object.entries(PROVIDER_PRESETS).map(([k, v]) => (
@@ -317,14 +317,14 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
           </select>
         </div>
         <div>
-          <label className="text-hacker-accent text-[11px] block mb-1">NAME</label>
+          <label className="text-hacker-accent text-[0.6875rem] block mb-1">NAME</label>
           <input value={name} onChange={e => setName(e.target.value)}
             className="input-hacker w-full text-xs" placeholder="My Provider" />
         </div>
       </div>
 
       <div className="mb-2">
-        <label className="text-hacker-accent text-[11px] flex items-center gap-1 mb-1">
+        <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
           <Wifi size={10} /> BASE URL
         </label>
         <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
@@ -333,7 +333,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
       {PROVIDER_PRESETS[type].requiresApiKey && (
         <div className="mb-2">
-          <label className="text-hacker-accent text-[11px] flex items-center gap-1 mb-1">
+          <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
             <Key size={10} /> API KEY
           </label>
           <div className="flex gap-1">
@@ -490,9 +490,6 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 newDiscovered.push({ ...m, _providerId: p.id } as any);
               }
             }
-            // Debug: log first few models to check contextWindow
-            const sample = (data.models as any[]).filter((m: any) => m.id.includes('gemma') || m.id.includes('glm') || m.id.includes('kimi'));
-            if (sample.length > 0) console.log(`[scan] ${p.name}:`, sample.map((m: any) => `${m.id} ctx=${m.contextWindow} vis=${m.vision} reas=${m.reasoning}`));
           }
         } catch (e: any) {
           console.warn(`[scan] Provider ${p.name} failed:`, e.message);
@@ -501,7 +498,32 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
       setAllDiscovered(newDiscovered);
       // Refresh providers (to cache discovered models)
       await fetch("/api/providers").catch(() => {});
-      setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)`);
+
+      // Update capabilities of existing configured models with fresh detected values
+      let updatedExisting = 0;
+      for (const model of library.models) {
+        const dm = newDiscovered.find(
+          m => (m as any)._providerId === model.providerId && m.id === model.modelId
+        ) as any;
+        if (dm) {
+          const updates: Partial<RegisteredModel> = {};
+          if (dm.contextWindow && dm.contextWindow !== model.contextWindow) updates.contextWindow = dm.contextWindow;
+          if (dm.vision !== undefined && dm.vision !== model.vision) updates.vision = dm.vision;
+          if (dm.reasoning !== undefined && dm.reasoning !== model.reasoning) updates.reasoning = dm.reasoning;
+          if (Object.keys(updates).length > 0) {
+            updatedExisting++;
+            try {
+              await fetch(`/api/model-library/models/${encodeURIComponent(model.id)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(updates),
+              });
+            } catch { /* ignore individual update errors */ }
+          }
+        }
+      }
+
+      setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)${updatedExisting > 0 ? `, updated ${updatedExisting} existing` : ''}`);
     } catch (e: any) { setError(e.message); }
     finally { setScanning(false); }
   };
@@ -568,7 +590,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           value={modelFilter}
           onChange={e => setModelFilter(e.target.value)}
           placeholder="Filter models by name..."
-          className="flex-1 bg-hacker-bg border border-hacker-border px-2 py-1 text-[11px] text-hacker-text-bright focus:outline-none focus:border-hacker-accent"
+          className="flex-1 bg-hacker-bg border border-hacker-border px-2 py-1 text-[0.6875rem] text-hacker-text-bright focus:outline-none focus:border-hacker-accent"
         />
         {modelFilter && (
           <button onClick={() => setModelFilter("")} className="text-hacker-text-dim hover:text-hacker-accent">
@@ -582,17 +604,17 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         {/* Left column: Available models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">{t('modelLibrary.available')}</span>
-            <span className="text-hacker-text-dim text-[11px]">{filteredAvailable.length}</span>
+            <span className="text-hacker-accent text-[0.6875rem] font-bold tracking-wider flex-1">{t('modelLibrary.available')}</span>
+            <span className="text-hacker-text-dim text-[0.6875rem]">{filteredAvailable.length}</span>
             <button onClick={handleScanAll} disabled={scanning}
-              className="btn-hacker text-[11px] px-1.5 py-0.5 flex items-center gap-0.5" title={t('modelLibrary.rescan')}>
+              className="btn-hacker text-[0.6875rem] px-1.5 py-0.5 flex items-center gap-0.5" title={t('modelLibrary.rescan')}>
               <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> {t('modelLibrary.update')}
             </button>
           </div>
           {/* Available provider filter (above list) */}
           {providers.length > 1 && (
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
-              <span className="text-[9px] text-hacker-text-dim mr-1">filter:</span>
+              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">filter:</span>
               {providers.map(p => {
                 const checked = providerFilterAvailable.has(p.id);
                 const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id && !configuredCompositeIds.has(compKey(p.id, dm.id))).length;
@@ -610,10 +632,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                       }}
                       className="accent-[var(--accent)] w-3 h-3"
                     />
-                    <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                    <span className={`text-[0.6875rem] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
                       {p.name || p.type}
                     </span>
-                    {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                    {count > 0 && <span className="text-[0.75rem] text-hacker-text-dim">({count})</span>}
                   </label>
                 );
               })}
@@ -621,7 +643,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           )}
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredAvailable.length === 0 ? (
-              <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
+              <div className="text-hacker-text-dim text-[0.6875rem] italic p-3 text-center">
                 {allDiscovered.length === 0 ? t('modelLibrary.clickUpdate') : modelFilter ? t('modelLibrary.noMatches') : t('modelLibrary.allAdded')}
               </div>
             ) : (
@@ -630,24 +652,20 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 const ck = compKey(provId, dm.id);
                 const isSelected = selectedAvailable.has(ck);
                 const provName = getProviderNameForDiscovered(dm);
-                // Debug first render
-                if (dm.id === 'gemma4:31b' || dm.id === 'glm-5.1' || dm.id === 'kimi-k2.6') {
-                  console.log(`[render available] ${dm.id} ctx=${(dm as any).contextWindow} vis=${(dm as any).vision} reas=${(dm as any).reasoning}`);
-                }
                 return (
                   <button key={ck} onClick={() => toggleAvailable(ck)}
-                    className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                    className={`w-full text-left px-3 py-1 text-[0.6875rem] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
                       isSelected ? "bg-hacker-accent/10 text-hacker-accent" : "text-hacker-text-dim hover:bg-hacker-border/30"
                     }`}>
-                    <span className="text-[11px]">{isSelected ? "☑" : "☐"}</span>
+                    <span className="text-[0.6875rem]">{isSelected ? "☑" : "☐"}</span>
                     <span className="truncate flex-1">{dm.name || dm.id}</span>
-                    {provName && <span className="text-[11px] text-hacker-text-dim">({provName})</span>}
-                    {dm.size ? <span className="text-[11px] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
+                    {provName && <span className="text-[0.6875rem] text-hacker-text-dim">({provName})</span>}
+                    {dm.size ? <span className="text-[0.6875rem] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
                     {/* Capability badges */}
                     <span className="flex items-center gap-1 shrink-0">
-                      {((dm as any).vision ?? inferVision(dm.id)) && <span className="text-[11px]" title="Vision">👁️</span>}
-                      {((dm as any).reasoning ?? inferReasoning(dm.id)) && <span className="text-[11px]" title="Reasoning">🧠</span>}
-                      <span className="text-[9px] text-hacker-text-dim/70" title="Context window">{fmtCtx((dm as any).contextWindow || inferContextWindow(dm.id))}</span>
+                      {((dm as any).vision ?? inferVision(dm.id)) && <span className="text-[0.6875rem]" title="Vision">👁️</span>}
+                      {((dm as any).reasoning ?? inferReasoning(dm.id)) && <span className="text-[0.6875rem]" title="Reasoning">🧠</span>}
+                      <span className="text-[0.6875rem] text-hacker-text-dim/70" title="Context window">{fmtCtx((dm as any).contextWindow || inferContextWindow(dm.id))}</span>
                     </span>
                   </button>
                 );
@@ -659,12 +677,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         {/* Middle: Action buttons */}
         <div className="flex flex-col justify-center gap-1 px-0.5">
           <button onClick={handleAddSelected} disabled={selectedAvailable.size === 0}
-            className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            className="btn-hacker text-[0.6875rem] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
             title={t('modelLibrary.addSelected')}>
             ▶
           </button>
           <button onClick={handleRemoveSelected} disabled={selectedConfigured.size === 0}
-            className="btn-hacker text-[11px] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
+            className="btn-hacker text-[0.6875rem] px-1.5 py-1.5 flex items-center justify-center gap-0.5 disabled:opacity-30"
             title={t('modelLibrary.removeSelected')}>
             ◀
           </button>
@@ -673,13 +691,13 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         {/* Right column: Configured models */}
         <div className="flex-1 border border-hacker-border bg-hacker-surface/50 flex flex-col min-w-0">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border bg-hacker-bg/50">
-            <span className="text-hacker-accent text-[11px] font-bold tracking-wider flex-1">{t('modelLibrary.selected')}</span>
-            <span className="text-hacker-text-dim text-[11px]">{filteredConfigured.length}</span>
+            <span className="text-hacker-accent text-[0.6875rem] font-bold tracking-wider flex-1">{t('modelLibrary.selected')}</span>
+            <span className="text-hacker-text-dim text-[0.6875rem]">{filteredConfigured.length}</span>
           </div>
           {/* Selected provider filter (above list) */}
           {providers.length > 1 && (
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
-              <span className="text-[9px] text-hacker-text-dim mr-1">filter:</span>
+              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">filter:</span>
               {providers.map(p => {
                 const checked = providerFilterSelected.has(p.id);
                 const count = library.models.filter(m => m.providerId === p.id).length;
@@ -697,10 +715,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                       }}
                       className="accent-[var(--accent)] w-3 h-3"
                     />
-                    <span className={`text-[11px] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
+                    <span className={`text-[0.6875rem] ${checked ? "text-hacker-text-bright" : "text-hacker-text-dim"} group-hover:text-hacker-accent`}>
                       {p.name || p.type}
                     </span>
-                    {count > 0 && <span className="text-[10px] text-hacker-text-dim">({count})</span>}
+                    {count > 0 && <span className="text-[0.75rem] text-hacker-text-dim">({count})</span>}
                   </label>
                 );
               })}
@@ -708,7 +726,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           )}
           <div className="flex-1 overflow-y-auto max-h-[400px]">
             {filteredConfigured.length === 0 ? (
-              <div className="text-hacker-text-dim text-[11px] italic p-3 text-center">
+              <div className="text-hacker-text-dim text-[0.6875rem] italic p-3 text-center">
                 {library.models.length === 0 ? t('modelLibrary.noSelected') : t('modelLibrary.noMatches')}
               </div>
             ) : (
@@ -718,19 +736,19 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 return (
                   <div key={m.id}>
                     <button onClick={() => toggleConfigured(m.id)}
-                      className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
+                      className={`w-full text-left px-3 py-1 text-[0.6875rem] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
                         isSelected ? "bg-hacker-error/10 text-hacker-error" : isDef ? "bg-hacker-accent/5" : "hover:bg-hacker-border/30"
                       }`}>
-                      <span className="text-[11px]">{isSelected ? "☑" : "☐"}</span>
+                      <span className="text-[0.6875rem]">{isSelected ? "☑" : "☐"}</span>
                       <Star size={10} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
-                      <span className="text-[11px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
+                      <span className="text-[0.6875rem] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
                       {/* Capability badges */}
                       <span className="flex items-center gap-1 shrink-0">
-                        {m.vision && <span className="text-[11px]" title="Vision">👁️</span>}
-                        {m.reasoning && <span className="text-[11px]" title="Reasoning">🧠</span>}
-                        <span className="text-[9px] text-hacker-text-dim/70" title="Context window">{fmtCtx(m.contextWindow)}</span>
+                        {m.vision && <span className="text-[0.6875rem]" title="Vision">👁️</span>}
+                        {m.reasoning && <span className="text-[0.6875rem]" title="Reasoning">🧠</span>}
+                        <span className="text-[0.6875rem] text-hacker-text-dim/70" title="Context window">{fmtCtx(m.contextWindow)}</span>
                       </span>
                     </button>
                   </div>
@@ -743,7 +761,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
 
       {/* Set default hint */}
       {library.models.length > 0 && (
-        <div className="text-hacker-text-dim text-[11px] text-center">
+        <div className="text-hacker-text-dim text-[0.6875rem] text-center">
           ★ = default model · 👁️ vision · 🧠 reasoning
         </div>
       )}

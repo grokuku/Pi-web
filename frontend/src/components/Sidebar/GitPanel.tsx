@@ -127,7 +127,7 @@ export function GitPanel({ project, onRefresh }: Props) {
 
   return (
     <div className="p-2 border-b border-hacker-border">
-      <div className="text-hacker-accent text-[10px] tracking-widest mb-2 flex items-center gap-1">
+      <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-2 flex items-center gap-1">
         <GitBranch size={12} />
         GIT {providerIcon}
         <div className="flex-1" />
@@ -141,21 +141,21 @@ export function GitPanel({ project, onRefresh }: Props) {
       </div>
 
       {loading && !status && (
-        <div className="text-hacker-text-dim italic text-[10px] flex items-center gap-1">
+        <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1">
           <RefreshCw size={10} className="animate-spin" />
           Loading...
         </div>
       )}
 
       {error && (
-        <div className="text-hacker-error text-[10px] mb-1.5 flex items-center gap-1">
+        <div className="text-hacker-error text-[0.75rem] mb-1.5 flex items-center gap-1">
           <AlertTriangle size={10} />
           {error}
         </div>
       )}
 
       {message && (
-        <div className="text-hacker-accent text-[10px] mb-1.5 flex items-center gap-1">
+        <div className="text-hacker-accent text-[0.75rem] mb-1.5 flex items-center gap-1">
           <Check size={10} />
           {message}
         </div>
@@ -166,7 +166,7 @@ export function GitPanel({ project, onRefresh }: Props) {
         <div className="space-y-2">
           <div className="flex justify-between">
             <span className="text-hacker-text-dim">Remote</span>
-            <span className="text-hacker-text-bright text-[9px] truncate max-w-[100px] text-right">
+            <span className="text-hacker-text-bright text-[0.6875rem] truncate max-w-[100px] text-right">
               {project.git.remote.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
             </span>
           </div>
@@ -178,14 +178,14 @@ export function GitPanel({ project, onRefresh }: Props) {
 
           {dirIsEmpty ? (
             <>
-              <div className="text-hacker-text-dim text-[10px] flex items-center gap-1">
+              <div className="text-hacker-text-dim text-[0.75rem] flex items-center gap-1">
                 <Download size={10} />
                 Directory is empty — ready to clone
               </div>
               <button
                 onClick={() => doAction("clone", `/api/projects/${project.id}/git/clone`)}
                 disabled={actionLoading !== null}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-hacker-accent text-[10px] hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-hacker-accent text-[0.75rem] hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
               >
                 {actionLoading === "clone" ? (
                   <RefreshCw size={10} className="animate-spin" />
@@ -197,14 +197,14 @@ export function GitPanel({ project, onRefresh }: Props) {
             </>
           ) : (
             <>
-              <div className="text-hacker-warn text-[10px] flex items-start gap-1 bg-hacker-bg/30 border border-hacker-warn/20 p-1.5">
+              <div className="text-hacker-warn text-[0.75rem] flex items-start gap-1 bg-hacker-bg/30 border border-hacker-warn/20 p-1.5">
                 <AlertTriangle size={10} className="shrink-0 mt-0.5" />
                 <span>Directory not empty — cannot clone. Initialize git + add remote instead.</span>
               </div>
               <button
                 onClick={() => doAction("init", `/api/projects/${project.id}/git/init`)}
                 disabled={actionLoading !== null}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent text-[10px] transition-colors disabled:opacity-40"
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent text-[0.75rem] transition-colors disabled:opacity-40"
               >
                 {actionLoading === "init" ? (
                   <RefreshCw size={10} className="animate-spin" />
@@ -228,7 +228,7 @@ export function GitPanel({ project, onRefresh }: Props) {
 
           <div className="flex justify-between">
             <span className="text-hacker-text-dim">Remote</span>
-            <span className="text-hacker-text-bright text-[9px] truncate max-w-[100px] text-right">
+            <span className="text-hacker-text-bright text-[0.6875rem] truncate max-w-[100px] text-right">
               {project.git.remote.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
             </span>
           </div>
@@ -236,13 +236,13 @@ export function GitPanel({ project, onRefresh }: Props) {
           {(normalStatus.ahead > 0 || normalStatus.behind > 0) && (
             <div className="flex items-center gap-2">
               {normalStatus.behind > 0 && (
-                <span className="flex items-center gap-0.5 text-hacker-warn text-[10px]">
+                <span className="flex items-center gap-0.5 text-hacker-warn text-[0.75rem]">
                   <ArrowDown size={10} />
                   {normalStatus.behind} behind
                 </span>
               )}
               {normalStatus.ahead > 0 && (
-                <span className="flex items-center gap-0.5 text-hacker-info text-[10px]">
+                <span className="flex items-center gap-0.5 text-hacker-info text-[0.75rem]">
                   <ArrowUp size={10} />
                   {normalStatus.ahead} ahead
                 </span>
@@ -251,7 +251,7 @@ export function GitPanel({ project, onRefresh }: Props) {
           )}
 
           {!normalStatus.isClean && (
-            <div className="text-[10px] space-y-0.5 bg-hacker-bg/30 border border-hacker-border p-1.5">
+            <div className="text-[0.75rem] space-y-0.5 bg-hacker-bg/30 border border-hacker-border p-1.5">
               {normalStatus.staged.length > 0 && (
                 <div className="text-hacker-accent">✓ {normalStatus.staged.length} staged</div>
               )}
@@ -271,7 +271,7 @@ export function GitPanel({ project, onRefresh }: Props) {
               <div className="mt-1 max-h-[60px] overflow-y-auto">
                 {normalStatus.files.slice(0, 5).map((f) => (
                   <div key={f.path} className="flex gap-1 text-hacker-text-dim/70 truncate">
-                    <span className="text-hacker-accent text-[9px] w-5 shrink-0">{f.status}</span>
+                    <span className="text-hacker-accent text-[0.6875rem] w-5 shrink-0">{f.status}</span>
                     <span className="truncate">{f.path}</span>
                   </div>
                 ))}
@@ -285,14 +285,14 @@ export function GitPanel({ project, onRefresh }: Props) {
           )}
 
           {normalStatus.isClean && totalChanges === 0 && !normalStatus.ahead && !normalStatus.behind && (
-            <div className="text-hacker-text-dim text-[10px] flex items-center gap-1">
+            <div className="text-hacker-text-dim text-[0.75rem] flex items-center gap-1">
               <Check size={10} className="text-hacker-accent" />
               Up to date
             </div>
           )}
 
           {project.git.lastSync && (
-            <div className="text-hacker-text-dim text-[9px] flex items-center gap-1">
+            <div className="text-hacker-text-dim text-[0.6875rem] flex items-center gap-1">
               <Clock size={9} />
               {formatTimeAgo(project.git.lastSync)}
             </div>
@@ -300,7 +300,7 @@ export function GitPanel({ project, onRefresh }: Props) {
 
           {/* Commit message preview */}
           {commitMessage && (
-            <div className="mt-1 text-[9px] bg-hacker-bg/30 border border-hacker-accent/20 p-1.5">
+            <div className="mt-1 text-[0.6875rem] bg-hacker-bg/30 border border-hacker-accent/20 p-1.5">
               <div className="text-hacker-accent font-bold mb-0.5">🚀 {commitMessage.subject}</div>
               {commitMessage.body && (
                 <div className="text-hacker-text-dim whitespace-pre-wrap mt-0.5">{commitMessage.body}</div>
@@ -312,7 +312,7 @@ export function GitPanel({ project, onRefresh }: Props) {
             <button
               onClick={() => doAction("pull", `/api/projects/${project.id}/git/pull`)}
               disabled={actionLoading !== null}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[10px] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[0.75rem] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
               title="git pull"
             >
               {actionLoading === "pull" ? (
@@ -325,7 +325,7 @@ export function GitPanel({ project, onRefresh }: Props) {
             <button
               onClick={() => setShowPushModal(true)}
               disabled={actionLoading !== null}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[10px] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[0.75rem] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
               title="Stage all → commit → push"
             >
               {actionLoading === "commit-push" ? (

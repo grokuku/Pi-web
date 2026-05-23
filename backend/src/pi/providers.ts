@@ -327,7 +327,6 @@ async function enrichWithOllamaCapabilities(
   models: DiscoveredModel[]
 ): Promise<void> {
   const nativeUrl = deriveNativeOllamaUrl(provider.baseUrl);
-  console.log(`[enrich] Provider ${provider.name} (${provider.type}) → native URL: ${nativeUrl}, models count: ${models.length}`);
   const apiKey = provider.apiKey || "ollama";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -355,12 +354,8 @@ async function enrichWithOllamaCapabilities(
         for (const [key, value] of Object.entries(modelInfo)) {
           if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
             model.contextWindow = value;
-            console.log(`[enrich] ${model.id} contextWindow=${value} (from ${key})`);
             break;
           }
-        }
-        if (!model.contextWindow) {
-          console.log(`[enrich] ${model.id} NO context_length in model_info keys:`, Object.keys(modelInfo).join(", "));
         }
 
         // Extract architecture for capability inference
@@ -383,9 +378,8 @@ async function enrichWithOllamaCapabilities(
           const m = params.match(/num_ctx\s+(\d+)/i);
           if (m) model.contextWindow = parseInt(m[1], 10);
         }
-      } catch (err: any) {
+      } catch {
         // Native API not available – that's OK, heuristics will fill in
-        console.log(`[enrich] ${model.id} fetch/parse failed:`, err.message || err);
       }
     }));
   }
@@ -452,10 +446,7 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
 
     // ── Enrich with real capabilities from Ollama native API ──
     if (provider.type === "ollama" || provider.type === "openai-compatible") {
-      console.log(`[testProvider] Enriching ${models.length} models for ${provider.name} (type=${provider.type})`);
       await enrichWithOllamaCapabilities(provider, models);
-      const sample = models.filter(m => m.id.includes('gemma') || m.id.includes('glm') || m.id.includes('kimi'));
-      if (sample.length > 0) console.log(`[testProvider] After enrich:`, sample.map(m => `${m.id} ctx=${(m as any).contextWindow}`));
     }
 
     // Update provider status
