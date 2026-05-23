@@ -171,46 +171,80 @@ export function getProvider(id: string): ProviderConfig | undefined {
   return loadProviders().find((p) => p.id === id);
 }
 
-export function inferReasoning(modelId: string): boolean {
-  const name = modelId.toLowerCase();
-  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason/i.test(name);
+export function inferReasoning(modelId: string, family?: string): boolean {
+  const name = (family || modelId).toLowerCase();
+  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
 }
 
-export function inferVision(modelId: string): boolean {
-  const name = modelId.toLowerCase();
-  return /llava|bakllava|moondream|minicpm-v|gemma.*vl|qwen.*vl|qwen.*v|vision|multimodal|omni|multi.*mod|minicpm|kimi/i.test(name);
+export function inferVision(modelId: string, family?: string): boolean {
+  const name = (family || modelId).toLowerCase();
+  // Known vision families (Ollama / model architecture)
+  const visionFamilies = /^(gemma3|gemma4|gemma-4|llama4|llama-4|pixtral|llava|minicpm|moondream|bakllava|qwen2[._-]?vl|qwen2[._-]?5.*vl|phi-4|phi4)/i;
+  if (visionFamilies.test(name)) return true;
+  return /llava|bakllava|moondream|minicpm-v|minicpm|gemma.*vl|qwen.*vl|qwen.*v|vision|multimodal|omni|multi.*mod|pixtral|kimi|gpt-4o|gpt-4.*vision|claude.*sonnet|claude.*opus|claude.*haiku|command-r.*plus|phi-?4.*vision|gemini.*2[._-]?5.*(pro|flash)|gemini.*1[._-]?5.*(pro|flash)|llama-?4|gemma-?4/i.test(name);
 }
 
-export function inferContextWindow(modelId: string): number {
-  const key = modelId.toLowerCase().replace(/[:_]/g, "-");
+export function inferContextWindow(modelId: string, family?: string): number {
+  const key = (family || modelId).toLowerCase().replace(/[:_]/g, "-");
   const overrides: Record<string, number> = {
-    "kimi-k2.6": 256000,
-    "kimi-k2.5": 256000,
-    "kimi-k2.0": 200000,
-    "kimi-k1.5": 256000,
+    // Google
+    "gemma4": 1048576,
+    "gemma-4": 1048576,
+    "gemma3": 128000,
+    "gemma2": 128000,
+    // Meta
+    "llama4": 1048576,
+    "llama-4": 1048576,
+    "llama4-scout": 10485760,
+    "llama-4-scout": 10485760,
+    "llama3.3": 128000,
+    "llama3.2": 128000,
+    "llama3.1": 128000,
+    "llama3": 128000,
+    // Anthropic
+    "claude-sonnet-4": 200000,
+    "claude-sonnet-4-20250514": 200000,
+    "claude-opus-4-5": 200000,
+    "claude-opus-4": 200000,
+    "claude-3-5-sonnet": 200000,
+    "claude-3-5-haiku": 200000,
+    "claude-3-opus": 200000,
+    // OpenAI
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "o1": 200000,
+    "o1-mini": 128000,
+    "o3": 200000,
+    "o3-mini": 200000,
+    "o4-mini": 200000,
+    // DeepSeek
     "deepseek-r1": 128000,
     "deepseek-v3": 128000,
+    // Qwen
     "qwq": 128000,
     "qwq-32b": 128000,
     "qwen3.5": 128000,
     "qwen3": 128000,
     "qwen2.5": 128000,
     "qwen2": 128000,
-    "llama3.3": 128000,
-    "llama3.2": 128000,
-    "llama3.1": 128000,
-    "llama3": 128000,
+    // Mistral
     "mistral": 128000,
     "mixtral": 64000,
-    "gemma3": 128000,
-    "gemma2": 128000,
+    "pixtral": 128000,
+    "codestral": 32000,
+    // Others
     "command-r": 128000,
     "aya": 256000,
     "phi3": 128000,
     "phi4": 128000,
     "granite3": 128000,
-    "codestral": 32000,
     "nemotron": 128000,
+    "kimi-k2.6": 256000,
+    "kimi-k2.5": 256000,
+    "kimi-k2.0": 200000,
+    "kimi-k1.5": 256000,
     "llava": 4096,
     "bakllava": 4096,
     "moondream": 8192,
@@ -229,21 +263,43 @@ export function inferContextWindow(modelId: string): number {
   if (key.includes("llama3")) return 128000;
   if (key.includes("mistral")) return 128000;
   if (key.includes("mixtral")) return 64000;
+  if (key.includes("gemma4") || key.includes("gemma-4")) return 1048576;
   if (key.includes("gemma3")) return 128000;
   if (key.includes("gemma2")) return 128000;
   if (key.includes("gemma")) return 8192;
+  if (key.includes("llama4") || key.includes("llama-4")) return 1048576;
+  if (key.includes("llama3")) return 128000;
+  if (key.includes("llama2")) return 4096;
+  if (key.includes("claude")) return 200000;
+  if (key.includes("gpt-4o")) return 128000;
+  if (key.includes("gpt-4")) return 8192;
+  if (key.includes("o1") || key.includes("o3") || key.includes("o4")) return 200000;
+  if (key.includes("deepseek-r1")) return 128000;
+  if (key.includes("deepseek-v3")) return 128000;
+  if (key.includes("deepseek")) return 64000;
+  if (key.includes("qwq")) return 128000;
+  if (key.includes("qwen3")) return 128000;
+  if (key.includes("qwen2.5")) return 128000;
+  if (key.includes("qwen2")) return 128000;
+  if (key.includes("qwen")) return 32000;
+  if (key.includes("kimi")) return 256000;
+  if (key.includes("mistral")) return 128000;
+  if (key.includes("mixtral")) return 64000;
+  if (key.includes("pixtral")) return 128000;
   if (key.includes("command-r")) return 128000;
   if (key.includes("aya")) return 256000;
-  if (key.includes("phi3") || key.includes("phi-3")) return 128000;
   if (key.includes("phi4") || key.includes("phi-4")) return 128000;
-  if (key.includes("granite3")) return 128000;
+  if (key.includes("phi3") || key.includes("phi-3")) return 128000;
+  if (key.includes("granite")) return 128000;
   if (key.includes("codestral")) return 32000;
   if (key.includes("codellama")) return 16384;
+  if (key.includes("nemotron")) return 128000;
   if (key.includes("llava")) return 4096;
   if (key.includes("bakllava")) return 4096;
   if (key.includes("moondream")) return 8192;
   if (key.includes("minicpm")) return 128000;
   if (key.includes("embed")) return 8192;
+  if (key.includes("gemini")) return 1048576;
   return 128000;
 }
 

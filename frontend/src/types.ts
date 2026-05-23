@@ -169,13 +169,6 @@ export interface RegisteredModel {
   vision: boolean;             // supports image/vision input
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
-  // Inference parameters
-  temperature?: number;        // 0-2
-  topP?: number;               // 0-1
-  minP?: number;               // 0-1
-  topK?: number;               // 1-100
-  repeatPenalty?: number;      // 1-2
-  // Thinking
   thinkingLevel: string;       // off, minimal, low, medium, high
 }
 

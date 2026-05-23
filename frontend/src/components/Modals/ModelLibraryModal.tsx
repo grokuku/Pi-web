@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
 import {
   X, Wifi, Plus, Trash2, Star, Check, RefreshCw,
-  Edit2, Key, Power, Settings, TestTube2, Eye, EyeOff,
+  Edit2, Key, Power, TestTube2, Eye, EyeOff,
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
@@ -375,7 +375,6 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
   setStatus: (s: string) => void;
 }) {
   const { t } = useTranslation();
-  const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
@@ -522,7 +521,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         isDefault: false,
         reasoning: inferReasoning(modelId),
         vision: inferVision(modelId),
-        contextWindow: 128000,
+        contextWindow: inferContextWindow(modelId),
         maxTokens: 16384,
         thinkingLevel: "medium",
       });
@@ -713,8 +712,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
                       <span className="text-[11px] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
-                      <button onClick={(e) => { e.stopPropagation(); setEditingModelId(m.id); }}
-                        className="text-hacker-text-dim hover:text-hacker-accent shrink-0"><Settings size={10} /></button>
+                      {/* Capability badges */}
+                      <span className="flex items-center gap-1 shrink-0">
+                        {m.vision && <span className="text-[11px]" title="Vision">👁️</span>}
+                        {m.reasoning && <span className="text-[11px]" title="Reasoning">🧠</span>}
+                        <span className="text-[9px] text-hacker-text-dim/70" title="Context window">{fmtCtx(m.contextWindow)}</span>
+                      </span>
                     </button>
                   </div>
                 );
@@ -727,217 +730,19 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
       {/* Set default hint */}
       {library.models.length > 0 && (
         <div className="text-hacker-text-dim text-[11px] text-center">
-          ★ = default model · Click ⚙ to edit parameters
+          ★ = default model · 👁️ vision · 🧠 reasoning
         </div>
       )}
-
-      {/* Model Edit Modal */}
-      {editingModelId && (() => {
-        const editModel = library.models.find(m => m.id === editingModelId);
-        if (!editModel) return null;
-        return (
-          <ModelEditModal
-            model={editModel}
-            onUpdate={onUpdate}
-            isOllama={isOllamaProvider(editModel.providerId)}
-            onClose={() => setEditingModelId(null)}
-          />
-        );
-      })()}
     </div>
   );
 }
-// ── Model Edit Modal (inference params) ────────────────────
-
-function ModelEditModal({ model, onUpdate, isOllama, onClose }: {
-  model: RegisteredModel;
-  onUpdate: (id: string, updates: Partial<RegisteredModel>) => void;
-  isOllama: boolean;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  // Local state for context window input (in K) — synced with model prop
-  const [contextK, setContextK] = useState<string>(String(Math.round(model.contextWindow / 1024)));
-  const [contextCustom, setContextCustom] = useState(false);
-
-  // Sync contextK when model prop changes (after API update)
-  useEffect(() => {
-    setContextK(String(Math.round(model.contextWindow / 1024)));
-  }, [model.contextWindow]);
-
-  const CONTEXT_PRESETS = [4, 8, 16, 32, 64, 128, 200, 256, 500, 1000];
-
-  const applyContext = (k: string) => {
-    const num = parseInt(k, 10);
-    if (!isNaN(num) && num > 0) {
-      onUpdate(model.id, { contextWindow: num * 1024 });
-    }
-  };
-
-  return (
-    <ModalDialog id="model-edit" onClose={onClose}>
-      <div className="max-h-[85vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> EDIT MODEL</span>
-            <div className="text-hacker-text text-sm font-bold mt-0.5">{model.name}</div>
-          </div>
-          <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
-        </div>
-
-        {/* Form */}
-        <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-          {/* Temperature + Top P */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Temperature</label>
-              <input type="number" value={model.temperature ?? ""} min={0} max={2} step={0.1}
-                onChange={e => onUpdate(model.id, { temperature: e.target.value ? Number(e.target.value) : undefined })}
-                className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
-              <div className="text-hacker-text-dim text-[10px] mt-0.5">0.0 – 2.0 (lower = more deterministic)</div>
-            </div>
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Top P</label>
-              <input type="number" value={model.topP ?? ""} min={0} max={1} step={0.05}
-                onChange={e => onUpdate(model.id, { topP: e.target.value ? Number(e.target.value) : undefined })}
-                className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
-              <div className="text-hacker-text-dim text-[10px] mt-0.5">0.0 – 1.0 (nucleus sampling)</div>
-            </div>
-          </div>
-
-          {/* Ollama-specific params */}
-          {isOllama && (
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-hacker-text-dim text-xs block mb-1">Min P</label>
-                <input type="number" value={model.minP ?? ""} min={0} max={1} step={0.05}
-                  onChange={e => onUpdate(model.id, { minP: e.target.value ? Number(e.target.value) : undefined })}
-                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
-              </div>
-              <div>
-                <label className="text-hacker-text-dim text-xs block mb-1">Top K</label>
-                <input type="number" value={model.topK ?? ""} min={1} max={100} step={1}
-                  onChange={e => onUpdate(model.id, { topK: e.target.value ? Number(e.target.value) : undefined })}
-                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="auto" />
-              </div>
-              <div>
-                <label className="text-hacker-text-dim text-xs block mb-1">Repeat Penalty</label>
-                <input type="number" value={model.repeatPenalty ?? ""} min={1} max={2} step={0.1}
-                  onChange={e => onUpdate(model.id, { repeatPenalty: e.target.value ? Number(e.target.value) : undefined })}
-                  className="input-hacker w-full text-sm py-1.5 px-2" placeholder="1.1" />
-              </div>
-            </div>
-          )}
-
-          {/* Max Tokens full width */}
-          <div>
-            <label className="text-hacker-text-dim text-xs block mb-1">Max Tokens</label>
-            <input type="number" value={model.maxTokens ?? 16384} min={1} step={1024}
-              onChange={e => onUpdate(model.id, { maxTokens: Number(e.target.value) })}
-              className="input-hacker w-full text-sm py-1.5 px-2" />
-            <div className="text-hacker-text-dim text-[10px] mt-0.5">Maximum output tokens per response</div>
-          </div>
-
-          {/* Context Window + Reasoning + Thinking Level */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-3">
-              <label className="text-hacker-text-dim text-xs block mb-1">Context Window (tokens)</label>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="number"
-                  value={contextCustom ? contextK : Math.round(model.contextWindow / 1024)}
-                  onChange={e => {
-                    setContextK(e.target.value);
-                    setContextCustom(true);
-                    applyContext(e.target.value);
-                  }}
-                  onBlur={() => {
-                    // Finalize on blur
-                    applyContext(contextK);
-                    setContextCustom(false);
-                  }}
-                  min={1}
-                  step={1}
-                  className="input-hacker w-24 text-sm py-1.5 px-2 text-center"
-                />
-                <span className="text-hacker-text-dim text-xs shrink-0">K tokens</span>
-                <div className="flex gap-1 flex-wrap">
-                  {CONTEXT_PRESETS.map(preset => (
-                    <button key={preset}
-                      onClick={() => {
-                        setContextK(String(preset));
-                        setContextCustom(false);
-                        applyContext(String(preset));
-                      }}
-                      className={`px-1.5 py-0.5 text-[11px] border transition-colors ${
-                        Math.round(model.contextWindow / 1024) === preset
-                          ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-                          : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50 hover:text-hacker-text"
-                      }`}>
-                      {preset >= 1000 ? `${preset / 1000}M` : `${preset}K`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="text-hacker-text-dim text-[10px] mt-1">Type a custom value or click a preset. Current: {model.contextWindow.toLocaleString()} tokens</div>
-            </div>
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Reasoning Model</label>
-              <select value={model.reasoning ? "yes" : "no"} onChange={e => onUpdate(model.id, { reasoning: e.target.value === "yes" })}
-                className="select-hacker w-full text-sm py-1.5 px-2">
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-              </select>
-              <div className="text-hacker-text-dim text-[10px] mt-0.5">Has native chain-of-thought</div>
-            </div>
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Vision Model</label>
-              <select value={model.vision ? "yes" : "no"} onChange={e => onUpdate(model.id, { vision: e.target.value === "yes" })}
-                className="select-hacker w-full text-sm py-1.5 px-2">
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-              </select>
-              <div className="text-hacker-text-dim text-[10px] mt-0.5">Supports image/vision input</div>
-            </div>
-            <div>
-              <label className="text-hacker-text-dim text-xs block mb-1">Thinking Level</label>
-              <select value={model.thinkingLevel} onChange={e => onUpdate(model.id, { thinkingLevel: e.target.value })}
-                className="select-hacker w-full text-sm py-1.5 px-2">
-                {THINKING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-              </select>
-              <div className="text-hacker-text-dim text-[10px] mt-0.5">Reasoning depth (if supported)</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex gap-2 mt-4 pt-3 border-t border-hacker-border">
-          <button onClick={() => {
-            onUpdate(model.id, {
-              reasoning: inferReasoning(model.modelId || model.name),
-              vision: inferVision(model.modelId || model.name),
-              contextWindow: 128000,
-              maxTokens: 16384,
-              thinkingLevel: "medium",
-            });
-          }}
-            className="btn-hacker text-sm px-3 py-2 flex items-center justify-center gap-1.5 text-hacker-text-dim"
-            title={t('modelLibrary.resetDefaults')}>
-            ↺ RESET
-          </button>
-          <div className="flex-1" />
-          <button onClick={onClose}
-            className="btn-hacker flex-1 text-sm py-2 flex items-center justify-center gap-1.5">
-            <Check size={14} /> DONE
-          </button>
-        </div>
-      </div>
-    </ModalDialog>
-  );
-}
-
 // ── Helpers ────────────────────────────────────────────────
+
+function fmtCtx(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return `${tokens}`;
+}
 
 function formatSize(bytes: number): string {
   if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -948,47 +753,35 @@ function formatSize(bytes: number): string {
 
 function inferReasoning(modelId: string): boolean {
   const name = modelId.toLowerCase();
-  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason/i.test(name);
+  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
 }
 
 function inferVision(modelId: string): boolean {
   const name = modelId.toLowerCase();
-  return /llava|gemma[-_.]?3|minicpm-v|qwen.*vl|qwen.*vision|pixtral|llama.*vision|llama3[._-]?2[._-]?9|phi[-_.]?3[._-]?5|internvl|idefics|cogvlm|molmo|glm.*4v|gpt[-_.]?4[-_.]?o|gpt[-_.]?4[-_.]?vision|gpt[-_.]?4o|vision|kimi|multimodal/i.test(name);
+  const visionFamilies = /^(gemma3|gemma4|llama4|pixtral|llava|minicpm|moondream|phi-4|phi4)/i;
+  if (visionFamilies.test(name)) return true;
+  return /llava|llama.*vision|llama3[._-]?2[._-]?9|qwen.*vl|qwen.*vision|pixtral|phi[-_.]?3[._-]?5|phi[-_.]?4.*vision|internvl|idefics|cogvlm|molmo|glm.*4v|gpt[-_.]?4[-_.]?o|gpt[-_.]?4[-_.]?vision|vision|kimi|multimodal|claude.*sonnet|claude.*opus|claude.*haiku|command-r.*plus|gemini.*2[._-]?5.*(pro|flash)|gemini.*1[._-]?5.*(pro|flash)|minicpm|gemma[-_.]?3|gemma[-_.]?4|llama[-_.]?4/i.test(name);
 }
 
 function inferContextWindow(modelId: string): number {
   const key = modelId.toLowerCase().replace(/[:_]/g, "-");
   const overrides: Record<string, number> = {
-    "kimi-k2.6": 256000,
-    "kimi-k2.5": 256000,
-    "kimi-k2.0": 200000,
-    "kimi-k1.5": 256000,
-    "deepseek-r1": 128000,
-    "deepseek-v3": 128000,
-    "qwq": 128000,
-    "qwq-32b": 128000,
-    "qwen3.5": 128000,
-    "qwen3": 128000,
-    "qwen2.5": 128000,
-    "qwen2": 128000,
-    "llama3.3": 128000,
-    "llama3.2": 128000,
-    "llama3.1": 128000,
-    "llama3": 128000,
-    "mistral": 128000,
-    "mixtral": 64000,
-    "gemma3": 128000,
-    "gemma2": 128000,
-    "command-r": 128000,
-    "aya": 256000,
-    "phi3": 128000,
-    "phi4": 128000,
-    "granite3": 128000,
-    "codestral": 32000,
-    "nemotron": 128000,
-    "llava": 4096,
-    "bakllava": 4096,
-    "moondream": 8192,
+    "gemma4": 1048576, "gemma-4": 1048576,
+    "gemma3": 128000, "gemma2": 128000,
+    "llama4": 1048576, "llama-4": 1048576,
+    "llama4-scout": 10485760, "llama-4-scout": 10485760,
+    "llama3.3": 128000, "llama3.2": 128000, "llama3.1": 128000, "llama3": 128000,
+    "claude-sonnet-4": 200000, "claude-opus-4": 200000,
+    "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-4-turbo": 128000, "gpt-4": 8192,
+    "o1": 200000, "o1-mini": 128000, "o3": 200000, "o3-mini": 200000, "o4-mini": 200000,
+    "deepseek-r1": 128000, "deepseek-v3": 128000,
+    "qwq": 128000, "qwq-32b": 128000,
+    "qwen3.5": 128000, "qwen3": 128000, "qwen2.5": 128000, "qwen2": 128000,
+    "mistral": 128000, "mixtral": 64000, "pixtral": 128000, "codestral": 32000,
+    "command-r": 128000, "aya": 256000,
+    "phi3": 128000, "phi4": 128000, "granite3": 128000, "nemotron": 128000,
+    "llava": 4096, "bakllava": 4096, "moondream": 8192,
+    "kimi-k2.6": 256000, "kimi-k2.5": 256000, "kimi-k2.0": 200000, "kimi-k1.5": 256000,
   };
   if (overrides[key] !== undefined) return overrides[key];
   for (const [prefix, ctx] of Object.entries(overrides)) {
@@ -1001,23 +794,42 @@ function inferContextWindow(modelId: string): number {
   if (key.includes("qwen3")) return 128000;
   if (key.includes("qwen2.5")) return 128000;
   if (key.includes("qwen2")) return 128000;
-  if (key.includes("llama3")) return 128000;
-  if (key.includes("mistral")) return 128000;
-  if (key.includes("mixtral")) return 64000;
+  if (key.includes("gemma4") || key.includes("gemma-4")) return 1048576;
   if (key.includes("gemma3")) return 128000;
   if (key.includes("gemma2")) return 128000;
   if (key.includes("gemma")) return 8192;
+  if (key.includes("llama4") || key.includes("llama-4")) return 1048576;
+  if (key.includes("llama3")) return 128000;
+  if (key.includes("llama2")) return 4096;
+  if (key.includes("claude")) return 200000;
+  if (key.includes("gpt-4o")) return 128000;
+  if (key.includes("gpt-4")) return 8192;
+  if (key.includes("o1") || key.includes("o3") || key.includes("o4")) return 200000;
+  if (key.includes("deepseek-r1")) return 128000;
+  if (key.includes("deepseek-v3")) return 128000;
+  if (key.includes("deepseek")) return 64000;
+  if (key.includes("qwq")) return 128000;
+  if (key.includes("qwen3")) return 128000;
+  if (key.includes("qwen2.5")) return 128000;
+  if (key.includes("qwen2")) return 128000;
+  if (key.includes("qwen")) return 32000;
+  if (key.includes("kimi")) return 256000;
+  if (key.includes("mistral")) return 128000;
+  if (key.includes("mixtral")) return 64000;
+  if (key.includes("pixtral")) return 128000;
   if (key.includes("command-r")) return 128000;
   if (key.includes("aya")) return 256000;
-  if (key.includes("phi3") || key.includes("phi-3")) return 128000;
   if (key.includes("phi4") || key.includes("phi-4")) return 128000;
-  if (key.includes("granite3")) return 128000;
+  if (key.includes("phi3") || key.includes("phi-3")) return 128000;
+  if (key.includes("granite")) return 128000;
   if (key.includes("codestral")) return 32000;
   if (key.includes("codellama")) return 16384;
+  if (key.includes("nemotron")) return 128000;
   if (key.includes("llava")) return 4096;
   if (key.includes("bakllava")) return 4096;
   if (key.includes("moondream")) return 8192;
   if (key.includes("minicpm")) return 128000;
   if (key.includes("embed")) return 8192;
+  if (key.includes("gemini")) return 1048576;
   return 128000;
 }

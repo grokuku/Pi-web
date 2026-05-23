@@ -79,11 +79,6 @@ router.post("/models", async (req: Request, res: Response) => {
         vision: m.vision ?? inferVision(m.modelId),
         contextWindow: m.contextWindow || inferContextWindow(m.modelId),
         maxTokens: m.maxTokens || 16384,
-        temperature: m.temperature,
-        topP: m.topP,
-        minP: m.minP,
-        topK: m.topK,
-        repeatPenalty: m.repeatPenalty,
         thinkingLevel: m.thinkingLevel || "medium",
       }));
 
@@ -94,7 +89,7 @@ router.post("/models", async (req: Request, res: Response) => {
     } else {
       // Single add
       const { providerId, modelId, name, reasoning, vision, contextWindow, maxTokens,
-              temperature, topP, minP, topK, repeatPenalty, thinkingLevel, isDefault } = req.body;
+              thinkingLevel, isDefault } = req.body;
 
       if (!providerId || !modelId) {
         return res.status(400).json({ error: "providerId and modelId required" });
@@ -109,7 +104,6 @@ router.post("/models", async (req: Request, res: Response) => {
         vision: vision ?? inferVision(modelId),
         contextWindow: contextWindow || inferContextWindow(modelId),
         maxTokens: maxTokens || 16384,
-        temperature, topP, minP, topK, repeatPenalty,
         thinkingLevel: thinkingLevel || "medium",
       });
 

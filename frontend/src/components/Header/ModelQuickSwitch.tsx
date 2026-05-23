@@ -277,6 +277,7 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
                           <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                           <span className="truncate flex-1">{m.name}</span>
                           {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
+                          <span className="flex items-center gap-1 shrink-0">{m.vision && <span className="text-[10px]" title="Vision">👁️</span>}{m.reasoning && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
                           {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
                         </button>
                       );
@@ -352,4 +353,10 @@ function defaultProjectMode(): ProjectModeConfig {
     yolo: { modelId: null, enabled: false,
       config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
   };
+}
+
+function fmtCtx(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return `${tokens}`;
 }

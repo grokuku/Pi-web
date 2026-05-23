@@ -20,18 +20,11 @@ export interface RegisteredModel {
   name: string;                // display name
   isDefault: boolean;          // default model for modes without a specific model
 
-  // Model capabilities/dimensions
+  // Model capabilities (auto-detected from provider, not user-editable)
   reasoning: boolean;
   vision: boolean;             // supports image input
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
-
-  // Inference parameters
-  temperature?: number;        // 0-2, default per provider
-  topP?: number;               // 0-1
-  minP?: number;               // 0-1
-  topK?: number;               // 1-100
-  repeatPenalty?: number;      // 1-2
 
   // Thinking
   thinkingLevel: string;       // off, minimal, low, medium, high
@@ -174,15 +167,10 @@ function migrateModel(m: any): RegisteredModel {
     modelId: m.modelId || m.name || "",
     name: m.name || m.modelId || "",
     isDefault: m.isDefault || false,
-    reasoning: m.reasoning ?? inferReasoning(m.modelId || m.name || ""),
-    vision: m.vision ?? inferVision(m.modelId || m.name || ""),
-    contextWindow: m.contextWindow || inferContextWindow(m.modelId || m.name || ""),
+    reasoning: m.reasoning ?? inferReasoning(m.modelId || m.name || "", m.family),
+    vision: m.vision ?? inferVision(m.modelId || m.name || "", m.family),
+    contextWindow: m.contextWindow || inferContextWindow(m.modelId || m.name || "", m.family),
     maxTokens: m.maxTokens || 16384,
-    temperature: m.temperature,
-    topP: m.topP,
-    minP: m.minP,
-    topK: m.topK,
-    repeatPenalty: m.repeatPenalty,
     thinkingLevel: m.thinkingLevel || "medium",
   };
 }
