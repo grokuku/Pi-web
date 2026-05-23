@@ -490,6 +490,9 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 newDiscovered.push({ ...m, _providerId: p.id } as any);
               }
             }
+            // Debug: log first few models to check contextWindow
+            const sample = (data.models as any[]).filter((m: any) => m.id.includes('gemma') || m.id.includes('glm') || m.id.includes('kimi'));
+            if (sample.length > 0) console.log(`[scan] ${p.name}:`, sample.map((m: any) => `${m.id} ctx=${m.contextWindow} vis=${m.vision} reas=${m.reasoning}`));
           }
         } catch (e: any) {
           console.warn(`[scan] Provider ${p.name} failed:`, e.message);
@@ -627,6 +630,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 const ck = compKey(provId, dm.id);
                 const isSelected = selectedAvailable.has(ck);
                 const provName = getProviderNameForDiscovered(dm);
+                // Debug first render
+                if (dm.id === 'gemma4:31b' || dm.id === 'glm-5.1' || dm.id === 'kimi-k2.6') {
+                  console.log(`[render available] ${dm.id} ctx=${(dm as any).contextWindow} vis=${(dm as any).vision} reas=${(dm as any).reasoning}`);
+                }
                 return (
                   <button key={ck} onClick={() => toggleAvailable(ck)}
                     className={`w-full text-left px-3 py-1 text-[11px] flex items-center gap-1.5 border-b border-hacker-border/50 last:border-0 ${
