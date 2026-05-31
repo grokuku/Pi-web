@@ -538,18 +538,23 @@ export async function setGitCredentials(
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
   const git: SimpleGit = simpleGit(cwd);
-  try {
-    const name = (await git.raw(["config", "user.name"])).trim();
-    const email = (await git.raw(["config", "user.email"])).trim();
-    if (!name || !email) return null;
-    return { name, email };
-  } catch {
-    return null;
+  // Check repo-local config first, then global
+  for (const scope of ["local", "global"] as const) {
+    try {
+      const scopeFlag = scope === "global" ? ["--global"] : [];
+      const name = (await git.raw([...scopeFlag, "config", "user.name"])).trim();
+      const email = (await git.raw([...scopeFlag, "config", "user.email"])).trim();
+      if (name && email) return { name, email };
+    } catch {}
   }
+  return null;
 }
 
 export async function setGitIdentity(cwd: string, name: string, email: string): Promise<void> {
+  // Set both repo-local AND global, so new repos inherit the identity
   const git: SimpleGit = simpleGit(cwd);
+  await git.raw(["config", "--global", "user.name", name]);
+  await git.raw(["config", "--global", "user.email", email]);
   await git.raw(["config", "user.name", name]);
   await git.raw(["config", "user.email", email]);
 }
@@ -581,6 +586,16 @@ export async function gitCommit(
       }
     }
     if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
+      // Try to inherit identity from global git config
+      try {
+        const globalIdentity = await getGitIdentity(cwd);
+        if (globalIdentity) {
+          await setGitIdentity(cwd, globalIdentity.name, globalIdentity.email);
+          const result = await git.commit(message);
+          if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
+          return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
+        }
+      } catch {}
       throw new GitIdentityError(msg);
     }
     throw new Error(`Git commit failed: ${msg}`);
