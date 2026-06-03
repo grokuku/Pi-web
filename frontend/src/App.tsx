@@ -665,6 +665,7 @@ function App() {
           activeMode={activeMode}
           activeProjectId={activeProject?.id}
           modelChangeVersion={modelChangeVersion}
+          session={activeProject ? getProjectSession(activeProject.id).session : undefined}
           onModeSwitch={(mode) => {
             if (activeProject) {
               send({ type: "mode_switch", projectId: activeProject.id, mode });

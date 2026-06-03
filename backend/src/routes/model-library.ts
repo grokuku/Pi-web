@@ -22,7 +22,7 @@ import {
   type RegisteredModel,
 } from "../pi/model-library.js";
 import { loadProviders, inferVision, inferContextWindow } from "../pi/providers.js";
-import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode, reapplyAllSessions } from "../pi/session.js";
+import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode, reapplyAllSessions, getSession, compactSession } from "../pi/session.js";
 
 const router = Router();
 
@@ -253,11 +253,33 @@ router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
 router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
   try {
     const { projectId } = req.params;
-    const { mode, modelId, enabled, maxReviews, config } = req.body;
+    const { mode, modelId, enabled, maxReviews, config, compactToFit } = req.body;
 
     if (mode) validateMode(mode);
 
     let library = loadModelLibrary();
+
+    // If compactToFit is set and we're assigning a model, check if context fits
+    if (modelId && compactToFit) {
+      const targetModel = getModel(library, modelId);
+      if (targetModel?.contextWindow) {
+        const state = getSession(projectId);
+        const currentTokens = state?.session?.getContextUsage?.()?.tokens;
+        if (currentTokens && currentTokens > targetModel.contextWindow) {
+          const targetTokens = targetModel.contextWindow;
+          const safeTarget = Math.floor(targetTokens * 0.9); // 90% to leave room for new responses
+          const instructions =
+            `Compact this conversation to fit within ${safeTarget} tokens while preserving as much information as possible. ` +
+            `The conversation is being migrated to a model with a smaller context window (${targetTokens} tokens). ` +
+            `PRIORITIZE: project requirements, architecture decisions, code structure, file paths, ` +
+            `tool configurations, security rules, and the most recent conversation turns. ` +
+            `Compress aggressively but keep all critical details intact. ` +
+            `Use concise summaries for verbose tool outputs. ` +
+            `Maximum information density within the token budget.`;
+          await compactSession(projectId, instructions);
+        }
+      }
+    }
 
     if (modelId !== undefined) {
       library = setProjectModeModel(projectId, mode, modelId);

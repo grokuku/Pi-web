@@ -1,3 +1,4 @@
+import { ModalDialog } from "../common/ModalDialog";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
@@ -18,9 +19,11 @@ interface Props {
   modelChangeVersion?: number;
   onModeSwitch?: (mode: AgentMode) => void;
   onModelApplied?: () => void;
+  /** Current session info (for context usage checks) */
+  session?: any;
 }
 
-export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied }: Props) {
+export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied, session }: Props) {
   const { t } = useTranslation();
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [showYoloConfig, setShowYoloConfig] = useState(false);
@@ -75,18 +78,35 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return library?.models[0] || null;
   };
 
+  const [compactConfirm, setCompactConfirm] = useState<{ mode: AgentMode; modelId: string; currentTokens: number; newWindow: number } | null>(null);
+
   const handleSelectModel = async (mode: AgentMode, modelId: string) => {
+    if (!activeProjectId) return;
+    // Check context window size
+    const targetModel = library?.models.find(m => m.id === modelId);
+    const currentTokens = session?.contextUsage?.tokens;
+    if (targetModel?.contextWindow && currentTokens && currentTokens > targetModel.contextWindow) {
+      // Show confirmation dialog
+      setCompactConfirm({ mode, modelId, currentTokens, newWindow: targetModel.contextWindow });
+      return;
+    }
+    // No conflict — switch immediately
+    await doSwitchModel(mode, modelId, false);
+    setOpenMode(null);
+  };
+
+  /** Actually perform the model switch, optionally with compactToFit */
+  const doSwitchModel = async (mode: AgentMode, modelId: string, compactToFit: boolean) => {
     if (!activeProjectId) return;
     try {
       await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, modelId }),
+        body: JSON.stringify({ mode, modelId, compactToFit }),
       });
       await loadLibrary();
       onModelApplied?.();
     } catch (e) { console.error("handleSelectModel error:", e); }
-    setOpenMode(null);
   };
 
   const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "yolo") => {
@@ -340,6 +360,54 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
           providers={providers}
           config={yoloConfig}
         />
+      )}
+
+      {/* Compact confirmation modal */}
+      {compactConfirm && (
+        <ModalDialog id="compact-confirm" onClose={() => setCompactConfirm(null)}>
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xl">📦</span>
+              <span className="text-hacker-warn font-bold text-sm tracking-wider">
+                CONTEXT TOO LARGE
+              </span>
+            </div>
+
+            <div className="text-sm space-y-2 mb-6">
+              <p className="text-hacker-text">
+                This model has a <strong className="text-hacker-error">smaller context window</strong> than your current conversation size.
+              </p>
+              <div className="bg-hacker-bg/50 border border-hacker-border p-3 text-xs space-y-1">
+                <div className="text-hacker-text-dim">
+                  Current context: <span className="text-hacker-accent">{fmtCtx(compactConfirm.currentTokens)}</span>
+                </div>
+                <div className="text-hacker-text-dim">
+                  New model's window: <span className="text-hacker-error">{fmtCtx(compactConfirm.newWindow)}</span>
+                </div>
+              </div>
+              <p className="text-hacker-text-dim text-xs">
+                You can compact the conversation first to fit within the smaller window, preserving key information.
+              </p>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setCompactConfirm(null)} className="btn-hacker text-xs">
+                CANCEL
+              </button>
+              <button
+                onClick={async () => {
+                  const { mode, modelId } = compactConfirm;
+                  setCompactConfirm(null);
+                  await doSwitchModel(mode, modelId, true);
+                  setOpenMode(null);
+                }}
+                className="btn-hacker danger text-xs"
+              >
+                COMPACT &amp; SWITCH
+              </button>
+            </div>
+          </div>
+        </ModalDialog>
       )}
     </>
   );

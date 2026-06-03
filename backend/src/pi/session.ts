@@ -386,6 +386,7 @@ export async function sendPrompt(
         }
         try {
           await session.compact(args || undefined);
+          emitSessionUpdate(projectId);
           return { command: "compact", result: "✓ Context compacted" };
         } catch {
           return { command: "compact", result: "Compaction failed or cancelled" };
