@@ -78,6 +78,7 @@ export interface DisplayMessage {
   thinking: string;
   toolCalls: ToolCallInfo[];
   timestamp: number;
+  _streaming?: boolean;
   usage?: {
     input: number;
     output: number;
