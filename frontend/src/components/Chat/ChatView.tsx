@@ -490,12 +490,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         />
       )}
       {hasContent ? (
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" style={{ willChange: 'transform' }} onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
           {/* Messages */}
-          <div ref={messagesWrapperRef} style={{ contain: 'layout style' }}>
+          <div ref={messagesWrapperRef}>
             <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
           </div>
           <div ref={chatEndRef} />
@@ -587,7 +587,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
   if (message.customType === "pi_command") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-left whitespace-pre-wrap font-mono">{message.content}</div></div>;
   if (message.customType === "git_notification") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-center whitespace-pre-wrap">{message.content}</div></div>;
   return (
-    <div className="flex justify-end mb-3" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 100px' }}>
+    <div className="flex justify-end mb-3">
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
@@ -617,7 +617,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
   const toolName = (tc:ToolCallInfo) => { const s = (tc.name||tc.id||'tool').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
 
   return (
-    <div className="flex justify-start mb-3" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 200px' }}>
+    <div className="flex justify-start mb-3">
       <div className={`max-w-[95%] bg-hacker-surface border rounded-r-lg rounded-bl-lg overflow-hidden ${isStreaming ? "border-hacker-accent/50 shadow-[0_0_8px_rgba(var(--accent-rgb),0.15)]" : "border-hacker-border"}`}>
         {/* Header */}
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border/50 bg-hacker-bg/30">
@@ -788,16 +788,20 @@ function DebugOverlay({ getStats }: DebugOverlayProps) {
     return () => { observer?.disconnect(); };
   }, []);
 
-  // ── Event loop lag detector: measure how long setTimeout(0) actually takes ──
+  // ── Event loop lag detector: one setTimeout(0) measure per second ──
+  // Previous version used setTimeout(0) in a tight loop causing ~250 re-renders/sec
+  // which flooded Firefox's Cycle Collector.
   useEffect(() => {
     let running = true;
     const measure = () => {
       if (!running) return;
       const start = performance.now();
       setTimeout(() => {
+        if (!running) return;
         const lag = Math.round(performance.now() - start);
         setEventLoopLag(lag);
-        if (running) measure();
+        // Wait 1s before next measure, not 0ms
+        setTimeout(() => { if (running) measure(); }, 1000);
       }, 0);
     };
     measure();

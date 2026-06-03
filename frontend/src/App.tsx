@@ -50,6 +50,7 @@ interface ProjectSessionState {
 function App() {
   const { t } = useTranslation();
   const { connected, send, on } = useWebSocket();
+  const isGecko = typeof navigator !== 'undefined' && /Gecko\//.test(navigator.userAgent);
 
   // ── State ──
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -57,7 +58,14 @@ function App() {
     return (saved === "light" || saved === "dark") ? saved : "dark";
   });
   const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
-  const [scanlines, setScanlines] = useState(() => localStorage.getItem("pi-web-scanlines") !== "false");
+  const [scanlines, setScanlines] = useState(() => {
+    // Auto-disable scanlines + matrix-bg on Gecko (Firefox/Floorp) — the Cycle Collector
+    // runs at ~50% CPU with full-screen fixed overlays, making the UI unresponsive.
+    if (typeof navigator !== 'undefined' && /Gecko\//.test(navigator.userAgent)) {
+      return false;
+    }
+    return localStorage.getItem("pi-web-scanlines") !== "false";
+  });
 
   // ── Panel State ──
   interface PanelState { visible: boolean; floating: boolean; }
@@ -630,7 +638,7 @@ function App() {
   // Normal mode: full interface
   return (
     <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
-      <div className="matrix-bg" />
+      {!isGecko && <div className="matrix-bg" />}
 
       {/* ── HEADER ── */}
       <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
