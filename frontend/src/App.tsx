@@ -618,7 +618,7 @@ function App() {
           {standalonePanel === "files" && (
             <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
-                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+                <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
               </div>
             </div>
           )}
@@ -765,7 +765,7 @@ function App() {
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
                   ),
                   files: (
-                    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+                    <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
                   ),
                 }}
                 onSwap={handleSwap}
@@ -803,7 +803,7 @@ function App() {
       )}
       {panels.files.visible && panels.files.floating && (
         <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
-          <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} />
+          <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
         </Window>
       )}
 

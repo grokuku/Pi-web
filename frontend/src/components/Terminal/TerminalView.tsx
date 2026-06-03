@@ -165,10 +165,16 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
     };
   }, [activeProject?.id]);
 
-  // ── Fit terminal when tab becomes active ──
+  // ── Fit terminal + auto-focus when tab becomes active ──
   useEffect(() => {
-    if (isActive && terminalRef.current && fitAddonRef.current && projectIdRef.current) {
-      // Small delay to let layout settle after display toggle
+    if (!isActive) return;
+    if (!terminalRef.current) return;
+
+    // Always focus the terminal when it becomes active
+    terminalRef.current.focus();
+
+    // Also fit the terminal if the fit addon is ready
+    if (fitAddonRef.current && projectIdRef.current) {
       const timer = requestAnimationFrame(() => {
         if (fitAddonRef.current && terminalRef.current && projectIdRef.current) {
           try {

@@ -41,6 +41,7 @@ interface TreeNode {
 interface Props {
   project: any;
   onReferenceFile?: (path: string) => void;
+  on?: (type: string, cb: (msg: any) => void) => () => void;
 }
 
 // ── Helpers ──
@@ -191,7 +192,7 @@ function DirNode({
 }
 
 // ── Main File Explorer ──
-export function FileExplorer({ project }: Props) {
+export function FileExplorer({ project, onReferenceFile, on }: Props) {
   const { t } = useTranslation();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -395,6 +396,18 @@ export function FileExplorer({ project }: Props) {
       })
       .catch(() => {});
   }, [project?.id]);
+
+  // Auto-refresh when the LLM finishes modifying files
+  useEffect(() => {
+    if (!on || !project) return;
+    const unsub = on("pi_event", (msg: any) => {
+      if (msg.projectId !== project?.id) return;
+      if (msg.event?.type === "agent_end" || msg.event?.type === "turn_end") {
+        handleRefresh();
+      }
+    });
+    return () => unsub();
+  }, [on, project?.id, handleRefresh]);
 
   const toggleSelect = useCallback((path: string, type: "dir" | "file") => {
     setSelectedPaths((prev) => {

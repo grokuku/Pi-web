@@ -235,12 +235,13 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           }
           if (d.type === "toolcall_end") {
             const ea = d.toolCall?.arguments ?? d.toolCall?.input ?? d.toolCall ?? {};
-            updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===d.toolCallId ? {...tc, args:ea, isStreaming:false} : tc) }));
+            const en = d.toolCall?.name || d.toolName;
+            updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===d.toolCallId ? {...tc, args:ea, isStreaming:false, ...(en?{name:en}:{})} : tc) }));
           }
           break;
         }
         case "tool_execution_start":
-          updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===evt.toolCallId ? {...tc, isStreaming:true, startTime:tc.startTime||Date.now()} : tc) }));
+          updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===evt.toolCallId ? {...tc, isStreaming:true, startTime:tc.startTime||Date.now(), ...(evt.toolName && !tc.name?{name:evt.toolName}:{})} : tc) }));
           break;
         case "tool_execution_update": {
           const pt = evt.partialResult?.content?.map((c:any)=>c.text||"").join("")||"";
@@ -445,8 +446,6 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 
 // ── Assistant Group (redesigned) ──
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
-  const [thinkExpanded, setThinkExpanded] = useState(thinkDefaultExpanded);
-
   const allThinking: string[] = []; const allTools: ToolCallInfo[] = [];
   let finalText = ""; let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
@@ -459,7 +458,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
   const mergedThinking = allThinking.join("\n\n---\n\n");
   const hasThinking = allThinking.length > 0;
   const hasTools = allTools.length > 0;
-  const toolName = (tc:ToolCallInfo) => { const s = (tc.name||'?').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
+  const toolName = (tc:ToolCallInfo) => { const s = (tc.name||tc.id||'tool').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
 
   return (
     <div className="flex justify-start mb-3">
@@ -470,18 +469,13 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           {messages[0]?.timestamp && <span className="text-[0.625rem] text-hacker-text-dim">{formatTime(messages[0].timestamp)}</span>}
           {totalUsage && <span className="text-[0.625rem] text-hacker-text-dim">{totalUsage.input+totalUsage.output} tok</span>}
           <div className="flex-1" />
-          {hasThinking && <button onClick={() => setThinkExpanded(!thinkExpanded)} className="text-[0.625rem] text-hacker-text-dim hover:text-hacker-warn transition-colors" title="Toggle thinking">{thinkExpanded?"🧠▼":"🧠▶"}</button>}
           {isStreaming && <span className="w-2 h-2 rounded-full bg-hacker-accent animate-pulse" />}
         </div>
 
         {/* Thinking */}
         {hasThinking && (
-          <div className="border-b border-hacker-border/30">
-            {thinkExpanded ? (
-              <div className="px-3 py-2"><ThinkingBlock thinking={mergedThinking} defaultExpanded={true} /></div>
-            ) : (
-              <div className="px-3 py-2"><button onClick={() => setThinkExpanded(true)} className="text-[0.625rem] text-hacker-text-dim hover:text-hacker-warn hover:underline">💭 Thinking ({allThinking.length} block{allThinking.length>1?"s":""}) — click to expand</button></div>
-            )}
+          <div className="border-b border-hacker-border/30 px-3 py-2">
+            <ThinkingBlock thinking={mergedThinking} defaultExpanded={thinkDefaultExpanded} />
           </div>
         )}
 
