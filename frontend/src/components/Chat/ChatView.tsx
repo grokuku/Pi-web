@@ -93,7 +93,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
   const messagesRef = useRef<DisplayMessage[]>([]);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
+
+  const hasContent = messages.length > 0;
   const prevProjectIdRef = useRef(projectId);
 
   // ── Project switching ──
@@ -124,7 +127,20 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     setError(""); currentAssistantIdRef.current = null;
   }, [projectId]);
 
-  useEffect(() => { chatHistory.saveMessages(messages); try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messages)); } catch {} messagesRef.current = messages; }, [messages]);
+  // Instant ref sync (cheap)
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Debounced persistence (expensive — localStorage + JSON.stringify blocks main thread)
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      if (!projectId) return;
+      chatHistory.saveMessages(messagesRef.current);
+      try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messagesRef.current)); } catch {}
+      saveTimerRef.current = null;
+    }, 500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [messages, projectId]);
 
   // ── History restoration ──
   useEffect(() => {
@@ -171,8 +187,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
 
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-
   // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const el = chatContainerRef.current;
@@ -182,12 +196,16 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const handleScroll = useCallback(() => {
     const el = chatContainerRef.current; if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-    pinnedToBottomRef.current = atBottom; setShowScrollBtn(!atBottom); if (atBottom) setUnreadCount(0);
+    pinnedToBottomRef.current = atBottom;
+    const shouldShow = !atBottom;
+    setShowScrollBtn(prev => prev === shouldShow ? prev : shouldShow);
+    if (atBottom) setUnreadCount(prev => prev === 0 ? prev : 0);
   }, []);
   const prevMsgCountRef = useRef(messages.length);
   useEffect(() => { if (!pinnedToBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
 
-  // ResizeObserver: pins to bottom when content grows while user is at bottom
+  // ResizeObserver: pins to bottom when content grows while user is at bottom.
+  // Depends on `hasContent` so it re-runs once the DOM refs are actually mounted.
   useEffect(() => {
     const wrapper = messagesWrapperRef.current;
     const container = chatContainerRef.current;
@@ -199,7 +217,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     });
     ro.observe(wrapper);
     return () => ro.disconnect();
-  }, []);
+  }, [hasContent]);
 
   // ── Pi event handling ──
   useEffect(() => {
@@ -348,8 +366,10 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     if (activeMode === "yolo") {
       setMessages(prev => [...prev, { id:`msg-${Date.now()}`, role:"user", content:text, thinking:"", toolCalls:[], timestamp:Date.now() }]);
-      pinnedToBottomRef.current = true;
-      scrollToBottom("smooth");
+      requestAnimationFrame(() => {
+        pinnedToBottomRef.current = true;
+        scrollToBottom("smooth");
+      });
       fetch("/api/pi/yolo", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({projectId, prompt:text}) }).catch(()=>{});
       return;
     }
@@ -380,16 +400,18 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       setMessages(prev => [...prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }]);
     }
     send({ type:"pi_prompt", projectId, message:fullMessage });
-    // Force-scroll to bottom after sending
-    pinnedToBottomRef.current = true;
-    scrollToBottom("smooth");
+    // Force-scroll to bottom after sending (rAF to wait for DOM commit)
+    requestAnimationFrame(() => {
+      pinnedToBottomRef.current = true;
+      scrollToBottom("smooth");
+    });
   }, [send, projectId, activeMode]);
 
   if (!activeProject) {
     return <div className="h-full flex items-center justify-center text-hacker-text-dim"><div className="text-center"><div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-16 h-16" /></div><p className="text-lg mb-2">PI CODING AGENT</p><p className="text-sm">Select or create a project to begin...</p></div></div>;
   }
 
-  const hasContent = messages.length > 0;
+
 
   return (
     <div className="h-full flex flex-col">
