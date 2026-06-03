@@ -31,7 +31,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming
           className="thinking-toggle-btn"
         >
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          <span className="thinking-block-label">{t('thinkingBlock.thinking')}</span>
+          <span className="thinking-block-label">thinking</span>
         </button>
         <button onClick={handleCopy} className="thinking-copy-btn" title={t('thinkingBlock.copy')}>
           {copied ? <Check size={10} /> : <Copy size={10} />}

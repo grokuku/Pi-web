@@ -445,9 +445,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 
 // ── Assistant Group (redesigned) ──
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
-  const { t } = useTranslation();
   const [thinkExpanded, setThinkExpanded] = useState(thinkDefaultExpanded);
-  const [toolsExpanded, setToolsExpanded] = useState<Record<string,boolean>>({});
 
   const allThinking: string[] = []; const allTools: ToolCallInfo[] = [];
   let finalText = ""; let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
@@ -461,7 +459,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
   const mergedThinking = allThinking.join("\n\n---\n\n");
   const hasThinking = allThinking.length > 0;
   const hasTools = allTools.length > 0;
-  const toolName = (tc:ToolCallInfo) => { const s = tc.name.replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>20?s.slice(0,18)+"…":s; };
+  const toolName = (tc:ToolCallInfo) => { const s = (tc.name||'?').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
 
   return (
     <div className="flex justify-start mb-3">
@@ -487,32 +485,19 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           </div>
         )}
 
-        {/* Tools as inline badges */}
+        {/* Tools — compact single line */}
         {hasTools && (
-          <div className="px-3 py-2 border-b border-hacker-border/30">
-            <div className="flex flex-col gap-1">
-              {allTools.map(tc => {
-                const expanded = toolsExpanded[tc.id];
-                return (
-                  <div key={tc.id}>
-                    <button onClick={() => setToolsExpanded(p => ({...p,[tc.id]:!p[tc.id]}))}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 text-[0.6875rem] font-mono rounded transition-colors ${
-                        tc.isStreaming ? "bg-hacker-accent/10 text-hacker-accent border border-hacker-accent/40"
-                        : tc.isError ? "bg-red-900/20 text-red-400 border border-red-500/30"
-                        : "bg-hacker-surface border border-hacker-border text-hacker-text-dim hover:border-hacker-accent/40 hover:text-hacker-text-bright"
-                      }`}>
-                      {tc.isStreaming ? <span className="animate-spin text-[0.625rem]">⏳</span> : tc.isError ? <span className="text-[0.625rem]">❌</span> : expanded ? <span className="text-[0.625rem]">▼</span> : <span className="text-[0.625rem]">▶</span>}
-                      <span className={tc.isError?"text-red-400":""}>{tc.isError?"!":"📝"}</span> {toolName(tc)}
-                    </button>
-                    {expanded && (
-                      <div className="mt-1 px-2 py-1 bg-hacker-bg/50 border border-hacker-border/50 rounded text-[0.6875rem] font-mono whitespace-pre-wrap max-h-[200px] overflow-y-auto">
-                        {tc.output ? <span className="text-hacker-text-bright">{tc.output.slice(0,2000)}</span> : <span className="text-hacker-text-dim italic">No output yet{tc.isStreaming?"…":""}</span>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          <div className="px-3 py-1.5 border-b border-hacker-border/30 flex items-center gap-1.5 flex-wrap">
+            {allTools.map((tc, i) => (
+              <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.5625rem] font-mono ${
+                tc.isStreaming ? "text-hacker-accent animate-pulse"
+                : tc.isError ? "text-red-400"
+                : "text-hacker-text-dim/60"
+              }`}>
+                {tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}
+                {toolName(tc)}{i < allTools.length-1 ? "," : ""}
+              </span>
+            ))}
           </div>
         )}
 
