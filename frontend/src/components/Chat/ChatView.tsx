@@ -605,14 +605,15 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 // ── Assistant Group (redesigned) ──
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
   const allThinking: string[] = []; const allTools: ToolCallInfo[] = [];
-  let finalText = ""; let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
+  const allTexts: string[] = []; let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
     if (msg.thinking) allThinking.push(msg.thinking);
     allTools.push(...msg.toolCalls);
-    if (msg.content) finalText = msg.content;
+    if (msg.content) allTexts.push(msg.content);
     if (msg.usage) totalUsage = totalUsage ? {input:totalUsage.input+msg.usage.input,output:totalUsage.output+msg.usage.output,cost:{total:totalUsage.cost.total+msg.usage.cost.total}} : msg.usage;
     if (msg._streaming) isStreaming = true;
   }
+  const finalText = allTexts.join("\n\n");
   const mergedThinking = allThinking.join("\n\n---\n\n");
   const hasThinking = allThinking.length > 0;
   const hasTools = allTools.length > 0;
@@ -655,7 +656,12 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 
         {/* Response text — "Thinking…" only shown when there's NO thinking content yet */}
         <div className="px-3 py-2 prose-hacker">
-          {finalText ? <MemoizedReactMarkdown>{finalText}</MemoizedReactMarkdown> : isStreaming && !hasTools && !hasThinking ? <span className="text-hacker-text-dim italic text-sm">Thinking…</span> : null}
+          {allTexts.length > 0 ? allTexts.map((text, i) => (
+            <div key={i}>
+              {i > 0 && <hr className="border-hacker-border/40 my-3" />}
+              <MemoizedReactMarkdown>{text}</MemoizedReactMarkdown>
+            </div>
+          )) : isStreaming && !hasTools && !hasThinking ? <span className="text-hacker-text-dim italic text-sm">Thinking…</span> : null}
           {isStreaming && finalText && <span className="cursor-blink" />}
         </div>
       </div>
