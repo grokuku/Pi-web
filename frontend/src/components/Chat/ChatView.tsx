@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo, useLayoutEffect } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -89,7 +89,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
-  const isAtBottomRef = useRef(true);
+  const pinnedToBottomRef = useRef(true);
+  const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
   const messagesRef = useRef<DisplayMessage[]>([]);
   const chatHistory = useChatHistory(projectId);
@@ -172,7 +173,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
-  // ── Scroll ──
+  // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const el = chatContainerRef.current;
     if (el) { el.scrollTo({ top: el.scrollHeight, behavior }); return; }
@@ -180,16 +181,25 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, []);
   const handleScroll = useCallback(() => {
     const el = chatContainerRef.current; if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-    isAtBottomRef.current = atBottom; setShowScrollBtn(!atBottom); if (atBottom) setUnreadCount(0);
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    pinnedToBottomRef.current = atBottom; setShowScrollBtn(!atBottom); if (atBottom) setUnreadCount(0);
   }, []);
   const prevMsgCountRef = useRef(messages.length);
-  useEffect(() => { if (!isAtBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
-  useLayoutEffect(() => { 
-    const lastMsg = messages[messages.length-1];
-    const isOwnMessage = lastMsg?.role === "user";
-    if (isAtBottomRef.current || isOwnMessage) scrollToBottom(lastMsg?._streaming ? "auto" : "smooth");
-  }, [messages, scrollToBottom]);
+  useEffect(() => { if (!pinnedToBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
+
+  // ResizeObserver: pins to bottom when content grows while user is at bottom
+  useEffect(() => {
+    const wrapper = messagesWrapperRef.current;
+    const container = chatContainerRef.current;
+    if (!wrapper || !container) return;
+    const ro = new ResizeObserver(() => {
+      if (pinnedToBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    ro.observe(wrapper);
+    return () => ro.disconnect();
+  }, []);
 
   // ── Pi event handling ──
   useEffect(() => {
@@ -338,6 +348,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     if (activeMode === "yolo") {
       setMessages(prev => [...prev, { id:`msg-${Date.now()}`, role:"user", content:text, thinking:"", toolCalls:[], timestamp:Date.now() }]);
+      pinnedToBottomRef.current = true;
+      scrollToBottom("smooth");
       fetch("/api/pi/yolo", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({projectId, prompt:text}) }).catch(()=>{});
       return;
     }
@@ -368,6 +380,9 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       setMessages(prev => [...prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }]);
     }
     send({ type:"pi_prompt", projectId, message:fullMessage });
+    // Force-scroll to bottom after sending
+    pinnedToBottomRef.current = true;
+    scrollToBottom("smooth");
   }, [send, projectId, activeMode]);
 
   if (!activeProject) {
@@ -379,17 +394,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   return (
     <div className="h-full flex flex-col">
       {hasContent ? (
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-24 chat-messages relative" onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
           {/* Messages */}
-          <GroupedMessages messages={messages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
+          <div ref={messagesWrapperRef}>
+            <GroupedMessages messages={messages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
+          </div>
           <div ref={chatEndRef} />
 
           {showScrollBtn && (
             <div className="sticky bottom-4 flex justify-end z-20">
-              <button onClick={() => { scrollToBottom("smooth"); isAtBottomRef.current=true; setShowScrollBtn(false); setUnreadCount(0); }}
+              <button onClick={() => { scrollToBottom("smooth"); pinnedToBottomRef.current=true; setShowScrollBtn(false); setUnreadCount(0); }}
                 className="scroll-to-bottom-btn flex items-center gap-2 px-3 py-1.5 rounded-full border border-hacker-accent/30 bg-hacker-surface/95 backdrop-blur-sm text-hacker-accent text-xs font-medium shadow-lg shadow-hacker-accent/5 hover:bg-hacker-accent/10 hover:border-hacker-accent/50 transition-all animate-fade-in-up">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
                 {unreadCount > 0 && <span className="bg-hacker-accent/20 text-hacker-accent text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none min-w-[18px] text-center">{unreadCount}</span>}
