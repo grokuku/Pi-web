@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from "react";
+import { useState, useRef, useEffect, useCallback, memo, useLayoutEffect } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -88,6 +88,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const [unreadCount, setUnreadCount] = useState(0);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const currentAssistantIdRef = useRef<string | null>(null);
   const messagesRef = useRef<DisplayMessage[]>([]);
@@ -172,15 +173,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   // ── Scroll ──
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => { chatEndRef.current?.scrollIntoView({ behavior }); }, []);
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = chatContainerRef.current;
+    if (el) { el.scrollTo({ top: el.scrollHeight, behavior }); return; }
+    chatEndRef.current?.scrollIntoView({ behavior });
+  }, []);
   const handleScroll = useCallback(() => {
-    const el = chatEndRef.current?.parentElement; if (!el) return;
+    const el = chatContainerRef.current; if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
     isAtBottomRef.current = atBottom; setShowScrollBtn(!atBottom); if (atBottom) setUnreadCount(0);
   }, []);
   const prevMsgCountRef = useRef(messages.length);
   useEffect(() => { if (!isAtBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
-  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(messages.length > 0 && messages[messages.length-1]._streaming ? "auto" : "smooth"); }, [messages, scrollToBottom]);
+  useLayoutEffect(() => { if (isAtBottomRef.current) scrollToBottom(messages.length > 0 && messages[messages.length-1]._streaming ? "auto" : "smooth"); }, [messages, scrollToBottom]);
 
   // ── Pi event handling ──
   useEffect(() => {
@@ -267,7 +272,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
               const ex = next[idx];
               next[idx] = {
                 ...ex, _streaming: false,
-                content: ex.content || fc, thinking: ex.thinking || ft,
+                content: ex.content || fc,
+                thinking: ex.thinking || ft,
                 toolCalls: ex.toolCalls.map(tc => ({...tc, isStreaming:false})),
                 usage: mu ? { input:mu.input||0, output:mu.output||0, cost:{total:mu.cost?.total||0} } : ex.usage,
               };
@@ -300,7 +306,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const unsub = on("pi_event", (msg: any) => {
       if (msg.projectId && msg.projectId !== projectId) return;
       if (msg.event?.type === "session_reloaded") {
-        setMessages(prev => prev.filter(m => !m._streaming));
+        // Finalize any streaming message instead of removing it
+        setMessages(prev => prev.map(m => m._streaming ? { ...m, _streaming: false } : m));
         currentAssistantIdRef.current = null;
       }
     });
@@ -363,7 +370,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   return (
     <div className="h-full flex flex-col">
       {hasContent ? (
-        <div className="flex-1 overflow-y-auto p-4 chat-messages relative" onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 chat-messages relative" onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
