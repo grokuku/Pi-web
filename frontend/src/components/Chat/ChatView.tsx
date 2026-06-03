@@ -663,15 +663,6 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
   const [input, setInput] = useState(""); const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false); const inputRef = useRef<HTMLTextAreaElement>(null); const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Cache lineHeight once to avoid forced synchronous layout on every keystroke
-  const lineHeightRef = useRef(20);
-  const cachedLineHeight = useCallback(() => {
-    if (lineHeightRef.current === 20 && inputRef.current) {
-      lineHeightRef.current = parseInt(getComputedStyle(inputRef.current).lineHeight) || 20;
-    }
-    return lineHeightRef.current;
-  }, []);
-
   const processFile = useCallback(async (file: File) => {
     if (attachments.length >= 10) { setError("Maximum 10 files per message"); return; }
     const category = categorizeFile(file.type||"application/octet-stream", file.name);
@@ -692,7 +683,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     }
   }, [attachments.length, setError]);
 
-  const handleSendClick = useCallback(() => { const txt = input.trim(); if (!txt && attachments.length===0) return; onSend(input, attachments); setInput(""); setAttachments([]); if (inputRef.current) inputRef.current.style.height='auto'; }, [input, attachments, onSend]);
+  const handleSendClick = useCallback(() => { const txt = input.trim(); if (!txt && attachments.length===0) return; onSend(input, attachments); setInput(""); setAttachments([]); }, [input, attachments, onSend]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); handleSendClick(); } }, [handleSendClick]);
   const handleDrop = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); for (const f of Array.from(e.dataTransfer.files)) processFile(f); }, [processFile]);
   const handlePaste = useCallback((e: React.ClipboardEvent) => { for (const item of e.clipboardData.items) { if (item.type.startsWith("image/")) { const b = item.getAsFile(); if (b) processFile(b); } } }, [processFile]);
@@ -710,10 +701,10 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           onChange={e => {
             const keystrokeTs = performance.now();
             setInput(e.target.value);
-            const t = e.target;
-            t.style.height = 'auto';
-            t.style.height = Math.min(t.scrollHeight, cachedLineHeight() * 8) + 'px';
-            // Measure latency: time from keystroke to when React flushes
+            // ⚠️ NO forced layout here! Previously: t.style.height = 'auto';
+            // then t.scrollHeight read triggered a full layout pass on every
+            // keystroke, which with 119 messages took 500ms+. The CSS
+            // `field-sizing: content` (modern browsers) now auto-sizes.
             if (onKeystroke) {
               requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
@@ -724,7 +715,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           }}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.queueMessage') : t('chat.typeMessage')}
-          className="input-hacker flex-1 resize-none overflow-y-auto"
+          className="input-hacker flex-1 resize-none overflow-y-auto field-sizing-content"
           rows={2}
           style={{ minHeight: '3rem', maxHeight: '10rem' }}
         />
