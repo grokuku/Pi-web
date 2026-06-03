@@ -188,10 +188,17 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, []);
 
   // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  /** Instant scroll (for streaming — ResizeObserver-compatible) */
+  const scrollToBottomInstant = useCallback(() => {
     const el = chatContainerRef.current;
-    if (el) { el.scrollTo({ top: el.scrollHeight, behavior }); return; }
-    chatEndRef.current?.scrollIntoView({ behavior });
+    if (el) { el.scrollTop = el.scrollHeight; return; }
+    chatEndRef.current?.scrollIntoView(false);
+  }, []);
+  /** Smooth scroll (user-initiated only) */
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (el) { el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); return; }
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
   const handleScroll = useCallback(() => {
     const el = chatContainerRef.current; if (!el) return;
@@ -206,17 +213,36 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ResizeObserver: pins to bottom when content grows while user is at bottom.
   // Depends on `hasContent` so it re-runs once the DOM refs are actually mounted.
+  // Also scrolls on MutationObserver fallback for fast streaming where ResizeObserver
+  // may batch multiple mutations into one observation.
   useEffect(() => {
     const wrapper = messagesWrapperRef.current;
     const container = chatContainerRef.current;
     if (!wrapper || !container) return;
+    // ── ResizeObserver: fires when wrapper size changes ──
     const ro = new ResizeObserver(() => {
       if (pinnedToBottomRef.current) {
         container.scrollTop = container.scrollHeight;
       }
     });
     ro.observe(wrapper);
-    return () => ro.disconnect();
+    // ── MutationObserver fallback: catches rapid text_delta that ResizeObserver may miss ──
+    let moTimer: ReturnType<typeof requestAnimationFrame> | null = null;
+    const mo = new MutationObserver(() => {
+      if (moTimer) return; // throttle to rAF
+      moTimer = requestAnimationFrame(() => {
+        moTimer = null;
+        if (pinnedToBottomRef.current) {
+          container.scrollTop = container.scrollHeight;
+        }
+      });
+    });
+    mo.observe(wrapper, { childList: true, subtree: true, characterData: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      if (moTimer) cancelAnimationFrame(moTimer);
+    };
   }, [hasContent]);
 
   // ── Pi event handling ──
@@ -292,11 +318,8 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         }
         case "message_end": {
           if (evt.message?.role === "assistant") {
-            const fc = evt.message.content?.filter((c:any)=>c.type==="text").map((c:any)=>c.text).join("")||"";
-            const ft = evt.message.content?.filter((c:any)=>c.type==="thinking").map((c:any)=>c.thinking).join("")||"";
-            const mu = evt.message?.usage;
             setMessages(prev => {
-              // Find the last streaming assistant message (not by ref — the ref can be stale)
+              // Find the last streaming assistant message
               let targetIdx = -1;
               for (let i = prev.length - 1; i >= 0; i--) {
                 if (prev[i]._streaming && prev[i].role === "assistant") {
@@ -307,12 +330,17 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
               if (targetIdx === -1) return prev;
               const next = [...prev];
               const ex = next[targetIdx];
+              // ⚠️ NEVER replace accumulated streamed content with final content.
+              // The final content from Pi SDK may be a compaction summary or
+              // shorter recap that would erase the user-visible response.
+              // Always keep the content built from text_delta events.
               next[targetIdx] = {
-                ...ex, _streaming: false,
-                content: (ex.content?.length || 0) >= (fc?.length || 0) ? ex.content : fc,
-                thinking: (ex.thinking?.length || 0) >= (ft?.length || 0) ? ex.thinking : ft,
+                ...ex,
+                _streaming: false,
                 toolCalls: ex.toolCalls.map(tc => ({...tc, isStreaming:false})),
-                usage: mu ? { input:mu.input||0, output:mu.output||0, cost:{total:mu.cost?.total||0} } : ex.usage,
+                usage: evt.message?.usage
+                  ? { input: evt.message.usage.input||0, output: evt.message.usage.output||0, cost:{total:evt.message.usage.cost?.total||0} }
+                  : ex.usage,
               };
               return next;
             });
@@ -362,13 +390,18 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     return () => unsub();
   }, [on, projectId, onQuit]);
 
+  // ── Stable onAbort callback to avoid breaking ChatInputArea's memo ──
+  const onAbort = useCallback(() => {
+    send({ type: "pi_abort", projectId });
+  }, [send, projectId]);
+
   // ── Send ──
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     if (activeMode === "yolo") {
       setMessages(prev => [...prev, { id:`msg-${Date.now()}`, role:"user", content:text, thinking:"", toolCalls:[], timestamp:Date.now() }]);
       requestAnimationFrame(() => {
         pinnedToBottomRef.current = true;
-        scrollToBottom("smooth");
+        scrollToBottomInstant();
       });
       fetch("/api/pi/yolo", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({projectId, prompt:text}) }).catch(()=>{});
       return;
@@ -400,10 +433,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       setMessages(prev => [...prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }]);
     }
     send({ type:"pi_prompt", projectId, message:fullMessage });
-    // Force-scroll to bottom after sending (rAF to wait for DOM commit)
+    // Force-scroll to bottom after sending (instant — critical for streaming)
+    // Uses direct scrollTop assignment which is synchronous with DOM layout,
+    // unlike smooth scrolling which conflicts with ResizeObserver.
     requestAnimationFrame(() => {
       pinnedToBottomRef.current = true;
-      scrollToBottom("smooth");
+      scrollToBottomInstant();
     });
   }, [send, projectId, activeMode]);
 
@@ -428,7 +463,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
           {showScrollBtn && (
             <div className="sticky bottom-4 flex justify-end z-20">
-              <button onClick={() => { scrollToBottom("smooth"); pinnedToBottomRef.current=true; setShowScrollBtn(false); setUnreadCount(0); }}
+              <button onClick={() => { scrollToBottomSmooth(); pinnedToBottomRef.current=true; setShowScrollBtn(false); setUnreadCount(0); }}
                 className="scroll-to-bottom-btn flex items-center gap-2 px-3 py-1.5 rounded-full border border-hacker-accent/30 bg-hacker-surface/95 backdrop-blur-sm text-hacker-accent text-xs font-medium shadow-lg shadow-hacker-accent/5 hover:bg-hacker-accent/10 hover:border-hacker-accent/50 transition-all animate-fade-in-up">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
                 {unreadCount > 0 && <span className="bg-hacker-accent/20 text-hacker-accent text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none min-w-[18px] text-center">{unreadCount}</span>}
@@ -446,7 +481,18 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         </div>
       )}
 
-      <ChatInputArea onSend={handleSend} onAbort={() => send({ type:"pi_abort", projectId })} isStreaming={isStreaming} autoReviewStreaming={autoReviewStreaming} yoloStreaming={yoloStreaming} yoloStatus={yoloStatus} gitBranch={activeProject?.git?.branch} setError={setError} />
+
+
+      <ChatInputArea
+        onSend={handleSend}
+        onAbort={onAbort}
+        isStreaming={isStreaming}
+        autoReviewStreaming={autoReviewStreaming}
+        yoloStreaming={yoloStreaming}
+        yoloStatus={yoloStatus}
+        gitBranch={activeProject?.git?.branch}
+        setError={setError}
+      />
 
       {viewerFile && (
         <ModalDialog id="file-viewer" onClose={() => setViewerFile(null)}>
@@ -527,10 +573,10 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           {isStreaming && <span className="w-2 h-2 rounded-full bg-hacker-accent animate-pulse" />}
         </div>
 
-        {/* Thinking */}
+        {/* Thinking — animated progress bar when streaming, no redundant "Thinking…" text below */}
         {hasThinking && (
           <div className="border-b border-hacker-border/30 px-3 py-2">
-            <ThinkingBlock thinking={mergedThinking} defaultExpanded={thinkDefaultExpanded} />
+            <ThinkingBlock thinking={mergedThinking} defaultExpanded={thinkDefaultExpanded} isStreaming={isStreaming} />
           </div>
         )}
 
@@ -550,9 +596,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           </div>
         )}
 
-        {/* Response text */}
+        {/* Response text — "Thinking…" only shown when there's NO thinking content yet */}
         <div className="px-3 py-2 prose-hacker">
-          {finalText ? <MemoizedReactMarkdown>{finalText}</MemoizedReactMarkdown> : isStreaming && !hasTools ? <span className="text-hacker-text-dim italic text-sm">Thinking…</span> : null}
+          {finalText ? <MemoizedReactMarkdown>{finalText}</MemoizedReactMarkdown> : isStreaming && !hasTools && !hasThinking ? <span className="text-hacker-text-dim italic text-sm">Thinking…</span> : null}
           {isStreaming && finalText && <span className="cursor-blink" />}
         </div>
       </div>
@@ -569,6 +615,15 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
   const { t } = useTranslation();
   const [input, setInput] = useState(""); const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false); const inputRef = useRef<HTMLTextAreaElement>(null); const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Cache lineHeight once to avoid forced synchronous layout on every keystroke
+  const lineHeightRef = useRef(20);
+  const cachedLineHeight = useCallback(() => {
+    if (lineHeightRef.current === 20 && inputRef.current) {
+      lineHeightRef.current = parseInt(getComputedStyle(inputRef.current).lineHeight) || 20;
+    }
+    return lineHeightRef.current;
+  }, []);
 
   const processFile = useCallback(async (file: File) => {
     if (attachments.length >= 10) { setError("Maximum 10 files per message"); return; }
@@ -602,7 +657,21 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
       {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1"><X size={12}/></button></div>)}</div>}
       <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn"/> {t('autoReview.inProgress')}</span>}{yoloStreaming&&yoloStatus&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/>YOLO {yoloStatus.phase.toUpperCase()}{yoloStatus.agent?` (${yoloStatus.agent}${yoloStatus.model?`: ${yoloStatus.model}`:""})`:""} — G{yoloStatus.globalCycle}{yoloStatus.localCycle>0?`·${yoloStatus.localCycle}`:""}</span>}{isStreaming&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}</span></div>
       <div className="flex gap-2">
-        <textarea ref={inputRef} value={input} onChange={e=>{setInput(e.target.value);const t=e.target;t.style.height='auto';const lh=parseInt(getComputedStyle(t).lineHeight)||20;t.style.height=Math.min(t.scrollHeight,lh*8)+'px'}} onKeyDown={handleKeyDown} placeholder={isStreaming?t('chat.queueMessage'):t('chat.typeMessage')} className="input-hacker flex-1 resize-none overflow-y-auto" rows={2} style={{minHeight:'3rem',maxHeight:'10rem'}}/>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e => {
+            setInput(e.target.value);
+            const t = e.target;
+            t.style.height = 'auto';
+            t.style.height = Math.min(t.scrollHeight, cachedLineHeight() * 8) + 'px';
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={isStreaming ? t('chat.queueMessage') : t('chat.typeMessage')}
+          className="input-hacker flex-1 resize-none overflow-y-auto"
+          rows={2}
+          style={{ minHeight: '3rem', maxHeight: '10rem' }}
+        />
         <div className="flex flex-col gap-1">
           <button onClick={handleSendClick} className="btn-hacker flex-1 px-4" disabled={!input.trim()&&attachments.length===0}>{t('chat.send')}</button>
           <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('common.add')}><Paperclip size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">ABORT</button>}</div>
