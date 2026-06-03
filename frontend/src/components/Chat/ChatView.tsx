@@ -454,6 +454,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ── Debug overlay ──
   const [showDebug, setShowDebug] = useState(() => new URLSearchParams(window.location.search).has("debug"));
+  const [debugTick, setDebugTick] = useState(0); // incremented to force re-render of debug overlay
   const perfRef = useRef({ renders: 0, lastRender: 0, msgUpdates: 0, lastMsgUpdate: 0, keystrokeLatency: [] as number[] });
   perfRef.current.renders++;
   perfRef.current.lastRender = performance.now();
@@ -485,6 +486,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           messagesCount={messages.length}
           isStreaming={isStreaming}
           keystrokeLatency={perfRef.current.keystrokeLatency.slice(-5)}
+          tick={debugTick}
         />
       )}
       {hasContent ? (
@@ -533,6 +535,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           const p = perfRef.current;
           p.keystrokeLatency.push(latency);
           if (p.keystrokeLatency.length > 50) p.keystrokeLatency.shift();
+          setDebugTick(t => t + 1); // force re-render to show updated latency
         }}
       />
 
@@ -744,9 +747,10 @@ interface DebugOverlayProps {
   messagesCount: number;
   isStreaming: boolean;
   keystrokeLatency: number[];
+  tick: number;
 }
 
-function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale, messagesCount, isStreaming, keystrokeLatency }: DebugOverlayProps) {
+function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale, messagesCount, isStreaming, keystrokeLatency, tick }: DebugOverlayProps) {
   const avgLatency = keystrokeLatency.length > 0
     ? Math.round(keystrokeLatency.reduce((a, b) => a + b, 0) / keystrokeLatency.length)
     : 0;
