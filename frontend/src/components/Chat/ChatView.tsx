@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from "react";
+import { useState, useRef, useEffect, useCallback, memo, useDeferredValue, useSyncExternalStore } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -448,8 +448,45 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
 
 
+  // ── Deferred messages: input stays responsive even during heavy streaming ──
+  const deferredMessages = useDeferredValue(messages);
+  const isMessagesStale = deferredMessages !== messages;
+
+  // ── Debug overlay ──
+  const [showDebug, setShowDebug] = useState(() => new URLSearchParams(window.location.search).has("debug"));
+  const perfRef = useRef({ renders: 0, lastRender: 0, msgUpdates: 0, lastMsgUpdate: 0, keystrokeLatency: [] as number[] });
+  perfRef.current.renders++;
+  perfRef.current.lastRender = performance.now();
+
+  // Toggle debug with Ctrl+Shift+D
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
+        e.preventDefault();
+        setShowDebug(p => !p);
+      }
+    };
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
+  }, []);
+
+  // Track message update timing
+  const msgUpdateTimingRef = useRef(0);
+
   return (
     <div className="h-full flex flex-col">
+      {/* Debug overlay */}
+      {showDebug && (
+        <DebugOverlay
+          renderCount={perfRef.current.renders}
+          msgUpdates={perfRef.current.msgUpdates}
+          msgUpdateRate={msgUpdateTimingRef.current > 0 ? Math.round(1000 / msgUpdateTimingRef.current) : 0}
+          isMessagesStale={isMessagesStale}
+          messagesCount={messages.length}
+          isStreaming={isStreaming}
+          keystrokeLatency={perfRef.current.keystrokeLatency.slice(-5)}
+        />
+      )}
       {hasContent ? (
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
@@ -457,7 +494,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
           {/* Messages */}
           <div ref={messagesWrapperRef}>
-            <GroupedMessages messages={messages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
+            <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
           </div>
           <div ref={chatEndRef} />
 
@@ -492,6 +529,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         yoloStatus={yoloStatus}
         gitBranch={activeProject?.git?.branch}
         setError={setError}
+        onKeystroke={(latency: number) => {
+          const p = perfRef.current;
+          p.keystrokeLatency.push(latency);
+          if (p.keystrokeLatency.length > 50) p.keystrokeLatency.shift();
+        }}
       />
 
       {viewerFile && (
@@ -607,10 +649,11 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 });
 
 // ── ChatInputArea (unchanged) ──
-const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError }: {
+const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError, onKeystroke }: {
   onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; autoReviewStreaming: boolean;
   yoloStreaming: boolean; yoloStatus: { phase:string; globalCycle:number; localCycle:number; agent?:string; model?:string } | null;
   gitBranch?: string; setError: (e:string) => void;
+  onKeystroke?: (latency: number) => void;
 }) {
   const { t } = useTranslation();
   const [input, setInput] = useState(""); const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -661,10 +704,19 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           ref={inputRef}
           value={input}
           onChange={e => {
+            const keystrokeTs = performance.now();
             setInput(e.target.value);
             const t = e.target;
             t.style.height = 'auto';
             t.style.height = Math.min(t.scrollHeight, cachedLineHeight() * 8) + 'px';
+            // Measure latency: time from keystroke to when React flushes
+            if (onKeystroke) {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  onKeystroke(performance.now() - keystrokeTs);
+                });
+              });
+            }
           }}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.queueMessage') : t('chat.typeMessage')}
@@ -681,3 +733,86 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     </div>
   );
 });
+
+// ── Debug Overlay (Ctrl+Shift+D) ────────────────────────────────
+
+interface DebugOverlayProps {
+  renderCount: number;
+  msgUpdates: number;
+  msgUpdateRate: number;
+  isMessagesStale: boolean;
+  messagesCount: number;
+  isStreaming: boolean;
+  keystrokeLatency: number[];
+}
+
+function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale, messagesCount, isStreaming, keystrokeLatency }: DebugOverlayProps) {
+  const avgLatency = keystrokeLatency.length > 0
+    ? Math.round(keystrokeLatency.reduce((a, b) => a + b, 0) / keystrokeLatency.length)
+    : 0;
+  const maxLatency = keystrokeLatency.length > 0
+    ? Math.round(Math.max(...keystrokeLatency))
+    : 0;
+
+  return (
+    <div className="fixed bottom-12 left-2 z-[9999] bg-hacker-bg/90 border border-hacker-accent/40 text-[10px] font-mono leading-tight p-2 rounded shadow-lg shadow-hacker-accent/10"
+      style={{ width: "240px", backdropFilter: "blur(4px)" }}>
+      <div className="text-hacker-accent font-bold mb-1 tracking-wider">⚡ DEBUG</div>
+      <div className="space-y-0.5 text-hacker-text-dim">
+        <div className="flex justify-between">
+          <span>Renders</span>
+          <span className="text-hacker-text-bright">{renderCount}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Msg updates</span>
+          <span className="text-hacker-text-bright">{msgUpdates}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Msg update rate</span>
+          <span className={msgUpdateRate > 30 ? "text-hacker-warn" : "text-hacker-text-bright"}>
+            {msgUpdateRate} Hz{msgUpdateRate > 30 ? " ⚠" : ""}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span>Message count</span>
+          <span className="text-hacker-text-bright">{messagesCount}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Streaming</span>
+          <span className={isStreaming ? "text-hacker-accent" : "text-hacker-text-dim"}>
+            {isStreaming ? "●" : "○"}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span>Deferred stale</span>
+          <span className={isMessagesStale ? "text-hacker-warn" : "text-green-400"}>
+            {isMessagesStale ? "yes" : "no"}
+          </span>
+        </div>
+        <div className="border-t border-hacker-border/30 my-1" />
+        <div className="text-hacker-accent text-[9px]">⌨ Keystroke latency</div>
+        <div className="flex justify-between">
+          <span>Avg / Max</span>
+          <span className={avgLatency > 16 ? "text-hacker-warn font-bold" : "text-hacker-text-bright"}>
+            {avgLatency}ms / {maxLatency}ms
+          </span>
+        </div>
+        <div className="flex gap-0.5 mt-0.5" style={{ height: "8px" }}>
+          {keystrokeLatency.slice(-20).map((lat, i) => {
+            const h = Math.min(8, Math.round(lat / 20 * 8));
+            return <div key={i} className="w-1.5 rounded-sm"
+              style={{
+                height: `${h}px`,
+                alignSelf: "flex-end",
+                background: lat > 50 ? "var(--error)" : lat > 16 ? "var(--warn)" : "var(--accent)",
+              }} />;
+          })}
+        </div>
+        {keystrokeLatency.length === 0 && (
+          <div className="text-hacker-text-dim italic text-[9px]">Aucune frappe encore</div>
+        )}
+        <div className="text-[8px] text-hacker-text-dim/50 mt-1">Ctrl+Shift+D pour fermer</div>
+      </div>
+    </div>
+  );
+}
