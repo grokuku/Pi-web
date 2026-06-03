@@ -490,12 +490,12 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         />
       )}
       {hasContent ? (
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" style={{ willChange: 'transform' }} onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
           {/* Messages */}
-          <div ref={messagesWrapperRef}>
+          <div ref={messagesWrapperRef} style={{ contain: 'layout style' }}>
             <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
           </div>
           <div ref={chatEndRef} />
@@ -560,17 +560,26 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 // ── Grouped Messages ──
 interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; }
 
+const MAX_VISIBLE_GROUPS = 30;
+
 const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const groups: DisplayMessage[][] = [];
   for (const msg of messages) {
     if (msg.role === "user" || groups.length===0 || groups[groups.length-1][0].role==="user") groups.push([msg]);
     else groups[groups.length-1].push(msg);
   }
-  return <>{groups.map((group) => {
-    const first = group[0];
-    if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
-    return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} thinkDefaultExpanded={thinkDefaultExpanded} />;
-  })}</>;
+  // Only render the last MAX_VISIBLE_GROUPS groups to keep DOM size manageable.
+  // Older groups are off-screen and cause layout/compositing overhead.
+  const visibleGroups = groups.length > MAX_VISIBLE_GROUPS ? groups.slice(-MAX_VISIBLE_GROUPS) : groups;
+  const hiddenCount = groups.length - visibleGroups.length;
+  return <>
+    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">{hiddenCount} earlier message group{hiddenCount>1?"s":""} not rendered for performance</div>}
+    {visibleGroups.map((group) => {
+      const first = group[0];
+      if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
+      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} thinkDefaultExpanded={thinkDefaultExpanded} />;
+    })}
+  </>;
 });
 
 // ── User Bubble (unchanged) ──
