@@ -276,6 +276,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       switch (evt.type) {
         case "message_start": {
           if (evt.message?.role === "assistant") {
+            console.log(`[ChatView] message_start: id=${evt.message.id}, prev_id=${currentAssistantIdRef.current}`);
             currentAssistantIdRef.current = evt.message.id || `s-${Date.now()}`;
             setMessages(prev => [...prev, { id: currentAssistantIdRef.current!, role:"assistant", content:"", thinking:"", toolCalls:[], timestamp:Date.now(), _streaming:true }]);
           }
@@ -318,6 +319,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         }
         case "message_end": {
           if (evt.message?.role === "assistant") {
+            console.log(`[ChatView] message_end: id=${evt.message.id}, content_len=${(evt.message?.content||'').length}, current_id=${currentAssistantIdRef.current}`);
             setMessages(prev => {
               // Find the last streaming assistant message
               let targetIdx = -1;
