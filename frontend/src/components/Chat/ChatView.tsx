@@ -454,7 +454,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 
   // ── Debug overlay ──
   const [showDebug, setShowDebug] = useState(() => new URLSearchParams(window.location.search).has("debug"));
-  const [debugTick, setDebugTick] = useState(0); // incremented to force re-render of debug overlay
   const perfRef = useRef({ renders: 0, lastRender: 0, msgUpdates: 0, lastMsgUpdate: 0, keystrokeLatency: [] as number[] });
   perfRef.current.renders++;
   perfRef.current.lastRender = performance.now();
@@ -479,14 +478,15 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       {/* Debug overlay */}
       {showDebug && (
         <DebugOverlay
-          renderCount={perfRef.current.renders}
-          msgUpdates={perfRef.current.msgUpdates}
-          msgUpdateRate={msgUpdateTimingRef.current > 0 ? Math.round(1000 / msgUpdateTimingRef.current) : 0}
-          isMessagesStale={isMessagesStale}
-          messagesCount={messages.length}
-          isStreaming={isStreaming}
-          keystrokeLatency={perfRef.current.keystrokeLatency.slice(-5)}
-          tick={debugTick}
+          getStats={() => ({
+            renderCount: perfRef.current.renders,
+            msgUpdates: perfRef.current.msgUpdates,
+            msgUpdateInterval: msgUpdateTimingRef.current,
+            isMessagesStale,
+            messagesCount: messages.length,
+            isStreaming,
+            keystrokeLatency: perfRef.current.keystrokeLatency,
+          })}
         />
       )}
       {hasContent ? (
@@ -532,10 +532,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         gitBranch={activeProject?.git?.branch}
         setError={setError}
         onKeystroke={(latency: number) => {
+          // DO NOT trigger a ChatView re-render on every keystroke!
+          // Writing to perfRef is enough — the DebugOverlay polls it.
           const p = perfRef.current;
           p.keystrokeLatency.push(latency);
           if (p.keystrokeLatency.length > 50) p.keystrokeLatency.shift();
-          setDebugTick(t => t + 1); // force re-render to show updated latency
         }}
       />
 
@@ -738,24 +739,42 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
 });
 
 // ── Debug Overlay (Ctrl+Shift+D) ────────────────────────────────
+// Polls perf data on its own with setInterval — does NOT cause parent re-renders.
 
-interface DebugOverlayProps {
+interface DebugStats {
   renderCount: number;
   msgUpdates: number;
-  msgUpdateRate: number;
+  msgUpdateInterval: number;
   isMessagesStale: boolean;
   messagesCount: number;
   isStreaming: boolean;
   keystrokeLatency: number[];
-  tick: number;
 }
 
-function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale, messagesCount, isStreaming, keystrokeLatency, tick }: DebugOverlayProps) {
-  const avgLatency = keystrokeLatency.length > 0
-    ? Math.round(keystrokeLatency.reduce((a, b) => a + b, 0) / keystrokeLatency.length)
+interface DebugOverlayProps {
+  getStats: () => DebugStats;
+}
+
+function DebugOverlay({ getStats }: DebugOverlayProps) {
+  const [stats, setStats] = useState<DebugStats>(() => getStats());
+
+  // Poll every 200ms — cheap, doesn't trigger parent re-renders
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setStats(getStats());
+    }, 200);
+    return () => clearInterval(interval);
+  }, [getStats]);
+
+  const { renderCount, msgUpdates, msgUpdateInterval, isMessagesStale, messagesCount, isStreaming, keystrokeLatency } = stats;
+  const msgUpdateRate = msgUpdateInterval > 0 ? Math.round(1000 / msgUpdateInterval) : 0;
+  const recentLatency = keystrokeLatency.slice(-5);
+  const displayLatency = keystrokeLatency.slice(-20);
+  const avgLatency = recentLatency.length > 0
+    ? Math.round(recentLatency.reduce((a, b) => a + b, 0) / recentLatency.length)
     : 0;
-  const maxLatency = keystrokeLatency.length > 0
-    ? Math.round(Math.max(...keystrokeLatency))
+  const maxLatency = recentLatency.length > 0
+    ? Math.round(Math.max(...recentLatency))
     : 0;
 
   return (
@@ -802,7 +821,7 @@ function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale,
           </span>
         </div>
         <div className="flex gap-0.5 mt-0.5" style={{ height: "8px" }}>
-          {keystrokeLatency.slice(-20).map((lat, i) => {
+          {displayLatency.map((lat, i) => {
             const h = Math.min(8, Math.round(lat / 20 * 8));
             return <div key={i} className="w-1.5 rounded-sm"
               style={{
@@ -812,7 +831,7 @@ function DebugOverlay({ renderCount, msgUpdates, msgUpdateRate, isMessagesStale,
               }} />;
           })}
         </div>
-        {keystrokeLatency.length === 0 && (
+        {recentLatency.length === 0 && (
           <div className="text-hacker-text-dim italic text-[9px]">Aucune frappe encore</div>
         )}
         <div className="text-[8px] text-hacker-text-dim/50 mt-1">Ctrl+Shift+D pour fermer</div>
