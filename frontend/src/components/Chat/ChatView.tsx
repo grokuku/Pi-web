@@ -740,6 +740,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
 
 // ── Debug Overlay (Ctrl+Shift+D) ────────────────────────────────
 // Polls perf data on its own with setInterval — does NOT cause parent re-renders.
+// Uses PerformanceObserver to capture long tasks blocking the main thread.
 
 interface DebugStats {
   renderCount: number;
@@ -751,18 +752,64 @@ interface DebugStats {
   keystrokeLatency: number[];
 }
 
+interface LongTaskEntry {
+  duration: number;
+  name: string;
+  startTime: number;
+}
+
 interface DebugOverlayProps {
   getStats: () => DebugStats;
 }
 
 function DebugOverlay({ getStats }: DebugOverlayProps) {
   const [stats, setStats] = useState<DebugStats>(() => getStats());
+  const [longTasks, setLongTasks] = useState<LongTaskEntry[]>([]);
+  const [domNodes, setDomNodes] = useState(0);
+  const [eventLoopLag, setEventLoopLag] = useState(0);
 
-  // Poll every 200ms — cheap, doesn't trigger parent re-renders
+  // ── PerformanceObserver: capture long tasks (>50ms) that block the main thread ──
+  useEffect(() => {
+    let observer: PerformanceObserver | null = null;
+    try {
+      observer = new PerformanceObserver((list) => {
+        const entries = list.getEntries();
+        const newTasks: LongTaskEntry[] = entries.map(e => ({
+          duration: Math.round(e.duration),
+          name: e.name,
+          startTime: Math.round(e.startTime),
+        }));
+        setLongTasks(prev => [...prev.slice(-19), ...newTasks]);
+      });
+      observer.observe({ type: 'longtask', buffered: true });
+    } catch {
+      // PerformanceObserver.longtask not supported
+    }
+    return () => { observer?.disconnect(); };
+  }, []);
+
+  // ── Event loop lag detector: measure how long setTimeout(0) actually takes ──
+  useEffect(() => {
+    let running = true;
+    const measure = () => {
+      if (!running) return;
+      const start = performance.now();
+      setTimeout(() => {
+        const lag = Math.round(performance.now() - start);
+        setEventLoopLag(lag);
+        if (running) measure();
+      }, 0);
+    };
+    measure();
+    return () => { running = false; };
+  }, []);
+
+  // ── Poll stats + DOM node count every 500ms ──
   useEffect(() => {
     const interval = setInterval(() => {
       setStats(getStats());
-    }, 200);
+      setDomNodes(document.querySelectorAll('*').length);
+    }, 500);
     return () => clearInterval(interval);
   }, [getStats]);
 
@@ -777,9 +824,17 @@ function DebugOverlay({ getStats }: DebugOverlayProps) {
     ? Math.round(Math.max(...recentLatency))
     : 0;
 
+  const recentTasks = longTasks.slice(-10);
+  const avgTaskDuration = recentTasks.length > 0
+    ? Math.round(recentTasks.reduce((a, b) => a + b.duration, 0) / recentTasks.length)
+    : 0;
+  const maxTaskDuration = recentTasks.length > 0
+    ? Math.round(Math.max(...recentTasks.map(t => t.duration)))
+    : 0;
+
   return (
     <div className="fixed bottom-12 left-2 z-[9999] bg-hacker-bg/90 border border-hacker-accent/40 text-[10px] font-mono leading-tight p-2 rounded shadow-lg shadow-hacker-accent/10"
-      style={{ width: "240px", backdropFilter: "blur(4px)" }}>
+      style={{ width: "280px", backdropFilter: "blur(4px)" }}>
       <div className="text-hacker-accent font-bold mb-1 tracking-wider">⚡ DEBUG</div>
       <div className="space-y-0.5 text-hacker-text-dim">
         <div className="flex justify-between">
@@ -787,18 +842,16 @@ function DebugOverlay({ getStats }: DebugOverlayProps) {
           <span className="text-hacker-text-bright">{renderCount}</span>
         </div>
         <div className="flex justify-between">
+          <span>DOM nodes</span>
+          <span className={domNodes > 5000 ? "text-hacker-warn font-bold" : "text-hacker-text-bright"}>{domNodes.toLocaleString()}{domNodes > 5000 ? " ⚠" : ""}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Msg count (total/visible)</span>
+          <span className="text-hacker-text-bright">{messagesCount}</span>
+        </div>
+        <div className="flex justify-between">
           <span>Msg updates</span>
           <span className="text-hacker-text-bright">{msgUpdates}</span>
-        </div>
-        <div className="flex justify-between">
-          <span>Msg update rate</span>
-          <span className={msgUpdateRate > 30 ? "text-hacker-warn" : "text-hacker-text-bright"}>
-            {msgUpdateRate} Hz{msgUpdateRate > 30 ? " ⚠" : ""}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span>Message count</span>
-          <span className="text-hacker-text-bright">{messagesCount}</span>
         </div>
         <div className="flex justify-between">
           <span>Streaming</span>
@@ -812,8 +865,9 @@ function DebugOverlay({ getStats }: DebugOverlayProps) {
             {isMessagesStale ? "yes" : "no"}
           </span>
         </div>
+
         <div className="border-t border-hacker-border/30 my-1" />
-        <div className="text-hacker-accent text-[9px]">⌨ Keystroke latency</div>
+        <div className="text-hacker-accent text-[9px]">⌨ Input latency</div>
         <div className="flex justify-between">
           <span>Avg / Max</span>
           <span className={avgLatency > 16 ? "text-hacker-warn font-bold" : "text-hacker-text-bright"}>
@@ -824,17 +878,40 @@ function DebugOverlay({ getStats }: DebugOverlayProps) {
           {displayLatency.map((lat, i) => {
             const h = Math.min(8, Math.round(lat / 20 * 8));
             return <div key={i} className="w-1.5 rounded-sm"
-              style={{
-                height: `${h}px`,
-                alignSelf: "flex-end",
-                background: lat > 50 ? "var(--error)" : lat > 16 ? "var(--warn)" : "var(--accent)",
-              }} />;
+              style={{ height: `${h}px`, alignSelf: "flex-end", background: lat > 50 ? "var(--error)" : lat > 16 ? "var(--warn)" : "var(--accent)" }} />;
           })}
         </div>
-        {recentLatency.length === 0 && (
-          <div className="text-hacker-text-dim italic text-[9px]">Aucune frappe encore</div>
+
+        <div className="border-t border-hacker-border/30 my-1" />
+        <div className="text-hacker-accent text-[9px]">🧵 Event loop lag</div>
+        <div className="flex justify-between">
+          <span>setTimeout(0) delay</span>
+          <span className={eventLoopLag > 50 ? "text-hacker-warn font-bold" : eventLoopLag > 16 ? "text-hacker-warn" : "text-green-400"}>
+            {eventLoopLag}ms
+          </span>
+        </div>
+
+        <div className="border-t border-hacker-border/30 my-1" />
+        <div className="text-hacker-accent text-[9px]">{"🚫 Long tasks (>50ms)"}</div>
+        <div className="flex justify-between">
+          <span>Count / Avg / Max</span>
+          <span className={recentTasks.length > 0 ? "text-hacker-warn" : "text-green-400"}>
+            {recentTasks.length} / {avgTaskDuration}ms / {maxTaskDuration}ms
+          </span>
+        </div>
+        {recentTasks.length > 0 && (
+          <div className="mt-0.5 max-h-[60px] overflow-y-auto" style={{ fontSize: "8px" }}>
+            {recentTasks.map((t, i) => (
+              <div key={i} className="flex justify-between" style={{ color: t.duration > 100 ? "var(--error)" : "var(--warn)" }}>
+                <span>{t.name}</span>
+                <span>{t.duration}ms @{t.startTime}</span>
+              </div>
+            ))}
+          </div>
         )}
-        <div className="text-[8px] text-hacker-text-dim/50 mt-1">Ctrl+Shift+D pour fermer</div>
+
+        <div className="border-t border-hacker-border/30 my-1" />
+        <div className="text-[8px] text-hacker-text-dim/50">Ctrl+Shift+D pour fermer</div>
       </div>
     </div>
   );
