@@ -123,7 +123,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     setError(""); currentAssistantIdRef.current = null;
   }, [projectId]);
 
-  useEffect(() => { chatHistory.saveMessages(messages); try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messages)); } catch {} messagesRef.current = messages; }, [messages, projectId]);
+  useEffect(() => { chatHistory.saveMessages(messages); try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messages)); } catch {} messagesRef.current = messages; }, [messages]);
 
   // ── History restoration ──
   useEffect(() => {
@@ -185,7 +185,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, []);
   const prevMsgCountRef = useRef(messages.length);
   useEffect(() => { if (!isAtBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
-  useLayoutEffect(() => { if (isAtBottomRef.current) scrollToBottom(messages.length > 0 && messages[messages.length-1]._streaming ? "auto" : "smooth"); }, [messages, scrollToBottom]);
+  useLayoutEffect(() => { 
+    const lastMsg = messages[messages.length-1];
+    const isOwnMessage = lastMsg?.role === "user";
+    if (isAtBottomRef.current || isOwnMessage) scrollToBottom(lastMsg?._streaming ? "auto" : "smooth");
+  }, [messages, scrollToBottom]);
 
   // ── Pi event handling ──
   useEffect(() => {
@@ -260,20 +264,25 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         }
         case "message_end": {
           if (evt.message?.role === "assistant") {
-            const msgId = currentAssistantIdRef.current;
-            if (!msgId) break;
             const fc = evt.message.content?.filter((c:any)=>c.type==="text").map((c:any)=>c.text).join("")||"";
             const ft = evt.message.content?.filter((c:any)=>c.type==="thinking").map((c:any)=>c.thinking).join("")||"";
             const mu = evt.message?.usage;
             setMessages(prev => {
-              const idx = prev.findIndex(m => m.id === msgId);
-              if (idx === -1) return prev;
+              // Find the last streaming assistant message (not by ref — the ref can be stale)
+              let targetIdx = -1;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i]._streaming && prev[i].role === "assistant") {
+                  targetIdx = i;
+                  break;
+                }
+              }
+              if (targetIdx === -1) return prev;
               const next = [...prev];
-              const ex = next[idx];
-              next[idx] = {
+              const ex = next[targetIdx];
+              next[targetIdx] = {
                 ...ex, _streaming: false,
-                content: ex.content || fc,
-                thinking: ex.thinking || ft,
+                content: (ex.content?.length || 0) >= (fc?.length || 0) ? ex.content : fc,
+                thinking: (ex.thinking?.length || 0) >= (ft?.length || 0) ? ex.thinking : ft,
                 toolCalls: ex.toolCalls.map(tc => ({...tc, isStreaming:false})),
                 usage: mu ? { input:mu.input||0, output:mu.output||0, cost:{total:mu.cost?.total||0} } : ex.usage,
               };
@@ -370,7 +379,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   return (
     <div className="h-full flex flex-col">
       {hasContent ? (
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 chat-messages relative" onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-24 chat-messages relative" onScroll={handleScroll}>
           {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
