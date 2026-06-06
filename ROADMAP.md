@@ -23,6 +23,11 @@
 - **[?] Extension compaction-checkpoint** — Pas testé en conditions réelles. Vérifier que les résumés de compaction sont bien sauvegardés.
 - **[?] Pi-unipi/memory** — Aucune modification, rester en version vanilla. Ne pas modifier le package npm.
 - **[FIXED 2026-06-03] Auto-scroll bloqué pendant le streaming** — Le `scrollToBottom("smooth")` dans `handleSend` déclenchait une animation CSS qui modifiait `scrollTop` progressivement, ce qui déclenchait `handleScroll` à chaque étape et mettait `pinnedToBottomRef` à `false` (car temporairement > 50px du bottom). Résultat : le ResizeObserver ne scrollait plus, le texte arrivait plus vite que le scroll. Fix : remplacement par `scrollTop = scrollHeight` instantané + ajout d'un `MutationObserver` en fallback pour les `text_delta` rapides que ResizeObserver peut manquer.
+- **[FIXED 2026-06-03] Auto-scroll se déclenche accidentellement** — Race condition : quand du contenu arrivait vite, le navigateur déclenchait un scroll event AVANT que le ResizeObserver n'ait scrollé vers le bas. `handleScroll` voyait `scrollHeight - scrollTop > 50px` et mettait `pinnedToBottomRef = false`, tuant l'auto-scroll. Fix : `handleScroll` ne dépine que si l'utilisateur scroll VERS LE HAUT (scrollTop diminue de +10px), pas quand le contenu pousse le scroll vers le bas.
+- **[FIXED 2026-06-03] Thinking affiché en double** — Le composant `ThinkingBlock` affichait la barre de progression, ET le texte "Thinking…" s'affichait aussi en dessous si `hasThinking` était true. Fix : passage de `isStreaming` prop à ThinkingBlock (barre animée) + masquage du "Thinking…" redondant quand du thinking est déjà visible.
+- **[FIXED 2026-06-03] Messages effacés pendant le streaming** — Deux bugs : (1) `message_end` remplaçait le contenu streamé par le contenu final (potentiellement un résumé de compaction). Fix : `message_end` ne touche PLUS jamais `content`/`thinking`, uniquement `_streaming`, tools, usage. (2) `AssistantGroup` écrasait `finalText = msg.content` à chaque message — seul le dernier contenu survivait. Fix : `allTexts.push(msg.content)` puis affichage de tous les contenus.
+- **[FIXED 2026-06-03] Thinking et contenu hors ordre chronologique** — `AssistantGroup` fusionnait TOUS les thinking d'un coup puis TOUS les contenus. Quand le modèle faisait thinking → réponse → thinking → réponse, l'ordre était cassé. Fix : chaque message affiché individuellement dans l'ordre (thinking → tools → contenu), séparé par un trait horizontal.
+- **[IDENTIFIED 2026-06-03] Latence interface sur Firefox/Floorp** — Le Cycle Collector de Firefox tourne à 50% CPU même au repos. Ce n'est PAS un problème de l'app (1877 nœuds DOM, le debug overlay confirne des latences keystroke normales). Cause : les autres onglets du navigateur. En navigation privée ou avec un seul onglet, le problème disparaît. Fix partiel : auto-désactivation des scanlines et matrix-bg sur Gecko (overlays plein écran `position: fixed` qui aggravent le CC). Recommandation : utiliser Chrome/Chromium pour des performances optimales, ou garder peu d'onglets ouverts sur Firefox.
 
 ---
 
@@ -45,6 +50,7 @@
 | **Ctrl+T** | Afficher/Masquer tous les Thinkings | Nouvel onglet | 🔴 OUI |
 | **Ctrl+O** | Expand/Collapse tous les outils | Ouvrir fichier | 🔴 OUI |
 | **Shift+Tab** | Cycle niveau thinking (off→high) | Focus element precedent | 🟡 Partiel (hors inputs) |
+| **Ctrl+Shift+D** | Debug overlay | — | 🟢 Non |
 | **Esc** | Abort / fermer modales / viewer | Stop / fermer dialogue | 🟢 Non |
 | **Enter** | Envoyer message (textarea) | — | 🟢 Non |
 | **Shift+Enter** | Nouvelle ligne (textarea) | — | 🟢 Non |
@@ -282,12 +288,12 @@ Pi config
 | 5 | 💡 | **Export/Import config** complète (serveur + localStorage) |
 | 6 | 💡 | **Analyse audio** — refonte en 2 modèles (transcription + analyse) |
 | 7 | 💡 | **Analyse PDF visuelle** — texte + images des pages liées |
-| 8 | ✅ Done | **Refonte rendu Thinking + Tools** |
-| 9 | ✅ Done | **Provider name** au lieu de l'ID dans Analysis Models |
-| 10 | ✅ Done | **Tri alphabétique** des modèles dans ModelQuickSwitch |
-| 11 | ✅ Done | **Supprimer bouton commit** du header |
-| 12 | 💡 | **Prévisualisation PDF inline** |
-| 13 | ✅ Done | **Cache d'analyse** (hash query+page) |
+| 8 | ✅ Fixed | **Thinking affiché en double** (barre + "Thinking…" redondant) |
+| 9 | ✅ Fixed | **Messages effacés** pendant le streaming (message_end compaction + finalText overwrite) |
+| 10 | ✅ Fixed | **Thinking/contenu hors ordre** chronologique dans les groupes assistant |
+| 11 | ✅ Fixed | **Auto-scroll se déclenche** accidentellement (race condition scroll vs ResizeObserver) |
+| 12 | 🟡 Bug | **Latence Firefox/Floorp** — Cycle Collector à 50% causé par les autres onglets, pas l'app. Utiliser Chrome ou limiter les onglets |
+| 13 | 💡 | **Prévisualisation PDF inline** |
 | 14 | 💡 | **Nettoyage auto** des attachments |
 | 15 | 💡 | **Rate limiting** upload |
 | 16 | 🔽 Basse | **Extensions** Slack/Discord, Git hooks |
@@ -297,7 +303,7 @@ Pi config
 | 20 | ✅ Done | **LLM conscient du mode** — plan/review : pas de code, outils filtrés |
 | 21 | ✅ Done | **Thinking : titre sticky** au scroll |
 | 22 | ✅ Done | **Paramètre "Think expand"** par défaut dans Settings → General |
-| 23 | ✅ Done | **Auto-scroll messages** — seuil 50px, bouton ↓ avec compteur, ResizeObserver + MutationObserver |
+| 23 | ✅ Fixed | **Auto-scroll messages** — seuil 50px, bouton ↓ avec compteur, ResizeObserver + MutationObserver |
 | 24 | 💡 | **Onglet Raccourcis clavier** dans Settings |
 | 25 | ✅ Done | **Badge outil → expand individuel** (✕ pour refermer) |
 | 26 | ✅ Done | **Indicateur connexion** — texte "Connecté" / "Hors ligne" |

@@ -90,6 +90,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
   const messagesRef = useRef<DisplayMessage[]>([]);
@@ -203,7 +204,18 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   const handleScroll = useCallback(() => {
     const el = chatContainerRef.current; if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-    pinnedToBottomRef.current = atBottom;
+    // Only UNpin when the user scrolls UP (intentional) — not when new content
+    // pushes us slightly above the threshold (race condition with ResizeObserver).
+    // scrollDelta > 0 means scrollTop decreased → user scrolled UP.
+    if (!atBottom) {
+      const scrollDelta = lastScrollTopRef.current - el.scrollTop;
+      if (scrollDelta > 10) {
+        pinnedToBottomRef.current = false; // User intentionally scrolled up
+      }
+    } else {
+      pinnedToBottomRef.current = true;
+    }
+    lastScrollTopRef.current = el.scrollTop;
     const shouldShow = !atBottom;
     setShowScrollBtn(prev => prev === shouldShow ? prev : shouldShow);
     if (atBottom) setUnreadCount(prev => prev === 0 ? prev : 0);
@@ -276,7 +288,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
       switch (evt.type) {
         case "message_start": {
           if (evt.message?.role === "assistant") {
-            console.log(`[ChatView] message_start: id=${evt.message.id}, prev_id=${currentAssistantIdRef.current}`);
             currentAssistantIdRef.current = evt.message.id || `s-${Date.now()}`;
             setMessages(prev => [...prev, { id: currentAssistantIdRef.current!, role:"assistant", content:"", thinking:"", toolCalls:[], timestamp:Date.now(), _streaming:true }]);
           }
@@ -319,7 +330,6 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         }
         case "message_end": {
           if (evt.message?.role === "assistant") {
-            console.log(`[ChatView] message_end: id=${evt.message.id}, content_len=${(evt.message?.content||'').length}, current_id=${currentAssistantIdRef.current}`);
             setMessages(prev => {
               // Find the last streaming assistant message
               let targetIdx = -1;
@@ -562,7 +572,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
 // ── Grouped Messages ──
 interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; }
 
-const MAX_VISIBLE_GROUPS = 30;
+const MAX_VISIBLE_GROUPS = 200;
 
 const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const groups: DisplayMessage[][] = [];
@@ -570,12 +580,12 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
     if (msg.role === "user" || groups.length===0 || groups[groups.length-1][0].role==="user") groups.push([msg]);
     else groups[groups.length-1].push(msg);
   }
-  // Only render the last MAX_VISIBLE_GROUPS groups to keep DOM size manageable.
-  // Older groups are off-screen and cause layout/compositing overhead.
+  // Only render the last MAX_VISIBLE_GROUPS groups to prevent extremely long chats from
+  // creating unmanageable DOM trees (200 groups ≈ 400+ messages is a reasonable cap).
   const visibleGroups = groups.length > MAX_VISIBLE_GROUPS ? groups.slice(-MAX_VISIBLE_GROUPS) : groups;
   const hiddenCount = groups.length - visibleGroups.length;
   return <>
-    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">{hiddenCount} earlier message group{hiddenCount>1?"s":""} not rendered for performance</div>}
+    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">↑ {hiddenCount} earlier message{hiddenCount>1?"s":""} — scroll up for full history</div>}
     {visibleGroups.map((group) => {
       const first = group[0];
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
@@ -603,21 +613,16 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 });
 
 // ── Assistant Group (redesigned) ──
+// Renders each message in chronological order: thinking → tools → content, per message.
+const toolName = (tc:ToolCallInfo) => { const s = (tc.name||tc.id||'tool').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
+
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
-  const allThinking: string[] = []; const allTools: ToolCallInfo[] = [];
-  const allTexts: string[] = []; let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
+  let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
-    if (msg.thinking) allThinking.push(msg.thinking);
-    allTools.push(...msg.toolCalls);
-    if (msg.content) allTexts.push(msg.content);
     if (msg.usage) totalUsage = totalUsage ? {input:totalUsage.input+msg.usage.input,output:totalUsage.output+msg.usage.output,cost:{total:totalUsage.cost.total+msg.usage.cost.total}} : msg.usage;
     if (msg._streaming) isStreaming = true;
   }
-  const finalText = allTexts.join("\n\n");
-  const mergedThinking = allThinking.join("\n\n---\n\n");
-  const hasThinking = allThinking.length > 0;
-  const hasTools = allTools.length > 0;
-  const toolName = (tc:ToolCallInfo) => { const s = (tc.name||tc.id||'tool').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
+  const hasMultiple = messages.length > 1;
 
   return (
     <div className="flex justify-start mb-3">
@@ -631,39 +636,50 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           {isStreaming && <span className="w-2 h-2 rounded-full bg-hacker-accent animate-pulse" />}
         </div>
 
-        {/* Thinking — animated progress bar when streaming, no redundant "Thinking…" text below */}
-        {hasThinking && (
-          <div className="border-b border-hacker-border/30 px-3 py-2">
-            <ThinkingBlock thinking={mergedThinking} defaultExpanded={thinkDefaultExpanded} isStreaming={isStreaming} />
-          </div>
-        )}
+        {/* Messages in chronological order */}
+        {messages.map((msg, i) => {
+          const isFirst = i === 0;
+          const showThinking = !!msg.thinking;
+          const showTools = msg.toolCalls.length > 0;
+          const showContent = !!msg.content;
+          const showThinkingPlaceholder = msg._streaming && !showContent && !showTools && !showThinking;
 
-        {/* Tools — compact single line */}
-        {hasTools && (
-          <div className="px-3 py-1.5 border-b border-hacker-border/30 flex items-center gap-1.5 flex-wrap">
-            {allTools.map((tc, i) => (
-              <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.5625rem] font-mono ${
-                tc.isStreaming ? "text-hacker-accent animate-pulse"
-                : tc.isError ? "text-red-400"
-                : "text-hacker-text-dim/60"
-              }`}>
-                {tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}
-                {toolName(tc)}{i < allTools.length-1 ? "," : ""}
-              </span>
-            ))}
-          </div>
-        )}
+          return (
+            <div key={msg.id} className={hasMultiple && !isFirst ? "border-t border-hacker-border/30" : ""}>
+              {/* Thinking */}
+              {showThinking && (
+                <div className="px-3 py-2 {!isFirst?'border-b border-hacker-border/20':''}">
+                  <ThinkingBlock thinking={msg.thinking} defaultExpanded={thinkDefaultExpanded} isStreaming={!!msg._streaming} />
+                </div>
+              )}
 
-        {/* Response text — "Thinking…" only shown when there's NO thinking content yet */}
-        <div className="px-3 py-2 prose-hacker">
-          {allTexts.length > 0 ? allTexts.map((text, i) => (
-            <div key={i}>
-              {i > 0 && <hr className="border-hacker-border/40 my-3" />}
-              <MemoizedReactMarkdown>{text}</MemoizedReactMarkdown>
+              {/* Tools */}
+              {showTools && (
+                <div className="px-3 py-1.5 flex items-center gap-1.5 flex-wrap">
+                  {msg.toolCalls.map((tc) => (
+                    <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.5625rem] font-mono ${
+                      tc.isStreaming ? "text-hacker-accent animate-pulse"
+                      : tc.isError ? "text-red-400"
+                      : "text-hacker-text-dim/60"
+                    }`}>
+                      {tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}
+                      {toolName(tc)}{msg.toolCalls.indexOf(tc) < msg.toolCalls.length-1 ? "," : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Content */}
+              {(showContent || showThinkingPlaceholder) && (
+                <div className="px-3 py-2 prose-hacker">
+                  {showContent ? <MemoizedReactMarkdown>{msg.content}</MemoizedReactMarkdown> : null}
+                  {showThinkingPlaceholder && <span className="text-hacker-text-dim italic text-sm">Thinking…</span>}
+                  {msg._streaming && showContent && <span className="cursor-blink" />}
+                </div>
+              )}
             </div>
-          )) : isStreaming && !hasTools && !hasThinking ? <span className="text-hacker-text-dim italic text-sm">Thinking…</span> : null}
-          {isStreaming && finalText && <span className="cursor-blink" />}
-        </div>
+          );
+        })}
       </div>
     </div>
   );
