@@ -61,6 +61,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "file-viewer": { w: 900, h: 700 },
   "extensions": { w: 900, h: 700 },
   "settings": { w: 1200, h: 800 },
+  "usage-stats": { w: 1200, h: 800 },
 };
 
 // ── Resize handle positions ──

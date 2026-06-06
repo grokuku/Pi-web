@@ -643,9 +643,12 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           const showTools = msg.toolCalls.length > 0;
           const showContent = !!msg.content;
           const showThinkingPlaceholder = msg._streaming && !showContent && !showTools && !showThinking;
+          // Only add a visual separator between messages that have substantial content
+          // (thinking or response). Tool-only messages flow inline with the previous block.
+          const hasSubstantialContent = showThinking || showContent || showThinkingPlaceholder;
 
           return (
-            <div key={msg.id} className={hasMultiple && !isFirst ? "border-t border-hacker-border/30" : ""}>
+            <div key={msg.id} className={hasMultiple && !isFirst && hasSubstantialContent ? "border-t border-hacker-border/30" : ""}>
               {/* Thinking */}
               {showThinking && (
                 <div className="px-3 py-2">
@@ -653,9 +656,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                 </div>
               )}
 
-              {/* Tools */}
+              {/* Tools — compact, single line, no separator after */}
               {showTools && (
-                <div className="px-3 py-1.5 flex items-center gap-1.5 flex-wrap">
+                <div className={`px-3 flex items-center gap-1.5 flex-wrap ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
                   {msg.toolCalls.map((tc) => (
                     <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.5625rem] font-mono ${
                       tc.isStreaming ? "text-hacker-accent animate-pulse"
