@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo, useDeferredValue, useSyncExternalStore } from "react";
+import { useState, useRef, useEffect, useCallback, memo, useDeferredValue } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -648,7 +648,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
             <div key={msg.id} className={hasMultiple && !isFirst ? "border-t border-hacker-border/30" : ""}>
               {/* Thinking */}
               {showThinking && (
-                <div className="px-3 py-2 {!isFirst?'border-b border-hacker-border/20':''}">
+                <div className="px-3 py-2">
                   <ThinkingBlock thinking={msg.thinking} defaultExpanded={thinkDefaultExpanded} isStreaming={!!msg._streaming} />
                 </div>
               )}
