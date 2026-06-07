@@ -77,8 +77,8 @@
 - ✅ **Thinking : titre sticky au scroll** — CSS `position: sticky; top: 0; z-index: 2; background: var(--surface)` sur `.thinking-block-header`.
 - ✅ **Paramètre global "Think expand" par défaut** — Toggle dans Settings → General. Stocké dans localStorage (`pi-web-thinking-expand`).
 - ✅ **Améliorer l'auto-scroll des messages** — Seuil à **50px** (pas 30px comme indiqué dans la première version). Bouton sticky ↓ avec compteur "N nouveaux messages". `onScroll` (fiable). ResizeObserver + MutationObserver fallback.
-- 💡 **Utiliser Chart.js pour les graphiques** — Actuellement barres SVG custom dans UsageStatsModal. Chart.js serait plus flexible.
-- 💡 **Onglet Raccourcis clavier dans Settings** — Permettre de visualiser et reconfigurer les raccourcis clavier. Stockage localStorage.
+- ✅ **Utiliser Chart.js pour les graphiques** — Implémenté dans UsageStatsModal. Toggle Bar/Line/Pie, tooltips au hover, axes formatés (K/M), thème hacker préservé. La modale utilise aussi le `ModalDialog` standard (1200x800 par défaut) avec drag/resize.
+- ✅ **Onglet Raccourcis clavier dans Settings** — Implémenté. Affiche les raccourcis groupés par catégorie (Application / Chat / Modales) avec `<kbd>` stylés, icônes et warnings pour les conflits navigateur. La personnalisation (reconfiguration) reste une future amélioration.
 - ✅ **Badge outil → expand individuel** — Mode compact dans ToolTimeline : clic sur un badge expand seulement cet outil en timeline. Bouton ✕ pour refermer.
 - ✅ **Indicateur connexion texte** — Point vert/rouge + texte "Connecté" / "Hors ligne" dans le header.
 - ✅ **Provider name dans Analysis Models** — Les dropdowns affichent le `name` du provider, pas son ID technique.
@@ -304,10 +304,11 @@ Pi config
 | 21 | ✅ Done | **Thinking : titre sticky** au scroll |
 | 22 | ✅ Done | **Paramètre "Think expand"** par défaut dans Settings → General |
 | 23 | ✅ Fixed | **Auto-scroll messages** — seuil 50px, bouton ↓ avec compteur, ResizeObserver + MutationObserver |
-| 24 | 💡 | **Onglet Raccourcis clavier** dans Settings |
+| 24 | ✅ Done | **Onglet Raccourcis clavier** dans Settings (lecture seule, ⚠ conflits navigateur) |
 | 25 | ✅ Done | **Badge outil → expand individuel** (✕ pour refermer) |
 | 26 | ✅ Done | **Indicateur connexion** — texte "Connecté" / "Hors ligne" |
 | 27 | ✅ Done | **Mode YOLO** — débat multi-agent (2 IA, N cycles plan+code) |
-| 28 | 💡 | **Utiliser Chart.js** pour les graphiques |
+| 28 | ✅ Done | **Chart.js** dans UsageStatsModal (Bar/Line/Pie + ModalDialog standard) |
 | 29 | ✅ Done | **API agent externe** — REST API Bearer auth (projets, chat, fichiers) |
 | 30 | 💡 | **Onglet Analysis Models : modèles audio séparés** transcription + analyse (actuellement un seul `audioModelId`) |
+| 31 | ✅ Done | **Tool descriptions + arg previews** — badges affichent nom + description courte + aperçu (fichier, commande, URL) |
