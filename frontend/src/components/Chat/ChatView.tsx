@@ -614,7 +614,101 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 
 // ── Assistant Group (redesigned) ──
 // Renders each message in chronological order: thinking → tools → content, per message.
-const toolName = (tc:ToolCallInfo) => { const s = (tc.name||tc.id||'tool').replace(/^(analyze_|git_|firecrawl_|memory_)/,""); return s.length>16?s.slice(0,14)+"…":s; };
+// ── Tool descriptions (short) ───────────────────────────────
+const TOOL_DESC: Record<string, string> = {
+  read: "Lit un fichier",
+  write: "Écrit un fichier",
+  edit: "Modifie un fichier",
+  bash: "Exécute",
+  grep: "Cherche dans le code",
+  glob: "Trouve des fichiers",
+  find: "Trouve des fichiers",
+  ls: "Liste les fichiers",
+  webfetch: "Récupère une URL",
+  websearch: "Recherche web",
+  todowrite: "Met à jour la todo",
+  analyze_file: "Analyse un fichier",
+  git_status: "État git",
+  git_log: "Log git",
+  git_diff: "Diff git",
+  git_commit: "Commit",
+  git_push: "Push",
+  git_pull: "Pull",
+  firecrawl_scrape: "Scrape",
+  firecrawl_map: "Mappe un site",
+  firecrawl_search: "Recherche",
+  firecrawl_crawl: "Crawl",
+  memory_store: "Mémorise",
+  memory_search: "Cherche en mémoire",
+  memory_list: "Liste mémoire",
+  memory_delete: "Oublie",
+};
+
+const TOOL_BASE_NAME: Record<string, string> = {
+  "analyze_file": "analyze",
+  "git_status": "git",
+  "git_log": "git",
+  "git_diff": "git",
+  "git_commit": "git",
+  "git_push": "git",
+  "git_pull": "git",
+  "firecrawl_scrape": "firecrawl",
+  "firecrawl_map": "firecrawl",
+  "firecrawl_search": "firecrawl",
+  "firecrawl_crawl": "firecrawl",
+  "memory_store": "memory",
+  "memory_search": "memory",
+  "memory_list": "memory",
+  "memory_delete": "memory",
+};
+
+function shortName(name: string): string {
+  const s = (name || "tool").replace(/^(analyze_|git_|firecrawl_|memory_)/, "");
+  return s.length > 16 ? s.slice(0, 14) + "…" : s;
+}
+
+// Extract a short, single-line preview of the tool's arguments
+function argsPreview(tc: ToolCallInfo): string | null {
+  const a = tc.args;
+  if (!a || typeof a !== "object") return null;
+  // Try common arg names for each tool type
+  const base = TOOL_BASE_NAME[tc.name] || "";
+  let val: string | undefined;
+  if (base === "memory" || ["read", "write", "edit", "analyze_file"].includes(tc.name)) {
+    val = a.file_path || a.path || a.filePath || a.filepath;
+  } else if (tc.name === "bash") {
+    val = a.command;
+  } else if (tc.name === "grep") {
+    val = a.pattern;
+  } else if (tc.name === "glob" || tc.name === "find" || tc.name === "ls") {
+    val = a.pattern || a.path;
+  } else if (tc.name === "webfetch") {
+    val = a.url;
+  } else if (tc.name === "websearch") {
+    val = a.query;
+  } else if (tc.name === "firecrawl_scrape") {
+    val = a.url;
+  } else if (tc.name === "firecrawl_map") {
+    val = a.url || a.domain;
+  } else if (tc.name === "firecrawl_search") {
+    val = a.query;
+  } else if (tc.name === "memory_store" || tc.name === "memory_search") {
+    val = a.key || a.query || a.text;
+  } else {
+    // Fallback: take first string field
+    for (const k of Object.keys(a)) {
+      if (typeof a[k] === "string" && a[k].length > 0) { val = a[k]; break; }
+    }
+  }
+  if (!val) return null;
+  // Single-line, max 50 chars
+  val = String(val).replace(/\s+/g, " ").trim();
+  if (val.length > 50) val = val.slice(0, 47) + "…";
+  return val;
+}
+
+const toolName = (tc: ToolCallInfo) => shortName(tc.name || tc.id || "tool");
+const toolDescription = (tc: ToolCallInfo): string => TOOL_DESC[tc.name] || "Outil";
 
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
   let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
@@ -658,17 +752,28 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 
               {/* Tools — compact, single line, no separator after */}
               {showTools && (
-                <div className={`px-3 flex items-center gap-1.5 flex-wrap ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
-                  {msg.toolCalls.map((tc) => (
-                    <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.5625rem] font-mono ${
-                      tc.isStreaming ? "text-hacker-accent animate-pulse"
-                      : tc.isError ? "text-red-400"
-                      : "text-hacker-text-dim/60"
-                    }`}>
-                      {tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}
-                      {toolName(tc)}{msg.toolCalls.indexOf(tc) < msg.toolCalls.length-1 ? "," : ""}
-                    </span>
-                  ))}
+                <div className={`px-3 flex items-center gap-x-3 gap-y-1 flex-wrap ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
+                  {msg.toolCalls.map((tc) => {
+                    const preview = argsPreview(tc);
+                    return (
+                      <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.625rem] font-mono leading-tight ${
+                        tc.isStreaming ? "text-hacker-accent animate-pulse"
+                        : tc.isError ? "text-red-400"
+                        : "text-hacker-text-dim/70"
+                      }`}>
+                        <span className="opacity-70">{tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}</span>
+                        <span className="font-bold">{toolName(tc)}</span>
+                        <span className="text-hacker-text-dim/40">—</span>
+                        <span className="text-hacker-text-dim/70">{toolDescription(tc)}</span>
+                        {preview && (
+                          <>
+                            <span className="text-hacker-text-dim/40">·</span>
+                            <span className="text-hacker-text-bright/80 truncate max-w-[260px]" title={preview}>{preview}</span>
+                          </>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
 
