@@ -824,7 +824,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     }
   }, [attachments.length, setError]);
 
-  const handleSendClick = useCallback(() => { const txt = input.trim(); if (!txt && attachments.length===0) return; onSend(input, attachments); setInput(""); setAttachments([]); }, [input, attachments, onSend]);
+  const handleSendClick = useCallback(() => { const txt = input.trim(); if (!txt && attachments.length===0) return; onSend(input, attachments); setInput(""); setAttachments([]); if (inputRef.current) inputRef.current.style.height = 'auto'; }, [input, attachments, onSend]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); handleSendClick(); } }, [handleSendClick]);
   const handleDrop = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); for (const f of Array.from(e.dataTransfer.files)) processFile(f); }, [processFile]);
   const handlePaste = useCallback((e: React.ClipboardEvent) => { for (const item of e.clipboardData.items) { if (item.type.startsWith("image/")) { const b = item.getAsFile(); if (b) processFile(b); } } }, [processFile]);
@@ -842,10 +842,17 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           onChange={e => {
             const keystrokeTs = performance.now();
             setInput(e.target.value);
-            // ⚠️ NO forced layout here! Previously: t.style.height = 'auto';
-            // then t.scrollHeight read triggered a full layout pass on every
-            // keystroke, which with 119 messages took 500ms+. The CSS
-            // `field-sizing: content` (modern browsers) now auto-sizes.
+            // Auto-resize the textarea as the user types. We use rAF to defer
+            // the height calculation to the next frame so it never blocks the
+            // input event. `field-sizing: content` (CSS, modern browsers) would
+            // do this for free but isn't supported in Firefox yet.
+            const t = e.target;
+            if (t) {
+              requestAnimationFrame(() => {
+                t.style.height = 'auto';
+                t.style.height = Math.min(t.scrollHeight, 200) + 'px';
+              });
+            }
             if (onKeystroke) {
               requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
@@ -856,7 +863,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           }}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.queueMessage') : t('chat.typeMessage')}
-          className="input-hacker flex-1 resize-none overflow-y-auto field-sizing-content"
+          className="input-hacker flex-1 resize-none overflow-y-auto"
           rows={2}
           style={{ minHeight: '3rem', maxHeight: '10rem' }}
         />
