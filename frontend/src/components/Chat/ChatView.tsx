@@ -256,27 +256,32 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   // pi_history is the backend's full state sync. Route to the correct
   // project's store, not just the active one, so that switching project
   // shows the latest state even after a session reload.
+  //
+  // ⚠️  CRITICAL: pi_history does NOT include the in-progress streaming message
+  // (Pi SDK commits messages only on message_end). Overwriting the store
+  // with pi_history while streaming is active would corrupt the streaming
+  // state and break assistantId tracking. Always preserve _streaming messages.
   useEffect(() => {
     const unsub = on("pi_history", (msg: any) => {
       const pid = msg.projectId;
       if (!pid || !msg.messages || !Array.isArray(msg.messages) || msg.messages.length === 0) return;
-      if (pid !== projectId) {
-        // Update the other project's store so history is accurate on next switch
-        const display = convertHistoryToDisplayMessages(msg.messages);
-        chatHistory.saveMessagesFor(display, pid);
+
+      // Check if the store already has an in-progress streaming message.
+      // pi_history will NOT have it (backend only commits on message_end),
+      // so overwriting would erase the live streaming state.
+      const existing = chatHistory.getMessagesFor(pid);
+      if (existing.some(m => m._streaming)) {
+        // Streaming in progress — pi_history would contain stale/finalized data
+        // that lacks the current streaming message. Skip to preserve live state.
         return;
       }
-      // Current project
-      const restored = chatHistory.handleHistory(msg.messages);
-      try {
-        const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
-        if (raw) {
-          const local: DisplayMessage[] = JSON.parse(raw);
-          const ids = new Set(restored.map((m: DisplayMessage) => m.id));
-          for (const m of local) { if (!ids.has(m.id)) restored.push(m); }
-        }
-      } catch {}
-      setMessages(restored);
+
+      const display = convertHistoryToDisplayMessages(msg.messages);
+      chatHistory.saveMessagesFor(display, pid);
+
+      if (pid === projectId) {
+        setMessages(display);
+      }
     });
     return () => unsub();
   }, [on, projectId]);
@@ -407,6 +412,11 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         setMessages(prev => {
           const result = applyPiEvent(prev, evt, currentAssistantIdRef.current);
           currentAssistantIdRef.current = result.assistantId;
+          // Sync store immediately so pi_history cannot overwrite streaming state.
+          // The debounced persistence is too slow (500ms) and creates a window
+          // where pi_history can corrupt the store with stale finalized data.
+          chatHistory.saveMessagesFor(result.messages, pid);
+          chatHistory.setAssistantIdFor(pid, result.assistantId);
           return result.messages;
         });
       } else {
