@@ -8,7 +8,7 @@ import { ModalDialog } from "../common/ModalDialog";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
-import { useChatHistory } from "../../hooks/useChatHistory";
+import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 
 // ── Memoized ReactMarkdown ──
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
@@ -68,6 +68,103 @@ interface Props {
   onQuit?: () => void;
 }
 
+// ── Pure PiEvent processor ───────────────────────────────────────────
+// Extracted from ChatView so it can be applied to ANY project's messages,
+// not just the currently visible one. This is the key fix for the
+// "stale UI after project switch during streaming" bug.
+//
+// Returns { messages, assistantId } — the new state.
+// Does NOT mutate the input array.
+function applyPiEvent(
+  prev: DisplayMessage[],
+  evt: PiEvent,
+  assistantId: string | null,
+): { messages: DisplayMessage[]; assistantId: string | null } {
+  let msgs = prev;
+  let asstId = assistantId;
+
+  // Helper: find and update the current streaming assistant message
+  const updateLast = (fn: (last: DisplayMessage) => DisplayMessage) => {
+    const idx = msgs.length - 1;
+    if (idx < 0 || msgs[idx].role !== "assistant" || msgs[idx].id !== asstId) return;
+    msgs = [...msgs];
+    msgs[idx] = fn(msgs[idx]);
+  };
+
+  switch (evt.type) {
+    case "message_start": {
+      if (evt.message?.role === "assistant") {
+        const newId: string = evt.message.id || `s-${Date.now()}`;
+        asstId = newId;
+        msgs = [...msgs, { id: newId, role: "assistant", content: "", thinking: "", toolCalls: [], timestamp: Date.now(), _streaming: true }];
+      }
+      break;
+    }
+    case "message_update": {
+      const d = evt.assistantMessageEvent;
+      if (d.type === "text_delta") updateLast(last => ({ ...last, content: last.content + d.delta }));
+      if (d.type === "thinking_delta") updateLast(last => ({ ...last, thinking: last.thinking + d.delta }));
+      if (d.type === "toolcall_start") {
+        const a = d.args?.arguments ?? d.args?.input ?? d.args ?? {};
+        updateLast(last => {
+          if (last.toolCalls.some(tc => tc.id === d.toolCallId)) return last;
+          return { ...last, toolCalls: [...last.toolCalls, { id: d.toolCallId, name: d.toolName, args: a, output: "", isError: false, isStreaming: true }] };
+        });
+      }
+      if (d.type === "toolcall_delta") {
+        const da = d.argsDelta?.arguments ?? d.argsDelta?.input ?? d.argsDelta ?? {};
+        updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === d.toolCallId ? { ...tc, args: { ...tc.args, ...da } } : tc) }));
+      }
+      if (d.type === "toolcall_end") {
+        const ea = d.toolCall?.arguments ?? d.toolCall?.input ?? d.toolCall ?? {};
+        const en = d.toolCall?.name || d.toolName;
+        updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === d.toolCallId ? { ...tc, args: ea, isStreaming: false, ...(en ? { name: en } : {}) } : tc) }));
+      }
+      break;
+    }
+    case "tool_execution_start":
+      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, isStreaming: true, startTime: tc.startTime || Date.now(), ...(evt.toolName && !tc.name ? { name: evt.toolName } : {}) } : tc) }));
+      break;
+    case "tool_execution_update": {
+      const pt = evt.partialResult?.content?.map((c: any) => c.text || "").join("") || "";
+      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: pt, isStreaming: true } : tc) }));
+      break;
+    }
+    case "tool_execution_end": {
+      const rt = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
+      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: rt, isError: evt.isError, isStreaming: false } : tc) }));
+      break;
+    }
+    case "message_end": {
+      if (evt.message?.role === "assistant") {
+        let targetIdx = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i]._streaming && msgs[i].role === "assistant") {
+            targetIdx = i;
+            break;
+          }
+        }
+        if (targetIdx >= 0) {
+          msgs = [...msgs];
+          const ex = msgs[targetIdx];
+          msgs[targetIdx] = {
+            ...ex,
+            _streaming: false,
+            toolCalls: ex.toolCalls.map(tc => ({ ...tc, isStreaming: false })),
+            usage: evt.message?.usage
+              ? { input: evt.message.usage.input || 0, output: evt.message.usage.output || 0, cost: { total: evt.message.usage.cost?.total || 0 } }
+              : ex.usage,
+          };
+        }
+        asstId = null;
+      }
+      break;
+    }
+  }
+
+  return { messages: msgs, assistantId: asstId };
+}
+
 export function ChatView({ send, on, activeProject, isStreaming, session, projectId, activeMode, onQuit }: Props) {
   const { t } = useTranslation();
 
@@ -105,12 +202,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
     const prevId = prevProjectIdRef.current;
     if (prevId && prevId !== projectId) {
       chatHistory.saveMessagesFor(messagesRef.current, prevId);
+      // Also persist assistantId for the project we're leaving
+      chatHistory.setAssistantIdFor(prevId, currentAssistantIdRef.current);
     }
     prevProjectIdRef.current = projectId;
+
+    // Restore from chatHistory store (now kept up-to-date by pi_event routing)
     const stored = chatHistory.getMessages();
     if (stored.length > 0) {
       setMessages(stored);
+      // Restore the assistantId for in-progress streaming reconciliation
+      currentAssistantIdRef.current = chatHistory.getAssistantIdFor(projectId);
     } else {
+      // Fallback: localStorage for sessions that predate the routing fix
       try {
         const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
         if (raw) {
@@ -118,14 +222,19 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
           if (Array.isArray(parsed) && parsed.length > 0) {
             chatHistory.saveMessages(parsed);
             setMessages(parsed);
-            return;
+          } else {
+            setMessages([]);
           }
+        } else {
+          setMessages([]);
         }
-      } catch {}
-      setMessages([]);
+      } catch {
+        setMessages([]);
+      }
+      currentAssistantIdRef.current = null;
     }
     setYoloStreaming(false); setYoloStatus(null); setAutoReviewStreaming(false);
-    setError(""); currentAssistantIdRef.current = null;
+    setError("");
   }, [projectId]);
 
   // Instant ref sync (cheap)
@@ -144,21 +253,30 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, [messages, projectId]);
 
   // ── History restoration ──
+  // pi_history is the backend's full state sync. Route to the correct
+  // project's store, not just the active one, so that switching project
+  // shows the latest state even after a session reload.
   useEffect(() => {
     const unsub = on("pi_history", (msg: any) => {
-      if (msg.projectId && msg.projectId !== projectId) return;
-      if (msg.messages && Array.isArray(msg.messages) && msg.messages.length > 0) {
-        const restored = chatHistory.handleHistory(msg.messages);
-        try {
-          const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
-          if (raw) {
-            const local: DisplayMessage[] = JSON.parse(raw);
-            const ids = new Set(restored.map((m: DisplayMessage) => m.id));
-            for (const m of local) { if (!ids.has(m.id)) restored.push(m); }
-          }
-        } catch {}
-        setMessages(restored);
+      const pid = msg.projectId;
+      if (!pid || !msg.messages || !Array.isArray(msg.messages) || msg.messages.length === 0) return;
+      if (pid !== projectId) {
+        // Update the other project's store so history is accurate on next switch
+        const display = convertHistoryToDisplayMessages(msg.messages);
+        chatHistory.saveMessagesFor(display, pid);
+        return;
       }
+      // Current project
+      const restored = chatHistory.handleHistory(msg.messages);
+      try {
+        const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
+        if (raw) {
+          const local: DisplayMessage[] = JSON.parse(raw);
+          const ids = new Set(restored.map((m: DisplayMessage) => m.id));
+          for (const m of local) { if (!ids.has(m.id)) restored.push(m); }
+        }
+      } catch {}
+      setMessages(restored);
     });
     return () => unsub();
   }, [on, projectId]);
@@ -258,108 +376,47 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   }, [hasContent]);
 
   // ── Pi event handling ──
+  // Extracted as a pure function so it can be applied to ANY project's messages,
+  // not just the currently visible one. This prevents losing streaming updates
+  // when the user switches projects during a long-running LLM task.
   useEffect(() => {
     const unsub = on("pi_event", (msg: any) => {
-      if (msg.projectId && msg.projectId !== projectId) return;
       const evt: PiEvent = msg.event;
+      const pid = msg.projectId;
+      if (!pid) return;
 
-      if (evt._autoReview && (evt.type === "message_start" || evt.type === "message_update" || evt.type === "message_end")) {
-        if (evt.type === "message_start" && evt.message?.role === "assistant") setAutoReviewStreaming(true);
-        if (evt.type === "message_end" && evt.message?.role === "assistant") setAutoReviewStreaming(false);
-      }
-      if (evt._yolo) {
-        if (evt.type === "agent_start") { setYoloStreaming(true); setYoloStatus({ phase: evt._yoloPhase, globalCycle: (evt._yoloGlobalCycle||0)+1, localCycle: (evt._yoloLocalCycle||0)+1, agent: evt._yoloAgent, model: evt._yoloModel }); }
-        else if (evt.type === "agent_end") { setYoloStreaming(false); setYoloStatus(null); }
-        else if (evt.type === "yolo_status") {
-          if (evt.phase === "done") { setYoloStreaming(false); setYoloStatus(null); }
-          else { setYoloStreaming(true); setYoloStatus({ phase: evt.phase, globalCycle: (evt.globalCycle||0)+1, localCycle: evt.localCycle||0 }); }
+      // ── UI-only state (autoReview / YOLO) — only for the active project ──
+      if (pid === projectId) {
+        if (evt._autoReview && (evt.type === "message_start" || evt.type === "message_update" || evt.type === "message_end")) {
+          if (evt.type === "message_start" && evt.message?.role === "assistant") setAutoReviewStreaming(true);
+          if (evt.type === "message_end" && evt.message?.role === "assistant") setAutoReviewStreaming(false);
+        }
+        if (evt._yolo) {
+          if (evt.type === "agent_start") { setYoloStreaming(true); setYoloStatus({ phase: evt._yoloPhase, globalCycle: (evt._yoloGlobalCycle||0)+1, localCycle: (evt._yoloLocalCycle||0)+1, agent: evt._yoloAgent, model: evt._yoloModel }); }
+          else if (evt.type === "agent_end") { setYoloStreaming(false); setYoloStatus(null); }
+          else if (evt.type === "yolo_status") {
+            if (evt.phase === "done") { setYoloStreaming(false); setYoloStatus(null); }
+            else { setYoloStreaming(true); setYoloStatus({ phase: evt.phase, globalCycle: (evt.globalCycle||0)+1, localCycle: evt.localCycle||0 }); }
+          }
         }
       }
 
-      // Helper: find and update the current streaming message in-place
-      const updateLastMsg = (fn: (last: DisplayMessage) => DisplayMessage) => {
+      // ── Message content updates — route to the correct project's store ──
+      if (pid === projectId) {
+        // Current project → update React state (visible in UI)
         setMessages(prev => {
-          const idx = prev.length - 1;
-          if (idx < 0 || prev[idx].role !== "assistant" || prev[idx].id !== currentAssistantIdRef.current) return prev;
-          const next = [...prev]; next[idx] = fn(next[idx]); return next;
+          const result = applyPiEvent(prev, evt, currentAssistantIdRef.current);
+          currentAssistantIdRef.current = result.assistantId;
+          return result.messages;
         });
-      };
-
-      switch (evt.type) {
-        case "message_start": {
-          if (evt.message?.role === "assistant") {
-            currentAssistantIdRef.current = evt.message.id || `s-${Date.now()}`;
-            setMessages(prev => [...prev, { id: currentAssistantIdRef.current!, role:"assistant", content:"", thinking:"", toolCalls:[], timestamp:Date.now(), _streaming:true }]);
-          }
-          break;
-        }
-        case "message_update": {
-          const d = evt.assistantMessageEvent;
-          if (d.type === "text_delta") updateLastMsg(last => ({ ...last, content: last.content + d.delta }));
-          if (d.type === "thinking_delta") updateLastMsg(last => ({ ...last, thinking: last.thinking + d.delta }));
-          if (d.type === "toolcall_start") {
-            const a = d.args?.arguments ?? d.args?.input ?? d.args ?? {};
-            updateLastMsg(last => {
-              if (last.toolCalls.some(tc => tc.id === d.toolCallId)) return last;
-              return { ...last, toolCalls: [...last.toolCalls, { id:d.toolCallId, name:d.toolName, args:a, output:"", isError:false, isStreaming:true }] };
-            });
-          }
-          if (d.type === "toolcall_delta") {
-            const da = d.argsDelta?.arguments ?? d.argsDelta?.input ?? d.argsDelta ?? {};
-            updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===d.toolCallId ? {...tc, args:{...tc.args,...da}} : tc) }));
-          }
-          if (d.type === "toolcall_end") {
-            const ea = d.toolCall?.arguments ?? d.toolCall?.input ?? d.toolCall ?? {};
-            const en = d.toolCall?.name || d.toolName;
-            updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===d.toolCallId ? {...tc, args:ea, isStreaming:false, ...(en?{name:en}:{})} : tc) }));
-          }
-          break;
-        }
-        case "tool_execution_start":
-          updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===evt.toolCallId ? {...tc, isStreaming:true, startTime:tc.startTime||Date.now(), ...(evt.toolName && !tc.name?{name:evt.toolName}:{})} : tc) }));
-          break;
-        case "tool_execution_update": {
-          const pt = evt.partialResult?.content?.map((c:any)=>c.text||"").join("")||"";
-          updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===evt.toolCallId ? {...tc, output:pt, isStreaming:true} : tc) }));
-          break;
-        }
-        case "tool_execution_end": {
-          const rt = evt.result?.content?.map((c:any)=>c.text||"").join("")||"";
-          updateLastMsg(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id===evt.toolCallId ? {...tc, output:rt, isError:evt.isError, isStreaming:false} : tc) }));
-          break;
-        }
-        case "message_end": {
-          if (evt.message?.role === "assistant") {
-            setMessages(prev => {
-              // Find the last streaming assistant message
-              let targetIdx = -1;
-              for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i]._streaming && prev[i].role === "assistant") {
-                  targetIdx = i;
-                  break;
-                }
-              }
-              if (targetIdx === -1) return prev;
-              const next = [...prev];
-              const ex = next[targetIdx];
-              // ⚠️ NEVER replace accumulated streamed content with final content.
-              // The final content from Pi SDK may be a compaction summary or
-              // shorter recap that would erase the user-visible response.
-              // Always keep the content built from text_delta events.
-              next[targetIdx] = {
-                ...ex,
-                _streaming: false,
-                toolCalls: ex.toolCalls.map(tc => ({...tc, isStreaming:false})),
-                usage: evt.message?.usage
-                  ? { input: evt.message.usage.input||0, output: evt.message.usage.output||0, cost:{total:evt.message.usage.cost?.total||0} }
-                  : ex.usage,
-              };
-              return next;
-            });
-            currentAssistantIdRef.current = null;
-          }
-          break;
-        }
+      } else {
+        // Other project → update its store in chatHistory so we never lose
+        // streaming progress while the user is on another project.
+        const otherMsgs = chatHistory.getMessagesFor(pid);
+        const otherAsstId = chatHistory.getAssistantIdFor(pid);
+        const result = applyPiEvent(otherMsgs, evt, otherAsstId);
+        chatHistory.saveMessagesFor(result.messages, pid);
+        chatHistory.setAssistantIdFor(pid, result.assistantId);
       }
     });
     return () => unsub();

@@ -273,11 +273,26 @@ function extractTextContent(content: any): string {
 export function useChatHistory(projectId: string) {
   // Global store: persists across project switches since it's a ref
   const storeRef = useRef<Map<string, DisplayMessage[]>>(new Map());
+  // Per-project streaming assistant ID (survives across switches)
+  const assistantIdRef = useRef<Map<string, string | null>>(new Map());
 
   // Get messages for current project
   const getMessages = useCallback((): DisplayMessage[] => {
     return storeRef.current.get(projectId) || [];
   }, [projectId]);
+
+  // Get messages for ANY project (used when processing streaming events for non-active projects)
+  const getMessagesFor = useCallback((pid: string): DisplayMessage[] => {
+    return storeRef.current.get(pid) || [];
+  }, []);
+
+  // Get / set assistant ID for any project (survives across switches)
+  const getAssistantIdFor = useCallback((pid: string): string | null => {
+    return assistantIdRef.current.get(pid) ?? null;
+  }, []);
+  const setAssistantIdFor = useCallback((pid: string, id: string | null): void => {
+    assistantIdRef.current.set(pid, id);
+  }, []);
 
   // Save messages for current project
   const saveMessages = useCallback((messages: DisplayMessage[]) => {
@@ -329,6 +344,9 @@ export function useChatHistory(projectId: string) {
 
   return {
     getMessages,
+    getMessagesFor,
+    getAssistantIdFor,
+    setAssistantIdFor,
     saveMessages,
     saveMessagesFor,
     handleHistory,
