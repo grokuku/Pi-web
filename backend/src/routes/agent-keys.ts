@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import crypto from "crypto";
 import path from "path";
@@ -9,6 +9,81 @@ const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
 const KEYS_FILE = path.join(DATA_DIR, "agent-keys.json");
 
 const router = Router();
+
+// ── Admin auth middleware ───────────────────────────
+// Agent key management routes need authentication.
+// Strategy:
+//   1. Bootstrap: if NO agent keys exist yet → allow POST / to create the first key
+//   2. Same-origin: requests from the web UI (browser on same server) are allowed
+//      via Sec-Fetch-Site: same-origin header (modern browsers) or Origin/Host match
+//   3. External requests (curl, other websites, etc.) → require a valid Bearer token
+//
+// This prevents unauthenticated external access to key management while allowing
+// the web UI to work without additional configuration.
+// If you lose your only key, delete agent-keys.json and restart to re-bootstrap.
+function isSameOrigin(req: Request): boolean {
+  // Modern browsers (Chrome 76+, Firefox 90+, Safari 16.1+) send Sec-Fetch-Site.
+  // "same-origin" = request comes from the same origin as the target URL.
+  // This works in both production (same Express server) and dev (Vite proxy).
+  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
+  if (fetchSite === "same-origin") return true;
+  if (fetchSite === "cross-site" || fetchSite === "none") return false;
+
+  // Fallback for older browsers: compare Origin header against Host
+  const origin = req.headers.origin as string | undefined;
+  const host = req.headers.host as string | undefined;
+  if (origin && host) {
+    try {
+      const originUrl = new URL(origin);
+      // Allow if Origin hostname matches Host hostname
+      // (ignores port differences, useful for Vite dev proxy: localhost:5173 → localhost:3000)
+      return originUrl.hostname === host.split(":")[0];
+    } catch {}
+  }
+
+  // No Origin and no Sec-Fetch-Site: non-browser request (curl, Postman, etc.)
+  return false;
+}
+
+function adminAuth(req: Request, res: Response, next: NextFunction): void {
+  // Bootstrap: if no keys exist, allow POST / to create the first one
+  if (!isAgentEnabled() && req.method === "POST" && req.path === "/") {
+    next();
+    return;
+  }
+
+  // Same-origin requests from the web UI are allowed
+  if (isSameOrigin(req)) {
+    next();
+    return;
+  }
+
+  // External requests require a valid agent token
+  if (!isAgentEnabled()) {
+    res.status(503).json({
+      error: "No agent keys configured. Create one from the web UI (Settings → API Keys).",
+    });
+    return;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Authentication required for external access. Use: Bearer <agent-token>" });
+    return;
+  }
+
+  const token = authHeader.slice(7);
+  const key = validateToken(token);
+  if (!key) {
+    res.status(403).json({ error: "Invalid agent token" });
+    return;
+  }
+
+  next();
+}
+
+// Apply admin auth to ALL agent-keys routes
+router.use(adminAuth);
 
 // ── Types ──────────────────────────────────────────
 
