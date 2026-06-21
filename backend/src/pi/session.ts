@@ -769,8 +769,9 @@ export function getSessionMessages(projectId: string): any[] {
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 // For plan mode: no bash at all — it can create files
 const PLAN_TOOLS = ["read", "grep", "find", "ls"];
-// For review mode: bash allowed but only for read-only exploration
-const REVIEW_TOOLS = ["read", "bash", "grep", "find", "ls"];
+// For review mode: bash + read + grep for inspecting changed files
+// (no find/ls to prevent full-project exploration — reviewer should focus on diff)
+const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /** Get extension tool names registered in the session */
@@ -862,13 +863,14 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - NEVER execute any command that modifies the filesystem or state
 - NEVER attempt to edit files — the edit tool will fail in this mode
 - Focus on producing clear, actionable implementation plans`,
-  review: `You are in REVIEW mode — an independent code review focused on quality, correctness, and security.
+  review: `You are in REVIEW mode — a focused code review of **recently changed files only**.
 
 ## Core Rules
-- You can ONLY use read-only tools: read, bash (read-only commands), grep, find, ls
-- You CANNOT use: edit, write (file modifications are disabled)
-- Bash is restricted to read-only commands: cat, head, tail, wc, find, grep, ls, git status, git log, git diff, tree, du, pwd, echo, which, type, file, stat
+- You can ONLY use read-only tools: read, bash (read-only commands), grep
+- You CANNOT use: edit, write, find, ls (file modifications and project-wide exploration are disabled)
+- Bash is restricted to read-only commands: cat, head, tail, wc, grep, git status, git log, git diff, git show, pwd, echo
 - NEVER execute any command that modifies the filesystem or state
+- NEVER browse the entire project — focus ONLY on the files listed in the review context
 
 ## Review Focus
 1. **Correctness** — Logic errors, off-by-one, null handling, race conditions, missing error handling
@@ -885,6 +887,7 @@ For each finding:
 - **Suggestion** How to fix it (specific code, not vague advice)
 
 ## Important
+- Review ONLY the changed files provided in the context — do NOT explore the rest of the project
 - Be specific — cite exact file paths and line numbers
 - Prioritize findings by severity (HIGH first)
 - If code looks good, say so — don't fabricate issues
@@ -1198,15 +1201,17 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   const library = loadModelLibrary();
   const pm = getProjectModeConfig(library, projectId);
 
-  // Get the git diff to provide context to the reviewer
+  // Get the git diff AND list of changed files to provide focused context to the reviewer
   let diffSummary = "";
+  let changedFiles: string[] = [];
   try {
-    const { getGitDiff } = await import("../projects/git.js");
+    const { getGitDiff, getChangedFiles } = await import("../projects/git.js");
     const diff = await getGitDiff(state.cwd);
     if (diff && !diff.startsWith("No changes")) {
       // Truncate to 20K for review
       diffSummary = diff.length > 20000 ? diff.slice(0, 20000) + "\n... (truncated)" : diff;
     }
+    changedFiles = await getChangedFiles(state.cwd);
   } catch (e: any) {
     console.warn("[auto-review] Could not get git diff:", e.message);
   }
@@ -1249,20 +1254,34 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     (tempSession as any)._baseSystemPrompt = basePrompt + modeBlock;
     (tempSession as any).agent.state.systemPrompt = (tempSession as any)._baseSystemPrompt;
 
-    // Build the review prompt — neutral, no mention of who wrote the code
+    // Build the review prompt — focused on changed files ONLY
     let reviewPrompt =
-      "Perform a thorough code review of this project.";
+      "Perform a focused code review of the recently changed files in this project.\n" +
+      "Do NOT explore or review the entire project — focus ONLY on the files listed below.\n";
+    if (changedFiles.length > 0) {
+      reviewPrompt +=
+        "\n## Changed files to review (review ONLY these):\n" +
+        changedFiles.map(f => `- ${f}`).join("\n") + "\n";
+    }
     if (diffSummary) {
       reviewPrompt +=
-        "\n\nHere is the current git diff showing recent changes:\n\n```diff\n" + diffSummary + "\n```";
+        "\nHere is the git diff showing the exact changes:\n\n```diff\n" + diffSummary + "\n```\n";
+    }
+    if (!diffSummary && changedFiles.length === 0) {
+      reviewPrompt +=
+        "\nNo git changes were detected. Review the most recent conversation context for any code that was written or modified.\n";
     }
     reviewPrompt +=
-      "\n\nFocus on: bugs, security issues, code quality, anti-patterns, and potential improvements.\n" +
-      "List each finding with:\n" +
-      "- File and location (if applicable)\n" +
-      "- Severity: HIGH / MEDIUM / LOW\n" +
-      "- Description of the issue\n" +
-      "- Suggested fix";
+      "\n## Instructions\n" +
+      "- Review ONLY the changed files listed above. Do NOT use find/ls to browse the project.\n" +
+      "- You may use `read` to open a changed file for full context, and `grep` to check how a function/variable is used.\n" +
+      "- Do NOT read files that are not in the changed files list unless absolutely necessary for understanding a change.\n" +
+      "- For each finding, provide:\n" +
+      "  - **File:Line** location\n" +
+      "  - **[HIGH/MEDIUM/LOW]** severity\n" +
+      "  - **Description** of the issue\n" +
+      "  - **Suggested fix** (specific code, not vague advice)\n" +
+      "- If the changes look good, say so — don't fabricate issues.";
 
     // Subscribe to temp session events to forward tool calls for UI display
     const tempUnsub = tempSession.subscribe((event) => {

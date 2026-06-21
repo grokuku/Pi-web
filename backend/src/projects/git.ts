@@ -178,6 +178,25 @@ export async function getGitHistory(
  * Get unified diff of all changes (staged + unstaged).
  * Used for AI commit message generation. Truncated to ~8KB.
  */
+/**
+ * Get the list of files changed (staged + unstaged) relative to HEAD.
+ * Returns an array of file paths. Empty if no changes or not a git repo.
+ */
+export async function getChangedFiles(cwd: string): Promise<string[]> {
+  const git: SimpleGit = simpleGit(cwd);
+  try {
+    const status = await git.status();
+    const files: string[] = [];
+    for (const f of status.files) {
+      // status.files includes staged, unstaged, untracked, etc.
+      if (f.path) files.push(f.path);
+    }
+    return [...new Set(files)]; // dedup
+  } catch {
+    return [];
+  }
+}
+
 export async function getGitDiff(cwd: string): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
   try {
