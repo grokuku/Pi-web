@@ -430,6 +430,26 @@ export default async function (pi: ExtensionAPI) {
     }
   });
 
+  // ── Fallback: before_agent_start — ensure server + index if needed ──
+  // This handles cases where session_start didn't fire (e.g. extension loaded late).
+  pi.on("before_agent_start", async (_event, ctx) => {
+    try {
+      // Start server if not running
+      if (!status.running) {
+        if (!existsSync(BIN_PATH)) await ensureBinary();
+        await spawnServer();
+      }
+
+      // Index this project if not already done
+      if (ctx.cwd && !projectByCwd.has(ctx.cwd)) {
+        console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
+        await indexProject(ctx.cwd);
+      }
+    } catch (e: any) {
+      console.error("[cbm] before_agent_start failed:", e.message);
+    }
+  });
+
   // ── Cleanup ──
   pi.on("session_shutdown", async () => {
     // Keep the server running — it's shared across sessions
