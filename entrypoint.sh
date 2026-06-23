@@ -224,6 +224,10 @@ else
   echo "[PI-WEB] codebase-memory-mcp already installed"
 fi
 
+# Persist CBM cache on the /app/.data volume (survives Docker rebuilds)
+export CBM_CACHE_DIR="/app/.data/cbm"
+mkdir -p "$CBM_CACHE_DIR"
+
 # Start CBM HTTP server in background (3D graph UI + MCP API on port 9749)
 # The binary is an MCP stdio server — it exits if stdin closes.
 # We keep stdin open with `tail -f /dev/null` so the HTTP UI stays alive.
