@@ -97,11 +97,13 @@ app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);
 
 // ── CBM 3D Graph UI proxy ──────────────────────────────
-// Forwards all requests under /cbm-ui to the codebase-memory-mcp
-// HTTP server on localhost:9749. This lets the 3D graph visualization
-// work through the Pi-Web port without exposing an extra Docker port.
-app.use("/cbm-ui", async (req, res) => {
-  const cbmUrl = `http://localhost:9749${req.url}`;
+// The CBM UI is a Vite SPA that uses absolute paths (/assets/..., /rpc, ...).
+// We proxy both /cbm-ui/* (the main page) AND /assets/*, /rpc so the browser
+// resolves everything through the Pi-Web port without exposing port 9749.
+async function cbmProxy(req: any, res: any) {
+  // Strip the /cbm-ui prefix if present, keep the original path otherwise
+  const urlPath = req.url.startsWith("/cbm-ui") ? req.url.slice(7) : req.url;
+  const cbmUrl = `http://localhost:9749${urlPath}`;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -116,10 +118,8 @@ app.use("/cbm-ui", async (req, res) => {
     });
     clearTimeout(timeout);
 
-    // Forward status code
     res.status(proxyRes.status);
 
-    // Forward headers (skip transfer-encoding to avoid conflicts)
     proxyRes.headers.forEach((value, key) => {
       if (key.toLowerCase() !== "transfer-encoding" &&
           key.toLowerCase() !== "content-encoding" &&
@@ -128,13 +128,33 @@ app.use("/cbm-ui", async (req, res) => {
       }
     });
 
-    // Stream the response body
+    // If HTML, rewrite absolute paths to /cbm-ui/ prefix
+    const contentType = proxyRes.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      let html = await proxyRes.text();
+      // Rewrite absolute paths so assets load through the proxy
+      html = html.replace(/href="\//g, 'href="/cbm-ui/');
+      html = html.replace(/src="\//g, 'src="/cbm-ui/');
+      // Fix double-prefix if any (e.g. /cbm-ui/cbm-ui/)
+      html = html.replace(/\/cbm-ui\/cbm-ui\//g, "/cbm-ui/");
+      res.setHeader("content-type", contentType);
+      res.send(html);
+      return;
+    }
+
     const buffer = Buffer.from(await proxyRes.arrayBuffer());
     res.send(buffer);
   } catch {
-    res.status(502).send("CBM graph server not available. Start a Pi session first to download and launch the binary.");
+    res.status(502).send("CBM graph server not available.");
   }
-});
+}
+
+// Main UI page (iframe src)
+app.use("/cbm-ui", cbmProxy);
+// CBM UI assets (Vite builds to /assets/)
+app.use("/assets", cbmProxy);
+// CBM MCP RPC endpoint (used by the UI for graph queries)
+app.use("/rpc", cbmProxy);
 
 // ── Read VERSION file once at startup ──
 let piWebVersion = "unknown";
