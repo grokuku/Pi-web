@@ -114,7 +114,7 @@ async function cbmProxy(req: any, res: any) {
   // e.g. app.use("/rpc") makes req.url="/" but req.originalUrl="/rpc"
   const fullPath = req.originalUrl || req.url;
   const urlPath = fullPath.startsWith("/cbm-ui") ? fullPath.slice(7) : fullPath;
-  const cbmUrl = `http://localhost:9749${urlPath}`;
+  const cbmUrl = `http://127.0.0.1:9749${urlPath}`;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -122,7 +122,7 @@ async function cbmProxy(req: any, res: any) {
       method: req.method,
       headers: {
         ...(req.headers as Record<string, string>),
-        host: "localhost:9749",
+        host: "127.0.0.1:9749",
       },
       body: ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body),
       signal: controller.signal,
