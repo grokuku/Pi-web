@@ -336,6 +336,27 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [isStreaming, send, showSettings, showAddProject, showProjectSwitch, activeProject]);
 
+  // ── Stuck streaming watchdog: reset isStreaming after 3 min ──
+  // BUG-08 workaround: backend could leave isStreaming=true after tool_execution_end.
+  // Also handles edge cases where agent_end is missed (network, crash, etc.).
+  // NOTE: The backend fix (removing isStreaming=true in tool_execution_end) is the real fix.
+  // This watchdog is a safety net for any remaining edge cases.
+  useEffect(() => {
+    const STUCK_TIMEOUT = 3 * 60 * 1000; // 3 minutes
+    const interval = setInterval(() => {
+      let changed = false;
+      for (const [pid, state] of projectSessionsRef.current) {
+        if (state.isStreaming) {
+          console.warn(`[App] Resetting stuck isStreaming for project ${pid} (no activity for ${Math.round(STUCK_TIMEOUT/1000)}s)`);
+          state.isStreaming = false;
+          changed = true;
+        }
+      }
+      if (changed) rerender();
+    }, STUCK_TIMEOUT);
+    return () => clearInterval(interval);
+  }, []);
+
   // ── Load projects ──
   const loadProjects = useCallback(async () => {
     try {
@@ -553,6 +574,39 @@ function App() {
     send({ type: "pi_prompt", projectId: activeProject.id, message: referencePrompt, isReference: true });
     console.log(`[FileExplorer] Referenced file: ${filePath}`);
   }, [activeProject, send]);
+
+  // ── WebSocket reconnection: restore session state when WS reconnects ──
+  useEffect(() => {
+    const unsub = on("_ws_reconnect", () => {
+      console.log("[App] WebSocket reconnected — restoring session state");
+      // Reset stuck isStreaming states (BUG-08 fix: backend could leave isStreaming=true)
+      for (const [pid, state] of projectSessionsRef.current) {
+        if (state.isStreaming) {
+          console.log(`[App] Resetting stuck isStreaming for project ${pid}`);
+          state.isStreaming = false;
+        }
+      }
+      rerender();
+      // Re-request session state for the active project
+      if (activeProject) {
+        send({
+          type: "pi_history_request",
+          projectId: activeProject.id,
+        });
+        // Reload active mode and session state from backend
+        fetch(`/api/settings/session?projectId=${activeProject.id}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data) {
+              updateProjectSession(activeProject.id, { session: data, isStreaming: false });
+              if (data.activeMode) setActiveMode(data.activeMode);
+            }
+          })
+          .catch(() => {});
+      }
+    });
+    return () => unsub();
+  }, [on, activeProject, send]);
 
   // ── BroadcastChannel for cross-tab/window communication ──
   useEffect(() => {

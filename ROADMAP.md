@@ -60,18 +60,11 @@
 - **Description :** Similaire au BUG-06. La fonction `deleteProvider()` nettoie les références dans les modes `code`, `plan`, `review`, mais pas dans `yolo`. Si le provider supprimé hébergeait le modèle YOLO, la config reste pointée vers un modèle inexistant.
 - **Fix :** Ajouter le cleanup pour `m.yolo?.modelId` dans la boucle.
 
-#### BUG-08: `tool_execution_end` met `isStreaming = true` au lieu de `false`
+#### BUG-08: `tool_execution_end` met `isStreaming = true` au lieu de `false` — [FIXED 2026-06-23]
 - **Fichier :** `backend/src/pi/session.ts`
-- **Lignes :** ~101 (dans le handler d'events)
 - **Sévérité :** 🟡 Moyenne
-- **Description :** Dans le handler d'événements de session, après `tool_execution_end`, le code fait :
-  ```ts
-  const state = sessionsByProject.get(projectId);
-  if (state) state.isStreaming = true;
-  emitSessionUpdate(projectId);
-  ```
-  Cela force `isStreaming = true` à la fin d'un appel d'outil, ce qui est incorrect — la session est peut-être encore en streaming global, mais ce n'est pas le bon endroit pour le forcer à `true`. L'état `isStreaming` devrait être géré uniquement par `agent_start`/`agent_end`. Mettre `isStreaming = true` ici peut causer un affichage de streaming persistant si l'événement `agent_end` est manqué ou arrive en désordre.
-- **Fix :** Supprimer `state.isStreaming = true;` de ce bloc, ou le remplacer par une vérification : ne mettre à `true` que si l'agent est effectivement en cours d'exécution.
+- **Description :** Après `tool_execution_end`, le code forçait `isStreaming = true`, ce qui pouvait laisser le frontend dans un état de streaming permanent si `agent_end` était manqué.
+- **Fix :** Supprimé `state.isStreaming = true` du bloc `tool_execution_end`. Le streaming global est géré uniquement par `agent_start`/`agent_end`. Ajouté un watchdog frontend (3 min) et une restauration auto lors de la reconnexion WebSocket.
 
 #### BUG-09: Fichiers de sauvegarde dans le repo (`App.tsx.bak`, `.backup2`, etc.)
 - **Fichiers :** `frontend/src/App.tsx.bak`, `frontend/src/App.tsx.bak2`, `frontend/src/App.tsx.backup2`
@@ -501,7 +494,7 @@ Pi config
 ### Priorité de correction recommandée
 
 1. **🔴 BUG-12** — Sécurité critique : API Keys agent exposées sans auth
-2. **🟡 BUG-08** — `isStreaming` forcé à `true` incorrectement
+2. **🟡 BUG-08** — `isStreaming` forcé à `true` incorrectement — **[FIXED]**
 3. **🟡 BUG-04** — Nettoyage cache attachments cassé
 4. **🟡 BUG-02** — Promesses flottantes `syncToModelsJson()`
 5. **🟡 BUG-06 + BUG-07** — Cleanup YOLO manquant dans `removeModel` / `deleteProvider`

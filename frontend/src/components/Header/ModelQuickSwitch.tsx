@@ -34,15 +34,17 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const loadLibrary = useCallback(async () => {
     try {
       const res = await fetch("/api/model-library");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setLibrary(await res.json());
-    } catch {}
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to load model library:", e); }
   }, []);
 
   const loadProviders = useCallback(async () => {
     try {
       const res = await fetch("/api/providers");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setProviders(await res.json());
-    } catch {}
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to load providers:", e); }
   }, []);
 
   useEffect(() => { loadLibrary(); loadProviders(); }, [loadLibrary, loadProviders]);
@@ -106,7 +108,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       });
       await loadLibrary();
       onModelApplied?.();
-    } catch (e) { console.error("handleSelectModel error:", e); }
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
   };
 
   const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "yolo") => {
@@ -131,7 +133,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       if (!newEnabled && activeMode === mode) {
         onModeSwitch?.("code");
       }
-    } catch (e) { console.error("handleToggleMode error:", e); }
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to toggle mode:", e); }
   };
 
   const handleMaxReviews = async (maxReviews: number) => {
@@ -143,7 +145,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
         body: JSON.stringify({ mode: "review", maxReviews }),
       });
       await loadLibrary();
-    } catch (e) { console.error("handleMaxReviews error:", e); }
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to set max reviews:", e); }
   };
 
   const handleChipClick = (mode: AgentMode) => {
@@ -354,7 +356,7 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
               });
               await loadLibrary();
               onModelApplied?.();
-            } catch (e) { console.error("Save yolo config:", e); }
+            } catch (e) { console.error("[ModelQuickSwitch] Failed to save YOLO config:", e); }
           }}
           models={library?.models || []}
           providers={providers}

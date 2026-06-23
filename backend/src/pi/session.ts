@@ -71,6 +71,8 @@ const activeToolCalls: Map<
     output: string;
     startTime: number;
     projectId: string;
+    isStreaming?: boolean;
+    isError?: boolean;
   }
 > = new Map();
 
@@ -210,10 +212,12 @@ export async function createPiSession(
               .map((c: any) => c.text || "")
               .join("");
           }
+          existing.isStreaming = false;
+          existing.isError = event.isError;
         }
-      console.log("[event]", event.type);
-        const state = sessionsByProject.get(projectId);
-        if (state) state.isStreaming = true;
+        // NOTE: ne PAS mettre isStreaming = true ici (BUG-08).
+        // Le streaming global est géré uniquement par agent_start/agent_end.
+        // tool_execution_end marque la fin d'un outil, pas du stream global.
         emitSessionUpdate(projectId);
       } else if (event.type === "turn_end") {
         // Record usage for statistics

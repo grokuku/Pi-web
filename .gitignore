@@ -32,3 +32,10 @@ Thumbs.db
 *.log
 
 # Docker volumes (auto-generated)
+test.db
+
+# Backup files
+*.bak
+*.bak2
+*.backup
+*.backup2

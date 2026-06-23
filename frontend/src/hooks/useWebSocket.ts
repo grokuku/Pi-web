@@ -49,6 +49,11 @@ export function useWebSocket() {
       console.log(`[WS] Connected to ${wsUrl}`);
       setConnected(true);
       reconnectAttemptsRef.current = 0;
+      // Notify listeners that we reconnected so they can restore state
+      const reconnectListeners = listenersRef.current.get("_ws_reconnect");
+      if (reconnectListeners) {
+        reconnectListeners.forEach((cb) => cb({ type: "_ws_reconnect" }));
+      }
     };
 
     ws.onmessage = (event) => {
