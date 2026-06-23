@@ -224,6 +224,12 @@ else
   echo "[PI-WEB] codebase-memory-mcp already installed"
 fi
 
+# Start CBM HTTP server in background (3D graph UI + MCP API on port 9749)
+if [ -f "$CBM_BIN" ]; then
+  nohup "$CBM_BIN" --ui=true --port=9749 > /tmp/cbm-server.log 2>&1 &
+  echo "[PI-WEB] codebase-memory-mcp server starting on port 9749 (PID $!)"
+fi
+
 # ─── Start ────────────────────────────────────
 echo "[PI-WEB] Starting server..."
 cd /app
