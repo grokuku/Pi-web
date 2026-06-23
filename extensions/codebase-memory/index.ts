@@ -494,6 +494,7 @@ export default async function (pi: ExtensionAPI) {
           console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
           await indexProject(ctx.cwd);
         }
+      }
     } catch (e: any) {
       console.error("[cbm] before_agent_start failed:", e.message);
     }
