@@ -22,6 +22,7 @@ import piSettingsRouter from "./routes/pi-settings.js";
 import agentRouter from "./routes/agent.js";
 import agentKeysRouter from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
+import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
 import {
   createPiSession,
@@ -91,7 +92,9 @@ if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
 }
 
-// API Routes
+// API Routes (BUG-29 fix: global auth middleware — same-origin requests
+// from the web UI pass through; external requests require a Bearer token)
+app.use("/api", apiAuth);
 app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/ollama", ollamaRouter);

@@ -43,22 +43,34 @@
 - **Fichier :** `backend/src/pi/session.ts`
 - **Lignes :** Dans `runYoloAgent` (fonction de cleanup)
 - **Sévérité :** 🟡 Moyenne
-- **Description :** La fonction `runYoloAgent` utilise `require("fs")`, `require("path")` dans un module ESM (le projet est `"type": "module"`). Bien que Node.js puisse supporter `require` dans certains contextes ESM via interop, c'est non standard et peut causer des erreurs selon la configuration. Les imports ESM en haut du fichier utilisent déjà `import` correctement.
-- **Fix :** Importer `existsSync`, `unlinkSync`, `readdirSync`, `rmdirSync` et `path` en haut du fichier (ils sont déjà importés partiellement) et supprimer les appels `require()`.
+- **Description :** Plusieurs fichiers utilisent `require()` dans un module ESM (le projet est `"type": "module"`). Bien que Node.js puisse supporter `require` dans certains contextes ESM via interop, c'est non standard et peut causer des erreurs selon la configuration :
+  - `backend/src/pi/session.ts` : `require("fs")`, `require("path")` dans `runYoloAgent` (fonction de cleanup)
+  - `backend/src/projects/smb.ts` : `require("fs")` dans `cleanupCredentialsFile()`
+  - `backend/src/routes/attachments.ts` : `require("fs")` dans `DELETE /:id` (ligne 412) et `require("pdf-parse")` dans `POST /:id/analyze` (ligne 482)
+  
+  Les imports ESM en haut de chaque fichier utilisent déjà `import` correctement pour d'autres fonctions du même module.
+- **Fix :** Importer toutes les fonctions nécessaires via `import` en haut de chaque fichier et supprimer les appels `require()`. Pour `pdf-parse`, utiliser `await import("pdf-parse")`.
 
 #### BUG-06: `removeModel()` ne nettoie pas les références YOLO dans `projectModes`
 - **Fichier :** `backend/src/pi/model-library.ts`
 - **Lignes :** Dans `removeModel()`
 - **Sévérité :** 🟡 Moyenne
-- **Description :** La fonction `removeModel()` nettoie les références au modèle supprimé dans `pm.code.modelId`, `pm.plan.modelId`, et `pm.review.modelId`, mais **ne nettoie pas** `pm.yolo.modelId`. Si un modèle utilisé par la config YOLO est supprimé, la config YOLO pointe vers un modèle inexistant.
-- **Fix :** Ajouter `if (pm.yolo.modelId === id) pm.yolo.modelId = null;` dans la boucle de cleanup.
+- **Description :** La fonction `removeModel()` nettoie les références au modèle supprimé dans `pm.code.modelId`, `pm.plan.modelId`, et `pm.review.modelId`, mais **ne nettoie pas** :
+  - `pm.yolo.modelId` — si un modèle utilisé par la config YOLO est supprimé, la config YOLO pointe vers un modèle inexistant.
+  - `library.visionModelId` — si le modèle supprimé était le modèle de vision, le champ reste pointé vers un modèle inexistant.
+  - `library.audioModelId` — idem pour le modèle audio.
+  - `library.commitModelId` — idem pour le modèle de commit.
+- **Fix :** Ajouter `if (pm.yolo.modelId === id) pm.yolo.modelId = null;` dans la boucle de cleanup, et ajouter après la boucle : `if (library.visionModelId === id) library.visionModelId = null; if (library.audioModelId === id) library.audioModelId = null; if (library.commitModelId === id) library.commitModelId = null;`
 
 #### BUG-07: `deleteProvider()` ne nettoie pas les références YOLO non plus
 - **Fichier :** `backend/src/pi/providers.ts`
 - **Lignes :** Dans `deleteProvider()`
 - **Sévérité :** 🟡 Moyenne
-- **Description :** Similaire au BUG-06. La fonction `deleteProvider()` nettoie les références dans les modes `code`, `plan`, `review`, mais pas dans `yolo`. Si le provider supprimé hébergeait le modèle YOLO, la config reste pointée vers un modèle inexistant.
-- **Fix :** Ajouter le cleanup pour `m.yolo?.modelId` dans la boucle.
+- **Description :** Similaire au BUG-06. La fonction `deleteProvider()` nettoie les références dans les modes `code`, `plan`, `review`, et nettoie également `commitModelId`, mais **ne nettoie pas** :
+  - `yolo.modelId` — si le provider supprimé hébergeait le modèle YOLO, la config reste pointée vers un modèle inexistant.
+  - `visionModelId` — si le provider hébergeait le modèle de vision.
+  - `audioModelId` — si le provider hébergeait le modèle audio.
+- **Fix :** Ajouter le cleanup pour `m.yolo?.modelId` dans la boucle, et ajouter `if (library.visionModelId && !library.models.find(m => m.id === library.visionModelId)) library.visionModelId = null; if (library.audioModelId && !library.models.find(m => m.id === library.audioModelId)) library.audioModelId = null;` après la boucle.
 
 #### BUG-08: `tool_execution_end` met `isStreaming = true` au lieu de `false` — [FIXED 2026-06-23]
 - **Fichier :** `backend/src/pi/session.ts`
@@ -66,17 +78,17 @@
 - **Description :** Après `tool_execution_end`, le code forçait `isStreaming = true`, ce qui pouvait laisser le frontend dans un état de streaming permanent si `agent_end` était manqué.
 - **Fix :** Supprimé `state.isStreaming = true` du bloc `tool_execution_end`. Le streaming global est géré uniquement par `agent_start`/`agent_end`. Ajouté un watchdog frontend (3 min) et une restauration auto lors de la reconnexion WebSocket.
 
-#### BUG-09: Fichiers de sauvegarde dans le repo (`App.tsx.bak`, `.backup2`, etc.)
+#### BUG-09: Fichiers de sauvegarde dans le repo (`App.tsx.bak`, `.backup2`, etc.) — [RESOLVED]
 - **Fichiers :** `frontend/src/App.tsx.bak`, `frontend/src/App.tsx.bak2`, `frontend/src/App.tsx.backup2`
 - **Sévérité :** 🟢 Basse
-- **Description :** Trois fichiers de backup de `App.tsx` sont présents dans le repo. Cela viole la règle du `AGENTS.md` : "Aucun fichier temporaire dans le repo". Ces fichiers alourdissent le repo et peuvent causer de la confusion.
-- **Fix :** Supprimer les trois fichiers `.bak*` et `.backup*`.
+- **Description :** Trois fichiers de backup de `App.tsx` étaient présents dans le repo. Cela viole la règle du `AGENTS.md` : "Aucun fichier temporaire dans le repo".
+- **Statut :** Les fichiers ont été supprimés du repo. Le `.gitignore` couvre désormais `*.bak`, `*.bak2`, `*.backup`, `*.backup2`.
 
-#### BUG-10: `test.db` commité dans le repo
+#### BUG-10: `test.db` commité dans le repo — [RESOLVED]
 - **Fichier :** `test.db` (à la racine)
 - **Sévérité :** 🟢 Basse
-- **Description :** Un fichier `test.db` (probablement une base de données de test SQLite) est présent à la racine du repo. Il ne devrait pas être versionné.
-- **Fix :** Ajouter `test.db` au `.gitignore` et le supprimer du repo.
+- **Description :** Un fichier `test.db` (probablement une base de données de test SQLite) était présent à la racine du repo. Il ne devrait pas être versionné.
+- **Statut :** Le fichier a été retiré du repo. Le `.gitignore` contient désormais `test.db`.
 
 #### BUG-11: `unhandledRejection` ne termine pas le processus
 - **Fichier :** `backend/src/index.ts`
@@ -196,6 +208,118 @@
 - **Sévérité :** 🟢 Basse
 - **Description :** `gitInit()` fait `git init()`, `addRemote("origin", remote)`, et `checkoutLocalBranch(branch)`, mais ne configure pas le tracking upstream (`git push -u origin branch`). Le premier `gitPush()` peut échouer avec "no upstream branch".
 - **Fix :** Ajouter `await git.push(["-u", "origin", branch], () => {})` ou `git.branch(["--set-upstream-to", \`origin/${branch}\`, branch])`.
+
+---
+
+## 🆕 Bugs identifiés lors de l'analyse du 2026-06-23
+
+#### BUG-28: Command injection dans `pi-settings.ts` — 🔴 CRITIQUE
+- **Fichier :** `backend/src/routes/pi-settings.ts`
+- **Lignes :** 296, 310, 353
+- **Sévérité :** 🔴 Haute (sécurité — exécution de commandes arbitraires)
+- **Description :** Les appels `execSync()` utilisent des chaînes interpolées avec des valeurs provenant de l'utilisateur (`source`), permettant l'injection de commandes arbitraires :
+  ```ts
+  // Ligne 296 — npm install
+  const pkgSpec = source.startsWith("@") ? source : source.split("@")[0].split("/")[0];
+  execSync(`npm install --prefix ${AGENT_DIR} ${pkgSpec}`, ...);
+
+  // Ligne 310 — git clone
+  execSync(`git clone --depth 1 ${source.includes("@") ? source.split("@")[0] : source} ${...}`, ...);
+
+  // Ligne 353 — npm uninstall
+  const pkgName = source.startsWith("@") ? ... : source.split("@")[0].split("/")[0];
+  execSync(`npm uninstall --prefix ${AGENT_DIR} ${pkgName}`, ...);
+  ```
+  Un utilisateur peut envoyer `source = "foo; rm -rf /tmp/pi-web"` → `execSync("npm install --prefix /root/.pi/agent foo; rm -rf /tmp/pi-web")` → exécution arbitraire.
+- **Fix :** Utiliser `execFileSync(npm, ["install", "--prefix", AGENT_DIR, pkgSpec], ...)` avec un tableau d'arguments (pas de shell), ou sanitizer strictement les entrées avec une regex `^[a-zA-Z0-9@/_\.\-]+$`.
+
+#### BUG-29: Aucune authentification sur la majorité des routes API
+- **Fichier :** `backend/src/index.ts`
+- **Sévérité :** 🔴 Haute (sécurité)
+- **Description :** Seules deux routes ont un middleware d'authentification :
+  - `/api/agent/*` → `agentAuth` (Bearer token)
+  - `/api/agent-keys/*` → `adminAuth` (same-origin + Bearer)
+  
+  Toutes les autres routes sont **complètement non authentifiées** :
+  - `/api/projects/*` — créer/supprimer/modifier des projets, git push/pull/clone
+  - `/api/files/*` — naviguer, lire, écrire, uploader, télécharger des fichiers
+  - `/api/settings/*` — changer de modèle, thinking, créer session, **update pi-agent** (provoque `process.exit(0)`)
+  - `/api/model-library/*` — CRUD modèles
+  - `/api/providers/*` — CRUD providers, test connexion (expose clés API dans la réponse)
+  - `/api/attachments/*` — upload/serve/delete fichiers
+  - `/api/usage/*` — consulter les statistiques
+  - `/api/pi/*` — gestion extensions, **npm install/git clone** (→ commande injection BUG-28), reload, YOLO
+  - `/api/ollama/*` — configuration Ollama
+  - `/api/cbm/*` — codebase memory
+  - `/api/sessions/*` — historique des conversations
+  
+  Le CORS (`ALLOWED_ORIGINS`) et le WS origin check protègent contre les attaques cross-origin depuis un navigateur, mais ne protègent pas contre les accès directs (curl, scripts, réseau local).
+- **Fix :** Ajouter un middleware d'authentification global (session token, basic auth, ou similaire à `adminAuth`), configurable via env var pour le mode développement.
+
+#### BUG-30: `POST /api/settings/update` provoque un `process.exit(0)` sans authentification — [FIXED 2026-06-23]
+- **Fichier :** `backend/src/routes/settings.ts`
+- **Lignes :** 61-76
+- **Sévérité :** 🟡 Moyenne (lié à BUG-29)
+- **Description :** La route `POST /api/settings/update` exécute `npm install @earendil-works/pi-coding-agent@latest` puis `process.exit(0)` pour redémarrer. Sans authentification, n'importe qui pouvait forcer la mise à jour et le redémarrage du serveur.
+- **Fix :** Corrigé par le middleware `apiAuth` (BUG-29) — la route `/api/settings/update` n'est pas dans les endpoints publics, donc elle nécessite désormais une authentification pour les accès externes.
+- **Impact UX :** Aucun — le frontend (same-origin) accède à cette route sans token.
+
+#### BUG-31: Route `PUT /reorder` injoignable (code mort) — réorganisation des projets cassée
+- **Fichier :** `backend/src/routes/projects.ts`
+- **Lignes :** 86 (`PUT /:id`) et 518 (`PUT /reorder`)
+- **Sévérité :** 🟡 Moyenne
+- **Description :** La route `PUT /:id` est définie à la ligne 86, et `PUT /reorder` à la ligne 518. Express évalue les routes dans l'ordre. `PUT /:id` matche `PUT /reorder` avec `id = "reorder"`. La route `reorder` est donc **injoignable** — toute requête `PUT /api/projects/reorder` est interceptée par `PUT /:id` qui tente de trouver un projet avec l'ID `"reorder"`, échoue, et renvoie une erreur.
+- **Impact :** La réorganisation des projets est complètement cassée.
+- **Fix :** Déplacer `PUT /reorder` AVANT `PUT /:id`, ou utiliser un chemin distinct comme `PUT /reorder-projects`.
+
+#### BUG-32: `removeModel()` ne nettoie pas `visionModelId`, `audioModelId`, `commitModelId`
+- **Fichier :** `backend/src/pi/model-library.ts`
+- **Sévérité :** 🟡 Moyenne
+- **Description :** La fonction `removeModel()` nettoie les références dans `projectModes` (code/plan/review) mais ne nettoie pas les champs globaux `visionModelId`, `audioModelId`, et `commitModelId`. Si le modèle supprimé était configuré comme modèle de vision, audio, ou commit, ces champs pointent vers un modèle inexistant. (Le cleanup YOLO est couvert par BUG-06.)
+- **Fix :** Ajouter après la boucle de cleanup : `if (library.visionModelId === id) library.visionModelId = null; if (library.audioModelId === id) library.audioModelId = null; if (library.commitModelId === id) library.commitModelId = null;`
+
+#### BUG-33: `deleteProvider()` ne nettoie pas `visionModelId` et `audioModelId`
+- **Fichier :** `backend/src/pi/providers.ts`
+- **Sévérité :** 🟡 Moyenne
+- **Description :** La fonction `deleteProvider()` nettoie `commitModelId` et les références dans les modes code/plan/review, mais ne nettoie pas `visionModelId` ni `audioModelId`. Si le provider supprimé hébergeait le modèle de vision ou audio, ces champs deviennent des références pendantes. (Le cleanup YOLO est couvert par BUG-07.)
+- **Fix :** Ajouter le cleanup pour `visionModelId` et `audioModelId` après le nettoyage de `commitModelId`.
+
+#### BUG-34: `require("fs")` dans `smb.ts` — module ESM
+- **Fichier :** `backend/src/projects/smb.ts`
+- **Ligne :** 138
+- **Sévérité :** 🟡 Moyenne
+- **Description :** `cleanupCredentialsFile()` utilise `const { unlinkSync, rmdirSync } = require("fs")` dans un module ESM. Le fichier importe déjà `writeFileSync`, `existsSync`, `mkdirSync` via `import` en haut — `unlinkSync` et `rmdirSync` devraient être ajoutés à cet import. (Même classe de bug que BUG-05.)
+- **Fix :** Ajouter `unlinkSync, rmdirSync` à l'import ESM existant en haut du fichier.
+
+#### BUG-35: `require("pdf-parse")` et `require("fs")` dans `attachments.ts` — module ESM
+- **Fichier :** `backend/src/routes/attachments.ts`
+- **Lignes :** 412, 482
+- **Sévérité :** 🟡 Moyenne
+- **Description :** Deux utilisations de `require()` dans un module ESM :
+  - Ligne 412 : `require("fs").rmdirSync(dir, { recursive: true })` — utiliser `rmSync` de l'import ESM déjà présent en haut du fichier.
+  - Ligne 482 : `require("pdf-parse")` — devrait utiliser `await import("pdf-parse")`.
+  (Même classe de bug que BUG-05.)
+- **Fix :** Remplacer `require("fs").rmdirSync(...)` par `rmSync(...)` (déjà importé) et `require("pdf-parse")` par `await import("pdf-parse")`.
+
+#### BUG-36: Race condition potentielle dans le project manager (lectures non protégées)
+- **Fichier :** `backend/src/projects/manager.ts`
+- **Sévérité :** 🟢 Basse
+- **Description :** Les fonctions `getAllProjects()`, `getProject()`, `getProjectByName()` appellent `loadProjects()` sans le mutex. Les fonctions d'écriture (`createProject`, `updateProject`, etc.) utilisent le mutex. Si une lecture se produit pendant qu'une écriture est en cours (sauvegarde du fichier JSON), la lecture pourrait obtenir des données partielles. Le risque est faible car `writeFileSync` est généralement atomique, mais le pattern read-modify-write n'est pas protégé pour les lectures.
+- **Fix :** Utiliser le mutex pour toutes les opérations de lecture, ou utiliser un cache en mémoire avec invalidation.
+
+#### BUG-37: `gitClone` utilise deux méthodes différentes pour le même clone
+- **Fichier :** `backend/src/projects/git.ts`
+- **Lignes :** ~430-470
+- **Sévérité :** 🟢 Basse
+- **Description :** Dans `gitClone()`, le clone avec auth utilise `git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch])`, mais le clone sans auth utilise `git.clone(remote, repoName, ["--branch", branch])`. Ces deux méthodes peuvent se comporter différemment (la méthode `git.clone` peut ajouter des options par défaut).
+- **Fix :** Utiliser la même méthode `git.raw()` dans les deux cas pour assurer un comportement cohérent.
+
+#### BUG-38: `rmdirSync` (deprecated) utilisé dans `smb.ts`
+- **Fichier :** `backend/src/projects/smb.ts`
+- **Ligne :** 140
+- **Sévérité :** 🟢 Basse
+- **Description :** `rmdirSync(path.dirname(credFile))` — `rmdirSync` est deprecated depuis Node 16 pour les suppressions récursives. Bien qu'ici il ne s'agisse que d'un répertoire vide, c'est une API deprecated.
+- **Fix :** Utiliser `rmSync(path.dirname(credFile), { force: true })` à la place.
 
 ---
 
@@ -412,7 +536,7 @@ PDF uploadé
 | Usage | `/api/usage/*` (query, models list) | ✅ |
 | Pi | `/api/pi/*` (settings, packages, yolo, reload) | ✅ |
 | Agent | `/api/agent/*` (projets, modèles, chat, fichiers — auth Bearer) | ✅ |
-| Agent Keys | `/api/agent-keys/*` (CRUD, reveal — ⚠️ sans auth) | ✅ ⚠️ |
+| Agent Keys | `/api/agent-keys/*` (CRUD, reveal — auth `adminAuth`) | ✅ |
 | Providers | `/api/providers/*` | ✅ |
 | Ollama | `/api/ollama/*` | ✅ |
 | Sessions | `/api/sessions/:id/*` (history, info, tools) | ✅ |
@@ -437,7 +561,8 @@ Backend (Express + WebSocket + node-pty + Pi SDK)
   ├── /api/usage/* → stats tokens par période/modèle
   ├── /api/pi/* → settings, packages, yolo, reload
   ├── /api/agent/* → agent externe (Bearer auth)
-  ├── /api/agent-keys/* → gestion tokens agent (⚠️ sans auth)
+  ├── /api/agent-keys/* → gestion tokens agent (auth `adminAuth`)
+  ├── ⚠️ BUG-29 : toutes les autres routes /api/* n'ont aucune authentification
   └── pi/session.ts → orchestration sessions, modes, YOLO, auto-review
 
 Extensions Pi
@@ -467,14 +592,14 @@ Pi config
 | 02 | 🟡 | Promesse flottante | `syncToModelsJson()` sans `await` dans DELETE vision/audio model | `routes/model-library.ts` |
 | 03 | 🟢 | Robustesse | `reapplyAllSessions()` non awaité (intentionnel mais à documenter) | `routes/model-library.ts` |
 | 04 | 🟡 | Logique | Nettoyage cache attachments incorrect (`unlinkSync` sur un dossier) | `routes/attachments.ts` |
-| 05 | 🟡 | Compatibilité | `require()` utilisé dans un module ESM | `pi/session.ts` |
+| 05 | 🟡 | Compatibilité | `require()` en ESM dans `session.ts`, `smb.ts`, `attachments.ts` | plusieurs |
 | 06 | 🟡 | Logique | `removeModel()` ne nettoie pas `yolo.modelId` | `pi/model-library.ts` |
 | 07 | 🟡 | Logique | `deleteProvider()` ne nettoie pas `yolo.modelId` | `pi/providers.ts` |
-| 08 | 🟡 | Logique | `tool_execution_end` force `isStreaming = true` (incorrect) | `pi/session.ts` |
-| 09 | 🟢 | Propreté | Fichiers `.bak` / `.backup2` dans le repo | `frontend/src/` |
-| 10 | 🟢 | Propreté | `test.db` commité dans le repo | racine |
+| 08 | 🟡 | Logique | `tool_execution_end` force `isStreaming = true` — **[FIXED]** | `pi/session.ts` |
+| 09 | 🟢 | Propreté | Fichiers `.bak` / `.backup2` dans le repo — **[RESOLVED]** | `frontend/src/` |
+| 10 | 🟢 | Propreté | `test.db` commité dans le repo — **[RESOLVED]** | racine |
 | 11 | 🟡 | Robustesse | `unhandledRejection` ne termine pas le processus | `index.ts` |
-| 12 | 🔴 | Sécurité | API Keys agent exposées sans auth — **[FIXED]** : middleware `adminAuth` (same-origin + Bearer pour externe) | `routes/agent-keys.ts` |
+| 12 | 🔴 | Sécurité | API Keys agent exposées sans auth — **[FIXED]** : middleware `adminAuth` | `routes/agent-keys.ts` |
 | 13 | 🟡 | Logique | `setGitIdentity` écrit toujours dans le config global git | `projects/git.ts` |
 | 14 | 🟡 | Sécurité | URL remote non restaurée si `gitWithAuth` échoue avant l'opération | `projects/git.ts` |
 | 15 | 🟡 | Sécurité | Fuite potentielle de credentials dans les logs (password avec `@`) | `projects/git.ts` |
@@ -490,19 +615,38 @@ Pi config
 | 25 | 🟢 | Sécurité | `isPathAllowed` dans `files.ts` vulnérable (startsWith sans path.sep) | `routes/files.ts` |
 | 26 | 🟡 | Config | `ALLOWED_ROOTS` hardcoded — projets hors racines inaccessibles | `routes/files.ts` |
 | 27 | 🟢 | Logique | `gitInit` ne configure pas le tracking upstream | `projects/git.ts` |
+| **28** | **🔴** | **Sécurité** | **Command injection dans `npm install` / `git clone` — [FIXED]** | `routes/pi-settings.ts` |
+| **29** | **🔴** | **Sécurité** | **Aucune auth sur la majorité des routes API — [FIXED]** : middleware `apiAuth` | `index.ts` |
+| **30** | 🟡 | Sécurité | `process.exit(0)` sans auth sur `/api/settings/update` — [FIXED] | `routes/settings.ts` |
+| **31** | 🟡 | Code mort | Route `PUT /reorder` injoignable — réorganisation cassée | `routes/projects.ts` |
+| **32** | 🟡 | Logique | `removeModel()` ne nettoie pas `visionModelId`/`audioModelId`/`commitModelId` | `pi/model-library.ts` |
+| **33** | 🟡 | Logique | `deleteProvider()` ne nettoie pas `visionModelId`/`audioModelId` | `pi/providers.ts` |
+| **34** | 🟡 | Compatibilité | `require("fs")` en ESM dans `smb.ts` | `projects/smb.ts` |
+| **35** | 🟡 | Compatibilité | `require("pdf-parse")` / `require("fs")` en ESM dans `attachments.ts` | `routes/attachments.ts` |
+| **36** | 🟢 | Race condition | Lectures non protégées dans le project manager | `projects/manager.ts` |
+| **37** | 🟢 | Cohérence | `gitClone` utilise deux méthodes différentes pour le même clone | `projects/git.ts` |
+| **38** | 🟢 | Deprecated | `rmdirSync` deprecated utilisé dans `smb.ts` | `projects/smb.ts` |
 
 ### Priorité de correction recommandée
 
-1. **🔴 BUG-12** — Sécurité critique : API Keys agent exposées sans auth
-2. **🟡 BUG-08** — `isStreaming` forcé à `true` incorrectement — **[FIXED]**
-3. **🟡 BUG-04** — Nettoyage cache attachments cassé
-4. **🟡 BUG-02** — Promesses flottantes `syncToModelsJson()`
-5. **🟡 BUG-06 + BUG-07** — Cleanup YOLO manquant dans `removeModel` / `deleteProvider`
-6. **🟡 BUG-05** — `require()` en ESM
-7. **🟡 BUG-01** — Route dupliquée
-8. **🟡 BUG-21** — Race condition `/new` + `pi_history`
-9. **🟡 BUG-15** — Fuite credentials dans logs
-10. **🟡 BUG-22** — Limite localStorage
-11. **🟡 BUG-25 + BUG-26** — Sécurité file browser
-12. **🟢 BUG-09 + BUG-10** — Propreté repo (.bak, test.db)
-13. **🟢 Autres** — Code mort, style, améliorations
+1. **🔴 BUG-28** — Sécurité critique : command injection dans `pi-settings.ts` — **[FIXED]**
+2. **🔴 BUG-29** — Sécurité critique : aucune auth sur la majorité des routes API — **[FIXED]**
+3. **🔴 BUG-12** — Sécurité : API Keys agent exposées — **[FIXED]**
+4. **🟡 BUG-08** — `isStreaming` forcé à `true` — **[FIXED]**
+5. **🟡 BUG-30** — `process.exit(0)` sans auth — **[FIXED]**
+6. **🟡 BUG-31** — Route `PUT /reorder` injoignable — réorganisation cassée
+6. **🟡 BUG-04** — Nettoyage cache attachments cassé
+7. **🟡 BUG-02** — Promesses flottantes `syncToModelsJson()`
+8. **🟡 BUG-06 + BUG-07** — Cleanup YOLO manquant dans `removeModel` / `deleteProvider`
+9. **🟡 BUG-32 + BUG-33** — Cleanup `visionModelId`/`audioModelId`/`commitModelId` manquant
+10. **🟡 BUG-05 + BUG-34 + BUG-35** — `require()` en ESM (3 fichiers)
+11. **🟡 BUG-01** — Route dupliquée
+12. **🟡 BUG-21** — Race condition `/new` + `pi_history`
+13. **🟡 BUG-15** — Fuite credentials dans logs
+14. **🟡 BUG-22** — Limite localStorage
+15. **🟡 BUG-25 + BUG-26** — Sécurité file browser
+16. **🟡 BUG-30** — `process.exit(0)` sans auth
+17. **🟡 BUG-11** — `unhandledRejection` ne termine pas
+18. **🟡 BUG-13** — `setGitIdentity` écrit dans global config
+19. **🟢 BUG-09 + BUG-10** — Propreté repo — **[RESOLVED]**
+20. **🟢 Autres** — Code mort, style, améliorations

@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import path from "path";
 import os from "os";
 import { runYoloSession, type YoloConfig } from "../pi/session.js";
@@ -293,7 +293,8 @@ router.post("/packages", async (req: Request, res: Response) => {
         if (!existsSync(AGENT_DIR)) mkdirSync(AGENT_DIR, { recursive: true });
         const pkgSpec = source.startsWith("@") ? source : source.split("@")[0].split("/")[0];
         console.log(`[pi-settings] Installing npm package: ${pkgSpec}`);
-        execSync(`npm install --prefix ${AGENT_DIR} ${pkgSpec}`, {
+        // BUG-28 fix: use execFileSync with array args to prevent command injection
+        execFileSync("npm", ["install", "--prefix", AGENT_DIR, pkgSpec], {
           timeout: 120000,
           encoding: "utf-8",
         });
@@ -307,14 +308,15 @@ router.post("/packages", async (req: Request, res: Response) => {
         const gitDir = path.join(AGENT_DIR, "git");
         if (!existsSync(gitDir)) mkdirSync(gitDir, { recursive: true });
         console.log(`[pi-settings] Cloning git package: ${source}`);
-        execSync(`git clone --depth 1 ${source.includes("@") ? source.split("@")[0] : source} ${path.join(gitDir, source.replace(/[^a-zA-Z0-9]/g, "-"))}`, {
+        const cloneDir = path.join(gitDir, source.replace(/[^a-zA-Z0-9]/g, "-"));
+        // BUG-28 fix: use execFileSync with array args to prevent command injection
+        execFileSync("git", ["clone", "--depth", "1", source.includes("@") ? source.split("@")[0] : source, cloneDir], {
           timeout: 120000,
           encoding: "utf-8",
         });
         // Run npm install in the cloned repo if it has a package.json
-        const cloneDir = path.join(gitDir, source.replace(/[^a-zA-Z0-9]/g, "-"));
         if (existsSync(path.join(cloneDir, "package.json"))) {
-          execSync("npm install --omit=dev", { timeout: 120000, encoding: "utf-8", cwd: cloneDir });
+          execFileSync("npm", ["install", "--omit=dev"], { timeout: 120000, encoding: "utf-8", cwd: cloneDir });
         }
       } catch (e: any) {
         installError = `git clone failed: ${e.message}`;
@@ -350,7 +352,8 @@ router.delete("/packages/:source", async (req: Request, res: Response) => {
       try {
         const pkgName = source.startsWith("@") ? source.split("/").slice(0, 2).join("/").split("@")[0] : source.split("@")[0].split("/")[0];
         console.log(`[pi-settings] Uninstalling npm package: ${pkgName}`);
-        execSync(`npm uninstall --prefix ${AGENT_DIR} ${pkgName}`, { timeout: 60000, encoding: "utf-8" });
+        // BUG-28 fix: use execFileSync with array args to prevent command injection
+        execFileSync("npm", ["uninstall", "--prefix", AGENT_DIR, pkgName], { timeout: 60000, encoding: "utf-8" });
       } catch (e: any) {
         uninstallWarning = `npm uninstall failed: ${e.message}`;
         console.error(`[pi-settings] npm uninstall failed:`, e.message);
