@@ -82,6 +82,15 @@ if (corsOrigins === false) {
 }
 app.use(express.json({ limit: "50mb" }));
 
+// ── Serve frontend static files FIRST (before CBM proxy) ──
+// This ensures Pi-web's own JS/CSS assets are served correctly.
+// Without this, the CBM proxy on /assets intercepts them and returns
+// wrong MIME types (application/octet-stream), causing a blank page.
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+if (existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+}
+
 // API Routes
 app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
@@ -294,10 +303,9 @@ app.get("/api/sessions/:projectId/tools", (req, res) => {
   }
 });
 
-// Serve frontend in production
-const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+// ── SPA fallback: serve index.html for all unmatched routes ──
+// (frontend static assets are already served above, before the CBM proxy)
 if (existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {
     res.sendFile(path.join(frontendDist, "index.html"));
   });
