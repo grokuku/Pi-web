@@ -110,8 +110,10 @@ app.use("/api/cbm", cbmRouter);
 // We proxy both /cbm-ui/* (the main page) AND /assets/*, /rpc so the browser
 // resolves everything through the Pi-Web port without exposing port 9749.
 async function cbmProxy(req: any, res: any) {
-  // Strip the /cbm-ui prefix if present, keep the original path otherwise
-  const urlPath = req.url.startsWith("/cbm-ui") ? req.url.slice(7) : req.url;
+  // Use originalUrl — Express strips the mount prefix from req.url
+  // e.g. app.use("/rpc") makes req.url="/" but req.originalUrl="/rpc"
+  const fullPath = req.originalUrl || req.url;
+  const urlPath = fullPath.startsWith("/cbm-ui") ? fullPath.slice(7) : fullPath;
   const cbmUrl = `http://localhost:9749${urlPath}`;
   try {
     const controller = new AbortController();
