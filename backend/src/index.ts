@@ -21,6 +21,7 @@ import { usageRouter, recordUsage } from "./routes/usage.js";
 import piSettingsRouter from "./routes/pi-settings.js";
 import agentRouter from "./routes/agent.js";
 import agentKeysRouter from "./routes/agent-keys.js";
+import cbmRouter from "./routes/cbm.js";
 import type { Project } from "./projects/manager.js";
 import {
   createPiSession,
@@ -93,6 +94,47 @@ app.use("/api/usage", usageRouter);
 app.use("/api/pi", piSettingsRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/agent-keys", agentKeysRouter);
+app.use("/api/cbm", cbmRouter);
+
+// ── CBM 3D Graph UI proxy ──────────────────────────────
+// Forwards all requests under /cbm-ui to the codebase-memory-mcp
+// HTTP server on localhost:9749. This lets the 3D graph visualization
+// work through the Pi-Web port without exposing an extra Docker port.
+app.use("/cbm-ui", async (req, res) => {
+  const cbmUrl = `http://localhost:9749${req.url}`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const proxyRes = await fetch(cbmUrl, {
+      method: req.method,
+      headers: {
+        ...(req.headers as Record<string, string>),
+        host: "localhost:9749",
+      },
+      body: ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    // Forward status code
+    res.status(proxyRes.status);
+
+    // Forward headers (skip transfer-encoding to avoid conflicts)
+    proxyRes.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "transfer-encoding" &&
+          key.toLowerCase() !== "content-encoding" &&
+          key.toLowerCase() !== "connection") {
+        res.setHeader(key, value);
+      }
+    });
+
+    // Stream the response body
+    const buffer = Buffer.from(await proxyRes.arrayBuffer());
+    res.send(buffer);
+  } catch {
+    res.status(502).send("CBM graph server not available. Start a Pi session first to download and launch the binary.");
+  }
+});
 
 // ── Read VERSION file once at startup ──
 let piWebVersion = "unknown";

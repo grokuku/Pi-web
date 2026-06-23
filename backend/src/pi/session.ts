@@ -1244,8 +1244,8 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       }
     }
 
-    // Restrict to read-only tools
-    (tempSession as any).setActiveToolsByName(REVIEW_TOOLS);
+    // Restrict to read-only tools (include extension tools like cbm_* for graph queries)
+    (tempSession as any).setActiveToolsByName(toolsForMode(tempSession, REVIEW_TOOLS));
 
     // Inject review mode instructions
     const instructions = MODE_INSTRUCTIONS.review;
@@ -1784,6 +1784,9 @@ async function runYoloAgent(
         "read", "grep", "find", "ls", "list",
         "firecrawl_scrape", "firecrawl_map", "firecrawl_search",
         "memory_search", "memory_list", "global_memory_search", "global_memory_list",
+        // CBM graph tools — all read-only, safe for plan phase
+        "cbm_search", "cbm_trace", "cbm_code", "cbm_search_code",
+        "cbm_arch", "cbm_cypher", "cbm_schema", "cbm_diff",
       ]);
     }
 

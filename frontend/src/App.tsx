@@ -10,6 +10,7 @@ import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
 import { UsageStatsModal } from "./components/Modals/UsageStatsModal";
+import { Graph3DModal } from "./components/Modals/Graph3DModal";
 import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
@@ -155,6 +156,7 @@ function App() {
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showUsageStats, setShowUsageStats] = useState(false);
+  const [showGraph3D, setShowGraph3D] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
@@ -691,6 +693,17 @@ function App() {
 
         <div className="w-px h-4 bg-hacker-border-right" />
 
+        {/* Graph 3D button */}
+        <button
+          onClick={() => setShowGraph3D(true)}
+          className="text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          title="Open 3D codebase graph"
+        >
+          📊
+        </button>
+
+        <div className="w-px h-4 bg-hacker-border-right" />
+
         {/* Zoom buttons */}
         <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1" title="Zoom out">−</button>
         <span className="text-xs text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
@@ -854,6 +867,9 @@ function App() {
       )}
       {showUsageStats && (
         <UsageStatsModal onClose={() => setShowUsageStats(false)} />
+      )}
+      {showGraph3D && (
+        <Graph3DModal onClose={() => setShowGraph3D(false)} />
       )}
     </div>
   );

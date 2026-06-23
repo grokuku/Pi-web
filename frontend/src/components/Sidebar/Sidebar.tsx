@@ -42,6 +42,10 @@ export function Sidebar({
   const [piAgentVersion, setPiAgentVersion] = useState("?");
   const [piAgentLatest, setPiAgentLatest] = useState("");
   const [restartPending, setRestartPending] = useState(false);
+  const [cbmVersion, setCbmVersion] = useState<string | null>(null);
+  const [cbmInstalled, setCbmInstalled] = useState(false);
+  const [cbmUpdateAvailable, setCbmUpdateAvailable] = useState(false);
+  const [cbmUpdating, setCbmUpdating] = useState(false);
 
   // Check for updates on mount
   useEffect(() => {
@@ -53,6 +57,26 @@ export function Sidebar({
       setUpdataAvailable(!!data.updateAvailable);
       if (data.latest) setPiAgentLatest(data.latest);
     }).catch(() => {});
+    // Check CBM status
+    fetch("/api/cbm/status").then(r => r.json()).then(data => {
+      setCbmInstalled(data.installed);
+      setCbmVersion(data.version);
+      setCbmUpdateAvailable(data.updateAvailable);
+    }).catch(() => {});
+  }, []);
+
+  const handleCbmUpdate = useCallback(() => {
+    setCbmUpdating(true);
+    fetch("/api/cbm/update", { method: "POST" })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.newVersion) setCbmVersion(data.newVersion);
+        setCbmUpdateAvailable(false);
+        setCbmUpdating(false);
+      })
+      .catch(() => {
+        setCbmUpdating(false);
+      });
   }, []);
 
   const handleUpdate = useCallback(() => {
@@ -319,6 +343,24 @@ export function Sidebar({
             <span className="text-hacker-text-dim/50">v{piAgentVersion}</span>
           )}
         </div>
+        {cbmInstalled && (
+          <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim border-t border-hacker-border/30">
+            <span>cbm</span>
+            {cbmUpdateAvailable ? (
+              <button
+                onClick={handleCbmUpdate}
+                disabled={cbmUpdating}
+                className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
+                title="Update codebase-memory-mcp"
+              >
+                <ArrowUpCircle size={10} />
+                {cbmUpdating ? "..." : "Update"}
+              </button>
+            ) : (
+              <span className="text-hacker-text-dim/50">{cbmVersion ? `v${cbmVersion}` : "..."}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Delete project modal ── */}
