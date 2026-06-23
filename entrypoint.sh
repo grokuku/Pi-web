@@ -210,6 +210,20 @@ else
   echo "[PI-WEB] No models.json found, skipping extension API key auto-configure"
 fi
 
+# ── Download codebase-memory-mcp binary if not installed ──
+CBM_BIN="$HOME/.local/bin/codebase-memory-mcp"
+if [ ! -f "$CBM_BIN" ]; then
+  echo "[PI-WEB] Downloading codebase-memory-mcp (UI variant)..."
+  curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui --skip-config 2>&1 | tail -3 || true
+  if [ -f "$CBM_BIN" ]; then
+    echo "[PI-WEB] ✓ codebase-memory-mcp installed"
+  else
+    echo "[PI-WEB] WARNING: codebase-memory-mcp download failed — graph tools will be unavailable"
+  fi
+else
+  echo "[PI-WEB] codebase-memory-mcp already installed"
+fi
+
 # ─── Start ────────────────────────────────────
 echo "[PI-WEB] Starting server..."
 cd /app
