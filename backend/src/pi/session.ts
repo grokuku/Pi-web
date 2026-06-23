@@ -866,7 +866,10 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - When creating new files, follow existing project conventions (naming, structure, style)
 - Test your changes mentally — think about edge cases and error paths
 - If a change affects multiple files, list all affected files before starting
-- Keep commits atomic — one logical change per commit when possible`,
+- Keep commits atomic — one logical change per commit when possible
+
+## Knowledge Graph
+When available (cbm_* tools visible), use cbm_search instead of grep+read for structural questions. cbm_trace finds callers/callees instantly, cbm_arch gives architecture overview. This saves hundreds of thousands of tokens vs file-by-file exploration.`,
   plan: `You are in PLAN mode — you analyze the codebase and produce structured implementation plans WITHOUT modifying any files.
 
 ## Core Rules
@@ -875,7 +878,10 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - Bash is restricted to read-only commands: cat, head, tail, wc, find, grep, ls, tree, du, pwd, file, stat
 - NEVER execute any command that modifies the filesystem or state
 - NEVER attempt to edit files — the edit tool will fail in this mode
-- Focus on producing clear, actionable implementation plans`,
+- Focus on producing clear, actionable implementation plans
+
+## Knowledge Graph
+When available (cbm_* tools visible), use cbm_arch for architecture overview, cbm_trace for call chains, cbm_search to find code by name/pattern. Much faster than reading files one by one.`,
   review: `You are in REVIEW mode — a focused code review of **recently changed files only**.
 
 ## Core Rules
@@ -904,7 +910,10 @@ For each finding:
 - Be specific — cite exact file paths and line numbers
 - Prioritize findings by severity (HIGH first)
 - If code looks good, say so — don't fabricate issues
-- If you lack context to judge something, state it explicitly`,
+- If you lack context to judge something, state it explicitly
+
+## Knowledge Graph
+When available (cbm_* tools visible), use cbm_diff to analyze git diff impact (affected symbols, blast radius). Use cbm_trace to find callers of changed functions. Use cbm_search for targeted lookups instead of grep+read chains.`,
 };
 
 // Default thinking levels per mode

@@ -172,6 +172,20 @@ app.use("/cbm-ui", cbmProxy);
 app.use("/assets", cbmProxy);
 // CBM MCP RPC endpoint (used by the UI for graph queries)
 app.use("/rpc", cbmProxy);
+// CBM UI API endpoints (3D graph layout, project info, file browser, etc.)
+// Pi-Web's own API routes start with /api/ and are already mounted above.
+// The CBM UI uses different paths — no conflict expected.
+app.all("/api/index", cbmProxy);
+app.all("/api/index-status", cbmProxy);
+app.all("/api/logs", cbmProxy);
+app.all("/api/processes", cbmProxy);
+app.all("/api/process-kill", cbmProxy);
+app.all("/api/layout", cbmProxy);
+app.all("/api/adr", cbmProxy);
+app.all("/api/project", cbmProxy);
+app.all("/api/project-health", cbmProxy);
+// /api/browse uses a sub-path (/api/browse/path/to/file)
+app.use("/api/browse", cbmProxy);
 
 // ── Read VERSION file once at startup ──
 let piWebVersion = "unknown";
