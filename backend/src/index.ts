@@ -121,7 +121,12 @@ async function cbmProxy(req: any, res: any) {
     const proxyRes = await fetch(cbmUrl, {
       method: req.method,
       headers: {
-        ...(req.headers as Record<string, string>),
+        // Strip headers that fetch() manages automatically
+        ...Object.fromEntries(
+          Object.entries(req.headers as Record<string, string>)
+            .filter(([k]) => !["content-length", "transfer-encoding", "connection", "expect", "keep-alive", "upgrade", "host"].includes(k.toLowerCase()))
+        ),
+        "content-type": "application/json",
         host: "127.0.0.1:9749",
       },
       body: ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body),
@@ -155,7 +160,8 @@ async function cbmProxy(req: any, res: any) {
 
     const buffer = Buffer.from(await proxyRes.arrayBuffer());
     res.send(buffer);
-  } catch {
+  } catch (e: any) {
+    console.error("[cbm-proxy] Request failed:", cbmUrl, e.message, e.cause?.message || "");
     res.status(502).send("CBM graph server not available.");
   }
 }
