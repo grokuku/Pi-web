@@ -225,8 +225,10 @@ else
 fi
 
 # Start CBM HTTP server in background (3D graph UI + MCP API on port 9749)
+# The binary is an MCP stdio server — it exits if stdin closes.
+# We keep stdin open with `tail -f /dev/null` so the HTTP UI stays alive.
 if [ -f "$CBM_BIN" ]; then
-  nohup "$CBM_BIN" --ui=true --port=9749 > /tmp/cbm-server.log 2>&1 &
+  tail -f /dev/null | nohup "$CBM_BIN" --ui=true --port=9749 > /tmp/cbm-server.log 2>&1 &
   echo "[PI-WEB] codebase-memory-mcp server starting on port 9749 (PID $!)"
 fi
 
