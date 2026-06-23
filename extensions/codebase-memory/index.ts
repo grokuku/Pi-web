@@ -35,7 +35,7 @@ import { dirname } from "path";
 
 const BIN_PATH = join(homedir(), ".local", "bin", "codebase-memory-mcp");
 const PORT = 9749;
-const BASE = `http://localhost:${PORT}`;
+const BASE = `http://127.0.0.1:${PORT}`;
 const DOWNLOAD_URL =
   "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh";
 

@@ -452,7 +452,7 @@ export async function sendPrompt(
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -461,6 +461,19 @@ export async function sendPrompt(
       case "/quit":
       case "/close": {
         return { command: "quit", result: "" };
+      }
+      case "/reload": {
+        // Reload Pi session — picks up new extensions, skills, prompts
+        const state = sessionsByProject.get(projectId);
+        if (state?.session) {
+          try {
+            await (state.session as any).reload?.();
+            return { command: "reload", result: "✓ Session reloaded (extensions, skills, prompts updated)" };
+          } catch (e: any) {
+            return { command: "reload", result: `Error: ${e.message}` };
+          }
+        }
+        return { command: "reload", result: "No active session to reload" };
       }
       default: {
         // Unknown command — try extension commands via session.prompt()
