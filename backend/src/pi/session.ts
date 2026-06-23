@@ -868,8 +868,17 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - If a change affects multiple files, list all affected files before starting
 - Keep commits atomic — one logical change per commit when possible
 
-## Knowledge Graph
-When available (cbm_* tools visible), use cbm_search instead of grep+read for structural questions. cbm_trace finds callers/callees instantly, cbm_arch gives architecture overview. This saves hundreds of thousands of tokens vs file-by-file exploration.`,
+## Code exploration: prefer graph tools over grep/find/ls
+When the project has been indexed by the knowledge graph (cbm_* tools are visible):
+- Use **cbm_search** instead of grep/find to find code by name, label, or meaning
+- Use **cbm_search_code** instead of grep -r for text/regex searches
+- Use **cbm_trace** instead of manually reading files to trace callers/callees
+- Use **cbm_code** to get source code of specific symbols
+- Use **cbm_arch** to understand the overall project structure
+- Use **cbm_diff** to analyze the impact of uncommitted changes
+
+These are 100x more token-efficient than file-by-file exploration. Use them when possible.
+grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
   plan: `You are in PLAN mode — you analyze the codebase and produce structured implementation plans WITHOUT modifying any files.
 
 ## Core Rules

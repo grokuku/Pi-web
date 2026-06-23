@@ -27,14 +27,6 @@ interface CodeStats {
   scanTimeMs: number;
 }
 
-interface CbmProject {
-  name: string;
-  root_path: string;
-  nodes: number;
-  edges: number;
-  size_bytes: number;
-}
-
 const LANG_COLORS: Record<string, string> = {
   TypeScript: "#3178c6", JavaScript: "#f7df1e", Python: "#3776ab",
   HTML: "#e34c26", CSS: "#563d7c", SCSS: "#cd6799", Sass: "#a53b70",
@@ -103,8 +95,8 @@ function StatCard({ icon, value, label, color }: { icon: React.ReactNode; value:
 
 export function CbmStatsModal({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState<CbmProject[]>([]);
-  const [selected, setSelected] = useState<string>("");
+  const [projects, setProjects] = useState<{ name: string; cwd: string }[]>([]);
+  const [selected, setSelected] = useState<string | "__all__">("");
   const [stats, setStats] = useState<CodeStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState("lines");
@@ -114,15 +106,14 @@ export function CbmStatsModal({ onClose }: Props) {
 
   const loadProjects = useCallback(async () => {
     try {
-      const res = await fetch("/rpc", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_projects", arguments: {} } }),
-      });
+      const res = await fetch("/api/projects");
       const data = await res.json();
-      const text = data?.result?.content?.[0]?.text || "[]";
-      const list: CbmProject[] = JSON.parse(text).projects || [];
+      const list = (Array.isArray(data) ? data : data.projects || data.data || [])
+        .filter((p: any) => p.cwd)
+        .map((p: any) => ({ name: p.name || p.id, cwd: p.cwd }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
       setProjects(list);
-      if (list.length > 0) setSelected(list[0].root_path);
+      if (list.length > 0) setSelected(list[0].cwd);
     } catch {}
   }, []);
 
@@ -131,22 +122,83 @@ export function CbmStatsModal({ onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/cbm/code-stats", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: CodeStats = await res.json();
-      setStats(data);
+      if (path === "__all__") {
+        // Aggregate stats across all projects
+        const results = await Promise.all(
+          projects.filter(p => p.cwd).map(async p => {
+            try {
+              const res = await fetch("/api/cbm/code-stats", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: p.cwd }),
+              });
+              if (!res.ok) return null;
+              return await res.json();
+            } catch { return null; }
+          })
+        );
+        const valid = results.filter(Boolean);
+        if (valid.length === 0) throw new Error("Aucun projet accessible");
+
+        // Merge
+        const merged: CodeStats = {
+          totalCodeFiles: valid.reduce((s, r) => s + r.totalCodeFiles, 0),
+          totalLines: valid.reduce((s, r) => s + r.totalLines, 0),
+          totalCodeLines: valid.reduce((s, r) => s + r.totalCodeLines, 0),
+          totalBlank: valid.reduce((s, r) => s + r.totalBlank, 0),
+          totalSize: valid.reduce((s, r) => s + r.totalSize, 0),
+          scanTimeMs: valid.reduce((s, r) => s + r.scanTimeMs, 0),
+          langStats: [],
+          topFiles: [],
+          files: [],
+        };
+
+        // Merge lang stats
+        const langMap: Record<string, { files: number; lines: number; blank: number; codeLines: number }> = {};
+        for (const r of valid) {
+          for (const l of r.langStats || []) {
+            if (!langMap[l.lang]) langMap[l.lang] = { files: 0, lines: 0, blank: 0, codeLines: 0 };
+            langMap[l.lang].files += l.files;
+            langMap[l.lang].lines += l.lines;
+            langMap[l.lang].blank += l.blank;
+            langMap[l.lang].codeLines += l.codeLines;
+          }
+        }
+        merged.langStats = Object.entries(langMap).sort(([, a], [, b]) => b.lines - a.lines).map(([lang, s]) => ({ lang, ...s }));
+
+        // Top files — take top 15 across all projects
+        const allFiles: { path: string; name: string; lang: string; lines: number; size: number }[] = [];
+        for (const r of valid) {
+          for (const f of r.topFiles || []) {
+            allFiles.push({ ...f, path: `${r.projectLabel || ""}/${f.path}` });
+          }
+        }
+        merged.topFiles = allFiles.sort((a, b) => b.lines - a.lines).slice(0, 15);
+
+        // All files
+        for (const r of valid) {
+          for (const f of r.files || []) {
+            merged.files.push(f);
+          }
+        }
+
+        setStats(merged);
+      } else {
+        const res = await fetch("/api/cbm/code-stats", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setStats(await res.json());
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projects]);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
-  useEffect(() => { loadStats(selected); }, [selected, loadStats]);
+  useEffect(() => { if (selected) loadStats(selected); }, [selected, loadStats]);
 
   // File list with sorting + filtering
   const fileList = (stats?.files || [])
@@ -171,7 +223,7 @@ export function CbmStatsModal({ onClose }: Props) {
 
   const catCount = (cat: string) => stats?.files.filter(f => f.category === cat).length || 0;
 
-  const projectLabel = (p: CbmProject) => p.name.replace(/^projects-/, "");
+  const projectLabel = (p: { name: string }) => p.name;
 
   return (
     <div className="fixed inset-0 z-50 bg-hacker-bg/95 flex flex-col overflow-hidden" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -203,9 +255,9 @@ export function CbmStatsModal({ onClose }: Props) {
             {/* Project selector */}
             <div className="flex gap-1 flex-wrap mb-4">
               {projects.map(p => (
-                <button key={p.name} onClick={() => setSelected(p.root_path)}
+                <button key={p.name} onClick={() => setSelected(p.cwd)}
                   className={`text-xs px-3 py-1.5 rounded border font-semibold transition-all ${
-                    selected === p.root_path
+                    selected === p.cwd
                       ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
                       : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border-bright"}`}
                 >{projectLabel(p)}</button>
