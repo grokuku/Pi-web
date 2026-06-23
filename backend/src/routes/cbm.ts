@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
-import { existsSync } from "fs";
+import { existsSync, readdirSync, statSync, readFileSync, lstatSync } from "fs";
 import { execSync } from "child_process";
-import { join } from "path";
+import { join, extname, basename, relative } from "path";
 import os from "os";
 
 const router = Router();
@@ -136,6 +136,172 @@ router.post("/download", async (_req: Request, res: Response) => {
 
     const version = getCbmVersion();
     res.json({ success: true, version, output: output.slice(-500) });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Excluded directories (same as the HTML page) ────────────
+const EXCLUDED_DIRS = new Set([
+  ".git", ".svn", "node_modules", "bower_components", "vendor", "packages",
+  "__pycache__", ".pytest_cache", ".ruff_cache", ".tox", "venv", ".venv",
+  "env", ".env", "virtualenv", "dist", "build", "out", "target", ".turbo",
+  ".next", ".nuxt", ".svelte-kit", ".cache", "coverage", ".idea", ".vscode",
+  ".vs", ".gradle", "Pods", "bin", "obj", "Debug", "Release",
+]);
+
+const BINARY_EXTS = new Set([
+  "png","jpg","jpeg","gif","webp","bmp","ico","mp3","wav","ogg","flac",
+  "mp4","avi","mov","webm","mkv","pdf","doc","docx","xls","xlsx",
+  "zip","tar","gz","bz2","xz","rar","7z","tgz","zst","deb","rpm","dmg",
+  "iso","jar","war","ear","apk","exe","dll","so","dylib","o","a","lib",
+  "pyc","pyo","class","wasm","woff","woff2","ttf","otf","eot",
+  "ico","svg","eot","ttf","otf","woff","woff2",
+]);
+
+const ASSET_EXTS = new Set([
+  "png","jpg","jpeg","gif","webp","bmp","ico","tiff","avif","svg",
+  "mp3","wav","ogg","flac","aac","m4a","opus","mid","midi",
+  "mp4","avi","mov","webm","mkv","flv","wmv","m4v","3gp",
+  "woff","woff2","ttf","otf","eot",
+  "pdf","doc","docx","xls","xlsx","ppt","pptx","odt","ods","odp","epub",
+]);
+
+const CONFIG_NAMES = new Set([
+  "package.json", "tsconfig.json", "dockerfile", "makefile", "gnumakefile",
+  ".gitignore", ".editorconfig", ".env", "docker-compose.yml", "vite.config.ts",
+  "tailwind.config.js", "postcss.config.js", ".prettierrc", ".eslintrc",
+  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "gemfile", "rakefile",
+  "procfile", "cmakelists.txt",
+]);
+
+const LANG_MAP: Record<string, string> = {
+  ts: "TypeScript", tsx: "TypeScript", js: "JavaScript", jsx: "JavaScript",
+  mjs: "JavaScript", cjs: "JavaScript", py: "Python", pyw: "Python",
+  rb: "Ruby", rs: "Rust", go: "Go", java: "Java", kt: "Kotlin",
+  c: "C", h: "C", cpp: "C++", cc: "C++", hpp: "C++", cs: "C#",
+  swift: "Swift", php: "PHP", html: "HTML", htm: "HTML",
+  css: "CSS", scss: "SCSS", sass: "Sass", less: "Less",
+  vue: "Vue", svelte: "Svelte", json: "JSON", yaml: "YAML", yml: "YAML",
+  toml: "TOML", xml: "XML", md: "Markdown", mdx: "Markdown",
+  sql: "SQL", sh: "Shell", bash: "Shell", zsh: "Shell",
+  ps1: "PowerShell", lua: "Lua", r: "R", scala: "Scala",
+  dart: "Dart", zig: "Zig", nim: "Nim",
+  ex: "Elixir", exs: "Elixir", erl: "Erlang", hs: "Haskell",
+  clj: "Clojure", cljs: "Clojure", elm: "Elm",
+  tf: "Terraform", gradle: "Gradle", proto: "Protobuf",
+  graphql: "GraphQL", gql: "GraphQL",
+  ini: "INI", cfg: "INI", conf: "INI",
+  lock: "Lockfile", log: "Log", gitignore: "Git",
+};
+
+function detectLang(name: string): string {
+  const ext = extname(name).toLowerCase().slice(1);
+  if (LANG_MAP[ext]) return LANG_MAP[ext];
+  const lower = name.toLowerCase();
+  if (lower === "dockerfile") return "Dockerfile";
+  if (lower === "makefile") return "Makefile";
+  if (lower.startsWith(".env")) return "Env";
+  return "Unknown";
+}
+
+function isCodeFile(name: string): boolean {
+  const ext = extname(name).toLowerCase().slice(1);
+  if (!ext) return false;
+  if (BINARY_EXTS.has(ext)) return false;
+  const lang = detectLang(name);
+  return lang !== "Unknown" || false;
+}
+
+function walkDir(dirPath: string, basePath: string): any[] {
+  const results: any[] = [];
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name);
+      const relPath = relative(basePath, fullPath);
+      if (entry.isDirectory()) {
+        if (EXCLUDED_DIRS.has(entry.name)) continue;
+        results.push(...walkDir(fullPath, basePath));
+      } else if (entry.isFile()) {
+        try {
+          const stats = statSync(fullPath);
+          const isAsset = ASSET_EXTS.has(extname(entry.name).toLowerCase().slice(1));
+          const isConfig = CONFIG_NAMES.has(entry.name.toLowerCase()) ||
+            entry.name.toLowerCase().startsWith(".git") ||
+            entry.name.toLowerCase().endsWith(".lock");
+          const isCode = !isAsset && !isConfig && isCodeFile(entry.name);
+          let lines = 0, blankLines = 0;
+          if (isCode && stats.size < 2 * 1024 * 1024) {
+            try {
+              const content = readFileSync(fullPath, "utf-8");
+              const allLines = content.split("\n");
+              lines = allLines.length;
+              blankLines = allLines.filter(l => l.trim() === "").length;
+            } catch {}
+          }
+          results.push({
+            path: relPath,
+            name: entry.name,
+            extension: extname(entry.name).toLowerCase().slice(1) || "—",
+            lang: detectLang(entry.name),
+            lines,
+            blankLines,
+            codeLines: lines - blankLines,
+            size: stats.size,
+            category: isAsset ? "asset" : isConfig ? "config" : isCode ? "code" : "other",
+          });
+        } catch {}
+      }
+    }
+  } catch {}
+  return results;
+}
+
+// POST /api/cbm/code-stats — scan a project directory and return code stats
+router.post("/code-stats", (req: Request, res: Response) => {
+  try {
+    const { path: projectPath } = req.body as { path?: string };
+    if (!projectPath) return res.status(400).json({ error: "path is required" });
+    if (!existsSync(projectPath)) return res.status(404).json({ error: "Path not found" });
+
+    const start = Date.now();
+    const files = walkDir(projectPath, projectPath);
+
+    // Group by language (code only)
+    const langStats: Record<string, { files: number; lines: number; blank: number; codeLines: number }> = {};
+    files.filter(f => f.category === "code").forEach(f => {
+      if (!langStats[f.lang]) langStats[f.lang] = { files: 0, lines: 0, blank: 0, codeLines: 0 };
+      langStats[f.lang].files++;
+      langStats[f.lang].lines += f.lines;
+      langStats[f.lang].blank += f.blankLines;
+      langStats[f.lang].codeLines += f.codeLines;
+    });
+
+    const codeFiles = files.filter(f => f.category === "code");
+    const assetFiles = files.filter(f => f.category === "asset");
+    const configFiles = files.filter(f => f.category === "config");
+
+    res.json({
+      totalCodeFiles: codeFiles.length,
+      totalLines: codeFiles.reduce((s, f) => s + f.lines, 0),
+      totalCodeLines: codeFiles.reduce((s, f) => s + f.codeLines, 0),
+      totalBlank: codeFiles.reduce((s, f) => s + f.blankLines, 0),
+      totalSize: files.reduce((s, f) => s + f.size, 0),
+      langStats: Object.entries(langStats)
+        .sort(([, a], [, b]) => b.lines - a.lines)
+        .map(([lang, stats]) => ({ lang, ...stats })),
+      topFiles: codeFiles
+        .sort((a, b) => b.lines - a.lines)
+        .slice(0, 15)
+        .map(f => ({ path: f.path, name: f.name, lang: f.lang, lines: f.lines, size: f.size })),
+      files: files.map(f => ({
+        path: f.path, name: f.name, extension: f.extension,
+        lang: f.lang, lines: f.lines, size: f.size, category: f.category,
+      })),
+      excludedDirs: [...EXCLUDED_DIRS],
+      scanTimeMs: Date.now() - start,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
