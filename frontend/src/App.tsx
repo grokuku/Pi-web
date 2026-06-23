@@ -11,6 +11,7 @@ import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
 import { UsageStatsModal } from "./components/Modals/UsageStatsModal";
 import { Graph3DModal } from "./components/Modals/Graph3DModal";
+import { CbmStatsModal } from "./components/Modals/CbmStatsModal";
 import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { AccentPicker } from "./components/Header/AccentPicker";
@@ -157,6 +158,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showUsageStats, setShowUsageStats] = useState(false);
   const [showGraph3D, setShowGraph3D] = useState(false);
+  const [showCbmStats, setShowCbmStats] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
@@ -701,6 +703,14 @@ function App() {
         >
           📊
         </button>
+        {/* CBM stats button */}
+        <button
+          onClick={() => setShowCbmStats(true)}
+          className="text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          title="CBM usage statistics"
+        >
+          📈
+        </button>
 
         <div className="w-px h-4 bg-hacker-border-right" />
 
@@ -870,6 +880,9 @@ function App() {
       )}
       {showGraph3D && (
         <Graph3DModal onClose={() => setShowGraph3D(false)} />
+      )}
+      {showCbmStats && (
+        <CbmStatsModal onClose={() => setShowCbmStats(false)} />
       )}
     </div>
   );

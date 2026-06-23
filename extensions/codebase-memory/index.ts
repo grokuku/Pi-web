@@ -47,6 +47,39 @@ interface CbmStatus {
   indexing: boolean;
   error: string | null;
 }
+
+// Shared usage stats — read by Express route /api/cbm/status
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = globalThis as any;
+if (!g.__cbmUsageStats) {
+  g.__cbmUsageStats = {
+    totalCalls: 0,
+    totalErrors: 0,
+    byTool: {} as Record<string, { ok: number; fail: number }>,
+    byMode: {} as Record<string, number>,
+    indexedProjects: 0,
+    since: new Date().toISOString(),
+  };
+}
+
+/** Track a successful CBM tool call */
+function trackCall(tool: string, mode?: string) {
+  const s = g.__cbmUsageStats;
+  s.totalCalls++;
+  if (!s.byTool[tool]) s.byTool[tool] = { ok: 0, fail: 0 };
+  s.byTool[tool].ok++;
+  if (mode) {
+    s.byMode[mode] = (s.byMode[mode] || 0) + 1;
+  }
+}
+
+/** Track a failed CBM tool call */
+function trackFail(tool: string) {
+  const s = g.__cbmUsageStats;
+  s.totalErrors++;
+  if (!s.byTool[tool]) s.byTool[tool] = { ok: 0, fail: 0 };
+  s.byTool[tool].fail++;
+}
 let status: CbmStatus = {
   installed: false,
   version: null,
@@ -215,17 +248,29 @@ async function mcpCallForProject(
   signal?: AbortSignal
 ): Promise<string> {
   const project = getProjectName(cwd);
-  return mcpCall(toolName, { ...args, project }, signal);
+  try {
+    const result = await mcpCall(toolName, { ...args, project }, signal);
+    trackCall(toolName);
+    return result;
+  } catch (e: any) {
+    trackFail(toolName);
+    throw e;
+  }
 }
 
 // ── Project mapping ─────────────────────────────────────
-// Maps cwd → CBM project name, so tools know which graph to query.
+// Maps cwd → { projectName: string, lastIndexedAt: number }
 // The project name is discovered via list_projects after indexing.
-const projectByCwd = new Map<string, string>();
+interface ProjectInfo {
+  projectName: string;
+  lastIndexedAt: number;
+}
+const projectByCwd = new Map<string, ProjectInfo>();
+const REINDEX_INTERVAL_MS = 5 * 60 * 1000; // 5 min — keeps index fresh without being too expensive
 
 /** Get the CBM project name for a given cwd, or derive a fallback. */
 function getProjectName(cwd: string): string {
-  return projectByCwd.get(cwd) || cwd.split("/").pop() || cwd;
+  return projectByCwd.get(cwd)?.projectName || cwd.split("/").pop() || cwd;
 }
 
 // ── Index ────────────────────────────────────────────────
@@ -238,6 +283,7 @@ async function indexProject(cwd: string): Promise<void> {
     // NOTE: parameter is repo_path (absolute path), not path
     await mcpCall("index_repository", { repo_path: cwd, mode: "moderate" });
     console.log("[cbm] Indexing complete");
+    g.__cbmUsageStats.indexedProjects += 1;
 
     // Discover the project name assigned by CBM
     const listResult = await mcpCall("list_projects", {});
@@ -251,18 +297,18 @@ async function indexProject(cwd: string): Promise<void> {
         return pPath === cwd || p.name === cwd.split("/").pop();
       });
       if (match?.name) {
-        projectByCwd.set(cwd, match.name);
+        projectByCwd.set(cwd, { projectName: match.name, lastIndexedAt: Date.now() });
         console.log(`[cbm] Project name: ${match.name}`);
       } else {
         // Fallback: use directory name as project name
         const fallbackName = cwd.split("/").pop() || cwd;
-        projectByCwd.set(cwd, fallbackName);
+        projectByCwd.set(cwd, { projectName: fallbackName, lastIndexedAt: Date.now() });
         console.log(`[cbm] Project name (fallback): ${fallbackName}`);
       }
     } catch (e: any) {
       // If list_projects parsing fails, use dir name as fallback
       const fallbackName = cwd.split("/").pop() || cwd;
-      projectByCwd.set(cwd, fallbackName);
+      projectByCwd.set(cwd, { projectName: fallbackName, lastIndexedAt: Date.now() });
       console.warn(`[cbm] Could not parse list_projects: ${e.message}, using fallback name: ${fallbackName}`);
     }
   } catch (e: any) {
@@ -418,11 +464,12 @@ export default async function (pi: ExtensionAPI) {
       }
 
       // 3. Index THIS project (each project gets its own graph)
-      //    Skip if already indexed (projectByCwd has an entry for this cwd)
-      if (!projectByCwd.has(ctx.cwd)) {
-        await indexProject(ctx.cwd);
+      //    Skip if already indexed recently
+      const projInfo = projectByCwd.get(ctx.cwd);
+      if (projInfo && Date.now() - projInfo.lastIndexedAt < REINDEX_INTERVAL_MS) {
+        console.log(`[cbm] Project already indexed: ${ctx.cwd} → ${projInfo.projectName}`);
       } else {
-        console.log(`[cbm] Project already indexed: ${ctx.cwd} → ${projectByCwd.get(ctx.cwd)}`);
+        await indexProject(ctx.cwd);
       }
     } catch (e: any) {
       console.error("[cbm] Initialization failed:", e.message);
@@ -440,14 +487,32 @@ export default async function (pi: ExtensionAPI) {
         await spawnServer();
       }
 
-      // Index this project if not already done
-      if (ctx.cwd && !projectByCwd.has(ctx.cwd)) {
-        console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
-        await indexProject(ctx.cwd);
-      }
+      // Index this project if not indexed recently (within 5 min)
+      if (ctx.cwd) {
+        const projInfo = projectByCwd.get(ctx.cwd);
+        if (!projInfo || Date.now() - projInfo.lastIndexedAt > REINDEX_INTERVAL_MS) {
+          console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
+          await indexProject(ctx.cwd);
+        }
     } catch (e: any) {
       console.error("[cbm] before_agent_start failed:", e.message);
     }
+  });
+
+  // ── tool_execution_end: re-index after file edits ──
+  // When Pi edits or writes a file, the CBM index becomes stale.
+  // We trigger a fast incremental re-index so the next cbm_* call sees fresh data.
+  pi.on("tool_execution_end", async (event, ctx) => {
+    // Only react to file-modifying tools
+    if (event.toolName !== "edit" && event.toolName !== "write") return;
+
+    // Avoid re-index storm (multiple edits in quick succession)
+    if (!ctx.cwd) return;
+    const projInfo = projectByCwd.get(ctx.cwd);
+    if (projInfo && Date.now() - projInfo.lastIndexedAt < 5_000) return; // max once per 5s
+
+    console.log(`[cbm] File modified (${event.toolName}), re-indexing...`);
+    await indexProject(ctx.cwd);
   });
 
   // ── Cleanup ──

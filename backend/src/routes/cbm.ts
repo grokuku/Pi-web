@@ -48,7 +48,7 @@ async function getLatestVersion(): Promise<string | null> {
 function isServerRunning(): boolean {
   try {
     const result = execSync(
-      `curl -s -o /dev/null -w "%{http_code}" http://localhost:9749/ --max-time 1`,
+      `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9749/ --max-time 1`,
       { timeout: 3000, encoding: "utf-8" }
     ).trim();
     return result === "200" || result === "404"; // 404 is fine, means server is up but no root route
@@ -79,6 +79,8 @@ router.get("/status", async (_req: Request, res: Response) => {
       updateAvailable,
       running,
       binaryPath: installed ? BIN_PATH : null,
+      // Usage stats from the extension (tracked per CBM tool call)
+      usage: (globalThis as any).__cbmUsageStats || null,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
