@@ -16,7 +16,8 @@ export function useWebSocket() {
   const reconnectAttemptsRef = useRef(0);
 
   const connect = useCallback(() => {
-    // Clear any pending reconnect timer
+    if (isDestroyedRef.current) return;
+    let isFirstConnect = true;
     if (reconnectTimerRef.current !== null) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -49,11 +50,14 @@ export function useWebSocket() {
       console.log(`[WS] Connected to ${wsUrl}`);
       setConnected(true);
       reconnectAttemptsRef.current = 0;
-      // Notify listeners that we reconnected so they can restore state
-      const reconnectListeners = listenersRef.current.get("_ws_reconnect");
-      if (reconnectListeners) {
-        reconnectListeners.forEach((cb) => cb({ type: "_ws_reconnect" }));
+      // Only notify reconnect listeners on RECONNECT, not initial connect
+      if (!isFirstConnect) {
+        const reconnectListeners = listenersRef.current.get("_ws_reconnect");
+        if (reconnectListeners) {
+          reconnectListeners.forEach((cb) => cb({ type: "_ws_reconnect" }));
+        }
       }
+      isFirstConnect = false;
     };
 
     ws.onmessage = (event) => {

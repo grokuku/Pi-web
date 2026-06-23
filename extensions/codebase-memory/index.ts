@@ -450,60 +450,63 @@ const schemaParams = {
 export default async function (pi: ExtensionAPI) {
   console.log("[cbm] Extension loaded");
 
-  // ── session_start: download, spawn, index ──
-  pi.on("session_start", async (_event, ctx) => {
-    try {
-      // 1. Download binary if needed (only once)
-      if (!existsSync(BIN_PATH)) {
-        await ensureBinary();
-      }
-
-      // 2. Start server if not running (only once)
-      if (!status.running) {
-        await spawnServer();
-      }
-
-      // 3. Index THIS project (each project gets its own graph)
-      //    Skip if already indexed recently
-      const projInfo = projectByCwd.get(ctx.cwd);
-      if (projInfo && Date.now() - projInfo.lastIndexedAt < REINDEX_INTERVAL_MS) {
-        console.log(`[cbm] Project already indexed: ${ctx.cwd} → ${projInfo.projectName}`);
-      } else {
-        await indexProject(ctx.cwd);
-      }
-    } catch (e: any) {
-      console.error("[cbm] Initialization failed:", e.message);
-      status.error = e.message;
+  // ── session_start: download, spawn, index (NON-BLOCKING) ──
+  // Fire-and-forget so session creation is not delayed by CBM init.
+  pi.on("session_start", (_event, ctx) => {
+    if (!status.running && !existsSync(BIN_PATH)) {
+      console.log("[cbm] session_start: binary not installed, skipping init (non-blocking)");
+      return;
     }
+    (async () => {
+      try {
+        if (!status.running) {
+          await spawnServer();
+        }
+        const projInfo = projectByCwd.get(ctx.cwd);
+        if (projInfo && Date.now() - projInfo.lastIndexedAt < REINDEX_INTERVAL_MS) {
+          console.log(`[cbm] Project already indexed: ${ctx.cwd} → ${projInfo.projectName}`);
+        } else {
+          await indexProject(ctx.cwd);
+        }
+      } catch (e: any) {
+        console.error("[cbm] session_start failed:", e.message);
+        status.error = e.message;
+      }
+    })();
   });
 
   // ── Fallback: before_agent_start — ensure server + index if needed ──
-  // This handles cases where session_start didn't fire (e.g. extension loaded late).
-  pi.on("before_agent_start", async (_event, ctx) => {
-    try {
-      // Start server if not running
-      if (!status.running) {
-        if (!existsSync(BIN_PATH)) await ensureBinary();
-        await spawnServer();
-      }
-
-      // Index this project if not indexed recently (within 5 min)
-      if (ctx.cwd) {
-        const projInfo = projectByCwd.get(ctx.cwd);
-        if (!projInfo || Date.now() - projInfo.lastIndexedAt > REINDEX_INTERVAL_MS) {
-          console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
-          await indexProject(ctx.cwd);
-        }
-      }
-    } catch (e: any) {
-      console.error("[cbm] before_agent_start failed:", e.message);
+  // NON-BLOCKING: fire-and-forget so the LLM can start immediately.
+  // CBM init (download, spawn, index) can take minutes — we must not block the agent.
+  pi.on("before_agent_start", (_event, ctx) => {
+    // Skip entirely if CBM is not installed and not running
+    if (!status.running && !existsSync(BIN_PATH)) {
+      console.log("[cbm] before_agent_start: binary not installed, skipping (non-blocking)");
+      return;
     }
+    // Fire-and-forget: start/init in background, don't await
+    (async () => {
+      try {
+        if (!status.running) {
+          await spawnServer();
+        }
+        if (ctx.cwd) {
+          const projInfo = projectByCwd.get(ctx.cwd);
+          if (!projInfo || Date.now() - projInfo.lastIndexedAt > REINDEX_INTERVAL_MS) {
+            console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);
+            await indexProject(ctx.cwd);
+          }
+        }
+      } catch (e: any) {
+        console.error("[cbm] before_agent_start failed:", e.message);
+      }
+    })();
   });
 
   // ── tool_execution_end: re-index after file edits ──
   // When Pi edits or writes a file, the CBM index becomes stale.
   // We trigger a fast incremental re-index so the next cbm_* call sees fresh data.
-  pi.on("tool_execution_end", async (event, ctx) => {
+  pi.on("tool_execution_end", (event, ctx) => {
     // Only react to file-modifying tools
     if (event.toolName !== "edit" && event.toolName !== "write") return;
 
@@ -512,8 +515,11 @@ export default async function (pi: ExtensionAPI) {
     const projInfo = projectByCwd.get(ctx.cwd);
     if (projInfo && Date.now() - projInfo.lastIndexedAt < 5_000) return; // max once per 5s
 
-    console.log(`[cbm] File modified (${event.toolName}), re-indexing...`);
-    await indexProject(ctx.cwd);
+    // Non-blocking: fire-and-forget so the agent can continue immediately
+    (async () => {
+      console.log(`[cbm] File modified (${event.toolName}), re-indexing...`);
+      await indexProject(ctx.cwd);
+    })();
   });
 
   // ── Cleanup ──
