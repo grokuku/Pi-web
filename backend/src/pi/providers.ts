@@ -226,6 +226,8 @@ export function inferContextWindow(modelId: string, family?: string): number {
     // DeepSeek
     "deepseek-r1": 128000,
     "deepseek-v3": 128000,
+    "deepseek-v4": 1048576,
+    "deepseek-chat": 128000,
     // Qwen
     "qwq": 128000,
     "qwq-32b": 128000,
@@ -258,6 +260,7 @@ export function inferContextWindow(modelId: string, family?: string): number {
     if (key.startsWith(prefix + "-")) return ctx;
   }
   if (key.includes("kimi")) return 256000;
+  if (key.includes("deepseek-v4")) return 1048576;
   if (key.includes("deepseek-r1")) return 128000;
   if (key.includes("deepseek-v3")) return 128000;
   if (key.includes("qwq")) return 128000;
@@ -278,8 +281,10 @@ export function inferContextWindow(modelId: string, family?: string): number {
   if (key.includes("gpt-4o")) return 128000;
   if (key.includes("gpt-4")) return 8192;
   if (key.includes("o1") || key.includes("o3") || key.includes("o4")) return 200000;
+  if (key.includes("deepseek-v4")) return 1048576;
   if (key.includes("deepseek-r1")) return 128000;
   if (key.includes("deepseek-v3")) return 128000;
+  if (key.includes("deepseek-chat")) return 128000;
   if (key.includes("deepseek")) return 64000;
   if (key.includes("qwq")) return 128000;
   if (key.includes("qwen3")) return 128000;
@@ -419,6 +424,11 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
         size: m.size || m.details?.size || undefined,
         quantization: m.details?.quantization_level || m.quantization || undefined,
         family: m.details?.family || m.family || undefined,
+        // Some providers (OpenRouter, etc.) include context_length in /v1/models
+        contextWindow: m.context_length || m.context_window || m.max_context_length || undefined,
+        // Some providers include capability hints
+        reasoning: m.supports_reasoning || undefined,
+        vision: m.supports_vision || m.multimodal || undefined,
       })).filter((m: DiscoveredModel) => m.id);
     } else if (provider.type === "anthropic") {
       // Anthropic doesn't have a model list endpoint, return known models

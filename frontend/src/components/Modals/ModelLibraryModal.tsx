@@ -381,6 +381,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
+  // Inline edit state for model properties (contextWindow, maxTokens)
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [editCtx, setEditCtx] = useState("");
+  const [editMaxTokens, setEditMaxTokens] = useState("");
   // Provider filters: separate for Available and Selected columns
   const [providerFilterAvailable, setProviderFilterAvailable] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
   const [providerFilterSelected, setProviderFilterSelected] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
@@ -753,8 +757,58 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                         {m.vision && <span className="text-[0.6875rem]" title="Vision">👁️</span>}
                         {m.reasoning && <span className="text-[0.6875rem]" title="Reasoning">🧠</span>}
                         <span className="text-[0.6875rem] text-hacker-text-dim/70" title="Context window">{fmtCtx(m.contextWindow)}</span>
+                        <Edit2 size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (editingModelId === m.id) {
+                              setEditingModelId(null);
+                            } else {
+                              setEditingModelId(m.id);
+                              setEditCtx(String(m.contextWindow || ""));
+                              setEditMaxTokens(String(m.maxTokens || ""));
+                            }
+                          }}
+                        />
                       </span>
                     </button>
+                    {editingModelId === m.id && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-hacker-surface border-b border-hacker-border/50 text-[0.6875rem]">
+                        <label className="text-hacker-text-dim whitespace-nowrap">Ctx:</label>
+                        <input
+                          type="number"
+                          value={editCtx}
+                          onChange={(e) => setEditCtx(e.target.value)}
+                          placeholder={String(m.contextWindow || 0)}
+                          className="w-24 bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
+                        />
+                        <label className="text-hacker-text-dim whitespace-nowrap">Max out:</label>
+                        <input
+                          type="number"
+                          value={editMaxTokens}
+                          onChange={(e) => setEditMaxTokens(e.target.value)}
+                          placeholder={String(m.maxTokens || 0)}
+                          className="w-24 bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
+                        />
+                        <button
+                          onClick={async () => {
+                            const updates: Partial<RegisteredModel> = {};
+                            const ctx = parseInt(editCtx, 10);
+                            const max = parseInt(editMaxTokens, 10);
+                            if (ctx && ctx > 0 && ctx !== m.contextWindow) updates.contextWindow = ctx;
+                            if (max && max > 0 && max !== m.maxTokens) updates.maxTokens = max;
+                            if (Object.keys(updates).length > 0) {
+                              await onUpdate(m.id, updates);
+                            }
+                            setEditingModelId(null);
+                          }}
+                          className="px-2 py-0.5 bg-hacker-accent/20 border border-hacker-accent/50 text-hacker-accent rounded hover:bg-hacker-accent/30"
+                        >Save</button>
+                        <button
+                          onClick={() => setEditingModelId(null)}
+                          className="px-2 py-0.5 text-hacker-text-dim hover:text-hacker-text"
+                        >Cancel</button>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -766,7 +820,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
       {/* Set default hint */}
       {library.models.length > 0 && (
         <div className="text-hacker-text-dim text-[0.6875rem] text-center">
-          ★ = default model · 👁️ vision · 🧠 reasoning
+          ★ = default model · 👁️ vision · 🧠 reasoning · ✎ edit context/max tokens
         </div>
       )}
     </div>
