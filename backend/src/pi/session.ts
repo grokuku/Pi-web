@@ -106,6 +106,35 @@ export function getModelRegistry(): ModelRegistry {
   return sharedModelRegistry;
 }
 
+// ── Session timeout helper ──
+// Prevents LLM calls from hanging indefinitely. If prompt()/steer() doesn't
+// resolve within SESSION_TIMEOUT_MS, abort the session and emit agent_end.
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000;  // 5 minutes
+
+async function withSessionTimeout(
+  promise: Promise<void>,
+  session: AgentSession,
+  projectId: string,
+  label: string,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<void>((_, reject) => {
+    timer = setTimeout(async () => {
+      try {
+        await session.abort();
+      } catch {}
+      emitToSubscribers({ type: "agent_end" } as any, projectId);
+      emitSessionUpdate(projectId);
+      reject(new Error(`[${label}] Session request timed out after ${SESSION_TIMEOUT_MS/1000}s`));
+    }, SESSION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 export function subscribeToEvents(callback: EventCallback): () => void {
   eventCallbacks.add(callback);
   return () => { eventCallbacks.delete(callback); };
@@ -493,23 +522,35 @@ export async function sendPrompt(
     mimeType: img.mimeType,
   }));
 
-  if (state.isStreaming && imageAttachments && imageAttachments.length > 0) {
-    // steer() doesn't support images — abort current stream and send as new prompt
+  if (state.isStreaming) {
+    // Always abort the current session before sending a new prompt.
+    // steer() can hang if the previous LLM call is stuck, and the user
+    // needs a way to unblock without restarting the backend.
     try { await state.session.abort(); } catch {}
     const options: any = {};
-    options.images = imageAttachments;
-    console.log("[prompt] Calling session.prompt()...");
-    await state.session.prompt(message, options);
+    if (imageAttachments && imageAttachments.length > 0) {
+      options.images = imageAttachments;
+    }
+    console.log("[prompt] Aborted previous stream, calling session.prompt()...");
+    await withSessionTimeout(
+      state.session.prompt(message, options),
+      state.session,
+      projectId,
+      "prompt(steer)",
+    );
     console.log("[prompt] session.prompt() returned!");
-  } else if (state.isStreaming) {
-    await state.session.steer(message);
   } else {
     const options: any = {};
     if (imageAttachments && imageAttachments.length > 0) {
       options.images = imageAttachments;
     }
     console.log("[prompt] Calling session.prompt()...");
-    await state.session.prompt(message, options);
+    await withSessionTimeout(
+      state.session.prompt(message, options),
+      state.session,
+      projectId,
+      "prompt",
+    );
     console.log("[prompt] session.prompt() returned!");
   }
 
@@ -526,7 +567,12 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
-  await state.session.steer(message);
+  await withSessionTimeout(
+    state.session.steer(message),
+    state.session,
+    projectId,
+    "steer",
+  );
 }
 
 export async function abortPi(projectId?: string): Promise<void> {
@@ -1201,6 +1247,9 @@ export function triggerAutoReviewIfNeeded(projectId: string): void {
   const pm = getProjectModeConfig(library, projectId);
   const maxReviews = pm.review.maxReviews ?? 1;
 
+  // Reset cycle counter on each new prompt so auto-review triggers again
+  state.reviewCycle = 0;
+
   // Check conditions
   if (state.activeMode !== "code") return;            // Only after code mode
   if (!pm.review.enabled) return;                     // Review must be enabled
@@ -1872,8 +1921,13 @@ async function runYoloAgent(
       emitToSubscribers(taggedEvent, projectId);
     });
 
-    // Run the prompt
-    await tempSession.prompt(prompt, {});
+    // Run the prompt (with timeout to prevent hanging indefinitely)
+    await withSessionTimeout(
+      tempSession.prompt(prompt, {}),
+      tempSession,
+      projectId,
+      "yolo-agent",
+    );
 
     // Extract the all assistant messages as the result
     const messages: any[] = tempSession.messages || [];

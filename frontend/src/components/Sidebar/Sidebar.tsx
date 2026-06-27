@@ -16,7 +16,7 @@ interface Props {
   onAddProject: () => void;
   onDeleteProject: (p: Project, deleteFiles: boolean) => void;
   session: any;
-  projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any }>;
+  projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any; lastEventAt: number }>;
   onSendCommand: (cmd: string) => void;
   onRefreshGit?: () => void;
 }
@@ -216,6 +216,9 @@ export function Sidebar({
             const pState = projectSessions?.get(p.id);
             const isThisStreaming = pState?.isStreaming ?? false;
             const hasSession = !!pState?.session;
+            const streamingStalled = isThisStreaming && pState?.lastEventAt
+              ? Date.now() - pState.lastEventAt > 30_000
+              : false;
             const isDragging = dragIdx === idx;
             const isDragTarget = dragOverIdx === idx;
             return (
@@ -250,8 +253,11 @@ export function Sidebar({
                       : "text-hacker-text-dim"
                   }`}>
                   <span className="truncate flex-1">{p.name}</span>
-                  {isThisStreaming && (
+                  {isThisStreaming && !streamingStalled && (
                     <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming" />
+                  )}
+                  {isThisStreaming && streamingStalled && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn shrink-0" title="Streaming stalled" />
                   )}
                   {hasSession && !isThisStreaming && (
                     <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />

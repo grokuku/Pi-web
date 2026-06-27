@@ -5,6 +5,7 @@ import { useTranslation } from "../../i18n";
 interface Props {
   activeProject: Project | null;
   isStreaming: boolean;
+  streamingStalled?: boolean;
   stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
   session: any;
   connected: boolean;
@@ -16,6 +17,7 @@ interface Props {
 export function StatusBar({
   activeProject,
   isStreaming,
+  streamingStalled,
   stats,
   session,
   connected,
@@ -96,10 +98,18 @@ export function StatusBar({
       )}
 
       {/* Streaming */}
-      {isStreaming && (
+      {isStreaming && !streamingStalled && (
         <>
           <span className="text-hacker-accent flex items-center gap-1">
             <span className="pulse-dot w-1.5 h-1.5" /> {t('common.loading').toLowerCase()}
+          </span>
+          <span className="text-hacker-border-bright">│</span>
+        </>
+      )}
+      {isStreaming && streamingStalled && (
+        <>
+          <span className="text-hacker-warn flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn" /> stalled
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

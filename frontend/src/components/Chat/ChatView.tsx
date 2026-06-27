@@ -62,6 +62,7 @@ interface Props {
   on: (type: string, cb: (msg: any) => void) => () => void;
   activeProject: Project | null;
   isStreaming: boolean;
+  streamingStalled?: boolean;
   session: any;
   projectId: string;
   activeMode?: string;
@@ -165,7 +166,7 @@ function applyPiEvent(
   return { messages: msgs, assistantId: asstId };
 }
 
-export function ChatView({ send, on, activeProject, isStreaming, session, projectId, activeMode, onQuit }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, onQuit }: Props) {
   const { t } = useTranslation();
 
   // ── State ──
@@ -260,19 +261,29 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
   // ⚠️  CRITICAL: pi_history does NOT include the in-progress streaming message
   // (Pi SDK commits messages only on message_end). Overwriting the store
   // with pi_history while streaming is active would corrupt the streaming
-  // state and break assistantId tracking. Always preserve _streaming messages.
+  // state and break assistantId tracking. Preserve _streaming messages UNLESS
+  // the backend has more finalized data (agent finished during disconnect).
   useEffect(() => {
     const unsub = on("pi_history", (msg: any) => {
       const pid = msg.projectId;
       if (!pid || !msg.messages || !Array.isArray(msg.messages) || msg.messages.length === 0) return;
 
-      // Check if the store already has an in-progress streaming message.
-      // pi_history will NOT have it (backend only commits on message_end),
-      // so overwriting would erase the live streaming state.
       const existing = chatHistory.getMessagesFor(pid);
-      if (existing.some(m => m._streaming)) {
-        // Streaming in progress — pi_history would contain stale/finalized data
-        // that lacks the current streaming message. Skip to preserve live state.
+      const streamingMsgs = existing.filter(m => m._streaming);
+
+      if (streamingMsgs.length > 0) {
+        // Streaming in progress — but check if agent finished during WS gap.
+        // If history has MORE finalized messages than our non-streaming count,
+        // the streaming message is orphaned → apply the finalized history.
+        const nonStreamingCount = existing.length - streamingMsgs.length;
+        const display = convertHistoryToDisplayMessages(msg.messages);
+        if (display.length > nonStreamingCount) {
+          // Agent likely finished while disconnected — apply finalized history
+          chatHistory.saveMessagesFor(display, pid);
+          currentAssistantIdRef.current = null;
+          if (pid === projectId) setMessages(display);
+        }
+        // Otherwise agent still running — preserve live streaming state.
         return;
       }
 
@@ -605,6 +616,7 @@ export function ChatView({ send, on, activeProject, isStreaming, session, projec
         onSend={handleSend}
         onAbort={onAbort}
         isStreaming={isStreaming}
+        streamingStalled={streamingStalled}
         autoReviewStreaming={autoReviewStreaming}
         yoloStreaming={yoloStreaming}
         yoloStatus={yoloStatus}
@@ -861,8 +873,8 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 });
 
 // ── ChatInputArea (unchanged) ──
-const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError, onKeystroke }: {
-  onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; autoReviewStreaming: boolean;
+const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError, onKeystroke }: {
+  onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; streamingStalled?: boolean; autoReviewStreaming: boolean;
   yoloStreaming: boolean; yoloStatus: { phase:string; globalCycle:number; localCycle:number; agent?:string; model?:string } | null;
   gitBranch?: string; setError: (e:string) => void;
   onKeystroke?: (latency: number) => void;
@@ -901,7 +913,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     <div className="border-t border-hacker-border-bright bg-hacker-surface p-3" onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setIsDragOver(true)}} onDragLeave={()=>setIsDragOver(false)} onPaste={handlePaste}>
       {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div></div>}
       {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1"><X size={12}/></button></div>)}</div>}
-      <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn"/> {t('autoReview.inProgress')}</span>}{yoloStreaming&&yoloStatus&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/>YOLO {yoloStatus.phase.toUpperCase()}{yoloStatus.agent?` (${yoloStatus.agent}${yoloStatus.model?`: ${yoloStatus.model}`:""})`:""} — G{yoloStatus.globalCycle}{yoloStatus.localCycle>0?`·${yoloStatus.localCycle}`:""}</span>}{isStreaming&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}</span></div>
+      <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn"/> {t('autoReview.inProgress')}</span>}{yoloStreaming&&yoloStatus&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/>YOLO {yoloStatus.phase.toUpperCase()}{yoloStatus.agent?` (${yoloStatus.agent}${yoloStatus.model?`: ${yoloStatus.model}`:""})`:""} — G{yoloStatus.globalCycle}{yoloStatus.localCycle>0?`·${yoloStatus.localCycle}`:""}</span>}{isStreaming&&!streamingStalled&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> stalled</span>}</span></div>
       <div className="flex gap-2">
         <textarea
           ref={inputRef}

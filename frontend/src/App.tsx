@@ -47,6 +47,7 @@ interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
   stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
+  lastEventAt: number;  // timestamp of last pi_event received (0 = never)
 }
 
 function App() {
@@ -148,6 +149,9 @@ function App() {
     ? projectSessionsRef.current.get(activeProject.id)
     : undefined;
   const isStreaming = activeSessionState?.isStreaming ?? false;
+  const streamingStalled = isStreaming && activeSessionState?.lastEventAt
+    ? Date.now() - activeSessionState.lastEventAt > 30_000
+    : false;
   const session = activeSessionState?.session ?? null;
   const stats = activeSessionState?.stats ?? null;
 
@@ -212,7 +216,7 @@ function App() {
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
     let state = projectSessionsRef.current.get(projectId);
     if (!state) {
-      state = { isStreaming: false, session: null, stats: null };
+      state = { isStreaming: false, session: null, stats: null, lastEventAt: 0 };
       projectSessionsRef.current.set(projectId, state);
     }
     return state;
@@ -336,24 +340,34 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [isStreaming, send, showSettings, showAddProject, showProjectSwitch, activeProject]);
 
-  // ── Stuck streaming watchdog: reset isStreaming after 3 min ──
-  // BUG-08 workaround: backend could leave isStreaming=true after tool_execution_end.
-  // Also handles edge cases where agent_end is missed (network, crash, etc.).
-  // NOTE: The backend fix (removing isStreaming=true in tool_execution_end) is the real fix.
-  // This watchdog is a safety net for any remaining edge cases.
+  // ── Streaming watchdog + stall detector ──
+  // Every 15s, check all projects:
+  // - Stalled (>30s since last event): shown as stale in UI (orange dot)
+  // - Truly stuck (>60s): reset isStreaming to false + finalize
+  // This is a safety net for missed agent_end, WS drops, etc.
   useEffect(() => {
-    const STUCK_TIMEOUT = 3 * 60 * 1000; // 3 minutes
+    const STALL_THRESHOLD = 30 * 1000;  // 30s → show stale indicator
+    const STUCK_TIMEOUT  = 60 * 1000;   // 60s → force reset
+    const CHECK_INTERVAL = 15 * 1000;   // check every 15s
     const interval = setInterval(() => {
+      const now = Date.now();
       let changed = false;
       for (const [pid, state] of projectSessionsRef.current) {
         if (state.isStreaming) {
-          console.warn(`[App] Resetting stuck isStreaming for project ${pid} (no activity for ${Math.round(STUCK_TIMEOUT/1000)}s)`);
-          state.isStreaming = false;
-          changed = true;
+          const elapsed = state.lastEventAt > 0 ? now - state.lastEventAt : now;
+          if (elapsed > STUCK_TIMEOUT) {
+            console.warn(`[App] Force-reset stuck isStreaming for project ${pid} (no activity for ${Math.round(elapsed/1000)}s)`);
+            state.isStreaming = false;
+            changed = true;
+          } else if (elapsed > STALL_THRESHOLD) {
+            // Still streaming but stalled — mark for visual change
+            // (rerender so the UI can show the stale indicator)
+            changed = true;
+          }
         }
       }
       if (changed) rerender();
-    }, STUCK_TIMEOUT);
+    }, CHECK_INTERVAL);
     return () => clearInterval(interval);
   }, []);
 
@@ -379,6 +393,11 @@ function App() {
     const unsubPiEvent = on("pi_event", (msg: any) => {
       const evt = msg.event;
       const projectId = msg.projectId;
+      if (!projectId) return;
+
+      // Track last event time for stall detection
+      const state = getProjectSession(projectId);
+      state.lastEventAt = Date.now();
 
       switch (evt.type) {
         case "agent_start": {
@@ -415,8 +434,6 @@ function App() {
             const prevStats = state.stats || { tokens: 0, contextPercent: 0, totalTokens: 0 };
             const lastInputTokens = u.input || 0;
             const lastOutputTokens = u.output || 0;
-            // Only accumulate totalTokens for cost tracking here.
-            // Context tokens & percent come from contextUsage (emitted via session_update).
             const totalTokens = prevStats.totalTokens + lastInputTokens + lastOutputTokens;
             updateProjectSession(projectId, {
               stats: { ...prevStats, totalTokens },
@@ -427,11 +444,9 @@ function App() {
         case "session_update": {
           if (evt.session) {
             const state = getProjectSession(projectId);
-            // Initialize stats to zero when session is first created
             if (!state.stats) {
               state.stats = { tokens: 0, contextPercent: 0, totalTokens: 0 };
             }
-            // Use contextUsage from the Pi SDK for accurate context stats
             const cu = evt.session.contextUsage;
             if (cu && cu.tokens !== null && cu.contextWindow > 0) {
               const prevStats = state.stats;
@@ -442,7 +457,6 @@ function App() {
               };
             }
             updateProjectSession(projectId, { session: evt.session });
-            // Sync active mode from backend
             if (evt.session.activeMode && projectId === activeProject?.id) {
               setActiveMode(evt.session.activeMode);
             }
@@ -579,12 +593,11 @@ function App() {
   useEffect(() => {
     const unsub = on("_ws_reconnect", () => {
       console.log("[App] WebSocket reconnected — restoring session state");
-      // Reset stuck isStreaming states (BUG-08 fix: backend could leave isStreaming=true)
-      for (const [pid, state] of projectSessionsRef.current) {
-        if (state.isStreaming) {
-          console.log(`[App] Resetting stuck isStreaming for project ${pid}`);
-          state.isStreaming = false;
-        }
+      const now = Date.now();
+      // Don't blindly reset isStreaming — agent may still be running.
+      // Just update lastEventAt so the stall detector can monitor.
+      for (const [, state] of projectSessionsRef.current) {
+        state.lastEventAt = now;
       }
       rerender();
       // Re-request session state for the active project
@@ -593,12 +606,12 @@ function App() {
           type: "pi_history_request",
           projectId: activeProject.id,
         });
-        // Reload active mode and session state from backend
+        // Reload active mode and session state from backend (preserve isStreaming)
         fetch(`/api/settings/session?projectId=${activeProject.id}`)
           .then(r => r.json())
           .then(data => {
             if (data) {
-              updateProjectSession(activeProject.id, { session: data, isStreaming: false });
+              updateProjectSession(activeProject.id, { session: data });
               if (data.activeMode) setActiveMode(data.activeMode);
             }
           })
@@ -667,6 +680,7 @@ function App() {
                   on={on}
                   activeProject={activeProject}
                   isStreaming={isStreaming}
+                  streamingStalled={streamingStalled}
                   session={session}
                   projectId={activeProject?.id || ""}
                   activeMode={activeMode}
@@ -830,6 +844,7 @@ function App() {
               <StatusBar
                 activeProject={null}
                 isStreaming={false}
+                streamingStalled={false}
                 stats={null}
                 session={null}
                 connected={connected}
@@ -845,7 +860,7 @@ function App() {
                 sizes={layoutCfg.sizes}
                 panelContent={{
                   pi: (
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} streamingStalled={streamingStalled} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
                   ),
                   terminal: (
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
@@ -864,6 +879,7 @@ function App() {
               <StatusBar
                 activeProject={activeProject}
                 isStreaming={isStreaming}
+                streamingStalled={streamingStalled}
                 stats={stats}
                 session={session}
                 connected={connected}
