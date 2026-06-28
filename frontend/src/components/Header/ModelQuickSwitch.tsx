@@ -3,12 +3,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
-import { YoloConfigModal } from "../Modals/YoloConfigModal";
-import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, YoloConfig } from "../../types";
+import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
 
-const MODE_CONFIG: Record<AgentMode, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
+const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
   code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
-  yolo:   { icon: "🤝", label: "YOLO",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
   plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/20",    activeBorder: "border-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
 };
@@ -26,7 +24,6 @@ interface Props {
 export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersion, onModeSwitch, onModelApplied, session }: Props) {
   const { t } = useTranslation();
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
-  const [showYoloConfig, setShowYoloConfig] = useState(false);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const ref = useRef<HTMLDivElement>(null);
@@ -65,7 +62,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const pm: ProjectModeConfig = activeProjectId
     ? (library?.projectModes?.[activeProjectId] || defaultProjectMode())
     : defaultProjectMode();
-  const yoloConfig: YoloConfig = pm.yolo?.config || { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 };
 
   const getModelForMode = (mode: AgentMode): RegisteredModel | null => {
     const modelId = (pm as any)[mode]?.modelId;
@@ -111,7 +107,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "yolo") => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review") => {
     e.stopPropagation();
     if (!activeProjectId) return;
     const modeCfg = (pm as any)[mode] as { enabled: boolean };
@@ -126,7 +122,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       onModelApplied?.();
 
       // If enabling PLAN or YOLO, also switch to that mode
-      if ((mode === "plan" || mode === "yolo") && newEnabled) {
+      if (mode === "plan" && newEnabled) {
         onModeSwitch?.(mode);
       }
       // If disabling and was active, switch back to code
@@ -149,10 +145,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   };
 
   const handleChipClick = (mode: AgentMode) => {
-    if (mode === "yolo" && pm.yolo?.enabled && activeMode === "yolo") {
-      setShowYoloConfig(true);
-      return;
-    }
     if (openMode === mode) { setOpenMode(null); return; }
     setOpenMode(mode);
   };
@@ -170,7 +162,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return name.slice(0, 12) + "…";
   };
 
-  const modes: AgentMode[] = ["code", "plan", "review", "yolo"];
+  const modes: AgentMode[] = ["code", "plan", "review"];
 
   return (
     <>
@@ -211,10 +203,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
                 <div
-                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review" | "yolo")}
+                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review")}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review" | "yolo"); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review"); } }}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -235,14 +227,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 }`}>
                   {t('modelSwitch.' + mode)}
                 </span>
-                {isVisuallyActive && mode !== "yolo" && (
+                {isVisuallyActive && (
                   <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
-                )}
-                {isVisuallyActive && mode === "yolo" && yoloConfig.model1 && (
-                  <span className="text-xs text-hacker-text-dim max-w-[150px] truncate" title={`Agent 1: ${library?.models.find(m => m.providerId === yoloConfig.model1?.providerId && m.modelId === yoloConfig.model1?.modelId)?.name || "?"}
-Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.providerId && m.modelId === yoloConfig.model2?.modelId)?.name || "?"}`}>
-                    {library?.models.find(m => m.providerId === yoloConfig.model1?.providerId && m.modelId === yoloConfig.model1?.modelId)?.name?.slice(0, 12) || "?"}
-                  </span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
               </div>
@@ -259,30 +245,7 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
                 </div>
 
                 {/* Model list — always shown */}
-                {mode === "yolo" ? (
-                  <div className="px-3 py-3 space-y-2">
-                    <p className="text-[11px] text-hacker-text-dim">
-                      YOLO uses two AI agents debating together. Configure both models and debate cycles.
-                    </p>
-                    {pm.yolo?.config?.model1 ? (
-                      <div className="text-[11px] text-hacker-text-dim">
-                        Agent 1: <span className="text-hacker-accent">{library?.models.find(m => m.providerId === pm.yolo.config.model1?.providerId && m.modelId === pm.yolo.config.model1?.modelId)?.name || `${pm.yolo.config.model1.providerId}/${pm.yolo.config.model1.modelId}`}</span>
-                        <br />
-                        Agent 2: <span className="text-hacker-accent">{library?.models.find(m => m.providerId === pm.yolo.config.model2?.providerId && m.modelId === pm.yolo.config.model2?.modelId)?.name || `${pm.yolo.config.model2?.providerId}/${pm.yolo.config.model2?.modelId}`}</span>
-                        <br />
-                        Plan: <span className="text-hacker-accent">{pm.yolo.config.planCycles}x</span> · Code: <span className="text-hacker-accent">{pm.yolo.config.codeCycles}x</span> · Global: <span className="text-hacker-accent">{pm.yolo.config.globalCycles}x</span>
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-hacker-text-dim italic">Not configured yet.</p>
-                    )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setOpenMode(null); setShowYoloConfig(true); }}
-                      className="w-full btn-hacker text-xs px-3 py-1.5"
-                    >
-                      ⚙ CONFIGURE YOLO
-                    </button>
-                  </div>
-                ) : library && library.models.length > 0 ? (
+                {library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
                     {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
@@ -312,7 +275,7 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
                 )}
 
                 {/* Switch to mode button (if enabled and not active) */}
-                {isEnabled && !isActive && (model || mode === "yolo") && (
+                {isEnabled && !isActive && model && (
                   <button
                     onClick={() => { onModeSwitch?.(mode); setOpenMode(null); }}
                     className={`w-full text-left px-3 py-1.5 text-xs ${cfg.color} font-bold border-t border-hacker-border/30 hover:bg-hacker-accent/5`}>
@@ -343,26 +306,6 @@ Agent 2: ${library?.models.find(m => m.providerId === yoloConfig.model2?.provide
       })}
 
     </div>
-      {showYoloConfig && (
-        <YoloConfigModal
-          onClose={() => setShowYoloConfig(false)}
-          onChange={async (cfg) => {
-            if (!activeProjectId) return;
-            try {
-              await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "yolo", config: cfg }),
-              });
-              await loadLibrary();
-              onModelApplied?.();
-            } catch (e) { console.error("[ModelQuickSwitch] Failed to save YOLO config:", e); }
-          }}
-          models={library?.models || []}
-          providers={providers}
-          config={yoloConfig}
-        />
-      )}
 
       {/* Compact confirmation modal */}
       {compactConfirm && (

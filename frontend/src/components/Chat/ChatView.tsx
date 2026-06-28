@@ -487,15 +487,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
   // ── Send ──
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
-    if (activeMode === "yolo") {
-      setMessages(prev => [...prev, { id:`msg-${Date.now()}`, role:"user", content:text, thinking:"", toolCalls:[], timestamp:Date.now() }]);
-      requestAnimationFrame(() => {
-        pinnedToBottomRef.current = true;
-        scrollToBottomInstant();
-      });
-      fetch("/api/pi/yolo", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({projectId, prompt:text}) }).catch(()=>{});
-      return;
-    }
     const uploadErrors = attachments.filter(a => a.uploadStatus === "error");
     if (uploadErrors.length > 0) { setError(`Upload failed: ${uploadErrors.map(a => a.name).join(", ")}`); return; }
     const uploading = attachments.filter(a => a.uploadStatus === "uploading");

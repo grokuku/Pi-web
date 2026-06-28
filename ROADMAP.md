@@ -463,7 +463,130 @@ PDF uploadé
 - **Extension Slack/Discord** — Pousser les notifications de build/déploiement.
 - **Extension Git hooks** — Déclencher des analyses automatiques sur push.
 
-### YOLO Mode (Multi-Agent Debate)
+---
+
+## 🏗️ Architecture Planifiée — Pi-Web Harness
+
+### Contexte
+
+S'inspirant de **SAW (SAFe Agentic Workflow)** de ByBren LLC (https://github.com/bybren-llc/safe-agentic-workflow), on remplace le mode YOLO (déprécié) par un nouveau mode **HARNESS** : orchestration multi-agent avec rôles spécialisés, contrôle de concurrence, et bases de connaissance.
+
+### 1. Concurrency Manager (P1)
+
+Deux pools indépendants configurables dans l'interface Settings :
+
+```
+☎️ LLM slots max : [3]    ← Limite ton abonnement provider (RPM/TPM)
+🔧 Agent slots max : [5]  ← Limite RAM serveur (~200MB/session)
+```
+
+**Règles :**
+- Un agent **consomme un agent slot** au démarrage (sa session Pi SDK)
+- Un agent **consomme un LLM slot** seulement pendant un appel provider (attente réseau)
+- Si tous les LLM slots sont pris, l'agent attend en file d'attente
+- Si tous les agent slots sont pris, la tâche attend au niveau le plus haut
+
+**Fichiers :** `backend/src/pi/concurrency.ts` + UI dans Settings
+
+---
+
+### 2. Harness Mode (P2)
+
+Nouveau mode dédié, 100% indépendant des modes CODE/PLAN/REVIEW. On peut basculer entre mode normal et harness.
+
+**Architecture :**
+```
+Orchestrator (lead agent)
+├── Agent 1 (ARCHITECT) → Session #1 (modèle rapide, read/grep/cbm)
+├── Agent 2 (DEVELOPER) → Session #2 (modèle puissant, read/write/edit/bash)
+├── Agent 3 (REVIEWER)  → Session #3 (modèle équilibré, read/grep/diff)
+└── Agent 4 (QA)        → Session #4 (modèle rapide, bash/test)
+```
+
+**Principes :**
+- Chaque agent a **son propre contexte** (sa session Pi SDK avec son historique)
+- Contexte **partagé** via artefacts sur disque + messages de l'orchestrator
+- Chaque agent peut avoir son **propre modèle LLM**
+- Qualité : pipeline multi-étage
+- Orchestrator synthétise le résultat final
+
+**Fichiers :** `backend/src/pi/harness-engine.ts`
+
+---
+
+### 3. Technical Knowledge Base (P3)
+
+Cache automatique des recherches web avec TTL configurable.
+
+```
+.pi/knowledge/technical/
+├── sources/              ← Fichiers horodatés
+├── index.json            ← URL → fichier, date, TTL
+└── config.json           ← TTL par défaut
+```
+
+**Interception :** Hook automatique sur les appels `firecrawl_scrape/search` → vérifie le cache avant d'appeler l'API.
+
+**Fichiers :** `backend/src/pi/knowledge-base.ts`
+
+---
+
+### 4. User Knowledge Base (P4)
+
+Profil utilisateur persistant : préférences UI/UX, habitudes de code, décisions d'architecture.
+
+```
+.pi/knowledge/user/
+├── preferences.json          ← Thème, police, accent
+├── ui-preferences.md         ← Style UI, composants préférés
+├── coding-habits.md          ← Conventions code
+├── project-templates/        ← Templates réutilisables
+└── decisions.log             ← Décisions passées
+```
+
+**Apprentissage :** Détection de patterns au fil des sessions (framework, librairies, outils).
+
+**Fichiers :** `backend/src/pi/user-preferences.ts`
+
+---
+
+### 5. Quality Gates Pipeline (P4)
+
+Pipeline de validation multi-étage configurable :
+
+```
+[Agent] → [Lint & Build] → [Auto-Review N cycles] → [QA Tests] → [Security] → [Résultat]
+```
+
+Chaque gate peut être requis (bloquant) ou optionnel.
+
+---
+
+### 6. Timeline de réalisation
+
+| Phase | Contenu | Dépend de | Complexité |
+|-------|---------|-----------|-----------|
+| **P0** | Retirer YOLO de l'UI + préparer mode Harness | — | 🟢 Faible (1j) |
+| **P1** | Concurrency Manager (LLM + Agent slots) | P0 | 🟡 Moyenne (2j) |
+| **P2** | Harness Engine (N agents, rôles, orchestration) | P1 | 🔴 Élevée (5j) |
+| **P3** | Technical KB (cache auto, TTL, refresh) | — | 🟡 Moyenne (3j) |
+| **P4** | User KB (préférences, auto-apprentissage) | — | 🟡 Moyenne (2j) |
+| **P5** | Quality Gates Pipeline (multi-stage) | P2 | 🟡 Moyenne (3j) |
+| **P6** | Dark Factory (agents persistants parallèles) | P2 | 🔴 Élevée (5j) |
+
+---
+
+### 7. Fichiers à créer
+
+| Fichier | Phase | Rôle |
+|---------|-------|------|
+| `backend/src/pi/concurrency.ts` | P1 | Gestionnaire de concurrence |
+| `backend/src/pi/harness-engine.ts` | P2 | Orchestrateur multi-agent |
+| `backend/src/pi/knowledge-base.ts` | P3 | Base de connaissance technique |
+| `backend/src/pi/user-preferences.ts` | P4 | Profil utilisateur |
+| `frontend/src/components/Modals/HarnessConfigModal.tsx` | P2 | UI config harness |
+| `frontend/src/components/Modals/KnowledgeBaseModal.tsx` | P3 | UI KB technique |
+| `frontend/src/components/Modals/ConcurrencyConfigModal.tsx` | P1 | UI config concurrence |
 
 ✅ **Mode YOLO — Débat multi-agent**
 
@@ -522,7 +645,8 @@ PDF uploadé
 | CODE | ✅ | Tous les outils (read, bash, edit, write, grep, find, ls + extensions) |
 | PLAN | ✅ | Lecture seule, pas de bash modifiant l'état, instructions planification |
 | REVIEW | ✅ | Lecture seule + bash read-only, focus revue de code, format structuré |
-| YOLO | ✅ | Débat multi-agent : 2 sessions temporaires, cycles plan + code |
+| YOLO | ⏳ Déprécié (remplacé par HARNESS) | Débat multi-agent : 2 sessions temporaires, cycles plan + code. Conservé dans le code mais masqué de l'interface. |
+| HARNESS | 🚧 Planifié | Orchestration multi-agent avec rôles SAFe, files d'attente, quality gates, knowledge base. Voir section Architecture Planifiée. |
 | Auto-review | ✅ | Après un prompt CODE : review neutre (session fraîche) + fix (session principale) |
 
 ### Routes API
@@ -626,6 +750,9 @@ Pi config
 | **36** | 🟢 | Race condition | Lectures non protégées dans le project manager | `projects/manager.ts` |
 | **37** | 🟢 | Cohérence | `gitClone` utilise deux méthodes différentes pour le même clone | `projects/git.ts` |
 | **38** | 🟢 | Deprecated | `rmdirSync` deprecated utilisé dans `smb.ts` | `projects/smb.ts` |
+| **39** | 🔴 | Performance | `session.prompt()` / `session.steer()` sans timeout — **[FIXED 2026-06-28]** : `withSessionTimeout` 5 min | `pi/session.ts` |
+| **40** | 🟡 | Logique | Auto-review ne se déclenche qu'une fois par session — **[FIXED 2026-06-28]** : reset `reviewCycle` à chaque prompt | `pi/session.ts` |
+| **41** | 🟡 | UX | Impossible de savoir si le streaming est actif ou bloqué — **[FIXED 2026-06-28]** : stall detector + indicateurs | `App.tsx` + UI |
 
 ### Priorité de correction recommandée
 
