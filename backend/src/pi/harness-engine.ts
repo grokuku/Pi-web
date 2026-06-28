@@ -22,6 +22,9 @@ import path from "path";
 import os from "os";
 import { existsSync, mkdirSync } from "fs";
 
+// ── Constants ──
+const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max par agent
+
 // ── Default prompts ───────────────────────────────────
 
 const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
@@ -240,7 +243,22 @@ export class HarnessEngine {
         },
       } as any, this.projectId);
 
-      await tempSession.prompt(prompt, {});
+      // Acquérir un LLM slot + timeout pour l'appel provider
+      await concurrencyManager.acquireLLMSlot(this.projectId, label);
+      let llmTimer: ReturnType<typeof setTimeout>;
+      const llmTimeout = new Promise<void>((_, reject) => {
+        llmTimer = setTimeout(() => {
+          tempSession!.abort().catch(() => {});
+          reject(new Error(`[harness-${agent.role}] LLM call timed out after ${AGENT_TIMEOUT_MS/1000}s`));
+        }, AGENT_TIMEOUT_MS);
+      });
+
+      try {
+        await Promise.race([tempSession.prompt(prompt, {}), llmTimeout]);
+      } finally {
+        clearTimeout(llmTimer!);
+        concurrencyManager.releaseLLMSlot(this.projectId);
+      }
 
       // Collecter la réponse
       const messages: any[] = tempSession.messages || [];

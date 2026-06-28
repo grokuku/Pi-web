@@ -129,6 +129,17 @@ export function HarnessConfigModal({ onClose, onChange, models, providers, confi
 
               {expandedAgent === idx && (
                 <div className="px-3 py-2 border-t border-hacker-border/50 space-y-2 bg-hacker-bg/30">
+                  {/* Role name — editable */}
+                  <div>
+                    <label className="text-[10px] text-hacker-text-dim block mb-0.5">Rôle</label>
+                    <input
+                      type="text"
+                      value={agent.role}
+                      onChange={e => updateAgent(idx, { role: e.target.value })}
+                      className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[10px] px-2 py-1 rounded focus:border-hacker-accent outline-none font-mono"
+                      placeholder="ex: fe-developer, be-developer, security..."
+                    />
+                  </div>
                   {/* Enable toggle */}
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-hacker-text-dim">Activé</span>
@@ -186,21 +197,40 @@ export function HarnessConfigModal({ onClose, onChange, models, providers, confi
 
         {/* Add agent button */}
         <div className="flex flex-wrap gap-1.5">
-          {availableRoles.length > 0 ? (
-            availableRoles.map(dr => (
-              <button
-                key={dr.role}
-                onClick={() => addAgent(dr.role)}
-                className="flex items-center gap-1 text-[10px] px-2 py-1 border border-hacker-border rounded hover:border-hacker-accent hover:text-hacker-accent transition-colors"
-              >
-                <Plus size={10} />
-                {dr.label}
-                <span className="text-hacker-text-dim/50">— {dr.desc}</span>
-              </button>
-            ))
-          ) : (
-            <span className="text-[10px] text-hacker-text-dim italic">Tous les rôles sont déjà ajoutés</span>
-          )}
+          {availableRoles.map(dr => (
+            <button
+              key={dr.role}
+              onClick={() => addAgent(dr.role)}
+              className="flex items-center gap-1 text-[10px] px-2 py-1 border border-hacker-border rounded hover:border-hacker-accent hover:text-hacker-accent transition-colors"
+            >
+              <Plus size={10} />
+              {dr.label}
+            </button>
+          ))}
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              id="custom-role-input"
+              placeholder="Custom role..."
+              className="w-28 bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[10px] px-2 py-1 rounded focus:border-hacker-accent outline-none"
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  const val = (e.target as HTMLInputElement).value.trim();
+                  if (val) { addAgent(val); (e.target as HTMLInputElement).value = ""; }
+                }
+              }}
+            />
+            <button
+              onClick={() => {
+                const el = document.getElementById("custom-role-input") as HTMLInputElement;
+                if (el && el.value.trim()) { addAgent(el.value.trim()); el.value = ""; }
+              }}
+              className="flex items-center gap-1 text-[10px] px-2 py-1 border border-hacker-border rounded hover:border-hacker-accent hover:text-hacker-accent transition-colors"
+            >
+              <Plus size={10} />
+              Custom
+            </button>
+          </div>
         </div>
 
         <div className="border-t border-hacker-border/30" />
