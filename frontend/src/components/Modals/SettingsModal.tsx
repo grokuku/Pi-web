@@ -266,6 +266,41 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     return localStorage.getItem("pi-web-thinking-expand") !== "false";
   });
 
+  // ── Concurrency state ──
+  const [maxLLMSlots, setMaxLLMSlots] = useState(3);
+  const [maxAgentSlots, setMaxAgentSlots] = useState(5);
+  const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
+  const [concurrencySaved, setConcurrencySaved] = useState(false);
+
+  const loadConcurrencyConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/concurrency");
+      const data = await res.json();
+      setMaxLLMSlots(data.config.maxLLMSlots ?? 3);
+      setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
+      setConcurrencyStats(data.stats);
+    } catch {}
+  }, []);
+
+  const saveConcurrency = async () => {
+    try {
+      const res = await fetch("/api/settings/concurrency", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxLLMSlots, maxAgentSlots }),
+      });
+      const data = await res.json();
+      setConcurrencyStats(data.stats);
+      setConcurrencySaved(true);
+      setTimeout(() => setConcurrencySaved(false), 2000);
+    } catch (e: any) {
+      console.error("[concurrency] Failed to save:", e);
+    }
+  };
+
+  // Load concurrency config on mount
+  useEffect(() => { loadConcurrencyConfig(); }, [loadConcurrencyConfig]);
+
   const saveAuth = () => {
     if (authUser) {
       localStorage.setItem("pi-web-auth-user", authUser);
@@ -759,6 +794,57 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       {thinkExpand ? t('common.on') : t('common.off')}
                     </button>
                   </div>
+                </div>
+              </div>
+
+              {/* Concurrency Section */}
+              <div className="border border-hacker-border bg-hacker-surface/50">
+                <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">☎️ CONCURRENCE</span>
+                </div>
+                <div className="p-3 space-y-3">
+                  <p className="text-[11px] text-hacker-text-dim">
+                    Limite le nombre d'appels LLM et de sessions agent simultanés.
+                    Les appels en attente sont mis en file d'attente.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-hacker-text-dim text-xs block mb-1">
+                        ☎️ LLM slots max
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={maxLLMSlots}
+                        onChange={e => setMaxLLMSlots(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        className="input-hacker w-full text-xs py-1.5 px-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-hacker-text-dim text-xs block mb-1">
+                        🔧 Agent slots max
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={maxAgentSlots}
+                        onChange={e => setMaxAgentSlots(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
+                        className="input-hacker w-full text-xs py-1.5 px-2"
+                      />
+                    </div>
+                  </div>
+                  <button onClick={saveConcurrency}
+                    className={`btn-hacker text-xs px-4 py-1.5 ${concurrencySaved ? "text-hacker-accent border-hacker-accent" : ""}`}>
+                    {concurrencySaved ? "✓ SAVED" : "SAVE"}
+                  </button>
+                  {concurrencyStats && (
+                    <div className="text-[10px] text-hacker-text-dim space-y-1 mt-2 pt-2 border-t border-hacker-border/30">
+                      <div>☎️ LLM : {concurrencyStats.llmSlots.used}/{concurrencyStats.llmSlots.max} utilisé{concurrencyStats.llmSlots.queue > 0 ? ` · ${concurrencyStats.llmSlots.queue} en attente` : ""}</div>
+                      <div>🔧 Agents : {concurrencyStats.agentSlots.used}/{concurrencyStats.agentSlots.max} utilisé{concurrencyStats.agentSlots.queue > 0 ? ` · ${concurrencyStats.agentSlots.queue} en attente` : ""}</div>
+                    </div>
+                  )}
                 </div>
               </div>
 

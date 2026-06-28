@@ -16,6 +16,7 @@ import {
 from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
 import { recordUsage } from "../routes/usage.js";
+import { concurrencyManager } from "./concurrency.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -117,6 +118,9 @@ async function withSessionTimeout(
   projectId: string,
   label: string,
 ): Promise<void> {
+  // Acquire LLM slot (respects max parallel LLM calls)
+  await concurrencyManager.acquireLLMSlot(projectId, label);
+
   let timer: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<void>((_, reject) => {
     timer = setTimeout(async () => {
@@ -132,6 +136,7 @@ async function withSessionTimeout(
     return await Promise.race([promise, timeoutPromise]);
   } finally {
     clearTimeout(timer!);
+    concurrencyManager.releaseLLMSlot(projectId);
   }
 }
 
@@ -1368,6 +1373,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       "- If the changes look good, say so — don't fabricate issues.";
 
     // Subscribe to temp session events to forward tool calls for UI display
+    await concurrencyManager.acquireAgentSlot(projectId, "auto-review");
     const tempUnsub = tempSession.subscribe((event) => {
       const taggedEvent = { ...event, _autoReview: true } as any;
       if (event.type === "tool_execution_start") {
@@ -1411,6 +1417,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     }
 
     // Clean up temp session
+    concurrencyManager.releaseAgentSlot(projectId);
     tempUnsub();
     try { (tempSession as any).dispose?.(); } catch {}
     // Clean up temp session file from disk
@@ -1616,30 +1623,38 @@ export async function generateAiCommitMessage(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
 
-    const response = await completeSimple(model, context, {
-      temperature: 0.2,
-      maxTokens: 400,
-      apiKey,
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
+    // Acquire LLM slot for the provider call
+    await concurrencyManager.acquireLLMSlot(projectId, "commit");
 
-    const text = response.content
-      ?.filter((c: any) => c.type === "text")
-      ?.map((c: any) => c.text || "")
-      ?.join("\n")
-      ?.trim() || "";
+    let commitResult: { subject: string; body: string } | null = null;
+    try {
+      const response = await completeSimple(model, context, {
+        temperature: 0.2,
+        maxTokens: 400,
+        apiKey,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
 
-    if (!text) {
-      console.warn("[commit] Empty response from model");
-      return null;
+      const text = response.content
+        ?.filter((c: any) => c.type === "text")
+        ?.map((c: any) => c.text || "")
+        ?.join("\n")
+        ?.trim() || "";
+
+      if (!text) {
+        console.warn("[commit] Empty response from model");
+        commitResult = null;
+      } else {
+        const lines = text.split("\n");
+        const subject = lines[0].trim();
+        const body = lines.slice(1).join("\n").trim();
+        commitResult = { subject: subject || text, body };
+      }
+    } finally {
+      concurrencyManager.releaseLLMSlot(projectId);
     }
-
-    const lines = text.split("\n");
-    const subject = lines[0].trim();
-    const body = lines.slice(1).join("\n").trim();
-
-    return { subject: subject || text, body };
+    return commitResult;
   } catch (error: any) {
     console.error("[commit] === completeSimple FAILED ===", error?.message || error);
     return null;
@@ -1878,6 +1893,7 @@ async function runYoloAgent(
     (tempSession as any).agent.state.systemPrompt = prompt;
 
     // Subscribe to forward events with yolo tags
+    await concurrencyManager.acquireAgentSlot(projectId, `yolo-${agentKey}`);
     const tempUnsub = tempSession.subscribe((event) => {
       const modelName = modelInfo
         ? sharedModelRegistry.getAvailable().find((m: any) => m.provider === modelInfo.providerId && m.id === modelInfo.modelId)?.name
@@ -1958,6 +1974,7 @@ async function runYoloAgent(
     return fullResponse;
   } catch (err: any) {
     console.error(`[yolo] Agent ${agentKey} error:`, err.message);
+    concurrencyManager.releaseAgentSlot(projectId);
     return `[Error: ${agentKey} failed — ${err.message}]`;
   }
 }

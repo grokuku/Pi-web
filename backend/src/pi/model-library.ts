@@ -56,6 +56,10 @@ export interface ModelLibrary {
   visionModelId: string | null;           // model for image/file analysis (null = use default or fallback)
   audioModelId: string | null;            // model for audio transcription (null = not configured)
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
+  concurrency: {                          // Concurrency Manager config
+    maxLLMSlots: number;
+    maxAgentSlots: number;
+  };
 }
 
 // ── Defaults ─────────────────────────────────────────
@@ -79,6 +83,7 @@ function getDefaultLibrary(): ModelLibrary {
     visionModelId: null,
     audioModelId: null,
     projectModes: {},
+    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 },
   };
 }
 
@@ -106,6 +111,25 @@ export function saveModelLibrary(library: ModelLibrary): void {
   writeFileSync(LIBRARY_FILE, JSON.stringify(library, null, 2));
 }
 
+// ── Concurrency config ─────────────────────────────
+
+export function getConcurrencyConfig() {
+  const lib = loadModelLibrary();
+  return lib.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5 };
+}
+
+export async function setConcurrencyConfig(config: { maxLLMSlots?: number; maxAgentSlots?: number }) {
+  const lib = loadModelLibrary();
+  if (!lib.concurrency) lib.concurrency = { maxLLMSlots: 3, maxAgentSlots: 5 };
+  if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) lib.concurrency.maxLLMSlots = config.maxLLMSlots;
+  if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) lib.concurrency.maxAgentSlots = config.maxAgentSlots;
+  saveModelLibrary(lib);
+  // Sync with the runtime manager
+  const { concurrencyManager } = await import("./concurrency.js");
+  concurrencyManager.setConfig(lib.concurrency);
+  return lib.concurrency;
+}
+
 // ── Migration ─────────────────────────────────────────
 
 function migrateLibrary(data: any): ModelLibrary {
@@ -121,6 +145,7 @@ function migrateLibrary(data: any): ModelLibrary {
     visionModelId: data.visionModelId || null,
     audioModelId: data.audioModelId || null,
     projectModes: {},
+    concurrency: data.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5 },
   };
 
   // Migrate project modes
@@ -134,7 +159,7 @@ function migrateLibrary(data: any): ModelLibrary {
 }
 
 function migrateFromOldFormat(data: any): ModelLibrary {
-  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, projectModes: {} };
+  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, projectModes: {}, concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 } };
 
   // Collect all unique models from all modes
   const seenIds = new Set<string>();

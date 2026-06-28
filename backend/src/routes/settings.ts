@@ -175,4 +175,37 @@ router.post("/models/reload", (_req: Request, res: Response) => {
   }
 });
 
+// ── Concurrency config ──
+
+router.get("/concurrency", async (_req: Request, res: Response) => {
+  try {
+    const { getConcurrencyConfig } = await import("../pi/model-library.js");
+    const config = getConcurrencyConfig();
+    const { concurrencyManager } = await import("../pi/concurrency.js");
+    const stats = concurrencyManager.getStats();
+    res.json({ config, stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/concurrency", async (req: Request, res: Response) => {
+  try {
+    const { maxLLMSlots, maxAgentSlots } = req.body;
+    if (maxLLMSlots !== undefined && (typeof maxLLMSlots !== "number" || maxLLMSlots < 1 || maxLLMSlots > 20)) {
+      return res.status(400).json({ error: "maxLLMSlots must be between 1 and 20" });
+    }
+    if (maxAgentSlots !== undefined && (typeof maxAgentSlots !== "number" || maxAgentSlots < 1 || maxAgentSlots > 50)) {
+      return res.status(400).json({ error: "maxAgentSlots must be between 1 and 50" });
+    }
+    const { setConcurrencyConfig } = await import("../pi/model-library.js");
+    const config = setConcurrencyConfig({ maxLLMSlots, maxAgentSlots });
+    const { concurrencyManager } = await import("../pi/concurrency.js");
+    const stats = concurrencyManager.getStats();
+    res.json({ config, stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
