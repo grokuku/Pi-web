@@ -30,7 +30,7 @@ export interface RegisteredModel {
   thinkingLevel: string;       // off, minimal, low, medium, high
 }
 
-export type AgentMode = "code" | "review" | "plan" | "yolo";
+export type AgentMode = "code" | "review" | "plan" | "yolo" | "harness";
 
 export interface ModeConfig {
   modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
@@ -47,6 +47,21 @@ export interface ProjectModeConfig {
     codeCycles: number;
     globalCycles: number;
   } };
+  harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
+}
+
+export interface HarnessAgentConfig {
+  role: string;
+  modelId: string | null;
+  enabled: boolean;
+  systemPrompt?: string;
+  tools?: string[];
+}
+
+export interface HarnessConfig {
+  agents: HarnessAgentConfig[];
+  maxRounds: number;           // max debate rounds between agents
+  synthesize: boolean;         // whether to synthesize final output
 }
 
 export interface ModelLibrary {
@@ -72,6 +87,8 @@ function createDefaultProjectMode(): ProjectModeConfig {
     plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1 },
     yolo: { modelId: null, enabled: false, config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
+    harness: { modelId: null, enabled: false,
+      config: { agents: [], maxRounds: 1, synthesize: true } },
   };
 }
 
@@ -224,6 +241,15 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
         globalCycles: pm?.yolo?.config?.globalCycles ?? 1,
       },
     },
+    harness: {
+      modelId: pm?.harness?.modelId ?? d.harness.modelId,
+      enabled: pm?.harness?.enabled ?? d.harness.enabled,
+      config: {
+        agents: pm?.harness?.config?.agents ?? [],
+        maxRounds: pm?.harness?.config?.maxRounds ?? 1,
+        synthesize: pm?.harness?.config?.synthesize ?? true,
+      },
+    },
   };
 }
 
@@ -374,7 +400,7 @@ export function setProjectModeModel(projectId: string, mode: AgentMode, modelId:
   return library;
 }
 
-export function setProjectModeEnabled(projectId: string, mode: "plan" | "review" | "yolo", enabled: boolean): ModelLibrary {
+export function setProjectModeEnabled(projectId: string, mode: "plan" | "review" | "yolo" | "harness", enabled: boolean): ModelLibrary {
   const library = loadModelLibrary();
   if (!library.projectModes[projectId]) {
     library.projectModes[projectId] = createDefaultProjectMode();

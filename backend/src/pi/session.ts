@@ -107,6 +107,11 @@ export function getModelRegistry(): ModelRegistry {
   return sharedModelRegistry;
 }
 
+/** Access for HarnessEngine */
+export function getSharedAuthStorage() {
+  return sharedAuthStorage;
+}
+
 // ── Session timeout helper ──
 // Prevents LLM calls from hanging indefinitely. If prompt()/steer() doesn't
 // resolve within SESSION_TIMEOUT_MS, abort the session and emit agent_end.
@@ -527,6 +532,23 @@ export async function sendPrompt(
     mimeType: img.mimeType,
   }));
 
+  // ── Harness mode: redirect to multi-agent engine ──
+  if (state.activeMode === "harness") {
+    const library = loadModelLibrary();
+    const pm = getProjectModeConfig(library, projectId);
+    const harnessConfig = pm.harness?.config;
+    if (harnessConfig && harnessConfig.agents?.length > 0) {
+      console.log("[prompt] Harness mode — delegating to HarnessEngine");
+      // Launch harness in background
+      runHarness(projectId, message, harnessConfig).catch(err => {
+        console.error("[prompt] Harness error:", err.message);
+      });
+      return;
+    }
+    // Fallback: no agents configured, treat as normal prompt
+    console.warn("[prompt] Harness mode but no agents configured — falling back to normal prompt");
+  }
+
   if (state.isStreaming) {
     // Always abort the current session before sending a new prompt.
     // steer() can hang if the previous LLM call is stuck, and the user
@@ -578,6 +600,38 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
     projectId,
     "steer",
   );
+}
+
+// ── Harness Engine ───────────────────────────────────
+
+/**
+ * Lance un cycle Harness (multi-agent orchestré) et renvoie
+ * le résultat synthétisé.
+ */
+export async function runHarness(
+  projectId: string,
+  prompt: string,
+  config: any,
+): Promise<string> {
+  const { HarnessEngine, setModelRegistry, setAuthStorage } = await import("./harness-engine.js");
+  // Initialiser le HarnessEngine avec le registry + auth du session.ts
+  setModelRegistry(sharedModelRegistry);
+  setAuthStorage(sharedAuthStorage);
+
+  const state = sessionsByProject.get(projectId);
+  if (state) {
+    state.activeMode = "harness";
+    state.isStreaming = true;
+  }
+
+  try {
+    const result = await HarnessEngine.run(projectId, prompt, config);
+    return result;
+  } finally {
+    if (state) {
+      state.isStreaming = false;
+    }
+  }
 }
 
 export async function abortPi(projectId?: string): Promise<void> {

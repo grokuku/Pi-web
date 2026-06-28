@@ -3,12 +3,13 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
-import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig } from "../../types";
+import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, HarnessConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
   code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
   plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/20",    activeBorder: "border-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
+  harness: { icon: "🏭", label: "HARNESS", color: "text-hacker-accent",    activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
 };
 
 interface Props {
@@ -107,7 +108,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review") => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "harness") => {
     e.stopPropagation();
     if (!activeProjectId) return;
     const modeCfg = (pm as any)[mode] as { enabled: boolean };
@@ -162,7 +163,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return name.slice(0, 12) + "…";
   };
 
-  const modes: AgentMode[] = ["code", "plan", "review"];
+  const modes: AgentMode[] = ["code", "plan", "review", "harness"];
 
   return (
     <>
@@ -203,10 +204,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
                 <div
-                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review")}
+                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review" | "harness")}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review"); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review" | "harness"); } }}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -365,6 +366,8 @@ function defaultProjectMode(): ProjectModeConfig {
     review: { modelId: null, enabled: false, maxReviews: 1 },
     yolo: { modelId: null, enabled: false,
       config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
+    harness: { modelId: null, enabled: false,
+      config: { agents: [], maxRounds: 1, synthesize: true } },
   };
 }
 
