@@ -364,6 +364,22 @@ export async function sendPrompt(
   images?: { data: string; mimeType: string }[]
 ): Promise<{ command?: string; result?: string } | void> {
   const state = sessionsByProject.get(projectId);
+
+  // ── Harness mode: no session needed, delegate to HarnessEngine ──
+  if (state?.activeMode === "harness") {
+    const library = loadModelLibrary();
+    const pm = getProjectModeConfig(library, projectId);
+    const harnessConfig = pm.harness?.config;
+    if (harnessConfig && harnessConfig.agents?.length > 0) {
+      console.log("[prompt] Harness mode — delegating to HarnessEngine");
+      runHarness(projectId, message, harnessConfig).catch(err => {
+        console.error("[prompt] Harness error:", err.message);
+      });
+      return;
+    }
+    console.warn("[prompt] Harness mode but no agents configured — falling back to normal prompt");
+  }
+
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
@@ -531,23 +547,6 @@ export async function sendPrompt(
     data: img.data,
     mimeType: img.mimeType,
   }));
-
-  // ── Harness mode: redirect to multi-agent engine ──
-  if (state.activeMode === "harness") {
-    const library = loadModelLibrary();
-    const pm = getProjectModeConfig(library, projectId);
-    const harnessConfig = pm.harness?.config;
-    if (harnessConfig && harnessConfig.agents?.length > 0) {
-      console.log("[prompt] Harness mode — delegating to HarnessEngine");
-      // Launch harness in background
-      runHarness(projectId, message, harnessConfig).catch(err => {
-        console.error("[prompt] Harness error:", err.message);
-      });
-      return;
-    }
-    // Fallback: no agents configured, treat as normal prompt
-    console.warn("[prompt] Harness mode but no agents configured — falling back to normal prompt");
-  }
 
   if (state.isStreaming) {
     // Always abort the current session before sending a new prompt.
