@@ -137,6 +137,13 @@ export class HarnessEngine {
       _agentCount: activeAgents.length,
     } as any, projectId);
 
+    // Émettre message_start pour créer le message assistant en streaming
+    const messageId = `harness-${Date.now()}`;
+    emitToSubscribers({
+      type: "message_start",
+      message: { id: messageId, role: "assistant" },
+    } as any, projectId);
+
     let previousOutput = userPrompt;
     const artifacts: { role: string; output: string }[] = [];
 
@@ -164,7 +171,11 @@ export class HarnessEngine {
       finalOutput = await engine.synthesize(artifacts);
     }
 
-    // Émettre la fin
+    // Émettre message_end + agent_end
+    emitToSubscribers({
+      type: "message_end",
+      message: { id: messageId, role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } },
+    } as any, projectId);
     emitToSubscribers({
       type: "agent_end",
       _harness: true,
