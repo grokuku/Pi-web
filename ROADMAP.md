@@ -568,7 +568,7 @@ Chaque gate peut être requis (bloquant) ou optionnel.
 |-------|---------|-----------|-----------|
 | **P0** | Retirer YOLO de l'UI + préparer mode Harness | — | 🟢 Faible (1j) | ✅ Fait (2026-06-28) |
 | **P1** | Concurrency Manager (LLM + Agent slots) | P0 | 🟡 Moyenne (2j) | ✅ Fait (2026-06-28) |
-| **P2** | Harness Engine (N agents, rôles, orchestration) | P1 | 🔴 Élevée (5j) |
+| **P2** | Harness Engine (N agents, rôles, orchestration) | P1 | 🔴 Élevée (5j) | ✅ Fait (2026-06-28) |
 | **P3** | Technical KB (cache auto, TTL, refresh) | — | 🟡 Moyenne (3j) |
 | **P4** | User KB (préférences, auto-apprentissage) | — | 🟡 Moyenne (2j) |
 | **P5** | Quality Gates Pipeline (multi-stage) | P2 | 🟡 Moyenne (3j) |

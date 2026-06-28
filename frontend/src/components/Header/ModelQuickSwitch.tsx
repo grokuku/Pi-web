@@ -1,8 +1,9 @@
 import { ModalDialog } from "../common/ModalDialog";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ChevronDown, Power, Star } from "lucide-react";
+import { ChevronDown, Power, Star, Settings } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
+import { HarnessConfigModal } from "../Modals/HarnessConfigModal";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, HarnessConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -27,6 +28,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [showHarnessConfig, setShowHarnessConfig] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   const loadLibrary = useCallback(async () => {
@@ -284,6 +286,17 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </button>
                 )}
 
+                {/* Harness config button */}
+                {mode === "harness" && (
+                  <button
+                    onClick={() => { setShowHarnessConfig(true); setOpenMode(null); }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-hacker-text-dim border-t border-hacker-border/30 hover:bg-hacker-accent/5 flex items-center gap-1.5"
+                  >
+                    <Settings size={10} />
+                    ⚙ CONFIGURE HARNESS
+                  </button>
+                )}
+
                 {/* Max reviews (REVIEW only, always show if enabled) */}
                 {mode === "review" && isEnabled && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border-t border-hacker-border/30">
@@ -307,6 +320,27 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       })}
 
     </div>
+
+      {showHarnessConfig && (
+        <HarnessConfigModal
+          onClose={() => setShowHarnessConfig(false)}
+          onChange={async (cfg) => {
+            if (!activeProjectId) return;
+            try {
+              await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: "harness", config: cfg }),
+              });
+              await loadLibrary();
+              onModelApplied?.();
+            } catch (e) { console.error("[ModelQuickSwitch] Failed to save Harness config:", e); }
+          }}
+          models={library?.models || []}
+          providers={providers}
+          config={(pm as any)?.harness?.config || { agents: [], maxRounds: 1, synthesize: true }}
+        />
+      )}
 
       {/* Compact confirmation modal */}
       {compactConfirm && (
