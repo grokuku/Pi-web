@@ -124,9 +124,36 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       await loadLibrary();
       onModelApplied?.();
 
-      // If enabling PLAN or YOLO, also switch to that mode
-      if (mode === "plan" && newEnabled) {
+      // If enabling PLAN or HARNESS, also switch to that mode
+      if ((mode === "plan" || mode === "harness") && newEnabled) {
         onModeSwitch?.(mode);
+      }
+
+      // Auto-configure default harness agents if none exist
+      if (mode === "harness" && newEnabled) {
+        const pm = library?.projectModes?.[activeProjectId];
+        const existingAgents = (pm as any)?.harness?.config?.agents;
+        if (!existingAgents || existingAgents.length === 0) {
+          try {
+            await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mode: "harness",
+                config: {
+                  agents: [
+                    { role: "architect", modelId: null, enabled: true },
+                    { role: "developer", modelId: null, enabled: true },
+                    { role: "reviewer", modelId: null, enabled: true },
+                  ],
+                  maxRounds: 1,
+                  synthesize: true,
+                },
+              }),
+            });
+            await loadLibrary();
+          } catch (e) { console.error("[ModelQuickSwitch] Failed to set default harness agents:", e); }
+        }
       }
       // If disabling and was active, switch back to code
       if (!newEnabled && activeMode === mode) {
