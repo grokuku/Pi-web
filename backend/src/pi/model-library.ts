@@ -446,6 +446,27 @@ export function setProjectModeYoloConfig(
   return library;
 }
 
+export function setProjectModeHarnessConfig(
+  projectId: string,
+  config: {
+    agents?: { role: string; modelId: string | null; enabled: boolean; systemPrompt?: string; tools?: string[] }[];
+    maxRounds?: number;
+    synthesize?: boolean;
+  }
+): ModelLibrary {
+  const library = loadModelLibrary();
+  if (!library.projectModes[projectId]) {
+    library.projectModes[projectId] = createDefaultProjectMode();
+  }
+  const harness = (library.projectModes[projectId] as any).harness;
+  if (!harness.config) harness.config = { agents: [], maxRounds: 1, synthesize: true };
+  if (config.agents !== undefined) harness.config.agents = config.agents;
+  if (config.maxRounds !== undefined) harness.config.maxRounds = Math.max(1, Math.min(10, config.maxRounds));
+  if (config.synthesize !== undefined) harness.config.synthesize = config.synthesize;
+  saveModelLibrary(library);
+  return library;
+}
+
 /** Clean up project mode configs for deleted projects */
 export function cleanupProjectModes(projectId: string): void {
   const library = loadModelLibrary();

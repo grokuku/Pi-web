@@ -11,6 +11,7 @@ import {
   setProjectModeEnabled,
   setProjectModeMaxReviews,
   setProjectModeYoloConfig,
+  setProjectModeHarnessConfig,
   getProjectModeConfig,
   getModel,
   getDefaultModel,
@@ -28,7 +29,7 @@ const router = Router();
 
 // ── Helpers ──────────────────────────────────────────
 
-const VALID_MODES: AgentMode[] = ["code", "review", "plan", "yolo"];
+const VALID_MODES: AgentMode[] = ["code", "review", "plan", "yolo", "harness"];
 
 function validateMode(mode: string): AgentMode {
   if (!VALID_MODES.includes(mode as AgentMode)) {
@@ -284,14 +285,18 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     if (modelId !== undefined) {
       library = setProjectModeModel(projectId, mode, modelId);
     }
-    if (enabled !== undefined && (mode === "plan" || mode === "review" || mode === "yolo")) {
+    if (enabled !== undefined && (mode === "plan" || mode === "review" || mode === "yolo" || mode === "harness")) {
       library = setProjectModeEnabled(projectId, mode, enabled);
     }
     if (maxReviews !== undefined && mode === "review") {
       library = setProjectModeMaxReviews(projectId, maxReviews);
     }
-    if (config !== undefined && mode === "yolo") {
-      library = setProjectModeYoloConfig(projectId, config);
+    if (config !== undefined && (mode === "yolo" || mode === "harness")) {
+      if (mode === "yolo") {
+        library = setProjectModeYoloConfig(projectId, config);
+      } else if (mode === "harness") {
+        library = setProjectModeHarnessConfig(projectId, config);
+      }
     }
 
     res.json(library);
