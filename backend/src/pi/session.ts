@@ -521,7 +521,7 @@ export async function sendPrompt(
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -543,6 +543,71 @@ export async function sendPrompt(
           }
         }
         return { command: "reload", result: "No active session to reload" };
+      }
+      case "/harness": {
+        // Tech lead mode : le modèle de la session principale résume le contexte,
+        // puis le brief est passé à l'architecte du Harness pour exécution.
+        const lib = loadModelLibrary();
+        const pm = getProjectModeConfig(lib, projectId);
+
+        // Vérifier que le mode Harness est configuré
+        const harnessConfig = pm.harness?.config;
+        if (!harnessConfig?.agents?.length) {
+          return { command: "harness", result: "⚠️ **Aucun agent Harness configuré.** Active d'abord le mode Harness dans les paramètres." };
+        }
+
+        // Forcer le mode harness
+        state.activeMode = "harness";
+        emitModeChange(projectId, "harness", false);
+        emitSessionUpdate(projectId);
+
+        // Générer un brief via le modèle de la session principale
+        // (il a tout le contexte de la conversation)
+        try {
+          const summaryInstruction =
+            "Résume les besoins, décisions techniques et contraintes de cette conversation " +
+            "en un brief concis et opérationnel, prêt à être exécuté par une équipe de développement. " +
+            "Sois précis, technique, et inclus les fichiers/dossiers concernés si mentionnés.";
+
+          emitToSubscribers({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "\n\n**📋 Génération du brief par le modèle principal...**\n\n" },
+          } as any, projectId);
+
+          await withSessionTimeout(
+            state.session.prompt(summaryInstruction, {}),
+            state.session,
+            projectId,
+            "harness-brief",
+          );
+
+          // Extraire le dernier message assistant = le brief
+          const msgs: any[] = state.session.messages || [];
+          const lastAssistant = [...msgs].reverse().find((m: any) => m.role === "assistant");
+          const brief = lastAssistant?.content
+            ?.map((c: any) => c.text || "")
+            .join("")
+            .trim();
+
+          if (brief) {
+            console.log(`[harness] Brief généré (${brief.length} chars), lancement Harness...`);
+            runHarness(projectId, brief, harnessConfig).catch(err => {
+              console.error("[harness] Execution error:", err.message);
+            });
+          } else {
+            console.warn("[harness] Brief vide, fallback sur le message brut");
+            runHarness(projectId, message, harnessConfig).catch(err => {
+              console.error("[harness] Execution error:", err.message);
+            });
+          }
+        } catch (e: any) {
+          console.error("[harness] Brief generation failed:", e.message);
+          runHarness(projectId, message, harnessConfig).catch(err => {
+            console.error("[harness] Execution error:", err.message);
+          });
+        }
+
+        return { command: "harness", result: "" };
       }
       default: {
         // Unknown command — try extension commands via session.prompt()

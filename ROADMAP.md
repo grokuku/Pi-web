@@ -465,140 +465,91 @@ PDF uploadé
 
 ---
 
-## 🏗️ Architecture Planifiée — Pi-Web Harness
+## 🏗️ Architecture — Pi-Web Harness (implémenté v2)
 
 ### Contexte
 
-S'inspirant de **SAW (SAFe Agentic Workflow)** de ByBren LLC (https://github.com/bybren-llc/safe-agentic-workflow), on remplace le mode YOLO (déprécié) par un nouveau mode **HARNESS** : orchestration multi-agent avec rôles spécialisés, contrôle de concurrence, et bases de connaissance.
+S'inspirant de **SAW (SAFe Agentic Workflow)** de ByBren LLC (https://github.com/bybren-llc/safe-agentic-workflow), le mode YOLO a été déprécié et remplacé par le mode **HARNESS** : orchestration multi-agent avec rôles spécialisés et contrôle de concurrence.
 
-### 1. Concurrency Manager (P1)
+### Architecture actuelle (v2)
 
-Deux pools indépendants configurables dans l'interface Settings :
-
-```
-☎️ LLM slots max : [3]    ← Limite ton abonnement provider (RPM/TPM)
-🔧 Agent slots max : [5]  ← Limite RAM serveur (~200MB/session)
-```
-
-**Règles :**
-- Un agent **consomme un agent slot** au démarrage (sa session Pi SDK)
-- Un agent **consomme un LLM slot** seulement pendant un appel provider (attente réseau)
-- Si tous les LLM slots sont pris, l'agent attend en file d'attente
-- Si tous les agent slots sont pris, la tâche attend au niveau le plus haut
-
-**Fichiers :** `backend/src/pi/concurrency.ts` + UI dans Settings
-
----
-
-### 2. Harness Mode (P2)
-
-Nouveau mode dédié, 100% indépendant des modes CODE/PLAN/REVIEW. On peut basculer entre mode normal et harness.
-
-**Architecture :**
-```
-Orchestrator (lead agent)
-├── Agent 1 (ARCHITECT) → Session #1 (modèle rapide, read/grep/cbm)
-├── Agent 2 (DEVELOPER) → Session #2 (modèle puissant, read/write/edit/bash)
-├── Agent 3 (REVIEWER)  → Session #3 (modèle équilibré, read/grep/diff)
-└── Agent 4 (QA)        → Session #4 (modèle rapide, bash/test)
-```
-
-**Principes :**
-- Chaque agent a **son propre contexte** (sa session Pi SDK avec son historique)
-- Contexte **partagé** via artefacts sur disque + messages de l'orchestrator
-- Chaque agent peut avoir son **propre modèle LLM**
-- Qualité : pipeline multi-étage
-- Orchestrator synthétise le résultat final
-
-**Fichiers :** `backend/src/pi/harness-engine.ts`
-
----
-
-### 3. Technical Knowledge Base (P3)
-
-Cache automatique des recherches web avec TTL configurable.
+Le flux Harness enchaîne 3 phases :
 
 ```
-.pi/knowledge/technical/
-├── sources/              ← Fichiers horodatés
-├── index.json            ← URL → fichier, date, TTL
-└── config.json           ← TTL par défaut
+1. TECH LEAD (/harness en mode CODE)
+   Le modèle principal synthétise la conversation en un BRIEF technique
+   ↓
+2. ARCHITECTE
+   Explore le code, prend les décisions techniques,
+   produit un PLAN structuré (JSON) en phases + tâches
+   ↓
+3. EXÉCUTION
+   Pour chaque phase (séquentielle) :
+     Pour chaque tâche (séquentielle, V1) :
+       Agent spécialisé → session temporaire → context minimal
+       (instruction + fichiers spécifiés uniquement)
+   ↓
+4. RAPPORT FINAL
+   Synthèse structurée par phase affichée dans le chat
 ```
 
-**Interception :** Hook automatique sur les appels `firecrawl_scrape/search` → vérifie le cache avant d'appeler l'API.
+### Pool d'agents par défaut (12 rôles)
 
-**Fichiers :** `backend/src/pi/knowledge-base.ts`
+| Rôle | Emoji | Spécialité | Outils |
+|------|-------|-----------|--------|
+| Architect | 🏗 | Planification, exploration, décisions | read/grep/find/cbm |
+| Backend Developer | ⚙️ | API, services, business logic | read/edit/write/bash |
+| Frontend Developer | 🎨 | Composants UI, styles, routing | read/edit/write/bash |
+| Database Engineer | 🗄️ | Schémas, migrations, requêtes | read/edit/write/bash |
+| API Designer | 🔌 | Contrats API, OpenAPI, validation | read/edit/write/bash |
+| Code Reviewer | 👁 | Review logique, sécurité, qualité | read/grep/bash |
+| QA Tester | 🧪 | Tests, validation, ACs | read/edit/write/bash |
+| Test Writer | 🔬 | Tests unitaires, intégration, e2e | read/edit/write/bash |
+| Documentation Writer | 📝 | README, guides, API docs | read/edit/grep |
+| DevOps Engineer | 🚀 | CI/CD, Docker, automation | read/edit/write/bash |
+| Security Reviewer | 🔒 | Audit vulnérabilités | read/grep/bash |
+| Refactoring Specialist | 🔧 | Restructuration, dette technique | read/edit/write/bash |
 
----
+### Principes de fonctionnement
 
-### 4. User Knowledge Base (P4)
+- **Context isolation** : chaque agent reçoit UNIQUEMENT sa tâche + les fichiers spécifiés
+- **Pas de pollution** : un agent backend ne voit pas le code frontend, ni l'historique de conversation
+- **Architecte décide** : langage, framework, fichiers à lire pour chaque tâche
+- **Rapport structuré** : résultat groupé par phase, visible dans le chat
+- **Slots LLM/Agent** : limits de concurrence via `concurrency.ts` (partagé avec auto-review)
+- **Timeout** : par agent configurable (30s à 30min), abort propre
+- **Abort** : interrompt entre les phases/tâches, message_end systématique
+- **Steer** : les messages pendant l'exécution sont queued et injectés dans la tâche suivante
 
-Profil utilisateur persistant : préférences UI/UX, habitudes de code, décisions d'architecture.
+### Commande `/harness` (Tech Lead)
 
-```
-.pi/knowledge/user/
-├── preferences.json          ← Thème, police, accent
-├── ui-preferences.md         ← Style UI, composants préférés
-├── coding-habits.md          ← Conventions code
-├── project-templates/        ← Templates réutilisables
-└── decisions.log             ← Décisions passées
-```
+En mode CODE/PLAN, la commande `/harness` déclenche :
+1. Le **modèle principal** (qui a tout l'historique) génère un brief technique concis
+2. Le brief est passé à l'architecte (pas l'historique brut)
+3. L'architecte planifie et les agents exécutent
 
-**Apprentissage :** Détection de patterns au fil des sessions (framework, librairies, outils).
+Évite de noyer l'architecte dans des dizaines de messages de discussion.
 
-**Fichiers :** `backend/src/pi/user-preferences.ts`
+### Fichiers
 
----
+| Fichier | Rôle | Statut |
+|---------|------|--------|
+| `backend/src/pi/harness-engine.ts` | Orchestrateur multi-agent v2 | ✅ Fait |
+| `backend/src/pi/concurrency.ts` | Gestionnaire de concurrence | ✅ Fait |
+| `backend/src/pi/model-library.ts` | Types, pool d'agents, persistance | ✅ Fait |
+| `backend/src/pi/session.ts` | Intégration `/harness`, runHarness, abort | ✅ Fait |
+| `frontend/src/components/Modals/HarnessConfigModal.tsx` | UI config harness | ✅ Fait |
+| `frontend/src/components/Header/ModelQuickSwitch.tsx` | Toggle harness + auto-config | ✅ Fait |
 
-### 5. Quality Gates Pipeline (P4)
+### Fonctionnalités futures (non implémentées)
 
-Pipeline de validation multi-étage configurable :
-
-```
-[Agent] → [Lint & Build] → [Auto-Review N cycles] → [QA Tests] → [Security] → [Résultat]
-```
-
-Chaque gate peut être requis (bloquant) ou optionnel.
-
----
-
-### 6. Timeline de réalisation
-
-| Phase | Contenu | Dépend de | Complexité |
-|-------|---------|-----------|-----------|
-| **P0** | Retirer YOLO de l'UI + préparer mode Harness | — | 🟢 Faible (1j) | ✅ Fait (2026-06-28) |
-| **P1** | Concurrency Manager (LLM + Agent slots) | P0 | 🟡 Moyenne (2j) | ✅ Fait (2026-06-28) |
-| **P2** | Harness Engine (N agents, rôles, orchestration) | P1 | 🔴 Élevée (5j) | ✅ Fait (2026-06-28) |
-| **P3** | Technical KB (cache auto, TTL, refresh) | — | 🟡 Moyenne (3j) |
-| **P4** | User KB (préférences, auto-apprentissage) | — | 🟡 Moyenne (2j) |
-| **P5** | Quality Gates Pipeline (multi-stage) | P2 | 🟡 Moyenne (3j) |
-| **P6** | Dark Factory (agents persistants parallèles) | P2 | 🔴 Élevée (5j) |
-
----
-
-### 7. Fichiers à créer
-
-| Fichier | Phase | Rôle |
-|---------|-------|------|
-| `backend/src/pi/concurrency.ts` | P1 | Gestionnaire de concurrence |
-| `backend/src/pi/harness-engine.ts` | P2 | Orchestrateur multi-agent |
-| `backend/src/pi/knowledge-base.ts` | P3 | Base de connaissance technique |
-| `backend/src/pi/user-preferences.ts` | P4 | Profil utilisateur |
-| `frontend/src/components/Modals/HarnessConfigModal.tsx` | P2 | UI config harness |
-| `frontend/src/components/Modals/KnowledgeBaseModal.tsx` | P3 | UI KB technique |
-| `frontend/src/components/Modals/ConcurrencyConfigModal.tsx` | P1 | UI config concurrence |
-
-✅ **Mode YOLO — Débat multi-agent**
-
-- Implémenté backend + frontend :
-  - `session.ts:runYoloSession()` — orchestration cycles plan/code
-  - `session.ts:runYoloDebate()` — boucle agent1 → agent2
-  - `session.ts:runYoloAgent()` — session temporaire par agent, clean up après
-  - `routes/pi-settings.ts` → `POST /api/pi/yolo`
-  - `ModelQuickSwitch.tsx` → bouton YOLO + dropdown
-  - `YoloConfigModal.tsx` → configuration (2 modèles, cycles)
-  - Streaming temps réel des tool calls des deux agents
-- Configuration : `model1`, `model2`, `planCycles`, `codeCycles`, `globalCycles`
+| Fonctionnalité | Priorité | Description |
+|----------------|----------|-------------|
+| **Parallélisme intra-phase** | P3 | Tâches indépendantes dans une même phase exécutées en parallèle |
+| **Technical Knowledge Base** | P3 | Cache auto des recherches web (firecrawl) avec TTL |
+| **User Knowledge Base** | P4 | Profil utilisateur, préférences, décisions d'architecture |
+| **Quality Gates Pipeline** | P4 | Pipeline multi-étage : lint → build → review → test → security |
+| **Dark Factory** | P6 | Agents persistants parallèles, files d'attente, jobs asynchrones |
 
 ---
 
@@ -646,7 +597,7 @@ Chaque gate peut être requis (bloquant) ou optionnel.
 | PLAN | ✅ | Lecture seule, pas de bash modifiant l'état, instructions planification |
 | REVIEW | ✅ | Lecture seule + bash read-only, focus revue de code, format structuré |
 | YOLO | ⏳ Déprécié (remplacé par HARNESS) | Débat multi-agent : 2 sessions temporaires, cycles plan + code. Conservé dans le code mais masqué de l'interface. |
-| HARNESS | 🚧 Planifié | Orchestration multi-agent avec rôles SAFe, files d'attente, quality gates, knowledge base. Voir section Architecture Planifiée. |
+| HARNESS | ✅ Implémenté (v2) | Architecte planifie → agents spécialisés exécutent. Pool de 12 rôles prédéfinis. Context isolation par tâche. Commande `/harness` : brief par le modèle principal puis orchestration. Voir section Architecture. |
 | Auto-review | ✅ | Après un prompt CODE : review neutre (session fraîche) + fix (session principale) |
 
 ### Routes API
