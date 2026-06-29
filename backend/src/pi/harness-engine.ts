@@ -12,7 +12,7 @@ import { createAgentSession, SessionManager, ModelRegistry } from "@earendil-wor
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emitToSubscribers, getSession } from "./session.js";
 import { concurrencyManager } from "./concurrency.js";
-import { getDefaultAgent } from "./model-library.js";
+import { getDefaultAgent, loadModelLibrary } from "./model-library.js";
 import type { HarnessConfig, HarnessAgentConfig } from "./model-library.js";
 import os from "os";
 import { existsSync } from "fs";
@@ -440,11 +440,25 @@ export class HarnessEngine {
       });
       tempSession = result.session;
 
-      // Modèle spécifique si configuré
+      // Modèle spécifique si configuré, sinon modèle par défaut du registry
       if (agent.modelId) {
         const parts = agent.modelId.split("__");
         const model = getModelRegistry().find(parts[0], parts[1] || "");
         if (model) await tempSession.setModel(model);
+      } else {
+        // Pas de modèle spécifique → utiliser le modèle par défaut du projet
+        const available = getModelRegistry().getAvailable();
+        const lib = loadModelLibrary();
+        const defaultModelId = lib.defaultModelId;
+        if (defaultModelId) {
+          // Chercher par ID complet (ex: provider__model)
+          const parts = defaultModelId.split("__");
+          const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
+          if (model) await tempSession.setModel(model);
+        } else if (available.length > 0) {
+          // Fallback: premier modèle dispo
+          await tempSession.setModel(available[0]);
+        }
       }
 
       // Appliquer le system prompt
@@ -456,7 +470,10 @@ export class HarnessEngine {
       }
 
       // Forward des events vers le frontend
+      // FILTRER message_start/message_end de la session temp pour ne pas
+      // écraser le assistantId du frontend (le harness gère ses propres message_start/end)
       tempUnsub = tempSession.subscribe((event: any) => {
+        if (event.type === "message_start" || event.type === "message_end") return;
         emitToSubscribers({ ...event, _harness: true, _harnessAgent: agent.role } as any, this.projectId);
       });
 
