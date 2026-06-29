@@ -49,15 +49,18 @@ export class HarnessEngine {
   private config: HarnessConfig;
   private projectId: string;
   private userPrompt: string;
+  private conversationHistory: string;
   private steerMessages: string[];
   private constructor(
     projectId: string,
     userPrompt: string,
+    conversationHistory: string,
     config: HarnessConfig,
     steerMessages: string[],
   ) {
     this.projectId = projectId;
     this.userPrompt = userPrompt;
+    this.conversationHistory = conversationHistory;
     this.config = config;
     this.steerMessages = steerMessages;
   }
@@ -75,8 +78,9 @@ export class HarnessEngine {
     userPrompt: string,
     config: HarnessConfig,
     steerMessages?: string[],
+    conversationHistory?: string,
   ): Promise<string> {
-    const engine = new HarnessEngine(projectId, userPrompt, config, steerMessages || []);
+    const engine = new HarnessEngine(projectId, userPrompt, conversationHistory || "", config, steerMessages || []);
 
     const activeAgents = config.agents.filter(a => a.enabled);
     if (activeAgents.length === 0) {
@@ -230,12 +234,21 @@ export class HarnessEngine {
     // Outils pour l'architecte (read-only + exploration)
     const tools = architect.tools || poolEntry?.tools || ["read", "grep", "find", "ls"];
 
+    // Concaténer l'historique de conversation au prompt de l'architecte
+    let archUserPrompt = `\n\n## Demande utilisateur\n\n${this.userPrompt}`;
+    if (this.conversationHistory) {
+      // Limiter à 8000 chars pour éviter de saturer
+      const history = this.conversationHistory.slice(0, 8000);
+      archUserPrompt += `\n\n## Historique de la discussion\n\nVoici les messages récents de la conversation (pour contexte) :\n\n${history}\n\n---`;
+    }
+    archUserPrompt += `\n\n## Règles\n- Explore le codebase avant de décider\n- Produis un plan réaliste et précis\n- Maximum ${MAX_PHASES} phases et ${MAX_TASKS_TOTAL} tâches\n- Termine par un bloc JSON valide (\`\`\`json ... \`\`\`)\n- N'assigne des tâches qu'aux agents listés ci-dessus`;
+
     // Exécuter l'architecte
     const response = await this.runSingleAgent(
       architect,
       architectPrompt,
       tools,
-      `\n\n## Demande utilisateur\n\n${this.userPrompt}\n\n## Règles\n- Explore le codebase avant de décider\n- Produis un plan réaliste et précis\n- Maximum ${MAX_PHASES} phases et ${MAX_TASKS_TOTAL} tâches\n- Termine par un bloc JSON valide (\`\`\`json ... \`\`\`)\n- N'assigne des tâches qu'aux agents listés ci-dessus`,
+      archUserPrompt,
       "architect",
     );
 

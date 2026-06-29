@@ -637,8 +637,22 @@ export async function runHarness(
   const steerMessages = state ? [...state.harnessSteerMessages] : [];
   if (state) state.harnessSteerMessages = [];
 
+  // Collecter l'historique récent de la session principale pour donner du contexte à l'architecte
+  // (limité aux 20 derniers messages pour ne pas saturer le prompt)
+  let conversationHistory: string | undefined;
+  if (state?.session?.messages) {
+    const msgs = state.session.messages.slice(-20);
+    const lines = msgs
+      .filter((m: any) => m.role === "user" || m.role === "assistant")
+      .map((m: any) => {
+        const text = m.content?.map?.((c: any) => c.text || "").join("") || "";
+        return m.role === "user" ? `**Utilisateur :** ${text}` : `**Assistant :** ${text}`;
+      });
+    conversationHistory = lines.join("\n\n");
+  }
+
   try {
-    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages);
+    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages, conversationHistory);
     return result;
   } finally {
     if (state) {
