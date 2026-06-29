@@ -45,6 +45,8 @@ export interface PiSessionState {
   reviewCycle: number;          // current auto-review cycle count
   autoReviewInProgress: boolean; // is an auto-review cycle running
   autoReviewAborted: boolean;   // was auto-review aborted by user
+  harnessAborted: boolean;      // was harness run aborted by user
+  harnessSteerMessages: string[]; // messages queued for harness while streaming
 }
 
 // ─── Multi-project session map ──────────────────────────
@@ -302,6 +304,8 @@ export async function createPiSession(
       reviewCycle: 0,
       autoReviewInProgress: false,
       autoReviewAborted: false,
+      harnessAborted: false,
+      harnessSteerMessages: [],
     };
 
     sessionsByProject.set(projectId, newSession);
@@ -367,6 +371,12 @@ export async function sendPrompt(
 
   // ── Harness mode: no session needed, delegate to HarnessEngine ──
   if (state?.activeMode === "harness") {
+    if (state.isStreaming) {
+      // Harness already running — queue as steer message
+      state.harnessSteerMessages.push(message);
+      console.log(`[prompt] Harness steer queued (${state.harnessSteerMessages.length} pending): ${message.substring(0, 60)}`);
+      return;
+    }
     const library = loadModelLibrary();
     const pm = getProjectModeConfig(library, projectId);
     const harnessConfig = pm.harness?.config;
@@ -623,8 +633,12 @@ export async function runHarness(
     state.isStreaming = true;
   }
 
+  // Collecter les messages de steering en attente
+  const steerMessages = state ? [...state.harnessSteerMessages] : [];
+  if (state) state.harnessSteerMessages = [];
+
   try {
-    const result = await HarnessEngine.run(projectId, prompt, config);
+    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages);
     return result;
   } finally {
     if (state) {
@@ -636,11 +650,22 @@ export async function runHarness(
 export async function abortPi(projectId?: string): Promise<void> {
   if (projectId) {
     const state = sessionsByProject.get(projectId);
-    if (state?.session) await state.session.abort();
+    if (state?.session) {
+      if (state.activeMode === "harness") {
+        state.harnessAborted = true;
+        console.log("[harness] Abort requested — will stop after current round");
+      } else {
+        await state.session.abort();
+      }
+    }
   } else {
     // Abort all sessions
     for (const [, state] of sessionsByProject) {
-      if (state?.session) await state.session.abort();
+      if (state.activeMode === "harness") {
+        state.harnessAborted = true;
+      } else if (state?.session) {
+        await state.session.abort();
+      }
     }
   }
 }

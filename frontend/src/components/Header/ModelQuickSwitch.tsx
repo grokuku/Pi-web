@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star, Settings } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
-import { HarnessConfigModal } from "../Modals/HarnessConfigModal";
+import { HarnessConfigModal, DEFAULT_HARNESS_AGENTS } from "../Modals/HarnessConfigModal";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, HarnessConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -141,13 +141,15 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               body: JSON.stringify({
                 mode: "harness",
                 config: {
-                  agents: [
-                    { role: "architect", modelId: null, enabled: true },
-                    { role: "developer", modelId: null, enabled: true },
-                    { role: "reviewer", modelId: null, enabled: true },
-                  ],
-                  maxRounds: 1,
+                  agents: DEFAULT_HARNESS_AGENTS.map(a => ({
+                    role: a.role,
+                    description: a.description,
+                    modelId: null,
+                    enabled: true,
+                  })),
                   synthesize: true,
+                  agentTimeout: 300,
+                  maxTasks: 20,
                 },
               }),
             });
@@ -365,7 +367,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
           }}
           models={library?.models || []}
           providers={providers}
-          config={(pm as any)?.harness?.config || { agents: [], maxRounds: 1, synthesize: true }}
+          config={(pm as any)?.harness?.config || { agents: [], synthesize: true }}
         />
       )}
 
@@ -428,7 +430,7 @@ function defaultProjectMode(): ProjectModeConfig {
     yolo: { modelId: null, enabled: false,
       config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
     harness: { modelId: null, enabled: false,
-      config: { agents: [], maxRounds: 1, synthesize: true } },
+      config: { agents: [], synthesize: true } },
   };
 }
 

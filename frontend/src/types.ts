@@ -193,6 +193,7 @@ export interface YoloConfig {
 
 export interface HarnessAgentConfig {
   role: string;
+  description: string;          // what this agent specializes in
   modelId: string | null;
   enabled: boolean;
   systemPrompt?: string;
@@ -201,8 +202,9 @@ export interface HarnessAgentConfig {
 
 export interface HarnessConfig {
   agents: HarnessAgentConfig[];
-  maxRounds: number;
   synthesize: boolean;
+  agentTimeout?: number;       // per-agent timeout in seconds (default: 300)
+  maxTasks?: number;           // safety limit (default: 20)
 }
 
 export interface ProjectModeConfig {

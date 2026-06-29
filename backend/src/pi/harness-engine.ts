@@ -1,76 +1,49 @@
 /**
- * Harness Engine — Multi-Agent Orchestration
+ * Harness Engine v2 — Architecture Pilotée par un Architecte
  *
- * Prend un prompt utilisateur + une config d'équipe, et orchestre
- * N agents séquentiellement. Chaque agent :
- * - Reçoit sa propre session Pi SDK temporaire
- * - A son propre rôle (system prompt), modèle, et outils
- * - Reçoit l'output du précédent agent comme contexte
- * - Produit un artefact (plan, code, review)
- *
- * L'orchestrator gère l'ordre d'exécution, les dépendances,
- * et synthétise le résultat final.
+ * Nouveau flow :
+ * 1. L'ARCHITECTE explore le code et produit un PLAN structuré en phases/tâches
+ * 2. Chaque tâche est assignée à un agent spécialisé (backend, frontend, review, etc.)
+ * 3. Les phases s'exécutent séquentiellement ; les tâches dans chaque phase aussi (V1)
+ * 4. Chaque agent reçoit UNIQUEMENT sa tâche + les fichiers spécifiés — context minimal
  */
 
 import { createAgentSession, SessionManager, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emitToSubscribers, getSession } from "./session.js";
 import { concurrencyManager } from "./concurrency.js";
-import { loadModelLibrary, getModeModel } from "./model-library.js";
+import { loadModelLibrary, getModeModel, getDefaultAgent, getDefaultHarnessAgents } from "./model-library.js";
 import type { HarnessConfig, HarnessAgentConfig } from "./model-library.js";
 import path from "path";
 import os from "os";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
 
 // ── Constants ──
-const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max par agent
+const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
+const MAX_PHASES = 5;
+const MAX_TASKS_TOTAL = 15;
 
-// ── Default prompts ───────────────────────────────────
+// ── Types du plan ────────────────────────────────────
 
-const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
-  architect: `## RÔLE : ARCHITECTE SYSTÈME
+interface PlanTask {
+  agent: string;
+  title: string;
+  instruction: string;
+  read_files: string[];
+}
 
-Tu es un architecte système. Analyse la demande et produit un PLAN détaillé.
+interface PlanPhase {
+  name: string;
+  tasks: PlanTask[];
+}
 
-Règles :
-- Utilise read/grep/find pour explorer le code existant
-- Ne JAMAIS écrire de code — seulement planifier
-- Décompose en étapes claires avec chemins de fichiers
-- Considère les edge cases, la sécurité, les performances
-- Format : liste de fichiers à modifier + description des changements`,
-
-  developer: `## RÔLE : DÉVELOPPEUR
-
-Tu es un développeur. Implémente le plan fourni en écrivant du code.
-
-Règles :
-- Utilise read, edit, write, bash pour implémenter
-- Écris du code de qualité production
-- Fais des changements atomiques, un fichier à la fois
-- Gère les erreurs et edge cases
-- Exécute les tests si applicable`,
-
-  reviewer: `## RÔLE : REVIEWER
-
-Tu es un reviewer. Analyse le code/plan fourni et trouve les problèmes.
-
-Règles :
-- Vérifie la logique, la sécurité, les performances
-- Vérifie les edge cases non gérés
-- Signale les bugs avec fichier:ligne
-- Suggère des corrections concrètes
-- Ne modifie PAS le code toi-même (sauf si explicite)`,
-
-  qa: `## RÔLE : QA TESTER
-
-Tu es un testeur QA. Valide que le code fourni fonctionne.
-
-Règles :
-- Exécute les tests existants avec bash
-- Vérifie que toutes les ACs sont couvertes
-- Crée des tests manquants si nécessaire
-- Signale les régressions`,
-};
+interface ArchitecturePlan {
+  decisions: {
+    summary: string;
+    tech?: Record<string, string>;
+  };
+  phases: PlanPhase[];
+}
 
 // ── Engine ────────────────────────────────────────────
 
@@ -78,129 +51,352 @@ export class HarnessEngine {
   private config: HarnessConfig;
   private projectId: string;
   private userPrompt: string;
+  private steerMessages: string[];
   private availableModels: any[];
 
   private constructor(
     projectId: string,
     userPrompt: string,
     config: HarnessConfig,
+    steerMessages: string[],
     availableModels: any[],
   ) {
     this.projectId = projectId;
     this.userPrompt = userPrompt;
     this.config = config;
+    this.steerMessages = steerMessages;
     this.availableModels = availableModels;
   }
 
+  // ── Point d'entrée ──────────────────────────────────
+
   /**
-   * Lance un cycle harness avec les agents configurés.
-   * Exécution séquentielle : chaque agent reçoit l'output du précédent.
+   * Lance un cycle harness :
+   * 1. Architecte explore le code et produit un plan
+   * 2. Les phases/tâches s'exécutent séquentiellement
+   * 3. Synthèse finale
    */
   static async run(
     projectId: string,
     userPrompt: string,
     config: HarnessConfig,
+    steerMessages?: string[],
   ): Promise<string> {
-    const library = loadModelLibrary();
-
-    // Collecter les modèles disponibles
     const registry = getModelRegistry();
     const availableModels = registry.getAvailable();
 
-    const engine = new HarnessEngine(projectId, userPrompt, config, availableModels);
+    const engine = new HarnessEngine(projectId, userPrompt, config, steerMessages || [], availableModels);
 
-    // Sélectionner les agents activés
     const activeAgents = config.agents.filter(a => a.enabled);
     if (activeAgents.length === 0) {
-      emitToSubscribers({
-        type: "tool_execution_start",
-        toolCallId: "harness-no-agents",
-        toolName: "harness",
-        args: {},
-      } as any, projectId);
-      emitToSubscribers({
-        type: "tool_execution_end",
-        toolCallId: "harness-no-agents",
-        toolName: "harness",
-        result: { content: [{ type: "text", text: "⚠ Aucun agent configuré pour le Harness. Configure des agents dans Settings → Harness." }] },
-        isError: false,
-      } as any, projectId);
+      engine.emitText("\n\n⚠ **Aucun agent activé.** Active des agents dans la config Harness.\n\n");
       return "No agents configured";
     }
 
-    // Émettre le début du cycle
-    emitToSubscribers({
-      type: "agent_start",
-      message: { role: "assistant" },
-      _harness: true,
-      _phase: "orchestrating",
-      _agentCount: activeAgents.length,
-    } as any, projectId);
-
-    // Émettre message_start pour créer le message assistant en streaming
+    // Signal de début
     const messageId = `harness-${Date.now()}`;
-    emitToSubscribers({
-      type: "message_start",
-      message: { id: messageId, role: "assistant" },
-    } as any, projectId);
+    emitToSubscribers({ type: "message_start", message: { id: messageId, role: "assistant" } } as any, projectId);
+    emitToSubscribers({ type: "agent_start", message: { role: "assistant" }, _harness: true } as any, projectId);
 
-    let previousOutput = userPrompt;
-    const artifacts: { role: string; output: string }[] = [];
-
-    for (let round = 0; round < config.maxRounds; round++) {
-      for (const agent of activeAgents) {
-        const agentLabel = `harness-${agent.role}-r${round}`;
-
-        emitToSubscribers({
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "text_delta",
-            delta: `\n\n**🏗 Étape : ${agent.role.toUpperCase()} (round ${round + 1}/${config.maxRounds})**\n\n`,
-          },
-        } as any, projectId);
-
-        const output = await engine.runAgent(agent, previousOutput, agentLabel, round);
-        artifacts.push({ role: agent.role, output });
-        previousOutput = output;
+    try {
+      // ── Phase 1 : Architecte planifie ──
+      engine.emitText(`\n\n**🏗 PHASE D'ARCHITECTURE**\n\nL'architecte explore le code et élabore un plan...\n\n`);
+      const plan = await engine.runArchitect(activeAgents);
+      if (!plan) {
+        engine.emitText(`\n\n❌ **L'architecte n'a pas pu produire un plan valide.**\n\n`);
+        return "Plan generation failed";
       }
+
+      // Afficher les décisions de l'architecte
+      engine.emitText(`\n\n**📋 DÉCISIONS DE L'ARCHITECTE**\n\n${plan.decisions.summary}\n\n`);
+      if (plan.decisions.tech) {
+        const techLines = Object.entries(plan.decisions.tech).map(([k, v]) => `- **${k}** : ${v}`).join("\n");
+        engine.emitText(`${techLines}\n\n`);
+      }
+
+      // Afficher le plan au user
+      const phaseSummary = plan.phases.map((p, i) =>
+        `**Phase ${i + 1} : ${p.name}**  \n${p.tasks.map(t => `  → _${t.title}_ (${t.agent})`).join("\n")}`
+      ).join("\n\n");
+      engine.emitText(`**📐 PLAN D'EXÉCUTION**\n\n${phaseSummary}\n\n`);
+
+      // ── Phase 2 : Exécution des phases ──
+      const artifacts: { phase: string; task: string; agent: string; output: string }[] = [];
+      let taskCount = 0;
+      const maxTasks = config.maxTasks || 20;
+
+      for (let pi = 0; pi < plan.phases.length; pi++) {
+        const phase = plan.phases[pi];
+
+        // Vérifier l'abort
+        if (engine.isAborted()) break;
+
+        engine.emitText(`\n\n---\n## 🔷 Phase ${pi + 1} : ${phase.name}\n\n`);
+
+        for (let ti = 0; ti < phase.tasks.length; ti++) {
+          const task = phase.tasks[ti];
+
+          // Vérifier l'abort
+          if (engine.isAborted()) {
+            engine.emitText(`\n\n_🛑 Harness interrompu par l'utilisateur_\n\n`);
+            break;
+          }
+
+          // Limite de sécurité
+          taskCount++;
+          if (taskCount > maxTasks) {
+            engine.emitText(`\n\n_⚠️ Limite de ${maxTasks} tâches atteinte — exécution arrêtée_\n\n`);
+            break;
+          }
+
+          // Trouver l'agent par rôle
+          const agentConfig = activeAgents.find(a => a.role === task.agent);
+          if (!agentConfig) {
+            engine.emitText(`\n\n⚠️ **Agent "${task.agent}" introuvable** dans la config. Tâche ignorée.\n\n`);
+            continue;
+          }
+
+          engine.emitText(`\n### 🔸 ${task.title}\n**Agent :** ${task.agent}  \n\n`);
+
+          // Ajouter les steer messages au début de l'instruction si disponibles
+          let taskInstruction = task.instruction;
+          while (engine.steerMessages.length > 0) {
+            const steer = engine.steerMessages.shift()!;
+            taskInstruction += `\n\n---\n**💬 Complément utilisateur :**\n${steer}`;
+          }
+
+          const output = await engine.runAgentTask(
+            agentConfig,
+            taskInstruction,
+            task.read_files || [],
+            plan.decisions,
+            `task-${pi}-${ti}`,
+          );
+
+          artifacts.push({
+            phase: phase.name,
+            task: task.title,
+            agent: task.agent,
+            output,
+          });
+        }
+
+        if (engine.isAborted()) break;
+      }
+
+      // ── Phase 3 : Synthèse ──
+      let finalOutput = engine.formatFinalResult(artifacts, plan);
+
+      emitToSubscribers({
+        type: "message_end",
+        message: { id: messageId, role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } },
+      } as any, projectId);
+
+      return finalOutput;
+
+    } finally {
+      emitToSubscribers({ type: "agent_end", _harness: true, _phase: "done" } as any, projectId);
+    }
+  }
+
+  // ── Architecte ──────────────────────────────────────
+
+  /**
+   * Exécute l'agent architecte : explore le code, prend des décisions,
+   * produit un plan JSON structuré.
+   */
+  private async runArchitect(activeAgents: HarnessAgentConfig[]): Promise<ArchitecturePlan | null> {
+    const architect = activeAgents.find(a => a.role === "architect")
+      ?? activeAgents[0]; // fallback : premier agent comme planner
+
+    // Construire la liste des agents disponibles pour l'architecte
+    const agentListStr = activeAgents
+      .filter(a => a.role !== "architect") // l'architecte ne s'assigne pas de tâche à lui-même
+      .map(a => `- **${a.role}** : ${a.description || "Agent spécialisé"}`)
+      .join("\n");
+
+    // Prompt spécial pour l'architecte
+    const poolEntry = getDefaultAgent(architect.role);
+    const basePrompt = architect.systemPrompt || poolEntry?.systemPrompt
+      || `## RÔLE : ${architect.role.toUpperCase()}\n\nAnalyse la demande et produit un plan.`;
+
+    const architectPrompt = basePrompt.replace("{AGENT_LIST}", agentListStr || "Aucun agent disponible.");
+
+    // Outils pour l'architecte (read-only + exploration)
+    const tools = architect.tools || poolEntry?.tools || ["read", "grep", "find", "ls"];
+
+    // Exécuter l'architecte
+    const response = await this.runSingleAgent(
+      architect,
+      architectPrompt,
+      tools,
+      `\n\n## Demande utilisateur\n\n${this.userPrompt}\n\n## Règles\n- Explore le codebase avant de décider\n- Produis un plan réaliste et précis\n- Maximum ${MAX_PHASES} phases et ${MAX_TASKS_TOTAL} tâches\n- Termine par un bloc JSON valide (\`\`\`json ... \`\`\`)\n- N'assigne des tâches qu'aux agents listés ci-dessus`,
+      "architect",
+    );
+
+    if (!response) {
+      console.error("[harness] Architect returned empty response");
+      return null;
     }
 
-    // Synthèse finale
-    let finalOutput = previousOutput;
-    if (config.synthesize && artifacts.length > 1) {
-      finalOutput = await engine.synthesize(artifacts);
-    }
-
-    // Émettre message_end + agent_end
-    emitToSubscribers({
-      type: "message_end",
-      message: { id: messageId, role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } },
-    } as any, projectId);
-    emitToSubscribers({
-      type: "agent_end",
-      _harness: true,
-      _phase: "done",
-      _artifacts: artifacts.map(a => `${a.role}: ${a.output.slice(0, 100)}...`),
-    } as any, projectId);
-
-    return finalOutput;
+    // Extraire et parser le JSON du plan
+    return this.extractAndParsePlan(response, activeAgents);
   }
 
   /**
-   * Exécute un agent unique dans une session temporaire.
+   * Extrait le JSON du plan depuis la réponse de l'architecte.
+   * Essaie plusieurs patterns, avec retry si échec.
    */
-  private async runAgent(
+  private extractAndParsePlan(response: string, activeAgents: HarnessAgentConfig[]): ArchitecturePlan | null {
+    let jsonStr: string | null = null;
+
+    // Pattern 1 : ```json ... ```
+    const matchJsonBlock = response.match(/```json\s*([\s\S]*?)```/);
+    if (matchJsonBlock) jsonStr = matchJsonBlock[1].trim();
+
+    // Pattern 2 : ``` ... ``` (sans lang)
+    if (!jsonStr) {
+      const matchAnyBlock = response.match(/```\s*([\s\S]*?)```/);
+      if (matchAnyBlock) jsonStr = matchAnyBlock[1].trim();
+    }
+
+    // Pattern 3 : premier { ... } avec accolades équilibrées
+    if (!jsonStr) {
+      const start = response.indexOf("{");
+      if (start !== -1) {
+        let depth = 0;
+        let end = -1;
+        for (let i = start; i < response.length; i++) {
+          if (response[i] === "{") depth++;
+          else if (response[i] === "}") {
+            depth--;
+            if (depth === 0) { end = i + 1; break; }
+          }
+        }
+        if (end !== -1) jsonStr = response.slice(start, end);
+      }
+    }
+
+    if (!jsonStr) {
+      console.error("[harness] No JSON found in architect response");
+      return null;
+    }
+
+    // Tentative de parsing
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return this.validatePlan(parsed, activeAgents);
+    } catch (e: any) {
+      console.error("[harness] Failed to parse architect JSON:", e.message);
+      return null;
+    }
+  }
+
+  /** Valide la structure du plan et ajoute les defaults */
+  private validatePlan(parsed: any, activeAgents: HarnessAgentConfig[]): ArchitecturePlan | null {
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.decisions?.summary) return null;
+    if (!Array.isArray(parsed.phases) || parsed.phases.length === 0) return null;
+
+    const validRoles = new Set(activeAgents.map(a => a.role));
+    // L'architecte lui-même n'est pas dans les tâches, mais le validateur
+    // doit accepter les rôles des agents disponibles (sauf architecte)
+
+    const phases: PlanPhase[] = [];
+    for (const phase of parsed.phases.slice(0, MAX_PHASES)) {
+      if (!phase.name || !Array.isArray(phase.tasks)) continue;
+      const tasks: PlanTask[] = [];
+      for (const task of phase.tasks.slice(0, MAX_TASKS_TOTAL)) {
+        if (!task.agent || !task.instruction) continue;
+        // Vérifier que l'agent assigné existe
+        if (!validRoles.has(task.agent)) {
+          console.warn(`[harness] Task assigns unknown agent "${task.agent}" — skipping`);
+          continue;
+        }
+        tasks.push({
+          agent: task.agent,
+          title: task.title || task.agent,
+          instruction: task.instruction,
+          read_files: Array.isArray(task.read_files) ? task.read_files : [],
+        });
+      }
+      if (tasks.length > 0) {
+        phases.push({ name: phase.name, tasks });
+      }
+    }
+
+    if (phases.length === 0) return null;
+
+    return {
+      decisions: {
+        summary: parsed.decisions.summary,
+        tech: parsed.decisions.tech || {},
+      },
+      phases,
+    };
+  }
+
+  // ── Exécution d'une tâche ───────────────────────────
+
+  /**
+   * Exécute une tâche unique confiée à un agent.
+   * L'agent reçoit CONTEXTE MINIMAL : instruction + fichiers à lire + décisions architecte.
+   */
+  private async runAgentTask(
     agent: HarnessAgentConfig,
-    context: string,
+    taskInstruction: string,
+    readFiles: string[],
+    architectDecisions: { summary: string; tech?: Record<string, string> },
     label: string,
-    round: number,
+  ): Promise<string> {
+    const cwd = getSession(this.projectId)?.cwd || os.homedir();
+
+    // Contexte compressé : décisions de l'architecte + fichiers à lire + instruction
+    const readFilesBlock = readFiles.length > 0
+      ? `\n## Fichiers de contexte à lire avant de commencer\n${readFiles.map(f => `- \`${f}\``).join("\n")}\n\nPrends le temps de les lire avec read() pour comprendre le contexte existant.`
+      : "";
+
+    const techBlock = architectDecisions.tech && Object.keys(architectDecisions.tech).length > 0
+      ? `\n## Décisions techniques (définies par l'architecte)\n${Object.entries(architectDecisions.tech).map(([k, v]) => `- **${k}** : ${v}`).join("\n")}`
+      : "";
+
+    const steerBlock = ""; // déjà injecté dans taskInstruction
+
+    const fullPrompt = [
+      `## Contexte du projet\n${architectDecisions.summary}`,
+      techBlock,
+      `\n## Ta tâche\n${taskInstruction}`,
+      readFilesBlock,
+      `\n---\nExécute ta tâche en utilisant les outils à ta disposition.`,
+    ].filter(Boolean).join("\n");
+
+    const poolEntry = getDefaultAgent(agent.role);
+    const systemPrompt = agent.systemPrompt || poolEntry?.systemPrompt
+      || `## RÔLE : ${agent.role.toUpperCase()}\n\nExécute la tâche assignée avec ton expertise.`;
+    const tools = agent.tools || poolEntry?.tools || ["read", "edit", "write", "bash", "grep", "find", "ls"];
+
+    return this.runSingleAgent(agent, systemPrompt, tools, fullPrompt, label);
+  }
+
+  // ── Agent unique (mutualisé) ────────────────────────
+
+  /**
+   * Crée une session Pi temporaire pour un agent, exécute le prompt,
+   * collecte la réponse, nettoie.
+   */
+  private async runSingleAgent(
+    agent: HarnessAgentConfig,
+    systemPrompt: string,
+    tools: string[],
+    prompt: string,
+    label: string,
   ): Promise<string> {
     const cwd = getSession(this.projectId)?.cwd || os.homedir();
     let tempSession: AgentSession | null = null;
     let tempSessionFile: string | undefined;
+    let tempUnsub: (() => void) | null = null;
 
     try {
-      // Acquire agent slot
       await concurrencyManager.acquireAgentSlot(this.projectId, label);
 
       const tempSessionManager = SessionManager.create(cwd);
@@ -213,55 +409,43 @@ export class HarnessEngine {
       });
       tempSession = result.session;
 
-      // Appliquer le modèle spécifique à l'agent si configuré
+      // Modèle spécifique si configuré
       if (agent.modelId) {
-        const model = getModelRegistry().find(
-          agent.modelId.split("__")[0],
-          agent.modelId.split("__")[1],
-        );
+        const parts = agent.modelId.split("__");
+        const model = getModelRegistry().find(parts[0], parts[1] || "");
         if (model) await tempSession.setModel(model);
       }
 
-      // Système prompt du rôle (ou générique)
-      const systemPrompt = agent.systemPrompt || DEFAULT_SYSTEM_PROMPTS[agent.role] || `## RÔLE : ${agent.role.toUpperCase()}\n\nAnalyse la demande et fournis ton expertise.`;
-
-      // Restreindre les outils si spécifié
-      if (agent.tools && agent.tools.length > 0) {
-        (tempSession as any).setActiveToolsByName(agent.tools);
-      }
-
+      // Appliquer le system prompt
       (tempSession as any).agent.state.systemPrompt = systemPrompt;
 
-      // Prompter l'agent avec le contexte
-      const prompt = round > 0
-        ? `Contexte (output du précédent agent) :\n\n${context.slice(0, 30000)}\n\n---\n\nApplique ton expertise selon ton rôle. Produis le meilleur résultat possible.`
-        : `${this.userPrompt}\n\n---\n\n${context.slice(0, 5000) === this.userPrompt ? "" : `\nContexte additionnel :\n${context.slice(0, 30000)}`}\n\nApplique ton expertise selon ton rôle.`;
+      // Restreindre les outils
+      if (tools.length > 0) {
+        (tempSession as any).setActiveToolsByName(tools);
+      }
 
-      // Émettre tool_execution pour le suivi
+      // Forward des events vers le frontend
+      tempUnsub = tempSession.subscribe((event: any) => {
+        emitToSubscribers({ ...event, _harness: true, _harnessAgent: agent.role } as any, this.projectId);
+      });
+
+      // Émettre tool_execution_start pour le suivi
       emitToSubscribers({
         type: "tool_execution_start",
-        toolCallId: label,
+        toolCallId: `harness-${label}`,
         toolName: `harness-${agent.role}`,
-        args: { role: agent.role, round },
+        args: { role: agent.role, task: label },
       } as any, this.projectId);
 
-      // Émettre un text_delta pour informer l'utilisateur
-      emitToSubscribers({
-        type: "message_update",
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta: `\n\n**[${agent.role.toUpperCase()}]** Consultation en cours...\n\n`,
-        },
-      } as any, this.projectId);
-
-      // Acquérir un LLM slot + timeout pour l'appel provider
+      // Appel LLM avec timeout
       await concurrencyManager.acquireLLMSlot(this.projectId, label);
       let llmTimer: ReturnType<typeof setTimeout>;
+      const timeoutMs = (this.config.agentTimeout || 300) * 1000;
       const llmTimeout = new Promise<void>((_, reject) => {
         llmTimer = setTimeout(() => {
           tempSession!.abort().catch(() => {});
-          reject(new Error(`[harness-${agent.role}] LLM call timed out after ${AGENT_TIMEOUT_MS/1000}s`));
-        }, AGENT_TIMEOUT_MS);
+          reject(new Error(`[harness-${agent.role}] Timed out after ${timeoutMs / 1000}s`));
+        }, timeoutMs);
       });
 
       try {
@@ -280,18 +464,19 @@ export class HarnessEngine {
 
       emitToSubscribers({
         type: "tool_execution_end",
-        toolCallId: label,
+        toolCallId: `harness-${label}`,
         toolName: `harness-${agent.role}`,
-        result: { content: [{ type: "text", text: `${agent.role.toUpperCase()} terminé (${(fullResponse.length / 1000).toFixed(1)}K tokens)` }] },
+        result: { content: [{ type: "text", text: `${agent.role.toUpperCase()} : ${(fullResponse.length / 1024).toFixed(1)}K tokens` }] },
         isError: false,
       } as any, this.projectId);
 
       return fullResponse || `[${agent.role} n'a produit aucune réponse]`;
+
     } catch (err: any) {
       console.error(`[harness] Agent ${agent.role} error:`, err.message);
       emitToSubscribers({
         type: "tool_execution_end",
-        toolCallId: label,
+        toolCallId: `harness-${label}`,
         toolName: `harness-${agent.role}`,
         result: { content: [{ type: "text", text: `❌ ${agent.role} a échoué : ${err.message}` }] },
         isError: true,
@@ -299,34 +484,65 @@ export class HarnessEngine {
       return `[Error: ${agent.role} failed — ${err.message}]`;
     } finally {
       concurrencyManager.releaseAgentSlot(this.projectId);
+      if (tempUnsub) tempUnsub();
       if (tempSession) {
         try { (tempSession as any).dispose?.(); } catch {}
       }
       if (tempSessionFile) {
-        try {
-          const { unlinkSync, readdirSync, rmdirSync } = await import("fs");
-          if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
-          const dir = tempSessionFile.replace(/\/[^/]+\.json$/, "");
-          if (existsSync(dir)) {
-            try {
-              const files = readdirSync(dir);
-              for (const f of files) unlinkSync(path.join(dir, f));
-              rmdirSync(dir);
-            } catch {}
-          }
-        } catch {}
+        try { if (existsSync(tempSessionFile)) await import("fs").then(fs => fs.unlinkSync(tempSessionFile!)); } catch {}
       }
     }
   }
 
-  /**
-   * Synthétise les artefacts de tous les agents en un résultat final.
-   */
-  private async synthesize(artifacts: { role: string; output: string }[]): Promise<string> {
-    const lines = artifacts.map(a => `=== ${a.role.toUpperCase()} ===\n${a.output.slice(0, 5000)}`);
-    const summary = lines.join("\n\n---\n\n");
+  // ── Helpers ─────────────────────────────────────────
 
-    return `## Résultat Harness\n\n${artifacts.map(a => `### ${a.role.toUpperCase()}\n${a.output}`).join("\n\n")}\n\n---\n*Généré par Harness Engine avec ${artifacts.length} agents, ${this.config.maxRounds} round(s).*`;
+  private isAborted(): boolean {
+    const state = getSession(this.projectId);
+    return state?.harnessAborted === true;
+  }
+
+  private emitText(text: string): void {
+    emitToSubscribers({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: text },
+    } as any, this.projectId);
+  }
+
+  /** Formate le résultat final avec ou sans synthèse LLM */
+  private formatFinalResult(
+    artifacts: { phase: string; task: string; agent: string; output: string }[],
+    plan: ArchitecturePlan,
+  ): string {
+    if (!this.config.synthesize || artifacts.length <= 1) {
+      // Pas de synthèse : on concatène simplement
+      return artifacts.map(a =>
+        `## ${a.task} (${a.agent})\n${a.output}`
+      ).join("\n\n---\n\n");
+    }
+
+    // Synthèse structurée (concaténation propre, pas d'appel LLM supplémentaire)
+    const lines: string[] = [];
+    lines.push(`# Résultat Harness\n`);
+    lines.push(`**Demande :** ${this.userPrompt.slice(0, 200)}${this.userPrompt.length > 200 ? "..." : ""}\n`);
+    lines.push(`**Plan :** ${plan.decisions.summary}\n`);
+    lines.push(`---\n`);
+
+    // Grouper par phase
+    const currentPhases = plan.phases.map(p => p.name);
+    for (const phaseName of currentPhases) {
+      const phaseArtifacts = artifacts.filter(a => a.phase === phaseName);
+      if (phaseArtifacts.length === 0) continue;
+      lines.push(`## 🔷 ${phaseName}\n`);
+      for (const art of phaseArtifacts) {
+        lines.push(`### ${art.task} (${art.agent})\n`);
+        lines.push(art.output);
+        lines.push(`\n`);
+      }
+    }
+
+    lines.push(`---\n*Généré par Harness Engine v2 — ${artifacts.length} tâche(s) exécutée(s)*`);
+
+    return lines.join("\n");
   }
 }
 
