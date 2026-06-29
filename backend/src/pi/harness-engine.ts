@@ -192,6 +192,13 @@ export class HarnessEngine {
 
       return finalOutput;
 
+    } catch (err: any) {
+      engine.emitText(`\n\n❌ **Erreur inattendue :** ${err.message}\n\n`);
+      emitToSubscribers({
+        type: "message_end",
+        message: { id: messageId, role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } },
+      } as any, projectId);
+      return `[Harness] Erreur : ${err.message}`;
     } finally {
       emitToSubscribers({ type: "agent_end", _harness: true, _phase: "done" } as any, projectId);
     }
@@ -234,6 +241,15 @@ export class HarnessEngine {
 
     if (!response) {
       console.error("[harness] Architect returned empty response");
+      this.emitText("\n\n⚠️ **L'architecte n'a pas produit de réponse.** Vérifie que le modèle LLM est accessible.\n\n");
+      return null;
+    }
+
+    // Si l'agent a retourné une erreur (timeout, session, model), l'afficher
+    const errorMatch = response.match(/^\[Error:\s*([^\]]*)\](.*)/s);
+    if (errorMatch) {
+      const errDetail = (errorMatch[1] + errorMatch[2]).trim();
+      this.emitText(`\n\n⚠️ **L'architecte a rencontré une erreur :** ${errDetail}\n\n`);
       return null;
     }
 
@@ -277,6 +293,9 @@ export class HarnessEngine {
 
     if (!jsonStr) {
       console.error("[harness] No JSON found in architect response");
+      // Afficher un extrait de la réponse pour debug
+      const snippet = response.replace(/\n/g, " ").slice(0, 150);
+      this.emitText(`\n\n⚠️ **L'architecte n'a pas produit un plan JSON valide.**\n\nDébut de sa réponse :\n\`${snippet}...\`\n\n`);
       return null;
     }
 
@@ -286,6 +305,7 @@ export class HarnessEngine {
       return this.validatePlan(parsed, activeAgents);
     } catch (e: any) {
       console.error("[harness] Failed to parse architect JSON:", e.message);
+      this.emitText(`\n\n⚠️ **Erreur de parsing du plan JSON :** ${e.message}\n\n`);
       return null;
     }
   }
