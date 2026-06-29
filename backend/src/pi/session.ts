@@ -12,6 +12,8 @@ import {
   getDefaultModel,
   getCommitModel,
   setProjectModeEnabled,
+  getDefaultHarnessAgents,
+  setProjectModeHarnessConfig,
 }
 from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
@@ -551,9 +553,15 @@ export async function sendPrompt(
         const pm = getProjectModeConfig(lib, projectId);
 
         // Vérifier que le mode Harness est configuré
-        const harnessConfig = pm.harness?.config;
+        let harnessConfig = pm.harness?.config;
         if (!harnessConfig?.agents?.length) {
-          return { command: "harness", result: "⚠️ **Aucun agent Harness configuré.** Active d'abord le mode Harness dans les paramètres." };
+          // Auto-configurer les agents par défaut
+          console.log("[harness] Aucun agent configuré — auto-configuration du pool par défaut");
+          const defaultAgents = getDefaultHarnessAgents();
+          setProjectModeHarnessConfig(projectId, { agents: defaultAgents, synthesize: true, agentTimeout: 300, maxTasks: 20 });
+          harnessConfig = { agents: defaultAgents, synthesize: true, agentTimeout: 300, maxTasks: 20 };
+          // Activer le mode
+          setProjectModeEnabled(projectId, "harness", true);
         }
 
         // Forcer le mode harness
