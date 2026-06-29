@@ -12,14 +12,12 @@ import { createAgentSession, SessionManager, ModelRegistry } from "@earendil-wor
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emitToSubscribers, getSession } from "./session.js";
 import { concurrencyManager } from "./concurrency.js";
-import { loadModelLibrary, getModeModel, getDefaultAgent, getDefaultHarnessAgents } from "./model-library.js";
+import { getDefaultAgent } from "./model-library.js";
 import type { HarnessConfig, HarnessAgentConfig } from "./model-library.js";
-import path from "path";
 import os from "os";
 import { existsSync } from "fs";
 
 // ── Constants ──
-const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const MAX_PHASES = 5;
 const MAX_TASKS_TOTAL = 15;
 
@@ -52,20 +50,16 @@ export class HarnessEngine {
   private projectId: string;
   private userPrompt: string;
   private steerMessages: string[];
-  private availableModels: any[];
-
   private constructor(
     projectId: string,
     userPrompt: string,
     config: HarnessConfig,
     steerMessages: string[],
-    availableModels: any[],
   ) {
     this.projectId = projectId;
     this.userPrompt = userPrompt;
     this.config = config;
     this.steerMessages = steerMessages;
-    this.availableModels = availableModels;
   }
 
   // ── Point d'entrée ──────────────────────────────────
@@ -82,10 +76,7 @@ export class HarnessEngine {
     config: HarnessConfig,
     steerMessages?: string[],
   ): Promise<string> {
-    const registry = getModelRegistry();
-    const availableModels = registry.getAvailable();
-
-    const engine = new HarnessEngine(projectId, userPrompt, config, steerMessages || [], availableModels);
+    const engine = new HarnessEngine(projectId, userPrompt, config, steerMessages || []);
 
     const activeAgents = config.agents.filter(a => a.enabled);
     if (activeAgents.length === 0) {
@@ -104,6 +95,10 @@ export class HarnessEngine {
       const plan = await engine.runArchitect(activeAgents);
       if (!plan) {
         engine.emitText(`\n\n❌ **L'architecte n'a pas pu produire un plan valide.**\n\n`);
+        emitToSubscribers({
+          type: "message_end",
+          message: { id: messageId, role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } },
+        } as any, projectId);
         return "Plan generation failed";
       }
 
@@ -186,6 +181,9 @@ export class HarnessEngine {
 
       // ── Phase 3 : Synthèse ──
       let finalOutput = engine.formatFinalResult(artifacts, plan);
+
+      // Émettre le rapport final dans le chat avant de cloturer le message
+      engine.emitText(`\n\n---\n${finalOutput}\n`);
 
       emitToSubscribers({
         type: "message_end",
