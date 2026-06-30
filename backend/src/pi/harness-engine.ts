@@ -540,6 +540,15 @@ export class HarnessEngine {
       // Collecter la réponse
       const messages: any[] = tempSession.messages || [];
       console.log(`[harness] Agent ${agent.role}: ${messages.length} messages au total (${messages.filter(m => m.role === "assistant").length} assistant)`);
+      // Debug: afficher le contenu brut des messages assistant
+      for (const m of messages.filter((mm: any) => mm.role === "assistant")) {
+        const contentTypes = m.content?.map((c: any) => c.type || typeof c) || [];
+        const textLen = m.content?.map((c: any) => (c.text || "").length).reduce((a: number, b: number) => a + b, 0) || 0;
+        console.log(`[harness] Agent ${agent.role}: assistant msg content types=[${contentTypes}] textLen=${textLen}`);
+        if (textLen === 0) {
+          console.log(`[harness] Agent ${agent.role}: content brut=`, JSON.stringify(m.content?.slice(0, 500)));
+        }
+      }
       const assistantMessages = messages
         .filter((m: any) => m.role === "assistant")
         .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "");
