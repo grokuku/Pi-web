@@ -45,7 +45,7 @@ Ce fichier contient les règles de base que les assistants IA (Claude Code, GitH
 ├── backend/                    # Express + WebSocket + Pi SDK
 │   └── src/
 │       ├── routes/             # Endpoints API
-│       ├── pi/                 # Logique Pi SDK (session, model-library)
+│       ├── pi/                 # Logique Pi SDK (session, model-library, harness-engine)
 │       └── middleware/         # Auth, etc.
 ├── frontend/                   # React + TypeScript + Tailwind + Vite
 │   └── src/
@@ -53,12 +53,26 @@ Ce fichier contient les règles de base que les assistants IA (Claude Code, GitH
 │       ├── hooks/              # Hooks custom (useWebSocket, etc.)
 │       ├── i18n/               # Traductions (fr, en)
 │       └── styles/             # CSS (hacker-theme.css)
+├── extensions/                 # Extensions Pi locales (codebase-memory, file-analyzer)
 ├── docs/                       # Documentation
 │   └── agent-api.md
 ├── ROADMAP.md                  # Suivi du projet (lire en premier)
 ├── README.md
 └── AGENTS.md                   # Ce fichier
 ```
+
+## 🐳 Environnement Docker
+
+Pi-Web tourne dans un conteneur Docker. Il y a deux copies du code :
+
+- **`/projects/Pi-Web/`** — le dépôt git (source de vérité). C'est ici que les modifications doivent être faites.
+- **`/app/`** — la copie utilisée par le conteneur en cours d'exécution. Cette copie est **recréée à chaque rebuild Docker** (le contenu de `/app` est effacé puis recréé depuis l'image).
+
+**Règles importantes :**
+- Toujours modifier les sources dans `/projects/Pi-Web/`, jamais dans `/app/`.
+- Ne pas perdre de temps à compiler ou copier vers `/app/` — le rebuild Docker le fera automatiquement via `entrypoint.sh` (qui exécute `npm run build` au démarrage).
+- Si on a besoin de tester rapidement sans rebuild, on peut copier le source modifié vers `/app/backend/src/` puis lancer `npm run build` dans `/app/backend/`, mais c'est **temporaire** — les changements seront perdus au prochain rebuild. Ne l'utiliser que pour du debug.
+- L'utilisateur fait le `git push` depuis `/projects/Pi-Web/` puis rebuild le conteneur pour appliquer les changements de façon permanente.
 
 ## 🔗 Fichiers importants à connaître
 

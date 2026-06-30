@@ -494,6 +494,10 @@ export class HarnessEngine {
       console.log(`[harness] Agent ${agent.role}: tempSession.model = ${sessionModel ? `${sessionModel.provider}/${sessionModel.id}` : "NULL"}`);
 
       // Appliquer le system prompt
+      // IMPORTANT: il faut setter _baseSystemPrompt car le SDK reset
+      // agent.state.systemPrompt à _baseSystemPrompt avant chaque prompt().
+      // Si on set seulement agent.state.systemPrompt, ça sera écrasé.
+      (tempSession as any)._baseSystemPrompt = systemPrompt;
       (tempSession as any).agent.state.systemPrompt = systemPrompt;
 
       // Restreindre les outils
