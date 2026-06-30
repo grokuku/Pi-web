@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "fs";
 import path from "path";
 import crypto from "crypto";
 
@@ -135,9 +135,8 @@ async function buildCredentialsFile(username: string, password: string, domain?:
 
 function cleanupCredentialsFile(credFile: string) {
   try {
-    const { unlinkSync, rmdirSync } = require("fs");
     unlinkSync(credFile);
-    rmdirSync(path.dirname(credFile));
+    rmSync(path.dirname(credFile), { force: true });
   } catch {}
 }
 

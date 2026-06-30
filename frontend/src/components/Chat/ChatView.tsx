@@ -192,6 +192,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
   const messagesRef = useRef<DisplayMessage[]>([]);
+  // BUG-21 fix: flag pour ignorer le pi_history qui arrive après un /new ou /clear
+  const justClearedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
 
@@ -247,7 +249,12 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     saveTimerRef.current = setTimeout(() => {
       if (!projectId) return;
       chatHistory.saveMessages(messagesRef.current);
-      try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(messagesRef.current)); } catch {}
+      // BUG-22 fix: limiter à 200 messages pour éviter QuotaExceededError (5-10MB)
+      const maxMessages = 200;
+      const toSave = messagesRef.current.length > maxMessages
+        ? messagesRef.current.slice(-maxMessages)
+        : messagesRef.current;
+      try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(toSave)); } catch {}
       saveTimerRef.current = null;
     }, 500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -267,6 +274,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     const unsub = on("pi_history", (msg: any) => {
       const pid = msg.projectId;
       if (!pid || !msg.messages || !Array.isArray(msg.messages) || msg.messages.length === 0) return;
+      // BUG-21 fix: ignorer le pi_history qui arrive juste après un /new ou /clear
+      if (justClearedRef.current) {
+        justClearedRef.current = false;
+        return;
+      }
 
       const existing = chatHistory.getMessagesFor(pid);
       const streamingMsgs = existing.filter(m => m._streaming);
@@ -419,6 +431,19 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
       // ── Message content updates — route to the correct project's store ──
       if (pid === projectId) {
+        // BUG-18 fix: gérer les custom messages ici au lieu d'un listener séparé
+        if (evt.type === "message_start" && evt.message?.role === "custom" && evt.message?.display) {
+          const cm = evt.message;
+          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display }]);
+          return;
+        }
+        // BUG-18 fix: gérer session_reloaded ici au lieu d'un listener séparé
+        if (evt.type === "session_reloaded") {
+          setMessages(prev => prev.map(m => m._streaming ? { ...m, _streaming: false } : m));
+          currentAssistantIdRef.current = null;
+          return;
+        }
+
         // Current project → update React state (visible in UI)
         setMessages(prev => {
           const result = applyPiEvent(prev, evt, currentAssistantIdRef.current);
@@ -443,38 +468,15 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return () => unsub();
   }, [on, projectId]);
 
-  // ── Custom messages ──
-  useEffect(() => {
-    const unsub = on("pi_event", (msg: any) => {
-      if (msg.projectId && msg.projectId !== projectId) return;
-      const evt = msg.event;
-      if (evt?.type === "message_start" && evt?.message?.role === "custom" && evt?.message?.display) {
-        const cm = evt.message;
-        setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display }]);
-      }
-    });
-    return () => unsub();
-  }, [on, projectId]);
-
-  // ── Session reload ──
-  useEffect(() => {
-    const unsub = on("pi_event", (msg: any) => {
-      if (msg.projectId && msg.projectId !== projectId) return;
-      if (msg.event?.type === "session_reloaded") {
-        // Finalize any streaming message instead of removing it
-        setMessages(prev => prev.map(m => m._streaming ? { ...m, _streaming: false } : m));
-        currentAssistantIdRef.current = null;
-      }
-    });
-    return () => unsub();
-  }, [on, projectId]);
-
   // ── Commands ──
   useEffect(() => {
     const unsub = on("pi_command_result", (msg: any) => {
       if (msg.projectId && msg.projectId !== projectId) return;
       if (msg.result) setMessages(prev => [...prev, { id:`cmd-${Date.now()}`, role:"user", content:msg.result, thinking:"", toolCalls:[], timestamp:Date.now(), customType:"pi_command", display:true }]);
-      if (msg.command === "clear" || msg.command === "new") setMessages([]);
+      if (msg.command === "clear" || msg.command === "new") {
+        setMessages([]);
+        justClearedRef.current = true;
+      }
       if (msg.command === "quit") onQuit?.();
     });
     return () => unsub();
@@ -647,8 +649,8 @@ const MAX_VISIBLE_GROUPS = 200;
 const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const groups: DisplayMessage[][] = [];
   for (const msg of messages) {
-    if (msg.role === "user" || groups.length===0 || groups[groups.length-1][0].role==="user") groups.push([msg]);
-    else groups[groups.length-1].push(msg);
+    if (msg.role === "user" || groups.length === 0 || groups[groups.length - 1][0].role === "user") groups.push([msg]);
+    else groups[groups.length - 1].push(msg);
   }
   // Only render the last MAX_VISIBLE_GROUPS groups to prevent extremely long chats from
   // creating unmanageable DOM trees (200 groups ≈ 400+ messages is a reasonable cap).

@@ -104,6 +104,8 @@ function saveProjects(projects: Project[]): void {
 }
 
 export function getAllProjects(): Project[] {
+  // BUG-36: lectures non protégées par le mutex — risque faible car writeFileSync est atomique.
+  // Rendre ces fonctions async casserait trop d'appelants. Accepté tel quel.
   return loadProjects();
 }
 

@@ -495,6 +495,13 @@ function App() {
   // ── Project selection ──
   const handleSelectProject = (project: Project) => {
     if (activeProject?.id === project.id) return;
+    // BUG-17 fix: si un stream est actif, demander confirmation avant de switcher
+    const currentSession = activeProject ? projectSessionsRef.current.get(activeProject.id) : undefined;
+    if (currentSession?.isStreaming) {
+      setShowProjectSwitch(true);
+      setPendingProject(project);
+      return;
+    }
     activateProject(project);
   };
 
@@ -633,13 +640,12 @@ function App() {
         const panelId = event.data.panelId as PanelId;
         // Restore the panel in the main interface
         if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files")) {
-          setPanels(prev => {
-            const p = { ...prev };
-            if (p[panelId]) {
-              p[panelId] = { ...p[panelId], visible: true, floating: false };
-            }
-            return p;
-          });
+          // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
+          const p = { ...panels };
+          if (p[panelId]) {
+            p[panelId] = { ...p[panelId], visible: true, floating: false };
+          }
+          savePanels(p);
         }
       }
     };

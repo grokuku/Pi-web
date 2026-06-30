@@ -602,13 +602,20 @@ export function removeModel(id: string): ModelLibrary {
     }
   }
 
-  // Clean up project mode references
+  // Clean up project mode references (tous les modes)
   for (const projectId of Object.keys(library.projectModes)) {
     const pm = library.projectModes[projectId];
     if (pm.code.modelId === id) pm.code.modelId = null;
     if (pm.plan.modelId === id) pm.plan.modelId = null;
     if (pm.review.modelId === id) pm.review.modelId = null;
+    if (pm.yolo.modelId === id) pm.yolo.modelId = null;
+    if (pm.harness.modelId === id) pm.harness.modelId = null;
   }
+
+  // Clean up global model references (BUG-06 + BUG-32 fix)
+  if (library.visionModelId === id) library.visionModelId = null;
+  if (library.audioModelId === id) library.audioModelId = null;
+  if (library.commitModelId === id) library.commitModelId = null;
 
   saveModelLibrary(library);
   return library;

@@ -82,6 +82,20 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
+// PUT reorder projects — DOIT être avant PUT /:id sinon Express matche /reorder avec :id=reorder (BUG-31)
+router.put("/reorder", async (req: Request, res: Response) => {
+  try {
+    const { projectIds } = req.body;
+    if (!Array.isArray(projectIds)) {
+      return res.status(400).json({ error: "projectIds (string[]) required" });
+    }
+    const projects = await reorderProjects(projectIds);
+    res.json(projects);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // PUT update project
 router.put("/:id", async (req: Request, res: Response) => {
   try {
@@ -367,20 +381,6 @@ router.post("/:id/git/init", async (req: Request, res: Response) => {
   }
 });
 
-// POST sync git info
-router.post("/:id/git/sync", async (req: Request, res: Response) => {
-  try {
-    const project = getProject(req.params.id);
-    if (!project) {
-      return res.status(404).json({ error: "Project not found" });
-    }
-    const updated = await syncGitInfo(project);
-    res.json(updated);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // GET git identity
 router.get("/:id/git/identity", async (req: Request, res: Response) => {
   try {
@@ -511,20 +511,6 @@ router.get("/:id/smb/status", async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
-  }
-});
-
-// PUT reorder projects
-router.put("/reorder", async (req: Request, res: Response) => {
-  try {
-    const { projectIds } = req.body;
-    if (!Array.isArray(projectIds)) {
-      return res.status(400).json({ error: "projectIds (string[]) required" });
-    }
-    const projects = await reorderProjects(projectIds);
-    res.json(projects);
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
   }
 });
 

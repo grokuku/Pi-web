@@ -438,12 +438,12 @@ async function gitWithAuth(cwd: string): Promise<SimpleGit> {
   try {
     const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
     const host = extractHost(remoteUrl);
-    console.log(`[git] gitWithAuth: remoteUrl=${remoteUrl.replace(/:[^@]+@/, ":****@")}, host=${host}, hasCreds=${host ? credentialStore.has(host) : false}`);
+    console.log(`[git] gitWithAuth: remoteUrl=${redactUrl(remoteUrl)}, host=${host}, hasCreds=${host ? credentialStore.has(host) : false}`);
 
     if (host && credentialStore.has(host)) {
       const creds = credentialStore.get(host)!;
       const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
-      console.log(`[git] gitWithAuth: injecting credentials, result=${authUrl.replace(/:[^@]+@/, ":****@")}`);
+      console.log(`[git] gitWithAuth: injecting credentials, result=${redactUrl(authUrl)}`);
       // Temporarily set the remote URL with credentials for this operation
       await git.raw(["remote", "set-url", "origin", authUrl]);
       // Git 2.38+ may reject credentials in URLs — explicitly allow it
@@ -464,10 +464,11 @@ async function gitWithAuth(cwd: string): Promise<SimpleGit> {
   return git;
 }
 
-/**
- * Extract hostname from a git remote URL.
- * Handles both HTTPS and SSH URLs.
- */
+// BUG-15 fix: regex robuste qui matche du : jusqu'au DERNIER @ (pas le premier)
+// Si le password contient un @, l'ancien regex /:[^@]+@/ laissait une partie du credential
+function redactUrl(url: string): string {
+  return url.replace(/:[^@]*@(?=[^@]*$)/, ":****@");
+}
 function extractHost(url: string): string | null {
   // HTTPS: https://github.com/user/repo.git
   const httpsMatch = url.match(/^https?:\/\/([^/]+)/);
@@ -570,10 +571,10 @@ export async function getGitIdentity(cwd: string): Promise<{ name: string; email
 }
 
 export async function setGitIdentity(cwd: string, name: string, email: string): Promise<void> {
-  // Set both repo-local AND global, so new repos inherit the identity
+  // BUG-13 fix: ne configurer QUE le repo local, pas le global.
+  // L'ancien code écrivait aussi dans --global, ce qui causait des conflits
+  // quand plusieurs projets avaient des identités git différentes.
   const git: SimpleGit = simpleGit(cwd);
-  await git.raw(["config", "--global", "user.name", name]);
-  await git.raw(["config", "--global", "user.email", email]);
   await git.raw(["config", "user.name", name]);
   await git.raw(["config", "user.email", email]);
 }
@@ -793,7 +794,7 @@ export async function gitClone(
     const creds = credentialStore.get(host)!;
     console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
     const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
-    console.log(`[git-clone] Auth URL (redacted): ${authUrl.replace(/:[^@]+@/, ":****@")}`);
+    console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
     try {
       // Git 2.38+ may reject credentials in URLs — explicitly allow it
       await withTimeout(
@@ -816,7 +817,11 @@ export async function gitClone(
   // No credentials — try without auth
   console.log(`[git-clone] No credentials for ${host}, trying without auth...`);
   try {
-    await withTimeout(git.clone(remote, repoName, ["--branch", branch]), GIT_NETWORK_TIMEOUT_MS, "git clone");
+    // BUG-37 fix: utiliser git.raw() comme la branche avec auth pour cohérence
+    await withTimeout(
+      git.raw(["clone", remote, repoName, "--branch", branch]),
+      GIT_NETWORK_TIMEOUT_MS, "git clone"
+    );
     console.log(`[git-clone] Clone succeeded (no auth)!`);
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
@@ -835,6 +840,8 @@ export async function gitInit(cwd: string, remote: string, branch: string = "mai
     await git.init();
     await git.addRemote("origin", remote);
     await git.checkoutLocalBranch(branch);
+    // BUG-27 fix: configurer le tracking upstream pour que le premier push fonctionne
+    await git.raw(["branch", "--set-upstream-to", `origin/${branch}`, branch]);
     return `Initialized repo, remote set to ${remote}`;
   } catch (error: any) {
     throw new Error(`Git init failed: ${error.message}`);

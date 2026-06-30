@@ -199,12 +199,12 @@ router.put("/vision-model/:id", async (req: Request, res: Response) => {
   }
 });
 
-router.delete("/vision-model", (_req: Request, res: Response) => {
+router.delete("/vision-model", async (_req: Request, res: Response) => {
   try {
     const library = loadModelLibrary();
     library.visionModelId = null;
     saveModelLibrary(library);
-    syncToModelsJson();
+    await syncToModelsJson();
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -226,12 +226,12 @@ router.put("/audio-model/:id", async (req: Request, res: Response) => {
   }
 });
 
-router.delete("/audio-model", (_req: Request, res: Response) => {
+router.delete("/audio-model", async (_req: Request, res: Response) => {
   try {
     const library = loadModelLibrary();
     library.audioModelId = null;
     saveModelLibrary(library);
-    syncToModelsJson();
+    await syncToModelsJson();
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });

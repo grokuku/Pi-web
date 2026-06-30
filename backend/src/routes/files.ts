@@ -5,7 +5,19 @@ import path from "path";
 const router = Router();
 
 // Allowed root paths for browsing (restrictive by default)
-const ALLOWED_ROOTS = ["/projects", "/home", "/mnt"];
+// BUG-26 fix: auto-inclure le cwd des projets en plus des racines par défaut
+import { getAllProjects } from "../projects/manager.js";
+const DEFAULT_ROOTS = ["/projects", "/home", "/mnt"];
+function getAllowedRoots(): string[] {
+  const roots = new Set(DEFAULT_ROOTS.map(r => path.resolve(r)));
+  // Auto-inclure le cwd de chaque projet
+  try {
+    for (const p of getAllProjects()) {
+      if (p.cwd) roots.add(path.resolve(p.cwd));
+    }
+  } catch {}
+  return [...roots];
+}
 
 // Sensitive paths that should never be accessible
 const DENY_LIST = [
@@ -24,9 +36,9 @@ const DENY_LIST = [
 function isPathAllowed(targetPath: string): boolean {
   const resolved = path.resolve(targetPath);
   // Check if path is within allowed roots
-  const inAllowedRoot = ALLOWED_ROOTS.some((root) => {
-    const resolvedRoot = path.resolve(root);
-    return resolved.startsWith(resolvedRoot);
+  // BUG-25 fix: utiliser path.sep pour éviter que /home matche /homeetc
+  const inAllowedRoot = getAllowedRoots().some((root) => {
+    return resolved === root || resolved.startsWith(root + path.sep);
   });
   if (!inAllowedRoot) return false;
   // Check deny list (path components)
@@ -49,7 +61,7 @@ router.get("/browse", (req: Request, res: Response) => {
 
     if (!isPathAllowed(resolved)) {
       return res.status(403).json({
-        error: `Access denied. Path must be within: ${ALLOWED_ROOTS.join(", ")}`,
+        error: `Access denied. Path must be within: ${getAllowedRoots().join(", ")}`,
       });
     }
 

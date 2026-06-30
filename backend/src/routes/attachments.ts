@@ -394,22 +394,10 @@ router.delete("/:id", (req: Request, res: Response) => {
   const dir = getAttachmentDir(id);
   if (existsSync(dir)) {
     try {
-      // Remove all files in directory
-      const files = readdirSync(dir);
-      for (const file of files) {
-        unlinkSync(path.join(dir, file));
-      }
-      // Remove cache directory contents
-      const cacheDir = getCacheDir(id);
-      if (existsSync(cacheDir)) {
-        const cacheFiles = readdirSync(cacheDir);
-        for (const file of cacheFiles) {
-          unlinkSync(path.join(cacheDir, file));
-        }
-        try { mkdirSync(cacheDir, { recursive: true }); unlinkSync(cacheDir); } catch {}
-      }
-      // Remove directory
-      try { require("fs").rmdirSync(dir, { recursive: true }); } catch {}
+      // Supprime tout le dossier d'attachment (fichiers + cache) en un seul appel
+      // BUG-04 fix: l'ancien code utilisait unlinkSync sur un dossier (ne marche pas)
+      // et rmdirSync (deprecated). rmSync recursive+force fait tout proprement.
+      rmSync(dir, { recursive: true, force: true });
     } catch (error: any) {
       console.warn(`[attachments] Error cleaning up ${id}:`, error.message);
     }
@@ -479,7 +467,8 @@ router.post("/:id/analyze", async (req: Request, res: Response) => {
       case "pdf": {
         // Try to extract text using pdf-parse
         try {
-          const pdfParse = require("pdf-parse");
+          const pdfParseModule = await import("pdf-parse");
+          const pdfParse = (pdfParseModule as any).default || (pdfParseModule as any).PDFParse || pdfParseModule;
           const buffer = readFileSync(filePath);
           const pdfData = await pdfParse(buffer, {
             max: page ? 1 : 50, // Limit pages

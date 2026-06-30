@@ -152,11 +152,19 @@ export async function deleteProvider(id: string): Promise<void> {
     if (library.commitModelId && !library.models.find((m: any) => m.id === library.commitModelId)) {
       library.commitModelId = null;
     }
-    // Clean project mode configs
+    // Also clear vision/audio if they referenced removed models (BUG-33 fix)
+    if (library.visionModelId && !library.models.find((m: any) => m.id === library.visionModelId)) {
+      library.visionModelId = null;
+    }
+    if (library.audioModelId && !library.models.find((m: any) => m.id === library.audioModelId)) {
+      library.audioModelId = null;
+    }
+
+    // Clean project mode configs (tous les modes, BUG-07 fix)
     if (library.projectModes) {
       for (const [projectId, modes] of Object.entries(library.projectModes)) {
         const m = modes as any;
-        for (const mode of ["code", "plan", "review"]) {
+        for (const mode of ["code", "plan", "review", "yolo", "harness"]) {
           if (m[mode]?.modelId) {
             const stillExists = library.models.some((mod: any) => mod.id === m[mode].modelId);
             if (!stillExists) m[mode].modelId = null;

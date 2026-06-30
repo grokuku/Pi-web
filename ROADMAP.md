@@ -370,12 +370,14 @@
 #### BUG-49: `docker-compose.yml` — `privileged: true` (sécurité)
 - **Fichier :** `docker-compose.yml`
 - **Sévérité :** 🟡 Moyenne (sécurité)
+- **Statut :** Toléré — non bloquant, phase de dev
 - **Description :** Le conteneur tourne en mode `privileged` — accès complet à tous les devices du host. Nécessaire pour les montages CIFS mais risque de sécurité important si le conteneur est compromis.
 - **Fix :** Utiliser `cap_add: [SYS_ADMIN, SYS_PTRACE]` au lieu de `privileged: true` si possible, ou documenter le risque.
 
 #### BUG-50: `ALLOWED_ORIGINS=*` et `WS_ALLOWED_ORIGINS=*` (sécurité)
 - **Fichier :** `docker-compose.yml`
 - **Sévérité :** 🔴 Haute (sécurité — en production)
+- **Statut :** Toléré — non bloquant, phase de dev
 - **Description :** Les deux variables à `*` désactivent toutes les protections CORS et WebSocket. N'importe quel site web peut faire des requêtes vers l'API. Risque critique si le serveur est exposé sur internet.
 - **Fix :** Configurer les origines spécifiques, ou au minimum documenter que `*` ne doit être utilisé qu'en réseau local isolé.
 
@@ -769,8 +771,8 @@ Pi config
 | **46** | 🟢 | Maintenabilité | Code de sérialisation des messages dupliqué dans `index.ts` | `index.ts` |
 | **47** | 🟢 | Logique | `_ws_reconnect` jamais émis (code mort dans `useWebSocket`) | `hooks/useWebSocket.ts` |
 | **48** | 🟢 | Ambiguïté | Conflit de routes API entre Pi-Web et CBM proxy | `index.ts` |
-| **49** | 🟡 | Sécurité | `privileged: true` dans docker-compose | `docker-compose.yml` |
-| **50** | 🔴 | Sécurité | `ALLOWED_ORIGINS=*` / `WS_ALLOWED_ORIGINS=*` en production | `docker-compose.yml` |
+| **49** | 🟡 | Sécurité | `privileged: true` dans docker-compose — **[TOLÉRÉ — phase dev]** | `docker-compose.yml` |
+| **50** | 🔴 | Sécurité | `ALLOWED_ORIGINS=*` / `WS_ALLOWED_ORIGINS=*` en production — **[TOLÉRÉ — phase dev]** | `docker-compose.yml` |
 
 ### Priorité de correction recommandée
 
@@ -778,7 +780,7 @@ Pi config
 2. **🔴 BUG-29** — Sécurité critique : aucune auth — **[FIXED]**
 3. **🔴 BUG-12** — Sécurité : API Keys agent exposées — **[FIXED]**
 4. **🔴 BUG-42** — UX critique : stall detector reset — **[FIXED]**
-5. **🔴 BUG-50** — Sécurité : `ALLOWED_ORIGINS=*` en production
+5. **🔴 BUG-50** — Sécurité : `ALLOWED_ORIGINS=*` en production — **[TOLÉRÉ — phase dev]**
 6. **🟡 BUG-08** — `isStreaming` forcé à `true` — **[FIXED]**
 7. **🟡 BUG-30** — `process.exit(0)` sans auth — **[FIXED]**
 8. **🟡 BUG-31** — Route `PUT /reorder` injoignable — réorganisation cassée
@@ -797,6 +799,6 @@ Pi config
 21. **🟡 BUG-25 + BUG-26** — Sécurité file browser
 22. **🟡 BUG-11** — `unhandledRejection` ne termine pas
 23. **🟡 BUG-13** — `setGitIdentity` écrit dans global config
-24. **🟡 BUG-49** — `privileged: true` dans docker-compose
+24. **🟡 BUG-49** — `privileged: true` dans docker-compose — **[TOLÉRÉ — phase dev]**
 25. **🟢 BUG-09 + BUG-10** — Propreté repo — **[RESOLVED]**
 26. **🟢 Autres** — Code mort, style, améliorations (BUG-16, 17, 20, 24, 27, 36, 37, 38, 46, 47, 48)

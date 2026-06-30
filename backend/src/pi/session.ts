@@ -3,7 +3,7 @@ import { completeSimple } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
-import { unlinkSync, existsSync, mkdirSync } from "fs";
+import { unlinkSync, existsSync, mkdirSync, readdirSync, rmdirSync } from "fs";
 import os from "os";
 import {
   loadModelLibrary,
@@ -2163,14 +2163,13 @@ async function runYoloAgent(
     try { (tempSession as any).dispose?.(); } catch {}
     if (tempSessionFile) {
       try {
-        const { existsSync, unlinkSync, readdirSync, rmdirSync } = require("fs");
         if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
         // Clean up the temp session directory
         const dir = tempSessionFile.replace(/\/[^/]+\.json$/, "");
         if (existsSync(dir)) {
           try {
             const files = readdirSync(dir);
-            for (const f of files) unlinkSync(require("path").join(dir, f));
+            for (const f of files) unlinkSync(path.join(dir, f));
             rmdirSync(dir);
           } catch {}
         }

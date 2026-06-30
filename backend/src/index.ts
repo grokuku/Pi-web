@@ -830,4 +830,8 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Promise:", promise);
   console.error("Stack:", (reason as any)?.stack || "No stack available");
   console.error("=========================================");
+  // BUG-11 fix: terminer le processus comme pour uncaughtException
+  // Une rejection non gérée peut laisser l'app dans un état corrompu
+  setTimeout(() => process.exit(1), 1000);
+  try { shutdown(); } catch {}
 });
