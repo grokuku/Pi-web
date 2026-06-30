@@ -36,17 +36,7 @@ router.use(agentAuth);
 
 // ── Helpers ──────────────────────────────────────────
 
-const ALLOWED_ROOTS = ["/projects", "/home", "/mnt"];
-const DENY_LIST = [".ssh", ".env", "credentials.enc", ".smb-key", "id_rsa", "id_ecdsa", "id_ed25519", "known_hosts", "authorized_keys"];
-
-function isPathAllowed(targetPath: string): boolean {
-  const resolved = path.resolve(targetPath);
-  const inAllowedRoot = ALLOWED_ROOTS.some((root) => path.resolve(root) === resolved ||
-    resolved.startsWith(path.resolve(root) + path.sep));
-  if (!inAllowedRoot) return false;
-  const parts = resolved.split(path.sep);
-  return !parts.some(part => DENY_LIST.includes(part));
-}
+import { isPathAllowed } from "../utils/path-security.js";
 
 /** Take a git snapshot of changed files in the cwd. Returns set of relative paths. */
 function gitSnapshot(cwd: string): Set<string> {

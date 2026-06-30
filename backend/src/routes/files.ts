@@ -1,51 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import { readdirSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync, createReadStream, copyFileSync, unlinkSync } from "fs";
 import path from "path";
+import { isPathAllowed, getAllowedRoots } from "../utils/path-security.js";
 
 const router = Router();
-
-// Allowed root paths for browsing (restrictive by default)
-// BUG-26 fix: auto-inclure le cwd des projets en plus des racines par défaut
-import { getAllProjects } from "../projects/manager.js";
-const DEFAULT_ROOTS = ["/projects", "/home", "/mnt"];
-function getAllowedRoots(): string[] {
-  const roots = new Set(DEFAULT_ROOTS.map(r => path.resolve(r)));
-  // Auto-inclure le cwd de chaque projet
-  try {
-    for (const p of getAllProjects()) {
-      if (p.cwd) roots.add(path.resolve(p.cwd));
-    }
-  } catch {}
-  return [...roots];
-}
-
-// Sensitive paths that should never be accessible
-const DENY_LIST = [
-  ".ssh",
-  ".env",
-  "credentials.enc",
-  ".smb-key",
-  "id_rsa",
-  "id_dsa",
-  "id_ecdsa",
-  "id_ed25519",
-  "known_hosts",
-  "authorized_keys",
-];
-
-function isPathAllowed(targetPath: string): boolean {
-  const resolved = path.resolve(targetPath);
-  // Check if path is within allowed roots
-  // BUG-25 fix: utiliser path.sep pour éviter que /home matche /homeetc
-  const inAllowedRoot = getAllowedRoots().some((root) => {
-    return resolved === root || resolved.startsWith(root + path.sep);
-  });
-  if (!inAllowedRoot) return false;
-  // Check deny list (path components)
-  const parts = resolved.split(path.sep);
-  const hasSensitive = parts.some(part => DENY_LIST.includes(part));
-  return !hasSensitive;
-}
 
 interface FileEntry {
   name: string;
