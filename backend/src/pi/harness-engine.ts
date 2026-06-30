@@ -447,36 +447,45 @@ export class HarnessEngine {
       // Modèle : priorité au modèle spécifique de l'agent, puis au modèle du mode Harness,
       // puis à la session principale, puis aux fallbacks.
       // BUG-58: la session temporaire doit hériter d'un modèle qui fonctionne.
+      let modelSet = false;
       if (agent.modelId) {
         const parts = agent.modelId.split("__");
         const model = getModelRegistry().find(parts[0], parts[1] || "");
-        if (model) await tempSession.setModel(model);
+        if (model) { await tempSession.setModel(model); modelSet = true; }
+        else console.warn(`[harness] Agent ${agent.role}: modelId=${agent.modelId} non trouvé dans le registry`);
       } else if (this.harnessModelId) {
         // Modèle configuré pour le mode HARNESS dans le ModelQuickSwitch
         const parts = this.harnessModelId.split("__");
         const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-        if (model) await tempSession.setModel(model);
+        if (model) { await tempSession.setModel(model); modelSet = true; }
+        else console.warn(`[harness] harnessModelId=${this.harnessModelId} non trouvé dans le registry`);
       } else {
         // Hériter du modèle de la session principale (qui marche)
         const mainSession = getSession(this.projectId);
         const mainModel = (mainSession?.session as any)?.model;
         if (mainModel) {
-          await tempSession.setModel(mainModel);
+          await tempSession.setModel(mainModel); modelSet = true;
+          console.log(`[harness] Agent ${agent.role}: hérite du modèle de la session principale: ${mainModel.provider}/${mainModel.id}`);
         } else {
+          console.warn(`[harness] Agent ${agent.role}: pas de modèle sur la session principale, fallback...`);
           // Derniers fallbacks : defaultModelId puis premier dispo
           const lib = loadModelLibrary();
           const defaultModelId = lib.defaultModelId;
           if (defaultModelId) {
             const parts = defaultModelId.split("__");
             const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-            if (model) await tempSession.setModel(model);
-          } else {
+            if (model) { await tempSession.setModel(model); modelSet = true; }
+          }
+          if (!modelSet) {
             const available = getModelRegistry().getAvailable();
             if (available.length > 0) {
-              await tempSession.setModel(available[0]);
+              await tempSession.setModel(available[0]); modelSet = true;
             }
           }
         }
+      }
+      if (!modelSet) {
+        console.error(`[harness] Agent ${agent.role}: AUCUN MODÈLE trouvé — prompt() ne fera rien`);
       }
 
       // Appliquer le system prompt
