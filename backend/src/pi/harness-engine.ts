@@ -493,17 +493,17 @@ export class HarnessEngine {
       const sessionModel = (tempSession as any).model;
       console.log(`[harness] Agent ${agent.role}: tempSession.model = ${sessionModel ? `${sessionModel.provider}/${sessionModel.id}` : "NULL"}`);
 
-      // Appliquer le system prompt
-      // IMPORTANT: il faut setter _baseSystemPrompt car le SDK reset
-      // agent.state.systemPrompt à _baseSystemPrompt avant chaque prompt().
-      // Si on set seulement agent.state.systemPrompt, ça sera écrasé.
-      (tempSession as any)._baseSystemPrompt = systemPrompt;
-      (tempSession as any).agent.state.systemPrompt = systemPrompt;
-
-      // Restreindre les outils
+      // Restreindre les outils — IMPORTANT : faire AVANT de setter le system prompt
+      // car setActiveToolsByName() appelle _rebuildSystemPrompt() qui écrase _baseSystemPrompt.
       if (tools.length > 0) {
         (tempSession as any).setActiveToolsByName(tools);
       }
+
+      // Appliquer le system prompt — APRÈS setActiveToolsByName pour ne pas être écrasé.
+      // Le SDK reset agent.state.systemPrompt à _baseSystemPrompt avant chaque prompt(),
+      // donc il faut setter _baseSystemPrompt (la source de vérité du SDK).
+      (tempSession as any)._baseSystemPrompt = systemPrompt;
+      (tempSession as any).agent.state.systemPrompt = systemPrompt;
 
       // Forward des events vers le frontend
       // FILTRER message_start/message_end de la session temp pour ne pas
