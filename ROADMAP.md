@@ -63,7 +63,7 @@
 | 13 | 🟡 | `setGitIdentity` écrit dans le config global | 2026-06-29 |
 | 15 | 🟡 | Fuite credentials dans les logs | 2026-06-29 |
 | 16 | 🟢 | BroadcastChannel utilise `setPanels` au lieu de `savePanels` | 2026-06-29 |
-| 17 | 🟢 | Switch de projet pendant streaming sans confirmation | 2026-06-29 |
+| 17 | 🟢 | ~~Switch de projet pendant streaming sans confirmation~~ **REVERT** — bloque le travail multi-projet | 2026-06-30 |
 | 18 | 🟡 | 3 listeners `pi_event` séparés dans ChatView | 2026-06-29 |
 | 20 | 🟢 | Manque d'espaces `===` dans GroupedMessages | 2026-06-29 |
 | 21 | 🟡 | Race condition `/new` + `pi_history` | 2026-06-29 |
@@ -83,11 +83,11 @@
 | 42 | 🔴 | Stall detector reset `isStreaming` à 60s | 2026-06-29 |
 | 43 | 🟡 | CBM perd le mapping après restart | 2026-06-29 |
 | 44 | 🟡 | Images ignorées si le modèle n'a pas la vision | 2026-06-29 |
-| 45 | 🟡 | Aucun avertissement avant interruption de stream | 2026-06-29 |
+| 45 | 🟡 | ~~Aucun avertissement avant interruption de stream~~ **REVERT** — le steer doit rester possible | 2026-06-30 |
 | 46 | 🟢 | Code de sérialisation dupliqué dans `index.ts` | 2026-06-29 |
 | 47 | 🟢 | `_ws_reconnect` jamais émis | 2026-06-29 |
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
-| 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 |
+| 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | **EN COURS** — système `_baseSystemPrompt` écrasé par `setActiveToolsByName`, fix partiel appliqué, response vide (`content: []`) | 2026-06-30 |
 
 ---
 
@@ -135,6 +135,7 @@ Extraire à la fois le texte ET les images de chaque page (pdfjs-dist + OCR fall
 #### Autres idées Backend
 
 - ✅ **Statistiques d'utilisation des tokens** — Fait.
+- 💡 **Limite d'appels LLM en parallèle par provider** — Remplacer la limite globale (`maxLLMSlots`) par une limite par provider (ex: 3 pour OpenRouter, 2 pour OpenAI). Permettrait de mieux répartir la charge selon les quotas/RPM de chaque provider. Non prioritaire.
 - 💡 **Nettoyage automatique des attachments orphelins** — Cron ou déclencheur.
 - 💡 **Rate limiting** sur les uploads.
 - 💡 **Streaming des résultats d'analyse** — Pour les gros PDFs.

@@ -6,7 +6,6 @@ import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
 import { FileExplorer } from "./components/Files/FileExplorer";
 import { WelcomeView } from "./components/Sidebar/WelcomeView";
-import { ProjectSwitchModal } from "./components/Modals/ProjectSwitchModal";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
 import { UsageStatsModal } from "./components/Modals/UsageStatsModal";
@@ -156,8 +155,6 @@ function App() {
   const stats = activeSessionState?.stats ?? null;
 
   // Modals
-  const [showProjectSwitch, setShowProjectSwitch] = useState(false);
-  const [pendingProject, setPendingProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showUsageStats, setShowUsageStats] = useState(false);
@@ -325,8 +322,7 @@ function App() {
         }
         if (showSettings) { e.preventDefault(); setShowSettings(false); }
         else if (showAddProject) { e.preventDefault(); setShowAddProject(false); }
-        else if (showProjectSwitch) { e.preventDefault(); setShowProjectSwitch(false); }
-        return;
+                return;
       }
 
       if (mod && e.key === "l") {
@@ -338,7 +334,7 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [isStreaming, send, showSettings, showAddProject, showProjectSwitch, activeProject]);
+  }, [isStreaming, send, showSettings, showAddProject, activeProject]);
 
   // ── Streaming watchdog + stall detector ──
   // Every 15s, check all projects:
@@ -495,13 +491,6 @@ function App() {
   // ── Project selection ──
   const handleSelectProject = (project: Project) => {
     if (activeProject?.id === project.id) return;
-    // BUG-17 fix: si un stream est actif, demander confirmation avant de switcher
-    const currentSession = activeProject ? projectSessionsRef.current.get(activeProject.id) : undefined;
-    if (currentSession?.isStreaming) {
-      setShowProjectSwitch(true);
-      setPendingProject(project);
-      return;
-    }
     activateProject(project);
   };
 
@@ -914,22 +903,6 @@ function App() {
       )}
 
       {/* ── MODALS ── */}
-      {showProjectSwitch && pendingProject && (
-        <ProjectSwitchModal
-          fromProject={activeProject!}
-          toProject={pendingProject}
-          onConfirm={() => {
-            activateProject(pendingProject);
-            setShowProjectSwitch(false);
-            setPendingProject(null);
-          }}
-          onCancel={() => {
-            setShowProjectSwitch(false);
-            setPendingProject(null);
-          }}
-        />
-      )}
-
       {showAddProject && (
         <AddProjectModal
           onClose={() => setShowAddProject(false)}

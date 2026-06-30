@@ -532,6 +532,11 @@ export class HarnessEngine {
         }, timeoutMs);
       });
 
+      // Vérifier le system prompt juste avant prompt()
+      const sp = (tempSession as any)._baseSystemPrompt || "";
+      console.log(`[harness] Agent ${agent.role}: _baseSystemPrompt length=${sp.length}, preview=${sp.slice(0, 100)}`);
+      console.log(`[harness] Agent ${agent.role}: agent.state.systemPrompt length=${(tempSession as any).agent.state.systemPrompt?.length || 0}`);
+
       try {
         console.log(`[harness] Agent ${agent.role}: appel prompt() (prompt length=${prompt.length})...`);
         await Promise.race([tempSession.prompt(prompt, {}), llmTimeout]);
@@ -550,7 +555,10 @@ export class HarnessEngine {
         const textLen = m.content?.map((c: any) => (c.text || "").length).reduce((a: number, b: number) => a + b, 0) || 0;
         console.log(`[harness] Agent ${agent.role}: assistant msg content types=[${contentTypes}] textLen=${textLen}`);
         if (textLen === 0) {
-          console.log(`[harness] Agent ${agent.role}: content brut=`, JSON.stringify(m.content?.slice(0, 500)));
+          // Logger l'objet complet pour voir stopReason, thinking, errorMessage, etc.
+          const { content, ...rest } = m;
+          console.log(`[harness] Agent ${agent.role}: message complet (sans content)=`, JSON.stringify(rest).slice(0, 800));
+          console.log(`[harness] Agent ${agent.role}: thinking length=${m.thinking?.length || 0}`);
         }
       }
       const assistantMessages = messages
