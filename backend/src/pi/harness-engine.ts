@@ -51,18 +51,21 @@ export class HarnessEngine {
   private userPrompt: string;
   private conversationHistory: string;
   private steerMessages: string[];
+  private harnessModelId: string | null;
   private constructor(
     projectId: string,
     userPrompt: string,
     conversationHistory: string,
     config: HarnessConfig,
     steerMessages: string[],
+    harnessModelId: string | null,
   ) {
     this.projectId = projectId;
     this.userPrompt = userPrompt;
     this.conversationHistory = conversationHistory;
     this.config = config;
     this.steerMessages = steerMessages;
+    this.harnessModelId = harnessModelId;
   }
 
   // ── Point d'entrée ──────────────────────────────────
@@ -79,8 +82,9 @@ export class HarnessEngine {
     config: HarnessConfig,
     steerMessages?: string[],
     conversationHistory?: string,
+    harnessModelId?: string | null,
   ): Promise<string> {
-    const engine = new HarnessEngine(projectId, userPrompt, conversationHistory || "", config, steerMessages || []);
+    const engine = new HarnessEngine(projectId, userPrompt, conversationHistory || "", config, steerMessages || [], harnessModelId ?? null);
 
     const activeAgents = config.agents.filter(a => a.enabled);
     if (activeAgents.length === 0) {
@@ -440,24 +444,38 @@ export class HarnessEngine {
       });
       tempSession = result.session;
 
-      // Modèle spécifique si configuré, sinon modèle par défaut du registry
+      // Modèle : priorité au modèle spécifique de l'agent, puis au modèle du mode Harness,
+      // puis à la session principale, puis aux fallbacks.
+      // BUG-58: la session temporaire doit hériter d'un modèle qui fonctionne.
       if (agent.modelId) {
         const parts = agent.modelId.split("__");
         const model = getModelRegistry().find(parts[0], parts[1] || "");
         if (model) await tempSession.setModel(model);
+      } else if (this.harnessModelId) {
+        // Modèle configuré pour le mode HARNESS dans le ModelQuickSwitch
+        const parts = this.harnessModelId.split("__");
+        const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
+        if (model) await tempSession.setModel(model);
       } else {
-        // Pas de modèle spécifique → utiliser le modèle par défaut du projet
-        const available = getModelRegistry().getAvailable();
-        const lib = loadModelLibrary();
-        const defaultModelId = lib.defaultModelId;
-        if (defaultModelId) {
-          // Chercher par ID complet (ex: provider__model)
-          const parts = defaultModelId.split("__");
-          const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-          if (model) await tempSession.setModel(model);
-        } else if (available.length > 0) {
-          // Fallback: premier modèle dispo
-          await tempSession.setModel(available[0]);
+        // Hériter du modèle de la session principale (qui marche)
+        const mainSession = getSession(this.projectId);
+        const mainModel = (mainSession?.session as any)?.model;
+        if (mainModel) {
+          await tempSession.setModel(mainModel);
+        } else {
+          // Derniers fallbacks : defaultModelId puis premier dispo
+          const lib = loadModelLibrary();
+          const defaultModelId = lib.defaultModelId;
+          if (defaultModelId) {
+            const parts = defaultModelId.split("__");
+            const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
+            if (model) await tempSession.setModel(model);
+          } else {
+            const available = getModelRegistry().getAvailable();
+            if (available.length > 0) {
+              await tempSession.setModel(available[0]);
+            }
+          }
         }
       }
 

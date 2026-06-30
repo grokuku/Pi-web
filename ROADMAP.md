@@ -87,6 +87,7 @@
 | 46 | 🟢 | Code de sérialisation dupliqué dans `index.ts` | 2026-06-29 |
 | 47 | 🟢 | `_ws_reconnect` jamais émis | 2026-06-29 |
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
+| 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 |
 
 ---
 

@@ -385,7 +385,7 @@ export async function sendPrompt(
     const harnessConfig = pm.harness?.config;
     if (harnessConfig && harnessConfig.agents?.length > 0) {
       console.log("[prompt] Harness mode — delegating to HarnessEngine");
-      runHarness(projectId, message, harnessConfig).catch(err => {
+      runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
         console.error("[prompt] Harness error:", err.message);
       });
       return;
@@ -600,18 +600,18 @@ export async function sendPrompt(
 
           if (brief) {
             console.log(`[harness] Brief généré (${brief.length} chars), lancement Harness...`);
-            runHarness(projectId, brief, harnessConfig).catch(err => {
+            runHarness(projectId, brief, harnessConfig, pm.harness?.modelId).catch(err => {
               console.error("[harness] Execution error:", err.message);
             });
           } else {
             console.warn("[harness] Brief vide, fallback sur le message brut");
-            runHarness(projectId, message, harnessConfig).catch(err => {
+            runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
               console.error("[harness] Execution error:", err.message);
             });
           }
         } catch (e: any) {
           console.error("[harness] Brief generation failed:", e.message);
-          runHarness(projectId, message, harnessConfig).catch(err => {
+          runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
             console.error("[harness] Execution error:", err.message);
           });
         }
@@ -735,6 +735,7 @@ export async function runHarness(
   projectId: string,
   prompt: string,
   config: any,
+  harnessModelId?: string | null,
 ): Promise<string> {
   const { HarnessEngine, setModelRegistry, setAuthStorage } = await import("./harness-engine.js");
   // Initialiser le HarnessEngine avec le registry + auth du session.ts
@@ -766,7 +767,7 @@ export async function runHarness(
   }
 
   try {
-    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages, conversationHistory);
+    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages, conversationHistory, harnessModelId);
     return result;
   } finally {
     if (state) {
