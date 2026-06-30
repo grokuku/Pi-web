@@ -94,6 +94,25 @@ if (existsSync(frontendDist)) {
 
 // API Routes (BUG-29 fix: global auth middleware — same-origin requests
 // from the web UI pass through; external requests require a Bearer token)
+// NOTE: les routes proxy CBM (/api/index, /api/logs, etc.) sont montées AVANT
+// le middleware apiAuth car le CBM UI (SPA externe) ne peut pas envoyer de token.
+// Elles sont en same-origin depuis le navigateur, donc le CORS protège l'accès.
+
+// ── CBM 3D Graph UI proxy routes — AVANT apiAuth pour éviter l'ambiguïté (BUG-48) ──
+// Le CBM UI est un SPA externe qui ne peut pas s'authentifier via Bearer.
+// Ces routes doivent être accessibles sans token (same-origin uniquement).
+app.all("/api/index", cbmProxy);
+app.all("/api/index-status", cbmProxy);
+app.all("/api/logs", cbmProxy);
+app.all("/api/processes", cbmProxy);
+app.all("/api/process-kill", cbmProxy);
+app.all("/api/layout", cbmProxy);
+app.all("/api/adr", cbmProxy);
+app.all("/api/project", cbmProxy);
+app.all("/api/project-health", cbmProxy);
+app.use("/api/browse", cbmProxy);
+
+// ── apiAuth middleware (après les routes CBM proxy) ──
 app.use("/api", apiAuth);
 app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
@@ -169,26 +188,66 @@ async function cbmProxy(req: any, res: any) {
   }
 }
 
+// ── Fonction partagée de sérialisation des messages (BUG-46 fix) ──
+// Utilisée par pi_start et pi_history_request pour reconstruire l'historique UI.
+function serializeMessagesForUi(messages: any[]): any[] {
+  return messages.map((m: any) => {
+    const base: any = {
+      id: m.id,
+      role: m.role,
+      timestamp: m.timestamp,
+    };
+    if (m.role === "user") {
+      base.content = m.content;
+    } else if (m.role === "assistant") {
+      const rawContent = Array.isArray(m.content) ? m.content : m.content;
+      base.content = Array.isArray(rawContent)
+        ? rawContent.map((b: any) => {
+            if (b.type === "tool_use" || b.type === "function") {
+              return {
+                ...b,
+                type: "toolCall",
+                name: b.name || b.toolName || "unknown",
+                arguments: b.arguments || b.input || b.args || {},
+              };
+            }
+            return b;
+          })
+        : rawContent;
+      base.usage = m.usage;
+      base.thinking = Array.isArray(base.content)
+        ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
+        : undefined;
+    } else if (m.role === "toolResult") {
+      base.toolCallId = m.toolCallId;
+      base.toolName = m.toolName;
+      base.content = m.content;
+      base.details = m.details;
+    } else if (m.role === "bashExecution") {
+      base.command = m.command;
+      base.output = m.output;
+      base.exitCode = m.exitCode;
+      base.cancelled = m.cancelled;
+    } else if (m.role === "compactionSummary") {
+      base.summary = m.summary;
+      base.tokensBefore = m.tokensBefore;
+    } else if (m.role === "custom") {
+      base.content = m.content;
+      base.customType = m.customType;
+      base.display = m.display;
+      base.details = m.details;
+    }
+    return base;
+  });
+}
+
 // Main UI page (iframe src)
 app.use("/cbm-ui", cbmProxy);
 // CBM UI assets (Vite builds to /assets/)
 app.use("/assets", cbmProxy);
 // CBM MCP RPC endpoint (used by the UI for graph queries)
 app.use("/rpc", cbmProxy);
-// CBM UI API endpoints (3D graph layout, project info, file browser, etc.)
-// Pi-Web's own API routes start with /api/ and are already mounted above.
-// The CBM UI uses different paths — no conflict expected.
-app.all("/api/index", cbmProxy);
-app.all("/api/index-status", cbmProxy);
-app.all("/api/logs", cbmProxy);
-app.all("/api/processes", cbmProxy);
-app.all("/api/process-kill", cbmProxy);
-app.all("/api/layout", cbmProxy);
-app.all("/api/adr", cbmProxy);
-app.all("/api/project", cbmProxy);
-app.all("/api/project-health", cbmProxy);
-// /api/browse uses a sub-path (/api/browse/path/to/file)
-app.use("/api/browse", cbmProxy);
+// Les routes CBM proxy /api/* sont déjà montées plus haut (avant apiAuth, BUG-48 fix)
 
 // ── Read VERSION file once at startup ──
 let piWebVersion = "unknown";
@@ -545,66 +604,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           ws.send(JSON.stringify({
             type: "pi_history",
             projectId: pid,
-            messages: messages.map((m: any) => {
-              // Serialize fully to allow UI reconstruction.
-              // Each message can be UserMessage, AssistantMessage, ToolResultMessage,
-              // or custom (bashExecution, compactionSummary, etc.)
-              const base: any = {
-                id: m.id,
-                role: m.role,
-                timestamp: m.timestamp,
-              };
-
-              if (m.role === "user") {
-                // UserMessage: content can be string or content block array
-                base.content = m.content;
-              } else if (m.role === "assistant") {
-                // AssistantMessage: content is array of blocks (text, thinking, tool_use, toolCall, etc.)
-                // Normalize content blocks so the frontend always gets a consistent format
-                const rawContent = Array.isArray(m.content) ? m.content : m.content;
-                base.content = Array.isArray(rawContent)
-                  ? rawContent.map((b: any) => {
-                      // Normalize tool call blocks: "tool_use" → "toolCall"
-                      if (b.type === "tool_use" || b.type === "function") {
-                        return {
-                          ...b,
-                          type: "toolCall",
-                          // Normalize property names: input → arguments, toolName → name
-                          name: b.name || b.toolName || "unknown",
-                          arguments: b.arguments || b.input || b.args || {},
-                        };
-                      }
-                      return b;
-                    })
-                  : rawContent;
-                base.usage = m.usage;
-                // Extract thinking from content blocks
-                base.thinking = Array.isArray(base.content)
-                  ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
-                  : undefined;
-              } else if (m.role === "toolResult") {
-                // ToolResultMessage
-                base.toolCallId = m.toolCallId;
-                base.toolName = m.toolName;
-                base.content = m.content;
-                base.details = m.details;
-              } else if (m.role === "bashExecution") {
-                base.command = m.command;
-                base.output = m.output;
-                base.exitCode = m.exitCode;
-                base.cancelled = m.cancelled;
-              } else if (m.role === "compactionSummary") {
-                base.summary = m.summary;
-                base.tokensBefore = m.tokensBefore;
-              } else if (m.role === "custom") {
-                base.content = m.content;
-                base.customType = m.customType;
-                base.display = m.display;
-                base.details = m.details;
-              }
-
-              return base;
-            }),
+            messages: serializeMessagesForUi(messages),
           }));
         }
       } catch (e: any) {
@@ -624,55 +624,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         ws.send(JSON.stringify({
           type: "pi_history",
           projectId,
-          messages: messages.map((m: any) => {
-            const base: any = {
-              id: m.id,
-              role: m.role,
-              timestamp: m.timestamp,
-            };
-            if (m.role === "user") {
-              base.content = m.content;
-            } else if (m.role === "assistant") {
-                // Normalize content blocks: "tool_use"/"function" → "toolCall"
-                const rawContent2 = Array.isArray(m.content) ? m.content : m.content;
-                base.content = Array.isArray(rawContent2)
-                  ? rawContent2.map((b: any) => {
-                      if (b.type === "tool_use" || b.type === "function") {
-                        return {
-                          ...b,
-                          type: "toolCall",
-                          name: b.name || b.toolName || "unknown",
-                          arguments: b.arguments || b.input || b.args || {},
-                        };
-                      }
-                      return b;
-                    })
-                  : rawContent2;
-                base.usage = m.usage;
-                base.thinking = Array.isArray(base.content)
-                  ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
-                  : undefined;
-            } else if (m.role === "toolResult") {
-              base.toolCallId = m.toolCallId;
-              base.toolName = m.toolName;
-              base.content = m.content;
-              base.details = m.details;
-            } else if (m.role === "bashExecution") {
-              base.command = m.command;
-              base.output = m.output;
-              base.exitCode = m.exitCode;
-              base.cancelled = m.cancelled;
-            } else if (m.role === "compactionSummary") {
-              base.summary = m.summary;
-              base.tokensBefore = m.tokensBefore;
-            } else if (m.role === "custom") {
-              base.content = m.content;
-              base.customType = m.customType;
-              base.display = m.display;
-              base.details = m.details;
-            }
-            return base;
-          }),
+          messages: serializeMessagesForUi(messages),
         }));
       }
       break;

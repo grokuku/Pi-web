@@ -273,6 +273,33 @@ function getProjectName(cwd: string): string {
   return projectByCwd.get(cwd)?.projectName || cwd.split("/").pop() || cwd;
 }
 
+// ── Project discovery ───────────────────────────────────
+// Au démarrage (restart container), la DB CBM existe déjà mais la Map en mémoire
+// projectByCwd est vide. Il faut découvrir le nom CBM sans ré-indexer.
+async function discoverProjectName(cwd: string): Promise<void> {
+  // Déjà en cache et récent → rien à faire
+  const existing = projectByCwd.get(cwd);
+  if (existing && Date.now() - existing.lastIndexedAt < REINDEX_INTERVAL_MS) return;
+
+  try {
+    const listResult = await mcpCall("list_projects", {});
+    const projects = JSON.parse(listResult);
+    const arr = Array.isArray(projects) ? projects : (projects.projects || projects.results || []);
+    // Chercher par path d'abord, puis par nom de dossier
+    const dirName = cwd.split("/").pop() || cwd;
+    const match = arr.find((p: any) => {
+      const pPath = p.path || p.repo_path || p.repo || "";
+      return pPath === cwd || p.name === dirName || p.name === `projects-${dirName}` || pPath === cwd;
+    });
+    if (match?.name) {
+      projectByCwd.set(cwd, { projectName: match.name, lastIndexedAt: Date.now() });
+      console.log(`[cbm] Discovered project name: ${match.name} for cwd ${cwd}`);
+    }
+  } catch (e: any) {
+    console.warn(`[cbm] discoverProjectName failed: ${e.message}`);
+  }
+}
+
 // ── Index ────────────────────────────────────────────────
 
 async function indexProject(cwd: string): Promise<void> {
@@ -462,6 +489,8 @@ export default async function (pi: ExtensionAPI) {
         if (!status.running) {
           await spawnServer();
         }
+        // D'abord découvrir le nom du projet (au cas où la DB existe déjà)
+        await discoverProjectName(ctx.cwd);
         const projInfo = projectByCwd.get(ctx.cwd);
         if (projInfo && Date.now() - projInfo.lastIndexedAt < REINDEX_INTERVAL_MS) {
           console.log(`[cbm] Project already indexed: ${ctx.cwd} → ${projInfo.projectName}`);
@@ -491,6 +520,8 @@ export default async function (pi: ExtensionAPI) {
           await spawnServer();
         }
         if (ctx.cwd) {
+          // D'abord découvrir le nom du projet (au cas où la DB existe déjà)
+          await discoverProjectName(ctx.cwd);
           const projInfo = projectByCwd.get(ctx.cwd);
           if (!projInfo || Date.now() - projInfo.lastIndexedAt > REINDEX_INTERVAL_MS) {
             console.log(`[cbm] Indexing project (before_agent_start): ${ctx.cwd}`);

@@ -873,6 +873,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
   const { t } = useTranslation();
   const [input, setInput] = useState(""); const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false); const inputRef = useRef<HTMLTextAreaElement>(null); const fileInputRef = useRef<HTMLInputElement>(null);
+  const [confirmInterrupt, setConfirmInterrupt] = useState(false);
 
   const processFile = useCallback(async (file: File) => {
     if (attachments.length >= 10) { setError("Maximum 10 files per message"); return; }
@@ -894,7 +895,26 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     }
   }, [attachments.length, setError]);
 
-  const handleSendClick = useCallback(() => { const txt = input.trim(); if (!txt && attachments.length===0) return; onSend(input, attachments); setInput(""); setAttachments([]); if (inputRef.current) inputRef.current.style.height = 'auto'; }, [input, attachments, onSend]);
+  const handleSendClick = useCallback(() => {
+    const txt = input.trim();
+    if (!txt && attachments.length===0) return;
+    // Si un stream est actif, demander confirmation avant d'interrompre
+    if (isStreaming && !confirmInterrupt) {
+      setConfirmInterrupt(true);
+      return;
+    }
+    setConfirmInterrupt(false);
+    onSend(input, attachments);
+    setInput("");
+    setAttachments([]);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+  }, [input, attachments, onSend, isStreaming, confirmInterrupt]);
+
+  // Reset la confirmation si le streaming s'arrête ou si l'utilisateur tape à nouveau
+  useEffect(() => {
+    if (!isStreaming) setConfirmInterrupt(false);
+  }, [isStreaming]);
+  useEffect(() => { setConfirmInterrupt(false); }, [input]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); handleSendClick(); } }, [handleSendClick]);
   const handleDrop = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); for (const f of Array.from(e.dataTransfer.files)) processFile(f); }, [processFile]);
   const handlePaste = useCallback((e: React.ClipboardEvent) => { for (const item of e.clipboardData.items) { if (item.type.startsWith("image/")) { const b = item.getAsFile(); if (b) processFile(b); } } }, [processFile]);
@@ -938,7 +958,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           style={{ minHeight: '3rem', maxHeight: '10rem' }}
         />
         <div className="flex flex-col gap-1">
-          <button onClick={handleSendClick} className="btn-hacker flex-1 px-4" disabled={!input.trim()&&attachments.length===0}>{t('chat.send')}</button>
+          <button onClick={handleSendClick} className={`btn-hacker flex-1 px-4 ${confirmInterrupt ? 'danger' : ''}`} disabled={!input.trim()&&attachments.length===0}>{isStreaming && confirmInterrupt ? '⚠ INTERRUPT & SEND' : t('chat.send')}</button>
           <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('common.add')}><Paperclip size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">ABORT</button>}</div>
         </div>
       </div>

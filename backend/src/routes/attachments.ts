@@ -63,7 +63,7 @@ interface AttachmentMeta {
 // ─── Vision Model Helpers ─────────────────────────────────
 
 /** Check if the current model supports vision */
-interface VisionModelInfo {
+export interface VisionModelInfo {
   modelId: string;
   providerId: string;
   apiKey: string;
@@ -71,7 +71,7 @@ interface VisionModelInfo {
 }
 
 /** Get full model info for the vision model (API key, base URL, etc.) */
-function getVisionModelInfo(): VisionModelInfo | null {
+export function getVisionModelInfo(): VisionModelInfo | null {
   try {
     const library = loadModelLibrary();
     const visionModelId = library.visionModelId;
@@ -109,7 +109,7 @@ function getVisionModelInfo(): VisionModelInfo | null {
 }
 
 /** Call a vision model to describe an image */
-async function describeImageWithVisionModel(
+export async function describeImageWithVisionModel(
   base64: string,
   mimeType: string,
   prompt: string,

@@ -323,6 +323,64 @@
 
 ---
 
+## 🆕 Bugs identifiés lors de l'audit du 2026-06-29
+
+#### BUG-42: Stall detector reset `isStreaming` à 60s — [FIXED 2026-06-29]
+- **Fichier :** `frontend/src/App.tsx` — watchdog streaming (lignes ~343-370)
+- **Sévérité :** 🔴 Haute (UX critique)
+- **Description :** Le watchdog à 60s (`STUCK_TIMEOUT`) forçait `isStreaming = false` alors que l'agent continuait de travailler en arrière-plan. L'UI devenait muette (ni "loading" ni "stalled"), l'utilisateur pensait que l'agent avait arrêté et envoyait un message — ce qui déclenchait un abort de la session en cours via `sendPrompt()` (qui aborte si `state.isStreaming === true`). Résultat : travail perdu + interruption.
+- **Fix :** Suppression du reset automatique à 60s. Le watchdog ne fait plus que marquer "stalled" (orange) après 30s sans événement. L'utilisateur peut annuler manuellement avec `Esc` s'il juge que c'est vraiment bloqué. Le seul reset légitime de `isStreaming` vient d'un vrai événement `agent_end` du backend.
+
+#### BUG-43: CBM perd le mapping de projet après restart du container — [FIXED 2026-06-29]
+- **Fichier :** `extensions/codebase-memory/index.ts`
+- **Sévérité :** 🟡 Moyenne
+- **Description :** Au redémarrage du container, la DB CBM existe déjà (`projects-Pi-Web.db`) mais la Map `projectByCwd` en mémoire est vide. L'extension sautait l'indexation (déjà faite) → n'appelait jamais `list_projects` → ne découvrait jamais que le nom CBM est `projects-Pi-Web` (pas `Pi-web`). Tous les appels CBM échouaient avec "project not found or not indexed".
+- **Fix :** Ajout d'une fonction `discoverProjectName()` qui appelle `list_projects` au démarrage, même quand le projet est déjà indexé. Elle cherche par path exact, nom de dossier, et préfixe `projects-`. Appelée dans `session_start` et `before_agent_start` avant la vérification de ré-indexation.
+
+#### BUG-44: Images dans le chat ignorées si le modèle n'a pas la vision — [FIXED 2026-06-29]
+- **Fichier :** `backend/src/pi/session.ts` (fonction `sendPrompt`), `backend/src/routes/attachments.ts`
+- **Sévérité :** 🟡 Moyenne
+- **Description :** Quand l'utilisateur envoie une image dans le chat, les images vont directement au modèle de session (modèle code mode). Si ce modèle n'a pas la vision (`vision: false`), les images sont **silencieusement ignorées** — pas d'erreur, pas de message, juste rien. Le modèle vision configuré dans Settings → Analysis Models n'est utilisé que par la route `/api/attachments/:id/analyze` (file explorer), jamais dans le flux de chat.
+- **Fix :** Dans `sendPrompt()`, avant d'appeler `session.prompt()`, on vérifie si le modèle courant supporte la vision (`model.input.includes("image")` ou `model.vision === true`). Si non, on utilise le modèle vision configuré (`getVisionModelInfo()` + `describeImageWithVisionModel()`) pour décrire chaque image, puis on injecte les descriptions comme texte dans le prompt. Les images brutes ne sont pas passées au modèle sans vision. Les fonctions `getVisionModelInfo` et `describeImageWithVisionModel` ont été exportées depuis `attachments.ts`.
+
+#### BUG-45: Aucun avertissement quand un message interrompt un stream actif
+- **Fichier :** `backend/src/pi/session.ts` (fonction `sendPrompt`)
+- **Sévérité :** 🟡 Moyenne (UX)
+- **Description :** Quand l'utilisateur envoie un message pendant que l'agent stream, le backend aborte la session en cours (`state.session.abort()`) puis envoie le nouveau prompt. C'est by design (pour permettre le "steering"), mais il n'y a **aucun avertissement** côté frontend. L'utilisateur ne sait pas qu'il interrompt un travail en cours. Combiné avec BUG-42 (indicateur muet), c'était particulièrement confus.
+- **Fix proposé :** Ajouter une confirmation côté frontend ("Un travail est en cours, interrompre ?") ou au minimum un indicateur visuel plus visible que l'agent travaille. À implémenter.
+
+#### BUG-46: Code de sérialisation des messages dupliqué dans `index.ts`
+- **Fichier :** `backend/src/index.ts` — handlers `pi_start` et `pi_history_request`
+- **Sévérité :** 🟢 Basse (maintenabilité)
+- **Description :** Le code de mapping/normalisation des messages (UserMessage, AssistantMessage, ToolResultMessage, custom, etc.) est **dupliqué à l'identique** entre le handler `pi_start` (~50 lignes) et le handler `pi_history_request` (~50 lignes). Toute modification doit être faite en deux endroits.
+- **Fix :** Extraire la logique dans une fonction `serializeMessages(messages: any[])` partagée.
+
+#### BUG-47: `useWebSocket` — `_ws_reconnect` jamais émis
+- **Fichier :** `frontend/src/hooks/useWebSocket.ts`
+- **Sévérité :** 🟢 Basse
+- **Description :** La variable `isFirstConnect` est locale à `connect()`. À chaque reconnexion (après `ws.onclose` → `setTimeout(connect, ...)`), une nouvelle closure est créée avec `isFirstConnect = true`. Donc l'événement `_ws_reconnect` n'est **jamais émis** — le flag est toujours `true` lors du `onopen`, et le check `if (!isFirstConnect)` est toujours faux. Code mort.
+- **Fix :** Déplacer `isFirstConnect` en dehors de `connect()` (dans un `useRef`) pour qu'il persiste entre les reconnexions.
+
+#### BUG-48: Conflit de routes API entre Pi-Web et CBM proxy
+- **Fichier :** `backend/src/index.ts`
+- **Sévérité :** 🟢 Basse (ambiguïté)
+- **Description :** Les routes `app.all("/api/index", cbmProxy)`, `app.all("/api/logs")`, etc. sont montées après `app.use("/api", apiAuth)`. Ambiguïté : le middleware `apiAuth` s'applique-t-il aux routes CBM ? Si oui, le CBM UI (SPA externe) pourrait ne pas passer l'auth. Si non, ces routes sont ouvertes sans auth.
+- **Fix :** Clarifier en plaçant les routes CBM proxy avant le middleware `apiAuth`, ou en les excluant explicitement de `PUBLIC_PATHS`.
+
+#### BUG-49: `docker-compose.yml` — `privileged: true` (sécurité)
+- **Fichier :** `docker-compose.yml`
+- **Sévérité :** 🟡 Moyenne (sécurité)
+- **Description :** Le conteneur tourne en mode `privileged` — accès complet à tous les devices du host. Nécessaire pour les montages CIFS mais risque de sécurité important si le conteneur est compromis.
+- **Fix :** Utiliser `cap_add: [SYS_ADMIN, SYS_PTRACE]` au lieu de `privileged: true` si possible, ou documenter le risque.
+
+#### BUG-50: `ALLOWED_ORIGINS=*` et `WS_ALLOWED_ORIGINS=*` (sécurité)
+- **Fichier :** `docker-compose.yml`
+- **Sévérité :** 🔴 Haute (sécurité — en production)
+- **Description :** Les deux variables à `*` désactivent toutes les protections CORS et WebSocket. N'importe quel site web peut faire des requêtes vers l'API. Risque critique si le serveur est exposé sur internet.
+- **Fix :** Configurer les origines spécifiques, ou au minimum documenter que `*` ne doit être utilisé qu'en réseau local isolé.
+
+---
+
 ## 🟡 Bugs mineurs / améliorations
 
 - **[?] Bouton download sur les fichiers** — Implémenté mais pas testé en conditions réelles (Docker). Vérifier que `Content-Disposition: attachment` fonctionne bien avec les noms sanitizés.
@@ -704,27 +762,41 @@ Pi config
 | **39** | 🔴 | Performance | `session.prompt()` / `session.steer()` sans timeout — **[FIXED 2026-06-28]** : `withSessionTimeout` 5 min | `pi/session.ts` |
 | **40** | 🟡 | Logique | Auto-review ne se déclenche qu'une fois par session — **[FIXED 2026-06-28]** : reset `reviewCycle` à chaque prompt | `pi/session.ts` |
 | **41** | 🟡 | UX | Impossible de savoir si le streaming est actif ou bloqué — **[FIXED 2026-06-28]** : stall detector + indicateurs | `App.tsx` + UI |
+| **42** | **🔴** | **UX critique** | **Stall detector reset `isStreaming` à 60s — travail perdu — [FIXED 2026-06-29]** | `App.tsx` |
+| **43** | 🟡 | CBM | CBM perd le mapping de projet après restart — **[FIXED 2026-06-29]** : `discoverProjectName()` | `extensions/codebase-memory/index.ts` |
+| **44** | 🟡 | Logique | Images dans le chat ignorées si le modèle n'a pas la vision — **[FIXED 2026-06-29]** : fallback modèle vision | `pi/session.ts` + `attachments.ts` |
+| **45** | 🟡 | UX | Aucun avertissement quand un message interrompt un stream actif | `pi/session.ts` |
+| **46** | 🟢 | Maintenabilité | Code de sérialisation des messages dupliqué dans `index.ts` | `index.ts` |
+| **47** | 🟢 | Logique | `_ws_reconnect` jamais émis (code mort dans `useWebSocket`) | `hooks/useWebSocket.ts` |
+| **48** | 🟢 | Ambiguïté | Conflit de routes API entre Pi-Web et CBM proxy | `index.ts` |
+| **49** | 🟡 | Sécurité | `privileged: true` dans docker-compose | `docker-compose.yml` |
+| **50** | 🔴 | Sécurité | `ALLOWED_ORIGINS=*` / `WS_ALLOWED_ORIGINS=*` en production | `docker-compose.yml` |
 
 ### Priorité de correction recommandée
 
-1. **🔴 BUG-28** — Sécurité critique : command injection dans `pi-settings.ts` — **[FIXED]**
-2. **🔴 BUG-29** — Sécurité critique : aucune auth sur la majorité des routes API — **[FIXED]**
+1. **🔴 BUG-28** — Sécurité critique : command injection — **[FIXED]**
+2. **🔴 BUG-29** — Sécurité critique : aucune auth — **[FIXED]**
 3. **🔴 BUG-12** — Sécurité : API Keys agent exposées — **[FIXED]**
-4. **🟡 BUG-08** — `isStreaming` forcé à `true` — **[FIXED]**
-5. **🟡 BUG-30** — `process.exit(0)` sans auth — **[FIXED]**
-6. **🟡 BUG-31** — Route `PUT /reorder` injoignable — réorganisation cassée
-6. **🟡 BUG-04** — Nettoyage cache attachments cassé
-7. **🟡 BUG-02** — Promesses flottantes `syncToModelsJson()`
-8. **🟡 BUG-06 + BUG-07** — Cleanup YOLO manquant dans `removeModel` / `deleteProvider`
-9. **🟡 BUG-32 + BUG-33** — Cleanup `visionModelId`/`audioModelId`/`commitModelId` manquant
-10. **🟡 BUG-05 + BUG-34 + BUG-35** — `require()` en ESM (3 fichiers)
-11. **🟡 BUG-01** — Route dupliquée
-12. **🟡 BUG-21** — Race condition `/new` + `pi_history`
-13. **🟡 BUG-15** — Fuite credentials dans logs
-14. **🟡 BUG-22** — Limite localStorage
-15. **🟡 BUG-25 + BUG-26** — Sécurité file browser
-16. **🟡 BUG-30** — `process.exit(0)` sans auth
-17. **🟡 BUG-11** — `unhandledRejection` ne termine pas
-18. **🟡 BUG-13** — `setGitIdentity` écrit dans global config
-19. **🟢 BUG-09 + BUG-10** — Propreté repo — **[RESOLVED]**
-20. **🟢 Autres** — Code mort, style, améliorations
+4. **🔴 BUG-42** — UX critique : stall detector reset — **[FIXED]**
+5. **🔴 BUG-50** — Sécurité : `ALLOWED_ORIGINS=*` en production
+6. **🟡 BUG-08** — `isStreaming` forcé à `true` — **[FIXED]**
+7. **🟡 BUG-30** — `process.exit(0)` sans auth — **[FIXED]**
+8. **🟡 BUG-31** — Route `PUT /reorder` injoignable — réorganisation cassée
+9. **🟡 BUG-43** — CBM perd le mapping après restart — **[FIXED]**
+10. **🟡 BUG-44** — Images ignorées sans vision — **[FIXED]**
+11. **🟡 BUG-04** — Nettoyage cache attachments cassé
+12. **🟡 BUG-02** — Promesses flottantes `syncToModelsJson()`
+13. **🟡 BUG-06 + BUG-07** — Cleanup YOLO manquant dans `removeModel` / `deleteProvider`
+14. **🟡 BUG-32 + BUG-33** — Cleanup `visionModelId`/`audioModelId`/`commitModelId` manquant
+15. **🟡 BUG-05 + BUG-34 + BUG-35** — `require()` en ESM (3 fichiers)
+16. **🟡 BUG-01** — Route dupliquée
+17. **🟡 BUG-21** — Race condition `/new` + `pi_history`
+18. **🟡 BUG-45** — Aucun avertissement avant interruption de stream
+19. **🟡 BUG-15** — Fuite credentials dans logs
+20. **🟡 BUG-22** — Limite localStorage
+21. **🟡 BUG-25 + BUG-26** — Sécurité file browser
+22. **🟡 BUG-11** — `unhandledRejection` ne termine pas
+23. **🟡 BUG-13** — `setGitIdentity` écrit dans global config
+24. **🟡 BUG-49** — `privileged: true` dans docker-compose
+25. **🟢 BUG-09 + BUG-10** — Propreté repo — **[RESOLVED]**
+26. **🟢 Autres** — Code mort, style, améliorations (BUG-16, 17, 20, 24, 27, 36, 37, 38, 46, 47, 48)

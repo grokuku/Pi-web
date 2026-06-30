@@ -19,6 +19,7 @@ from "./model-library.js";
 import type { AgentMode } from "./model-library.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
+import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -625,11 +626,51 @@ export async function sendPrompt(
     }
   }
 
-  const imageAttachments = images?.map((img) => ({
+  // ── Gestion des images : fallback vers le modèle vision si nécessaire ──
+  // Si le modèle de session courant ne supporte pas la vision, on utilise
+  // le modèle vision configuré (Settings → Analysis Models) pour décrire
+  // chaque image, puis on injecte les descriptions comme texte dans le prompt.
+  let imageAttachments = images?.map((img) => ({
     type: "image" as const,
     data: img.data,
     mimeType: img.mimeType,
   }));
+
+  if (imageAttachments && imageAttachments.length > 0) {
+    // Vérifier si le modèle courant supporte la vision
+    const currentModel = state.session?.model as any;
+    const supportsVision = currentModel?.input?.includes("image") || currentModel?.vision === true;
+    
+    if (!supportsVision) {
+      // Le modèle courant n'a pas la vision — utiliser le modèle vision configuré
+      const visionModelInfo = getVisionModelInfo();
+      if (visionModelInfo) {
+        console.log(`[prompt] Modèle courant (${currentModel?.id || "unknown"}) sans vision — utilisation du modèle vision (${visionModelInfo.modelId}) pour ${imageAttachments.length} image(s)`);
+        const descriptions: string[] = [];
+        for (let i = 0; i < imageAttachments.length; i++) {
+          const img = imageAttachments[i];
+          try {
+            const desc = await describeImageWithVisionModel(
+              img.data,
+              img.mimeType,
+              `Analyse cette image en détail. Décris ce que tu vois, y compris tout texte visible, éléments d'interface, erreurs, indicateurs de statut, etc.`,
+              visionModelInfo,
+            );
+            descriptions.push(`\n\n---\n**🖼️ Image ${i + 1}** (analysée avec le modèle vision)\n\n${desc}\n---`);
+            console.log(`[prompt] Image ${i + 1} décrite (${desc.length} chars)`);
+          } catch (e: any) {
+            console.error(`[prompt] Erreur vision modèle image ${i + 1}:`, e.message);
+            descriptions.push(`\n\n---\n**🖼️ Image ${i + 1}** (analyse échouée: ${e.message})\n---`);
+          }
+        }
+        // Injecter les descriptions dans le message et ne pas passer les images au session.prompt
+        message = message + descriptions.join("");
+        imageAttachments = undefined; // Ne pas passer les images brutes au modèle sans vision
+      } else {
+        console.warn(`[prompt] Modèle courant sans vision et aucun modèle vision configuré — les images seront ignorées`);
+      }
+    }
+  }
 
   if (state.isStreaming) {
     // Always abort the current session before sending a new prompt.

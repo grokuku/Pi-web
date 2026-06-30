@@ -343,23 +343,21 @@ function App() {
   // ── Streaming watchdog + stall detector ──
   // Every 15s, check all projects:
   // - Stalled (>30s since last event): shown as stale in UI (orange dot)
-  // - Truly stuck (>60s): reset isStreaming to false + finalize
-  // This is a safety net for missed agent_end, WS drops, etc.
+  //
+  // NOTE: on ne reset PLUS isStreaming automatiquement.
+  // L'utilisateur peut annuler manuellement (Esc) s'il estime que c'est vraiment bloqué.
+  // Le reset auto à 60s causait un bug : l'agent continuait de travailler en arrière-plan
+  // mais l'UI ne montrait plus aucun indicateur (ni loading ni stalled).
+  // Le seul reset légitime vient d'un vrai événement agent_end du backend.
   useEffect(() => {
     const STALL_THRESHOLD = 30 * 1000;  // 30s → show stale indicator
-    const STUCK_TIMEOUT  = 60 * 1000;   // 60s → force reset
     const CHECK_INTERVAL = 15 * 1000;   // check every 15s
     const interval = setInterval(() => {
-      const now = Date.now();
       let changed = false;
       for (const [pid, state] of projectSessionsRef.current) {
         if (state.isStreaming) {
-          const elapsed = state.lastEventAt > 0 ? now - state.lastEventAt : now;
-          if (elapsed > STUCK_TIMEOUT) {
-            console.warn(`[App] Force-reset stuck isStreaming for project ${pid} (no activity for ${Math.round(elapsed/1000)}s)`);
-            state.isStreaming = false;
-            changed = true;
-          } else if (elapsed > STALL_THRESHOLD) {
+          const elapsed = state.lastEventAt > 0 ? Date.now() - state.lastEventAt : Date.now();
+          if (elapsed > STALL_THRESHOLD) {
             // Still streaming but stalled — mark for visual change
             // (rerender so the UI can show the stale indicator)
             changed = true;
