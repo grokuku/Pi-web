@@ -448,16 +448,17 @@ export class HarnessEngine {
       // puis à la session principale, puis aux fallbacks.
       // BUG-58: la session temporaire doit hériter d'un modèle qui fonctionne.
       let modelSet = false;
+      console.log(`[harness] Agent ${agent.role}: recherche modèle (agent.modelId=${agent.modelId}, harnessModelId=${this.harnessModelId})`);
       if (agent.modelId) {
         const parts = agent.modelId.split("__");
         const model = getModelRegistry().find(parts[0], parts[1] || "");
-        if (model) { await tempSession.setModel(model); modelSet = true; }
+        if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via agent.modelId → ${model.provider}/${model.id}`); }
         else console.warn(`[harness] Agent ${agent.role}: modelId=${agent.modelId} non trouvé dans le registry`);
       } else if (this.harnessModelId) {
         // Modèle configuré pour le mode HARNESS dans le ModelQuickSwitch
         const parts = this.harnessModelId.split("__");
         const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-        if (model) { await tempSession.setModel(model); modelSet = true; }
+        if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via harnessModelId → ${model.provider}/${model.id}`); }
         else console.warn(`[harness] harnessModelId=${this.harnessModelId} non trouvé dans le registry`);
       } else {
         // Hériter du modèle de la session principale (qui marche)
@@ -474,12 +475,13 @@ export class HarnessEngine {
           if (defaultModelId) {
             const parts = defaultModelId.split("__");
             const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-            if (model) { await tempSession.setModel(model); modelSet = true; }
+            if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via defaultModelId → ${model.provider}/${model.id}`); }
           }
           if (!modelSet) {
             const available = getModelRegistry().getAvailable();
+            console.log(`[harness] Agent ${agent.role}: getAvailable() retourne ${available.length} modèles`);
             if (available.length > 0) {
-              await tempSession.setModel(available[0]); modelSet = true;
+              await tempSession.setModel(available[0]); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via available[0] → ${available[0].provider}/${available[0].id}`);
             }
           }
         }
@@ -487,6 +489,9 @@ export class HarnessEngine {
       if (!modelSet) {
         console.error(`[harness] Agent ${agent.role}: AUCUN MODÈLE trouvé — prompt() ne fera rien`);
       }
+      // Vérifier que le modèle est bien sur la session
+      const sessionModel = (tempSession as any).model;
+      console.log(`[harness] Agent ${agent.role}: tempSession.model = ${sessionModel ? `${sessionModel.provider}/${sessionModel.id}` : "NULL"}`);
 
       // Appliquer le system prompt
       (tempSession as any).agent.state.systemPrompt = systemPrompt;
@@ -524,7 +529,9 @@ export class HarnessEngine {
       });
 
       try {
+        console.log(`[harness] Agent ${agent.role}: appel prompt() (prompt length=${prompt.length})...`);
         await Promise.race([tempSession.prompt(prompt, {}), llmTimeout]);
+        console.log(`[harness] Agent ${agent.role}: prompt() résolu sans erreur`);
       } finally {
         clearTimeout(llmTimer!);
         concurrencyManager.releaseLLMSlot(this.projectId);
@@ -532,6 +539,7 @@ export class HarnessEngine {
 
       // Collecter la réponse
       const messages: any[] = tempSession.messages || [];
+      console.log(`[harness] Agent ${agent.role}: ${messages.length} messages au total (${messages.filter(m => m.role === "assistant").length} assistant)`);
       const assistantMessages = messages
         .filter((m: any) => m.role === "assistant")
         .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "");
