@@ -1,0 +1,403 @@
+/**
+ * Harness Orchestrator Extension for Pi-Web
+ *
+ * Remplace l'ancien HarnessEngine par une approche conversationnelle.
+ * L'orchestrator (chef de projet) discute avec l'utilisateur et délègue
+ * l'exécution aux experts via le tool `delegate_to_expert`.
+ *
+ * Le tool crée une session Pi temporaire pour l'expert, exécute la tâche,
+ * et retourne le résultat à l'orchestrator.
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// ── Experts ─────────────────────────────────────────────
+
+interface ExpertDef {
+  role: string;
+  emoji: string;
+  label: string;
+  description: string;
+  systemPrompt: string;
+  tools: string[];
+}
+
+const EXPERTS: ExpertDef[] = [
+  {
+    role: "architect",
+    emoji: "🏗",
+    label: "Architecte",
+    description: "Explore le code, prend les décisions techniques, élabore un plan d'exécution.",
+    systemPrompt: `## RÔLE : ARCHITECTE
+
+Tu es l'architecte. Tu reçois une tâche de l'orchestrator. Tu dois :
+1. Explorer le codebase existant (read, grep, find, ls, cbm_*)
+2. Prendre les décisions techniques clés
+3. Produire un plan d'exécution clair et structuré
+
+## Règles
+- Sois précis et concis
+- Liste les fichiers à créer/modifier
+- Décris l'approche technique et les dépendances
+- N'écris pas de code — c'est le job des développeurs`,
+    tools: ["read", "grep", "find", "ls", "cbm_search", "cbm_trace", "cbm_arch", "cbm_code", "cbm_search_code", "cbm_schema"],
+  },
+  {
+    role: "backend-dev",
+    emoji: "⚙️",
+    label: "Développeur Backend",
+    description: "Implémente la logique serveur : API, endpoints, middleware, services.",
+    systemPrompt: `## RÔLE : DÉVELOPPEUR BACKEND
+
+Tu implémentes la logique côté serveur.
+
+Règles :
+- Lis les fichiers concernés avant de commencer
+- Écris du code de qualité production
+- Suis les conventions existantes du projet
+- Fais des changements atomiques, un fichier à la fois
+- Gère les erreurs et edge cases
+- Teste tes changements avec bash si applicable`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "frontend-dev",
+    emoji: "🎨",
+    label: "Développeur Frontend",
+    description: "Implémente les composants UI, styles, interactions, routing.",
+    systemPrompt: `## RÔLE : DÉVELOPPEUR FRONTEND
+
+Tu implémentes l'interface utilisateur.
+
+Règles :
+- Lis les fichiers concernés avant de commencer
+- Suis les patterns et composants existants
+- Crée des composants responsive et accessibles
+- Gère les états de loading et d'erreur
+- Fais des changements atomiques`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "database-engineer",
+    emoji: "🗄️",
+    label: "Ingénieur Base de Données",
+    description: "Conçoit les schémas, migrations, queries, optimisations.",
+    systemPrompt: `## RÔLE : INGÉNIEUR BASE DE DONNÉES
+
+Tu conçois et implémentes la couche données.
+
+Règles :
+- Lis les fichiers de schéma/migration existants
+- Suis les patterns de migration existants
+- Considère l'indexing et les performances
+- Écris des migrations réversibles quand applicable`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "api-designer",
+    emoji: "🔌",
+    label: "Designer d'API",
+    description: "Conçoit les contrats API, schemas de validation, documentation.",
+    systemPrompt: `## RÔLE : DESIGNER D'API
+
+Tu conçois les contrats d'API et les schemas de validation.
+
+Règles :
+- Suis les bonnes pratiques REST/RPC du projet
+- Designe des interfaces claires et cohérentes
+- Inclus les cas d'erreur et codes de retour
+- Considère le versioning`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "code-reviewer",
+    emoji: "🔍",
+    label: "Reviewer de Code",
+    description: "Review le code : logique, sécurité, performances, edge cases.",
+    systemPrompt: `## RÔLE : REVIEWER DE CODE
+
+Tu analyses le code pour trouver les problèmes.
+
+Règles :
+- Vérifie la logique, la sécurité, les performances
+- Vérifie les edge cases non gérés
+- Signale les bugs avec fichier:ligne
+- Suggère des corrections concrètes
+- Ne modifie PAS le code toi-même`,
+    tools: ["read", "grep", "find", "ls", "bash"],
+  },
+  {
+    role: "qa-tester",
+    emoji: "🧪",
+    label: "Testeur QA",
+    description: "Exécute les tests, vérifie les critères d'acceptation.",
+    systemPrompt: `## RÔLE : TESTEUR QA
+
+Tu valides que l'implémentation fonctionne correctement.
+
+Règles :
+- Exécute les tests existants avec bash
+- Vérifie que les critères d'acceptation sont remplis
+- Crée des tests manquants si nécessaire
+- Signale les régressions et failures`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "test-writer",
+    emoji: "✅",
+    label: "Rédacteur de Tests",
+    description: "Écrit les tests unitaires, integration, e2e.",
+    systemPrompt: `## RÔLE : RÉDACTEUR DE TESTS
+
+Tu écris des tests de qualité.
+
+Règles :
+- Suis les patterns de test existants du projet
+- Couvre les edge cases et chemins d'erreur
+- Utilise des noms de test explicites
+- Mocke proprement les dépendances externes`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "docs-writer",
+    emoji: "📝",
+    label: "Rédacteur de Documentation",
+    description: "Rédige la documentation : README, guides, API docs.",
+    systemPrompt: `## RÔLE : RÉDACTEUR DE DOCUMENTATION
+
+Tu écris une documentation claire et concise.
+
+Règles :
+- Suis le style de documentation existant
+- Inclus des exemples de code quand pertinent
+- Sois concis — pas de blabla
+- Documente le pourquoi, pas juste le quoi`,
+    tools: ["read", "edit", "write", "grep", "find", "ls"],
+  },
+  {
+    role: "devops",
+    emoji: "🚀",
+    label: "Ingénieur DevOps",
+    description: "Configure CI/CD, Docker, scripts de déploiement.",
+    systemPrompt: `## RÔLE : INGÉNIEUR DEVOPS
+
+Tu configures l'infrastructure et l'automatisation.
+
+Règles :
+- Lis les fichiers de config existants
+- Suis les patterns existants
+- Rends tout reproductible et idempotent
+- Inclus la gestion d'erreurs`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+  {
+    role: "security-reviewer",
+    emoji: "🔒",
+    label: "Auditeur Sécurité",
+    description: "Audit de sécurité : injection, XSS, CSRF, auth, secrets.",
+    systemPrompt: `## RÔLE : AUDITEUR SÉCURITÉ
+
+Tu audit le code pour les vulnérabilités.
+
+Règles :
+- Vérifie : injection, XSS, CSRF, problèmes d'auth
+- Vérifie les secrets exposés et les defaults non sécurisés
+- Reporte avec sévérité (CRITICAL/HIGH/MEDIUM/LOW)
+- Suggère des corrections spécifiques`,
+    tools: ["read", "grep", "find", "ls", "bash"],
+  },
+  {
+    role: "refactoring",
+    emoji: "♻️",
+    label: "Spécialiste Refactoring",
+    description: "Refactor le code : améliore la structure, élimine la dette technique.",
+    systemPrompt: `## RÔLE : SPÉCIALISTE REFACTORING
+
+Tu améliores la structure du code sans changer son comportement.
+
+Règles :
+- Préserve le comportement existant
+- Améliore le nommage, la structure, DRY
+- Fais des changements petits et atomiques
+- N'introduis pas de nouvelles fonctionnalités`,
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  },
+];
+
+const EXPERT_BY_ROLE = new Map(EXPERTS.map(e => [e.role, e]));
+
+// ── Tool parameter schema (plain JSON Schema) ──────────
+
+const delegateParams = {
+  type: "object" as const,
+  properties: {
+    role: {
+      type: "string",
+      description: "Rôle de l'expert à déléguer. Valeurs possibles : " +
+        EXPERTS.map(e => `"${e.role}" (${e.label})`).join(", "),
+    },
+    task: {
+      type: "string",
+      description: "La tâche à exécuter par l'expert. Doit être précise et auto-contenue.",
+    },
+    context: {
+      type: "string",
+      description: "Contexte additionnel (fichiers à lire, décisions précédentes, etc.). Optionnel.",
+    },
+  },
+  required: ["role", "task"],
+};
+
+// ── Extension ───────────────────────────────────────────
+
+export default function (pi: ExtensionAPI) {
+  console.log("[harness-orchestrator] Extension loaded");
+
+  pi.registerTool({
+    name: "delegate_to_expert",
+    label: "Delegate to Expert",
+    description:
+      "Délègue une tâche à un expert spécialisé (architecte, développeur, reviewer, etc.). " +
+      "L'expert exécute la tâche dans une session isolée et retourne son résultat. " +
+      "Utilise ce tool pour TOUTE tâche d'exécution : code, debug, review, tests, plan, doc. " +
+      "Ne code JAMAIS toi-même — délègue toujours.",
+    promptSnippet: "Déléguer une tâche à un expert spécialisé",
+    promptGuidelines: [
+      "Utilise delegate_to_expert pour TOUTE tâche d'exécution (code, debug, review, tests, plan, doc).",
+      "Pour une tâche simple → délègue directement à l'expert approprié.",
+      "Pour une tâche complexe → délègue d'abord à l'architecte pour un plan, puis aux experts.",
+      "Ne code JAMAIS toi-même. Tu es un chef de projet, pas un développeur.",
+      "Réponds directement aux questions simples sans déléguer.",
+      "L'expert reçoit uniquement la tâche et le contexte que tu fournis — sois précis.",
+    ],
+    parameters: delegateParams,
+    async execute(
+      _toolCallId: string,
+      params: { role: string; task: string; context?: string },
+      signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[] }> {
+      const { role, task, context } = params;
+      const expert = EXPERT_BY_ROLE.get(role);
+
+      if (!expert) {
+        const validRoles = EXPERTS.map(e => e.role).join(", ");
+        return {
+          content: [{
+            type: "text" as const,
+            text: `❌ Rôle d'expert inconnu : "${role}". Rôles valides : ${validRoles}`,
+          }],
+        };
+      }
+
+      console.log(`[harness-orchestrator] Délégation à ${expert.label} (${role}): ${task.slice(0, 80)}...`);
+
+      try {
+        // Créer une session temporaire pour l'expert
+        const { createAgentSession, SessionManager, AuthStorage } = await import("@earendil-works/pi-coding-agent");
+        const { join } = await import("path");
+        const { homedir } = await import("os");
+        const { existsSync, mkdirSync, unlinkSync } = await import("fs");
+
+        const cwd = ctx.cwd || process.cwd();
+        const agentDir = join(homedir(), ".pi", "agent");
+        const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+
+        const tempSessionManager = SessionManager.create(cwd);
+        const tempSessionFile = tempSessionManager.getSessionFile();
+
+        const result = await createAgentSession({
+          cwd,
+          sessionManager: tempSessionManager,
+          authStorage,
+          modelRegistry: ctx.modelRegistry,
+        });
+        const tempSession = result.session;
+
+        try {
+          // Set le modèle — hériter de la session principale
+          if (ctx.model) {
+            await tempSession.setModel(ctx.model);
+          }
+
+          // Restreindre les outils de l'expert
+          if (expert.tools.length > 0) {
+            (tempSession as any).setActiveToolsByName(expert.tools);
+          }
+
+          // Set le system prompt APRÈS setActiveToolsByName (sinon écrasé)
+          (tempSession as any)._baseSystemPrompt = expert.systemPrompt;
+          (tempSession as any).agent.state.systemPrompt = expert.systemPrompt;
+
+          // Construire le prompt de l'expert
+          let expertPrompt = task;
+          if (context) {
+            expertPrompt = `## Contexte\n\n${context}\n\n## Tâche\n\n${task}`;
+          }
+
+          // Timeout : 300s par défaut
+          const timeoutMs = 300_000;
+          let timer: ReturnType<typeof setTimeout>;
+          const timeoutPromise = new Promise<void>((_, reject) => {
+            timer = setTimeout(() => {
+              (tempSession as any).abort?.().catch(() => {});
+              reject(new Error(`Expert ${role} timed out after ${timeoutMs / 1000}s`));
+            }, timeoutMs);
+          });
+
+          // Abort signal de l'orchestrator → abort l'expert aussi
+          const abortPromise = signal
+            ? new Promise<void>((_, reject) => {
+                signal.addEventListener("abort", () => {
+                  (tempSession as any).abort?.().catch(() => {});
+                  reject(new Error("Aborted by orchestrator"));
+                });
+              })
+            : new Promise<void>(() => {}); // jamais résout si pas de signal
+
+          try {
+            await Promise.race([
+              tempSession.prompt(expertPrompt, {}),
+              timeoutPromise,
+              abortPromise,
+            ]);
+          } finally {
+            clearTimeout(timer!);
+          }
+
+          // Collecter la réponse
+          const messages: any[] = (tempSession as any).messages || [];
+          const assistantTexts = messages
+            .filter((m: any) => m.role === "assistant")
+            .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "")
+            .filter((t: string) => t.length > 0);
+          const fullResponse = assistantTexts.join("\n\n");
+
+          console.log(`[harness-orchestrator] ${expert.label} terminé: ${fullResponse.length} chars`);
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: fullResponse || `${expert.label} n'a produit aucune réponse.`,
+            }],
+          };
+        } finally {
+          // Cleanup session
+          try { (tempSession as any).dispose?.(); } catch {}
+          try {
+            if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
+          } catch {}
+        }
+      } catch (err: any) {
+        console.error(`[harness-orchestrator] Erreur ${role}:`, err.message);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `❌ ${expert.label} a échoué : ${err.message}`,
+          }],
+        };
+      }
+    },
+  });
+}

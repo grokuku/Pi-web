@@ -373,25 +373,10 @@ export async function sendPrompt(
   const state = sessionsByProject.get(projectId);
 
   // ── Harness mode: no session needed, delegate to HarnessEngine ──
-  if (state?.activeMode === "harness") {
-    if (state.isStreaming) {
-      // Harness already running — queue as steer message
-      state.harnessSteerMessages.push(message);
-      console.log(`[prompt] Harness steer queued (${state.harnessSteerMessages.length} pending): ${message.substring(0, 60)}`);
-      return;
-    }
-    const library = loadModelLibrary();
-    const pm = getProjectModeConfig(library, projectId);
-    const harnessConfig = pm.harness?.config;
-    if (harnessConfig && harnessConfig.agents?.length > 0) {
-      console.log("[prompt] Harness mode — delegating to HarnessEngine");
-      runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
-        console.error("[prompt] Harness error:", err.message);
-      });
-      return;
-    }
-    console.warn("[prompt] Harness mode but no agents configured — falling back to normal prompt");
-  }
+  // NOTE: Le mode HARNESS est maintenant géré par l'extension harness-orchestrator.
+  // L'orchestrator reçoit les messages normalement via session.prompt() et
+  // délègue aux experts via le tool delegate_to_expert.
+  // L'ancien HarnessEngine (batch) reste accessible via la commande /harness.
 
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
@@ -1048,6 +1033,8 @@ const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // (no find/ls to prevent full-project exploration — reviewer should focus on diff)
 const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+// Harness orchestrator : read-only + delegate_to_expert (pas d'edit/write/bash)
+const HARNESS_TOOLS = ["read", "grep", "find", "ls"];
 
 /** Get extension tool names registered in the session */
 function getExtensionToolNames(session: any): string[] {
@@ -1116,6 +1103,7 @@ const MODE_IDENTITIES: Record<string, string> = {
   code: "",  // Keep default identity for code mode
   review: "You are a senior code reviewer. Your job is to READ code, analyze it, and provide detailed feedback. You do NOT make changes.",
   plan: "You are a PLANNING agent. You do NOT write code, edit files, or suggest shell commands. You analyze the codebase and produce structured implementation plans.",
+  harness: "Tu es le chef de projet de Pi-Web. Ton rôle est d'orchestrer les experts et d'être l'interface entre l'utilisateur et l'équipe.",
 };
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -1185,6 +1173,58 @@ For each finding:
 
 ## Knowledge Graph
 When available (cbm_* tools visible), use cbm_diff to analyze git diff impact (affected symbols, blast radius). Use cbm_trace to find callers of changed functions. Use cbm_search for targeted lookups instead of grep+read chains.`,
+  harness: `## Mode HARNESS — Chef de Projet
+
+Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécution aux experts.
+
+### Tes responsabilités
+- Comprendre la demande de l'utilisateur
+- Évaluer la complexité de la tâche
+- Choisir le bon expert et lui déléguer
+- Présenter les résultats à l'utilisateur de façon claire
+- Coordonner plusieurs experts si nécessaire
+
+### Règles ABSOLUES
+- Tu ne codes JAMAIS. Tu ne débugges JAMAIS. Tu ne fais JAMAIS de plan détaillé.
+- Tu délègues TOUJOURS l'exécution aux experts via le tool delegate_to_expert.
+- Tu peux répondre directement aux questions simples (conseils, explications, clarifications).
+- Quand tu n'es pas sûr, demande à l'utilisateur.
+
+### Quand déléguer vs répondre directement
+- **Réponds directement** : questions simples, conseils, explications, clarifications, synthèse de résultats
+- **Délègue à un expert** : toute tâche d'exécution (code, debug, review, test, doc, plan)
+- **Tâche complexe** : délègue d'abord à l'architecte (role: "architect") pour un plan, puis aux experts appropriés
+- **Tâche simple** : délègue directement à l'expert approprié (ex: backend-dev pour une API, frontend-dev pour un composant)
+
+### Experts disponibles
+| Rôle | Spécialité |
+|------|------------|
+| architect | Planification, exploration, architecture |
+| backend-dev | Logique serveur, API, middleware |
+| frontend-dev | UI, composants, routing |
+| database-engineer | Schémas, migrations, queries |
+| api-designer | Contrats API, validation |
+| code-reviewer | Review de code, qualité |
+| qa-tester | Tests, QA, validation |
+| test-writer | Tests unitaires, integration |
+| docs-writer | Documentation, README |
+| devops | CI/CD, Docker, déploiement |
+| security-reviewer | Audit sécurité |
+| refactoring | Refactoring, dette technique |
+
+### Comment déléguer
+Utilise le tool delegate_to_expert avec :
+- role : le rôle exact de l'expert (ex: "backend-dev")
+- task : la tâche précise et auto-contenue
+- context : fichiers à lire, décisions précédentes, contraintes (optionnel)
+
+L'expert ne voit QUE ce que tu lui passes — sois précis et complet.
+
+### Après une délégation
+- Analyse le résultat retourné par l'expert
+- Si l'expert signale un problème ou un besoin de clarification -> demande à l'utilisateur
+- Si la tâche est terminée -> résume le résultat pour l'utilisateur
+- Si tu as besoin d'un autre expert -> délègue à nouveau`,
 };
 
 // Default thinking levels per mode
@@ -1192,6 +1232,7 @@ const DEFAULT_THINKING: Record<string, string> = {
   code: "medium",
   review: "medium",
   plan: "high",
+  harness: "medium",
 };
 
 /**
@@ -1314,6 +1355,9 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS));
   } else if (mode === "review") {
     (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS));
+  } else if (mode === "harness") {
+    // Harness orchestrator: read-only + delegate_to_expert (l'extension l'enregistre)
+    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
   } else {
     // Code mode: all base tools + extension tools
     (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
