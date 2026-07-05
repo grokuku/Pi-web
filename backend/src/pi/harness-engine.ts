@@ -281,7 +281,7 @@ export class HarnessEngine {
   private extractAndParsePlan(response: string, activeAgents: HarnessAgentConfig[]): ArchitecturePlan | null {
     let jsonStr: string | null = null;
 
-    // Pattern 1 : ```json ... ```
+    // Pattern 1 : ```json ... ``` (lazy — peut s'arrêter trop tôt si backticks dans le JSON)
     const matchJsonBlock = response.match(/```json\s*([\s\S]*?)```/);
     if (matchJsonBlock) jsonStr = matchJsonBlock[1].trim();
 
@@ -291,26 +291,19 @@ export class HarnessEngine {
       if (matchAnyBlock) jsonStr = matchAnyBlock[1].trim();
     }
 
-    // Pattern 3 : premier { ... } avec accolades équilibrées
+    // Pattern 3 : premier { ... dernier } — capture le JSON complet même si
+    // les blocs de code sont mal fermés ou si le JSON contient des backticks.
+    // C'est le fallback le plus robuste pour les réponses longues des LLM.
     if (!jsonStr) {
-      const start = response.indexOf("{");
-      if (start !== -1) {
-        let depth = 0;
-        let end = -1;
-        for (let i = start; i < response.length; i++) {
-          if (response[i] === "{") depth++;
-          else if (response[i] === "}") {
-            depth--;
-            if (depth === 0) { end = i + 1; break; }
-          }
-        }
-        if (end !== -1) jsonStr = response.slice(start, end);
+      const firstBrace = response.indexOf("{");
+      const lastBrace = response.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        jsonStr = response.slice(firstBrace, lastBrace + 1);
       }
     }
 
     if (!jsonStr) {
       console.error("[harness] No JSON found in architect response");
-      // Afficher un extrait de la réponse pour debug
       const snippet = response.replace(/\n/g, " ").slice(0, 150);
       this.emitText(`\n\n⚠️ **L'architecte n'a pas produit un plan JSON valide.**\n\nDébut de sa réponse :\n\`${snippet}...\`\n\n`);
       return null;
@@ -321,12 +314,31 @@ export class HarnessEngine {
       const parsed = JSON.parse(jsonStr);
       return this.validatePlan(parsed, activeAgents);
     } catch (e: any) {
-      console.error(`[harness] Failed to parse architect JSON: ${e.message} (jsonStr length=${jsonStr.length})`);
+      console.error(`[harness] Failed to parse architect JSON (attempt 1, len=${jsonStr.length}): ${e.message}`);
       // Log un extrait autour de la position d'erreur
       const pos = parseInt(e.message.match(/position (\d+)/)?.[1] || "0");
       if (pos > 0) {
         const around = jsonStr.slice(Math.max(0, pos - 80), pos + 80);
-        console.error(`[harness] JSON autour de la position ${pos}: ...${JSON.stringify(around)}...`);
+        console.error(`[harness] JSON autour de pos ${pos}: ...${JSON.stringify(around)}...`);
+      }
+
+      // Si le pattern 1 ou 2 a capturé trop peu (regex lazy),
+      // réessayer avec le pattern 3 (premier { au dernier })
+      const firstBrace = response.indexOf("{");
+      const lastBrace = response.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const fullJson = response.slice(firstBrace, lastBrace + 1);
+        if (fullJson.length > jsonStr.length) {
+          console.log(`[harness] Retry avec extraction complète: ${jsonStr.length} → ${fullJson.length} chars`);
+          try {
+            const parsed = JSON.parse(fullJson);
+            console.log(`[harness] JSON parsé avec succès après extraction complète (${fullJson.length} chars)`);
+            return this.validatePlan(parsed, activeAgents);
+          } catch (e2: any) {
+            console.error(`[harness] Full extraction also failed: ${e2.message}`);
+            jsonStr = fullJson; // Utiliser le JSON complet pour la réparation
+          }
+        }
       }
 
       // Tentative de réparation : problèmes courants des LLM avec JSON
