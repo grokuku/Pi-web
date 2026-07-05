@@ -321,9 +321,33 @@ export class HarnessEngine {
       const parsed = JSON.parse(jsonStr);
       return this.validatePlan(parsed, activeAgents);
     } catch (e: any) {
-      console.error("[harness] Failed to parse architect JSON:", e.message);
-      this.emitText(`\n\n⚠️ **Erreur de parsing du plan JSON :** ${e.message}\n\n`);
-      return null;
+      console.error(`[harness] Failed to parse architect JSON: ${e.message} (jsonStr length=${jsonStr.length})`);
+      // Log un extrait autour de la position d'erreur
+      const pos = parseInt(e.message.match(/position (\d+)/)?.[1] || "0");
+      if (pos > 0) {
+        const around = jsonStr.slice(Math.max(0, pos - 80), pos + 80);
+        console.error(`[harness] JSON autour de la position ${pos}: ...${JSON.stringify(around)}...`);
+      }
+
+      // Tentative de réparation : problèmes courants des LLM avec JSON
+      try {
+        const repaired = jsonStr
+          // 1. Newlines littéraux dans les strings → \\n
+          .replace(/:\s*"([^"]*)\n([^"]*)"/g, (_m, p1, p2) => `: "${p1}\\n${p2}"`)
+          // 2. Virgules trailing avant } ou ]
+          .replace(/,\s*([\]}])/g, "$1")
+          // 3. Guillemets courbes → guillemets droits
+          .replace(/[\u201c\u201d]/g, '"')
+          // 4. Apostrophes courbes dans les strings
+          .replace(/\u2019/g, "'");
+        const parsed = JSON.parse(repaired);
+        console.log(`[harness] JSON réparé avec succès après ${repaired.length} chars`);
+        return this.validatePlan(parsed, activeAgents);
+      } catch (e2: any) {
+        console.error(`[harness] JSON repair also failed: ${e2.message}`);
+        this.emitText(`\n\n⚠️ **Erreur de parsing du plan JSON :** ${e.message}\nL'architecte a produit ${jsonStr.length} chars de JSON mais celui-ci est malformé.\n\n`);
+        return null;
+      }
     }
   }
 
