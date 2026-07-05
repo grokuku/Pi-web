@@ -1038,8 +1038,9 @@ const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // (no find/ls to prevent full-project exploration — reviewer should focus on diff)
 const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-// Harness orchestrator : read-only + delegate_to_expert (pas d'edit/write/bash)
-const HARNESS_TOOLS = ["read", "grep", "find", "ls"];
+// Harness orchestrator : aucun tool de base — uniquement delegate_to_expert (via extension)
+// L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
+const HARNESS_TOOLS: string[] = [];
 
 /** Get extension tool names registered in the session */
 function getExtensionToolNames(session: any): string[] {
@@ -1191,8 +1192,10 @@ Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécutio
 
 ### Règles ABSOLUES
 - Tu ne codes JAMAIS. Tu ne débugges JAMAIS. Tu ne fais JAMAIS de plan détaillé.
+- Tu ne lis JAMAIS le code pour investiguer un bug. L'investigation est le job des experts.
 - Tu délègues TOUJOURS l'exécution aux experts via le tool delegate_to_expert.
 - Tu peux répondre directement aux questions simples (conseils, explications, clarifications).
+- Quand l'utilisateur signale un bug, délègue IMMÉDIATEMENT à l'expert approprié (code-reviewer pour investiguer, backend-dev/frontend-dev pour fixer). Ne fais pas de recherche toi-même.
 - Quand tu n'es pas sûr, demande à l'utilisateur.
 
 ### Quand déléguer vs répondre directement
