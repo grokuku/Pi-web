@@ -150,11 +150,11 @@ Extraire à la fois le texte ET les images de chaque page (pdfjs-dist + OCR fall
 
 ---
 
-## 🏗️ Architecture — Pi-Web Harness (v2)
+## 🏗️ Architecture — Pi-Web Harness (v2 → v3)
+
+### État actuel (v2) — Mode HARNESS optionnel
 
 Mode YOLO déprécié, remplacé par le mode **HARNESS** : orchestration multi-agent avec rôles spécialisés.
-
-### Flux
 
 ```
 1. TECH LEAD (/harness en mode CODE) → synthétise un BRIEF
@@ -162,6 +162,34 @@ Mode YOLO déprécié, remplacé par le mode **HARNESS** : orchestration multi-a
 3. EXÉCUTION → agents spécialisés par tâche (context isolation)
 4. RAPPORT FINAL → synthèse par phase dans le chat
 ```
+
+### Cible (v3) — HARNESS par défaut (chef de projet)
+
+**Décision :** Passer HARNESS en mode unique par défaut. L'agent principal devient un **chef de projet** qui orchestre les experts.
+
+**Rôle de l'orchestrator (chef de projet) :**
+- Répond directement aux questions simples, conseils, explications
+- Délègue l'exécution (code, debug, review, test) aux experts
+- Appelle l'architecte pour les tâches complexes (plusieurs fichiers, approche incertaine, nouvelle feature)
+- Ne code JAMAIS, ne débugge JAMAIS, ne planifie JAMAIS
+- Si un expert signale qu'une tâche simple est devenue complexe → l'orchestrator peut appeler l'architecte
+
+**Flow :**
+```
+1. UTILISATEUR → parle à l'orchestrator
+2. ORCHESTRATOR → évalue la complexité
+   a. Question simple → répond directement
+   b. Tâche simple → délègue à l'expert approprié
+   c. Tâche complexe → appelle l'architecte → plan → experts
+3. EXPERT → exécute, remonte le résultat (ou signale une complexité)
+4. ORCHESTRATOR → présente le résultat à l'utilisateur
+```
+
+**Prérequis :**
+1. Fixer BUG-58 (harness produit `content: []`)
+2. Sessions persistantes par rôle (pas de recréation à chaque appel)
+3. Redéfinir le system prompt de l'orchestrator
+4. Supprimer les modes CODE/PLAN/REVIEW de l'UI (ou les garder cachés en fallback)
 
 ### Pool d'agents (12 rôles)
 
@@ -171,7 +199,7 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 
 | Fichier | Rôle | Statut |
 |---------|------|--------|
-| `backend/src/pi/harness-engine.ts` | Orchestrateur | ✅ |
+| `backend/src/pi/harness-engine.ts` | Orchestrateur | ✅ (BUG-58 en cours) |
 | `backend/src/pi/concurrency.ts` | Concurrence | ✅ |
 | `backend/src/pi/model-library.ts` | Types, pool, persistance | ✅ |
 | `backend/src/pi/session.ts` | Intégration /harness | ✅ |
@@ -182,6 +210,8 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 
 | Fonctionnalité | Priorité |
 |----------------|----------|
+| HARNESS par défaut (v3 chef de projet) | P1 (après BUG-58) |
+| Sessions persistantes par rôle | P1 (avec v3) |
 | Parallélisme intra-phase | P3 |
 | Technical Knowledge Base (cache firecrawl + TTL) | P3 |
 | User Knowledge Base | P4 |
