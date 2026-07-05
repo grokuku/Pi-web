@@ -148,9 +148,9 @@ function App() {
     ? projectSessionsRef.current.get(activeProject.id)
     : undefined;
   const isStreaming = activeSessionState?.isStreaming ?? false;
-  const streamingStalled = isStreaming && activeSessionState?.lastEventAt
-    ? Date.now() - activeSessionState.lastEventAt > 30_000
-    : false;
+  // NOTE: Stall detector désactivé — trop de faux positifs pendant les longues opérations
+  // (experts harness, tool calls longs, etc.). L'utilisateur peut abort manuellement.
+  const streamingStalled = false;
   const session = activeSessionState?.session ?? null;
   const stats = activeSessionState?.stats ?? null;
 

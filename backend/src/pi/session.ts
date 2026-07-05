@@ -765,19 +765,16 @@ export async function abortPi(projectId?: string): Promise<void> {
   if (projectId) {
     const state = sessionsByProject.get(projectId);
     if (state?.session) {
-      if (state.activeMode === "harness") {
-        state.harnessAborted = true;
-        console.log("[harness] Abort requested — will stop after current round");
-      } else {
-        await state.session.abort();
-      }
+      // Abort la session quelle que soit le mode (y compris harness orchestrator).
+      // L'abort signal se propage au tool delegate_to_expert via l'extension.
+      state.harnessAborted = true;
+      await state.session.abort();
     }
   } else {
     // Abort all sessions
     for (const [, state] of sessionsByProject) {
-      if (state.activeMode === "harness") {
-        state.harnessAborted = true;
-      } else if (state?.session) {
+      state.harnessAborted = true;
+      if (state?.session) {
         await state.session.abort();
       }
     }
