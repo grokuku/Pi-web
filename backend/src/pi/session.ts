@@ -680,12 +680,20 @@ export async function sendPrompt(
       options.images = imageAttachments;
     }
     console.log("[prompt] Calling session.prompt()...");
-    await withSessionTimeout(
-      state.session.prompt(message, options),
-      state.session,
-      projectId,
-      "prompt",
-    );
+    // En mode harness, l'orchestrator peut déléguer à plusieurs experts successivement.
+    // Chaque expert a son propre timeout (300s dans l'extension), mais le total peut dépasser 5 min.
+    // On désactive le timeout global en harness pour ne pas tuer l'orchestrator en pleine délégation.
+    if (state.activeMode === "harness") {
+      console.log("[prompt] Harness mode — no session timeout (experts have their own)");
+      await state.session.prompt(message, options);
+    } else {
+      await withSessionTimeout(
+        state.session.prompt(message, options),
+        state.session,
+        projectId,
+        "prompt",
+      );
+    }
     console.log("[prompt] session.prompt() returned!");
   }
 

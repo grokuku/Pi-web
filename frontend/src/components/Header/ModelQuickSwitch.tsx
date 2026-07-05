@@ -215,7 +215,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
           (isPlanActive && mode !== "plan") ||
           (isReviewActive && mode !== "review" && !pm.review.enabled)
         );
-        const isVisuallyActive = isActive || (mode !== "code" && isEnabled);
+        // Seul le mode actif doit être visuellement allumé — pas juste "enabled"
+        const isVisuallyActive = isActive;
 
         return (
           <div key={mode} className="relative">
