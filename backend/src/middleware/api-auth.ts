@@ -63,6 +63,15 @@ export function apiAuth(req: Request, res: Response, next: NextFunction): void {
     return;
   }
 
+  // Allow internal server-to-server calls (extensions calling the API via localhost)
+  // Le file-analyzer fait un fetch HTTP interne pour analyser les fichiers attachés.
+  // Sans headers navigateur, isSameOrigin() retourne false, donc on autorise localhost.
+  const remoteIp = req.ip || req.socket.remoteAddress;
+  if (remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1") {
+    next();
+    return;
+  }
+
   // External requests require a valid Bearer token
   if (!isAgentEnabled()) {
     res.status(401).json({
