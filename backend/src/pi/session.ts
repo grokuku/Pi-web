@@ -445,8 +445,10 @@ export async function sendPrompt(
           await session.compact(args || undefined);
           emitSessionUpdate(projectId);
           return { command: "compact", result: "✓ Context compacted" };
-        } catch {
-          return { command: "compact", result: "Compaction failed or cancelled" };
+        } catch (err: any) {
+          const msg = err?.message || String(err || "Unknown error");
+          console.error(`[compact] Failed: ${msg}`);
+          return { command: "compact", result: `Compaction failed: ${msg}` };
         }
       }
       case "/model": {
