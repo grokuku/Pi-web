@@ -22,6 +22,7 @@ import piSettingsRouter from "./routes/pi-settings.js";
 import agentRouter from "./routes/agent.js";
 import agentKeysRouter from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
+import designRouter from "./routes/design.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
 import {
@@ -126,6 +127,7 @@ app.use("/api/pi", piSettingsRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);
+app.use("/api/design", designRouter);
 
 // ── CBM 3D Graph UI proxy ──────────────────────────────
 // The CBM UI is a Vite SPA that uses absolute paths (/assets/..., /rpc, ...).

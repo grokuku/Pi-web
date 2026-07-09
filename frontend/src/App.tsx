@@ -5,6 +5,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
 import { FileExplorer } from "./components/Files/FileExplorer";
+import { DesignPanel } from "./components/Design/DesignPanel";
 import { WelcomeView } from "./components/Sidebar/WelcomeView";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
 import { SettingsModal } from "./components/Modals/SettingsModal";
@@ -79,7 +80,7 @@ function App() {
         if (typeof parsed === "object" && parsed !== null) return parsed;
       } catch {}
     }
-    return { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false } };
+    return { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false }, design: { visible: false, floating: false } };
   });
 
   const savePanels = (p: Record<PanelId, PanelState>) => {
@@ -170,12 +171,12 @@ function App() {
     return {
       layout2: "horizontal-2" as const,
       layout3: "horizontal-3" as const,
-      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId],
+      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId, "design" as PanelId],
       sizes: {} as Record<string, number[]>,
     };
   });
 
-  const activeDocked = (["pi", "terminal", "files"] as PanelId[])
+  const activeDocked = (["pi", "terminal", "files", "design"] as PanelId[])
     .filter(id => panels[id]?.visible && !panels[id]?.floating);
 
   // Ordered panels for LayoutRenderer
@@ -628,7 +629,7 @@ function App() {
       if (event.data.type === 'restore-panel') {
         const panelId = event.data.panelId as PanelId;
         // Restore the panel in the main interface
-        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files")) {
+        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files" || panelId === "design")) {
           // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
           const p = { ...panels };
           if (p[panelId]) {
@@ -695,6 +696,13 @@ function App() {
               </div>
             </div>
           )}
+          {standalonePanel === "design" && (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 overflow-hidden">
+                <DesignPanel projectId={activeProject?.id} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -753,6 +761,7 @@ function App() {
         {renderPanelSwitch("pi", "PI")}
         {renderPanelSwitch("terminal", "TERM")}
         {renderPanelSwitch("files", "FILES")}
+        {renderPanelSwitch("design", "DSN")}
 
         <div className="w-px h-4 bg-hacker-border-right" />
 
@@ -861,6 +870,9 @@ function App() {
                   files: (
                     <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
                   ),
+                  design: (
+                    <DesignPanel projectId={activeProject?.id} />
+                  ),
                 }}
                 onSwap={handleSwap}
                 onDetach={undockPanel}
@@ -899,6 +911,11 @@ function App() {
       {panels.files.visible && panels.files.floating && (
         <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
           <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
+        </Window>
+      )}
+      {panels.design.visible && panels.design.floating && (
+        <Window id="design-float" title="DESIGN" icon="🎨" onClose={() => hidePanel("design")} onDock={() => dockPanel("design")}>
+          <DesignPanel projectId={activeProject?.id} />
         </Window>
       )}
 

@@ -175,8 +175,8 @@ export function LayoutRenderer({
     };
   }, [isDragging, layoutKey, onSizesChange]);
 
-  // ── All 3 slots ALWAYS in the DOM (display:none when inactive) ──
-  const ALL_PANELS: PanelId[] = ["pi", "terminal", "files"];
+  // ── All 4 slots ALWAYS in the DOM (display:none when inactive) ──
+  const ALL_PANELS: PanelId[] = ["pi", "terminal", "files", "design"];
 
   if (count === 0) {
     return (
@@ -326,6 +326,25 @@ export function LayoutRenderer({
     );
   }
 
+  // ── 4‑panel layout: vertical stack only ──
+  if (count === 4) {
+    return (
+      <div ref={containerRef} className="flex-1 overflow-hidden flex flex-col">
+        {ALL_PANELS.map((panelId, i) => {
+          const visible = orderedPanels.includes(panelId);
+          const pos = visible ? orderedPanels.indexOf(panelId) : i + count;
+          const showDivider = visible && orderedPanels.indexOf(panelId) > 0;
+          return (
+            <React.Fragment key={panelId}>
+              {showDivider && <Divider axis="y" dIdx={orderedPanels.indexOf(panelId) - 1} type="outer" container={containerRef.current} />}
+              {renderSlot(i)}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  }
+
   // ── Flat layouts (horizontal-2/3, vertical-2/3) ──
   const isFlatHorizontal =
     layoutType === "horizontal-2" || layoutType === "horizontal-3";
@@ -355,6 +374,7 @@ export function LayoutRenderer({
 function defaultSizes(layoutKey: string, count: number): number[] {
   if (count <= 1) return [1];
   if (count === 2) return [0.6, 0.4];
+  if (count === 4) return [0.25, 0.25, 0.25, 0.25];
   if (layoutKey === "horizontal-3" || layoutKey === "vertical-3") return [0.4, 0.3, 0.3];
   // Compound: sizes = [subContainerFlex, soloFlex] (inner split uses separate state)
   return [0.55, 0.45];

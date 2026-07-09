@@ -233,7 +233,7 @@ export type LayoutType =
   | "top-2-bottom-1" | "top-1-bottom-2"
   | "left-2-right-1" | "left-1-right-2";
 
-export type PanelId = "pi" | "terminal" | "files";
+export type PanelId = "pi" | "terminal" | "files" | "design";
 
 export interface LayoutConfig {
   layout2: "horizontal-2" | "vertical-2";
@@ -246,7 +246,64 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   pi: "PI (Chat)",
   terminal: "Terminal",
   files: "Files",
+  design: "Design",
 };
+
+// ── Design Tool Types ──────────────────────────────────────
+export interface DesignTypography {
+  fontFamily: string;
+  headings: Record<string, { fontSize: string; fontWeight: string; lineHeight: string }>;
+  body: { fontSize: string; fontWeight: string; lineHeight: string };
+}
+
+export interface DesignSystem {
+  colors: Record<string, string>;
+  typography: DesignTypography;
+  spacing: number[];
+  borderRadius: string;
+  shadows: string[];
+  tokens: DesignToken[];
+}
+
+export interface DesignToken {
+  name: string;
+  value: string;
+  category: "color" | "font" | "spacing" | "border-radius" | "shadow";
+  type?: string;
+}
+
+export interface DesignComponent {
+  id: string;
+  name: string;
+  html: string;
+  css?: string;
+  tailwindClasses?: string[];
+  thumbnail?: string;
+  metadata: {
+    version: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
+export interface DesignPage {
+  id: string;
+  name: string;
+  html: string;
+  css?: string;
+  thumbnail?: string;
+}
+
+export interface DesignProject {
+  id: string;
+  name: string;
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+  designSystem: DesignSystem | null;
+  components: DesignComponent[];
+  pages: DesignPage[];
+}
 
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   layout2: "horizontal-2",
