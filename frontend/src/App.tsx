@@ -72,15 +72,30 @@ function App() {
 
   // ── Panel State ──
   interface PanelState { visible: boolean; floating: boolean; }
+  const DEFAULT_PANELS: Record<PanelId, PanelState> = { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false }, design: { visible: false, floating: false } };
   const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
     const saved = localStorage.getItem("pi-web-panels");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (typeof parsed === "object" && parsed !== null) return parsed;
+        if (typeof parsed === "object" && parsed !== null) {
+          // Merge with defaults so any newly-added panel keys are always present
+          // Also validate each key has the correct shape
+          const merged: Record<PanelId, PanelState> = { ...DEFAULT_PANELS };
+          for (const key of Object.keys(parsed) as PanelId[]) {
+            if (key in DEFAULT_PANELS) {
+              const val = parsed[key];
+              merged[key] = {
+                visible: typeof val?.visible === 'boolean' ? val.visible : false,
+                floating: typeof val?.floating === 'boolean' ? val.floating : false,
+              };
+            }
+          }
+          return merged;
+        }
       } catch {}
     }
-    return { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false }, design: { visible: false, floating: false } };
+    return { ...DEFAULT_PANELS };
   });
 
   const savePanels = (p: Record<PanelId, PanelState>) => {
@@ -88,10 +103,10 @@ function App() {
     setPanels(p);
   };
 
-  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: !panels[id].visible, floating: false } });
-  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: true } });
-  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: true, floating: false } });
-  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...panels[id], visible: false, floating: false } });
+  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: !(panels[id]?.visible ?? false), floating: false } });
+  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: true, floating: true } });
+  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: true, floating: false } });
+  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: false, floating: false } });
 
   // Open panel in new browser window (tab)
   const openInNewWindow = (id: PanelId) => {
@@ -113,7 +128,8 @@ function App() {
 
   // Helper to render panel buttons in header
   const renderPanelSwitch = (id: PanelId, label: string) => {
-    const isOn = panels[id].visible && !panels[id].floating;
+    const panel = panels[id] ?? { visible: false, floating: false };
+    const isOn = panel.visible && !panel.floating;
     return (
       <button
         onClick={() => togglePanel(id)}
@@ -632,9 +648,7 @@ function App() {
         if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files" || panelId === "design")) {
           // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
           const p = { ...panels };
-          if (p[panelId]) {
-            p[panelId] = { ...p[panelId], visible: true, floating: false };
-          }
+          p[panelId] = { ...(p[panelId] ?? { visible: false, floating: false }), visible: true, floating: false };
           savePanels(p);
         }
       }
@@ -898,22 +912,22 @@ function App() {
       </div>
 
       {/* FLOATING PANELS (Windows) */}
-      {panels.pi.visible && panels.pi.floating && (
+      {panels.pi?.visible && panels.pi?.floating && (
         <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
           <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
         </Window>
       )}
-      {panels.terminal.visible && panels.terminal.floating && (
+      {panels.terminal?.visible && panels.terminal?.floating && (
         <Window id="term-float" title="TERMINAL" icon="🖥" onClose={() => hidePanel("terminal")} onDock={() => dockPanel("terminal")}>
           <TerminalView send={send} on={on} activeProject={activeProject} isActive={false} />
         </Window>
       )}
-      {panels.files.visible && panels.files.floating && (
+      {panels.files?.visible && panels.files?.floating && (
         <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
           <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
         </Window>
       )}
-      {panels.design.visible && panels.design.floating && (
+      {panels.design?.visible && panels.design?.floating && (
         <Window id="design-float" title="DESIGN" icon="🎨" onClose={() => hidePanel("design")} onDock={() => dockPanel("design")}>
           <DesignPanel projectId={activeProject?.id} />
         </Window>
