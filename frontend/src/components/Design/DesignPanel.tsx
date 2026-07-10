@@ -37,20 +37,21 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
 
   // ── Load design list ──
   useEffect(() => {
-    if (!projectId) return;
     setLoading(true);
     setError(null);
-    fetch(`/api/design?projectId=${projectId}`)
+    const url = projectId ? `/api/design/project/${projectId}` : `/api/design`;
+    fetch(url)
       .then((r) => {
-        if (!r.ok) throw new Error("Failed to load designs");
+        if (!r.ok) throw new Error("Impossible de charger les designs");
         return r.json();
       })
       .then((data: DesignListItem[]) => {
-        setDesigns(data);
+        setDesigns(Array.isArray(data) ? data : (data as any)?.designs ?? []);
         setLoading(false);
       })
       .catch((err: Error) => {
-        setError(err.message);
+        // Silently fail if no designs exist yet
+        setDesigns([]);
         setLoading(false);
       });
   }, [projectId]);
@@ -155,10 +156,56 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
   }, []);
 
   // ── Render ──
+  // ── Create a new design ──
+  const handleNewDesign = useCallback(async () => {
+    const name = prompt("Nom du design:");
+    if (!name || !name.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/design`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          ...(projectId ? { projectId } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error("Échec de la création");
+      const data = await res.json();
+      setCurrentDesign({
+        id: data.id,
+        name: data.name,
+        html: data.html || "",
+        css: data.css || "",
+      });
+      setHtmlContent(data.html || "");
+      setCssContent(data.css || "");
+      setIsDirty(false);
+      setMode("editor");
+      // Refresh list in background
+      if (projectId) {
+        fetch(`/api/design`)
+          .then(r => r.ok && r.json())
+          .then(d => d && setDesigns(d))
+          .catch(() => {});
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
   if (error) {
     return (
       <div className="h-full flex items-center justify-center text-hacker-error text-sm font-mono p-4">
-        {error}
+        <div className="text-center">
+          <p className="mb-3">{error}</p>
+          <button onClick={() => setError(null)} className="text-xs border border-hacker-border px-3 py-1 rounded hover:bg-hacker-accent/10">
+            Réessayer
+          </button>
+        </div>
       </div>
     );
   }
@@ -180,17 +227,17 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
             DESIGN PROJECTS
           </span>
         </div>
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 overflow-auto p-4 space-y-2">
           {designs.length === 0 && !loading && (
-            <div className="text-hacker-muted text-sm text-center mt-8">
-              No designs yet. Create one via API or select a project.
+            <div className="text-hacker-muted text-sm text-center mt-8 mb-4">
+              Aucun design pour le moment.
             </div>
           )}
           {designs.map((d) => (
             <button
               key={d.id}
               onClick={() => loadDesign(d.id)}
-              className="w-full text-left px-3 py-2 mb-1 border border-hacker-border rounded hover:bg-hacker-accent/5 hover:border-hacker-accent/40 transition-colors"
+              className="w-full text-left px-3 py-2 border border-hacker-border rounded hover:bg-hacker-accent/5 hover:border-hacker-accent/40 transition-colors"
             >
               <div className="text-sm font-bold text-hacker-text">{d.name}</div>
               <div className="text-[10px] text-hacker-text-dim mt-0.5">
@@ -198,6 +245,12 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
               </div>
             </button>
           ))}
+          <button
+            onClick={handleNewDesign}
+            className="w-full text-center px-3 py-2 border border-dashed border-hacker-accent/40 text-hacker-accent text-sm rounded hover:bg-hacker-accent/10 transition-colors"
+          >
+            + Nouveau design
+          </button>
         </div>
       </div>
     );
