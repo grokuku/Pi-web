@@ -713,7 +713,7 @@ function App() {
           {standalonePanel === "design" && (
             <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
-                <DesignPanel projectId={activeProject?.id} />
+                <DesignPanel projectId={activeProject?.id} send={send} on={on} />
               </div>
             </div>
           )}
@@ -885,7 +885,7 @@ function App() {
                     <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
                   ),
                   design: (
-                    <DesignPanel projectId={activeProject?.id} />
+                    <DesignPanel projectId={activeProject?.id} send={send} on={on} />
                   ),
                 }}
                 onSwap={handleSwap}
@@ -929,7 +929,7 @@ function App() {
       )}
       {panels.design?.visible && panels.design?.floating && (
         <Window id="design-float" title="DESIGN" icon="🎨" onClose={() => hidePanel("design")} onDock={() => dockPanel("design")}>
-          <DesignPanel projectId={activeProject?.id} />
+          <DesignPanel projectId={activeProject?.id} send={send} on={on} />
         </Window>
       )}
 

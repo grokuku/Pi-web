@@ -6,6 +6,8 @@ import { ExportModal } from "./ExportModal";
 interface DesignPanelProps {
   projectId?: string;
   designId?: string;
+  send?: (msg: any) => void;
+  on?: (event: string, handler: (msg: any) => void) => () => void;
 }
 
 interface DesignListItem {
@@ -14,7 +16,7 @@ interface DesignListItem {
   updatedAt: string;
 }
 
-export function DesignPanel({ projectId, designId }: DesignPanelProps) {
+export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps) {
   const [designs, setDesigns] = useState<DesignListItem[]>([]);
   const [currentDesign, setCurrentDesign] = useState<{
     id: string;
@@ -30,6 +32,77 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editorRef = useRef<any>(null);
+
+  // ── Listen for design updates from the LLM ──
+  useEffect(() => {
+    if (!on) return;
+    const unsub = on("pi_event", (msg: any) => {
+      if (msg.projectId && msg.projectId !== projectId) return;
+      const event = msg.event || msg;
+      if (event.type !== "design_update") return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      if (event.html) {
+        editor.setComponents(event.html);
+        setHtmlContent(event.html);
+      }
+      if (event.css) {
+        editor.setStyle(event.css);
+        setCssContent(event.css);
+      }
+      setIsDirty(true);
+    });
+    return () => unsub();
+  }, [on, projectId]);
+
+  // ── Send to Chat ──
+  const handleSendToChat = useCallback(() => {
+    if (!send) return;
+    const html = editorRef.current?.getHtml?.() ?? htmlContent;
+    const css = editorRef.current?.getCss?.() ?? cssContent;
+    if (!html && !css) return;
+    send({
+      type: "design_send_to_chat",
+      projectId,
+      html,
+      css,
+    });
+  }, [htmlContent, cssContent, projectId, send]);
+
+  // ── Import from project ──
+  const handleImportProject = useCallback(async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/design/import-project/${projectId}`, { method: "POST" });
+      if (!res.ok) throw new Error("Import failed");
+      const data = await res.json();
+
+      // Créer un nouveau design avec le résultat
+      const createRes = await fetch(`/api/design`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `Import ${new Date().toLocaleDateString()}`,
+          projectId,
+          pages: [{ id: crypto.randomUUID(), name: "Main", html: data.html, css: data.css }],
+        }),
+      });
+      if (!createRes.ok) throw new Error("Failed to create design");
+      const newDesign = await createRes.json();
+
+      setCurrentDesign({ id: newDesign.id, name: newDesign.name, html: data.html, css: data.css });
+      setHtmlContent(data.html);
+      setCssContent(data.css);
+      setIsDirty(false);
+      setMode("editor");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
 
   // Track editor content for export
   const exportHtmlRef = useRef("");
@@ -251,6 +324,12 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
           >
             + Nouveau design
           </button>
+          <button
+            onClick={handleImportProject}
+            className="w-full text-center px-3 py-2 border border-dashed border-hacker-accent/40 text-hacker-accent text-sm rounded hover:bg-hacker-accent/10 transition-colors"
+          >
+            📥 Importer depuis le projet
+          </button>
         </div>
       </div>
     );
@@ -266,6 +345,7 @@ export function DesignPanel({ projectId, designId }: DesignPanelProps) {
         onUndo={handleUndo}
         onRedo={handleRedo}
         onPreview={handlePreview}
+        onSendToChat={handleSendToChat}
         isDirty={isDirty}
       />
       <div className="flex-1 overflow-hidden">

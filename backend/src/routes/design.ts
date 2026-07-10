@@ -4,6 +4,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
 import { Mutex } from "../utils/mutex.js";
+import { getProject } from "../projects/manager.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "..", "..", ".data");
@@ -67,6 +68,23 @@ router.get("/", (_req: Request, res: Response) => {
   try {
     const store = readDesigns();
     res.json(store.designs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/design/import-project/:projectId — Analyse un projet existant
+router.post("/import-project/:projectId", async (req: Request, res: Response) => {
+  try {
+    const { projectId } = req.params;
+    // Récupérer le projet pour avoir le cwd
+    const project = getProject(projectId);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+
+    const { scanProjectForDesign } = await import("../pi/design-scanner.js");
+    const result = await scanProjectForDesign(project.cwd);
+
+    res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

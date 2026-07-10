@@ -20,6 +20,7 @@ import type { AgentMode } from "./model-library.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
+import { designCustomTools } from "./design-tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -229,6 +230,7 @@ export async function createPiSession(
       sessionManager,
       authStorage,
       modelRegistry,
+      customTools: designCustomTools,
     });
 
     const unsubscribe = session.subscribe((event) => {
@@ -351,6 +353,14 @@ export async function createPiSession(
  * Get the session state for a project (or null if no session).
  */
 export function getSession(projectId: string): PiSessionState | undefined {
+  return sessionsByProject.get(projectId);
+}
+
+/**
+ * Get the session state for a project (or null if no session).
+ * Alias of getSession, used by design-bridge.ts.
+ */
+export function getProjectSession(projectId: string): PiSessionState | undefined {
   return sessionsByProject.get(projectId);
 }
 

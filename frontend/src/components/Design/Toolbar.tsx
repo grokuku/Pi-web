@@ -6,6 +6,7 @@ interface ToolbarProps {
   onUndo?: () => void;
   onRedo?: () => void;
   onPreview?: () => void;
+  onSendToChat?: () => void;
   isDirty?: boolean;
   /** Called to navigate back to the design selector */
   onBack?: () => void;
@@ -17,6 +18,7 @@ export function Toolbar({
   onUndo,
   onRedo,
   onPreview,
+  onSendToChat,
   isDirty = false,
   onBack,
 }: ToolbarProps) {
@@ -74,6 +76,17 @@ export function Toolbar({
           title="Preview"
         >
           <Eye size={14} />
+        </button>
+      )}
+
+      {/* Send to Chat */}
+      {onSendToChat && (
+        <button
+          onClick={onSendToChat}
+          className="text-xs px-2 py-1 text-hacker-accent hover:bg-hacker-accent/10 rounded transition-colors"
+          title="Envoyer le design au chat"
+        >
+          💬 Chat
         </button>
       )}
 

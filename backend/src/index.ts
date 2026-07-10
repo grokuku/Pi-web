@@ -755,6 +755,21 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       break;
     }
 
+    // ── Design → Chat bridge ──
+    case "design_send_to_chat": {
+      const pid = msg.projectId || projectId;
+      const { html, css } = msg;
+      if (!getValidatedProject(pid)) return;
+      try {
+        const { sendDesignToChat } = await import("./pi/design-bridge.js");
+        await sendDesignToChat(pid, html, css);
+        ws.send(JSON.stringify({ type: "design_sent_to_chat", projectId: pid }));
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+      break;
+    }
+
     default: {
       ws.send(
         JSON.stringify({
