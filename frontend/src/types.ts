@@ -233,7 +233,7 @@ export type LayoutType =
   | "top-2-bottom-1" | "top-1-bottom-2"
   | "left-2-right-1" | "left-1-right-2";
 
-export type PanelId = "pi" | "terminal" | "files" | "design";
+export type PanelId = "pi" | "terminal" | "files";
 
 export interface LayoutConfig {
   layout2: "horizontal-2" | "vertical-2";
@@ -246,7 +246,6 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   pi: "PI (Chat)",
   terminal: "Terminal",
   files: "Files",
-  design: "Design",
 };
 
 // ── Design Tool Types ──────────────────────────────────────

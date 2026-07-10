@@ -72,7 +72,7 @@ function App() {
 
   // ── Panel State ──
   interface PanelState { visible: boolean; floating: boolean; }
-  const DEFAULT_PANELS: Record<PanelId, PanelState> = { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false }, design: { visible: false, floating: false } };
+  const DEFAULT_PANELS: Record<PanelId, PanelState> = { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false } };
   const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
     const saved = localStorage.getItem("pi-web-panels");
     if (saved) {
@@ -187,12 +187,12 @@ function App() {
     return {
       layout2: "horizontal-2" as const,
       layout3: "horizontal-3" as const,
-      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId, "design" as PanelId],
+      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId],
       sizes: {} as Record<string, number[]>,
     };
   });
 
-  const activeDocked = (["pi", "terminal", "files", "design"] as PanelId[])
+  const activeDocked = (["pi", "terminal", "files"] as PanelId[])
     .filter(id => panels[id]?.visible && !panels[id]?.floating);
 
   // Ordered panels for LayoutRenderer
@@ -645,7 +645,7 @@ function App() {
       if (event.data.type === 'restore-panel') {
         const panelId = event.data.panelId as PanelId;
         // Restore the panel in the main interface
-        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files" || panelId === "design")) {
+        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files")) {
           // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
           const p = { ...panels };
           p[panelId] = { ...(p[panelId] ?? { visible: false, floating: false }), visible: true, floating: false };
@@ -710,13 +710,7 @@ function App() {
               </div>
             </div>
           )}
-          {standalonePanel === "design" && (
-            <div className="h-full flex flex-col">
-              <div className="flex-1 overflow-hidden">
-                <DesignPanel projectId={activeProject?.id} send={send} on={on} />
-              </div>
-            </div>
-          )}
+
         </div>
       </div>
     );
@@ -775,7 +769,7 @@ function App() {
         {renderPanelSwitch("pi", "PI")}
         {renderPanelSwitch("terminal", "TERM")}
         {renderPanelSwitch("files", "FILES")}
-        {renderPanelSwitch("design", "DSN")}
+
 
         <div className="w-px h-4 bg-hacker-border-right" />
 
@@ -884,9 +878,7 @@ function App() {
                   files: (
                     <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
                   ),
-                  design: (
-                    <DesignPanel projectId={activeProject?.id} send={send} on={on} />
-                  ),
+
                 }}
                 onSwap={handleSwap}
                 onDetach={undockPanel}
@@ -927,11 +919,7 @@ function App() {
           <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
         </Window>
       )}
-      {panels.design?.visible && panels.design?.floating && (
-        <Window id="design-float" title="DESIGN" icon="🎨" onClose={() => hidePanel("design")} onDock={() => dockPanel("design")}>
-          <DesignPanel projectId={activeProject?.id} send={send} on={on} />
-        </Window>
-      )}
+
 
       {/* ── MODALS ── */}
       {showAddProject && (
