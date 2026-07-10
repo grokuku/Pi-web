@@ -15,11 +15,26 @@ export interface PersistedLayout {
   sizes: Record<string, number[]>;
 }
 
+const DEFAULT_SLOT_ORDER: PanelId[] = ["pi", "terminal", "files", "design"];
+
 export function loadPersistedLayout(): PersistedLayout | null {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw) as PersistedLayout;
+    // Merge slotOrder: keep saved order but append any newly-added panels
+    // that are missing (e.g. "design" added after initial save).
+    if (parsed.slotOrder) {
+      const known = new Set(parsed.slotOrder);
+      for (const id of DEFAULT_SLOT_ORDER) {
+        if (!known.has(id)) {
+          parsed.slotOrder.push(id);
+        }
+      }
+    } else {
+      parsed.slotOrder = [...DEFAULT_SLOT_ORDER];
+    }
+    return parsed;
   } catch { return null; }
 }
 
