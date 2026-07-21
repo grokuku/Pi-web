@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -10,14 +10,14 @@ const DOCS_DIR = join(__dirname, "..", "..", "..", ".data", "docs");
 // ── Types ──
 
 interface DocEntry {
-  name: string;           // ex: "express"
-  version: string;        // ex: "4.21.0" ou "latest"
-  type: string;           // "npm" | "tool" | "runtime"
+  name: string;
+  version: string;
+  type: string;
   description: string;
-  filePath: string;       // relative to DOCS_DIR
+  filePath: string;
   keywords: string[];
-  updatedAt: string;      // ISO date
-  sourceUrl?: string;     // URL de la doc officielle
+  updatedAt: string;
+  sourceUrl?: string;
 }
 
 interface DocIndex {
@@ -34,18 +34,12 @@ interface DocContent {
     sourceUrl?: string;
     updatedAt: string;
   };
-  summary: string;           // résumé concis
-  keyPoints: string[];       // points clés
-  api: Array<{               // API principales
-    signature: string;
-    description: string;
-  }>;
-  examples: Array<{          // exemples pratiques
-    title: string;
-    code: string;
-  }>;
-  breakingChanges?: string[]; // si version différente
-  rawContent?: string;        // contenu original (cache)
+  summary: string;
+  keyPoints: string[];
+  api: Array<{ signature: string; description: string }>;
+  examples: Array<{ title: string; code: string }>;
+  breakingChanges?: string[];
+  rawContent?: string;
 }
 
 // ── Storage ──
@@ -87,13 +81,12 @@ function saveDoc(filePath: string, doc: DocContent): void {
 
 // ── Webclaw integration ──
 
-/** Get the current Webclaw connection config from settings */
 export function getWebclawConnection(): { url: string; apiKey: string } {
   const config = getWebclawConfig();
   return { url: config.url, apiKey: config.apiKey };
 }
 
-async function webclawScrape(url: string): Promise<{ content: string; title?: string; description?: string }> {
+export async function webclawScrape(url: string): Promise<{ content: string; title?: string; description?: string }> {
   const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
   const res = await fetch(`${wcUrl}/v1/scrape`, {
     method: "POST",
@@ -107,8 +100,8 @@ async function webclawScrape(url: string): Promise<{ content: string; title?: st
   const data = await res.json();
   return {
     content: data.content || data.markdown || "",
-    title: data.title,
-    description: data.description,
+    title: data.title || data.metadata?.title,
+    description: data.description || data.metadata?.description,
   };
 }
 
@@ -116,7 +109,7 @@ async function webclawScrape(url: string): Promise<{ content: string; title?: st
  * Recherche web via Webclaw.
  * Essaie d'abord /v1/search (cloud), puis fallback sur /v1/scrape de DuckDuckGo (self-hosted).
  */
-async function webclawSearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
+export async function webclawSearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
   const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
 
   // 1. Essayer /v1/search (endpoint cloud — peut ne pas exister en self-hosted)
@@ -145,28 +138,40 @@ async function webclawSearch(query: string, num: number = 5): Promise<Array<{ ti
   const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const ddgResult = await webclawScrape(ddgUrl);
 
-  // Extraire les URLs et titres depuis le markdown de DuckDuckGo
+  // Extraire les URLs et titres depuis le markdown de DuckDuckGo.
+  // DuckDuckGo wrap les URLs dans un redirect : //duckduckgo.com/l/?uddg=<url_encodée>&rut=...
   const results: Array<{ title: string; url: string; snippet: string; content?: string }> = [];
-  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const linkRegex = /\[([^\]]+)\]\(([^)\s]+)\)/g;
   let match;
   let count = 0;
   while ((match = linkRegex.exec(ddgResult.content)) !== null && count < num) {
     const title = match[1];
-    const url = match[2];
-    // Filtrer les liens internes DuckDuckGo
-    if (url.includes("duckduckgo.com") || url.includes("duckduckgo.org")) continue;
-    results.push({ title, url, snippet: "", content: undefined });
+    let rawUrl = match[2];
+
+    // Extraire l'URL réelle depuis le paramètre uddg du redirect DuckDuckGo
+    const uddgMatch = rawUrl.match(/uddg=([^&]+)/);
+    if (uddgMatch) {
+      try { rawUrl = decodeURIComponent(uddgMatch[1]); } catch { continue; }
+    }
+
+    // Normaliser les URLs relatives (//example.com → https://example.com)
+    if (rawUrl.startsWith("//")) rawUrl = "https:" + rawUrl;
+
+    // Filtrer les liens internes et non-http
+    if (!rawUrl.startsWith("http")) continue;
+    if (rawUrl.includes("duckduckgo.com") || rawUrl.includes("duckduckgo.org")) continue;
+
+    results.push({ title, url: rawUrl, snippet: "", content: undefined });
     count++;
   }
 
-  // 3. Scraper le contenu des 3 premiers résultats (pour éviter trop de requêtes)
+  // 3. Scraper le contenu des 3 premiers résultats
   const toScrape = Math.min(3, results.length);
   for (let i = 0; i < toScrape; i++) {
     try {
       const scraped = await webclawScrape(results[i].url);
       results[i].content = scraped.content.substring(0, 5000);
       results[i].snippet = scraped.description || scraped.content.substring(0, 200);
-      // Rate limiting
       await new Promise(r => setTimeout(r, 1000));
     } catch {
       // Si une page ne peut pas être scrapée, on continue
@@ -208,7 +213,6 @@ export async function searchAndArchive(query: string): Promise<{
   // 1. Chercher d'abord dans la bibliothèque locale
   const local = searchLocalDocs(query);
   if (local.length > 0) {
-    // Retourner le contenu local
     const docs = local.map(entry => {
       const content = loadDoc(entry.filePath);
       return {
@@ -232,7 +236,6 @@ export function archiveDoc(entry: DocEntry, content: DocContent): void {
   saveDoc(entry.filePath, content);
 
   const index = loadIndex();
-  // Remplacer si existe déjà (même name + version)
   const existingIdx = index.library.findIndex(e =>
     e.name === entry.name && e.version === entry.version
   );
@@ -292,5 +295,4 @@ export function getLibraryStatus(): { totalDocs: number; lastUpdated: string; la
   };
 }
 
-export { webclawScrape, webclawSearch };
 export type { DocEntry, DocContent, DocIndex };
