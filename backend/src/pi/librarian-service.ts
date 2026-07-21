@@ -3,6 +3,7 @@ import { join } from "path";
 import { fileURLToPath } from "url";
 import path from "path";
 import { getWebclawConfig } from "../webclaw.js";
+import { getTavilyConfig } from "../tavily.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_DIR = join(__dirname, "..", "..", "..", ".data", "docs");
@@ -106,8 +107,37 @@ export async function webclawScrape(url: string): Promise<{ content: string; tit
 }
 
 /**
+ * Recherche web via Tavily API.
+ */
+async function tavilySearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
+  const { apiKey } = getTavilyConfig();
+  if (!apiKey) throw new Error("Tavily API key not configured");
+
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: apiKey,
+      query,
+      max_results: num,
+      search_depth: "basic",
+      include_answer: false,
+    }),
+  });
+  if (!res.ok) throw new Error(`Tavily search failed: ${res.status}`);
+  const data = await res.json();
+
+  return (data.results || []).map((r: any) => ({
+    title: r.title || "",
+    url: r.url || "",
+    snippet: r.content?.substring(0, 200) || "",
+    content: r.content,
+  }));
+}
+
+/**
  * Recherche web via Webclaw.
- * Essaie d'abord /v1/search (cloud), puis fallback sur /v1/scrape de DuckDuckGo (self-hosted).
+ * Essaie d'abord /v1/search (cloud), puis Tavily, puis fallback sur /v1/scrape de DuckDuckGo (self-hosted).
  */
 export async function webclawSearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
   const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
@@ -133,8 +163,20 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
     if (!e.message.includes("501")) throw e;
   }
 
-  // 2. Fallback : scraper DuckDuckGo HTML pour récupérer les résultats, puis scraper chaque URL
-  console.log("[Librarian] /v1/search unavailable, using DuckDuckGo fallback");
+  // 2. Essayer Tavily (API search dédiée)
+  try {
+    console.log("[Librarian] Trying Tavily search");
+    const tavilyResults = await tavilySearch(query, num);
+    if (tavilyResults.length > 0) {
+      console.log(`[Librarian] Tavily returned ${tavilyResults.length} results`);
+      return tavilyResults;
+    }
+  } catch (e: any) {
+    console.log(`[Librarian] Tavily unavailable: ${e.message}`);
+  }
+
+  // 3. Fallback : scraper DuckDuckGo HTML pour récupérer les résultats, puis scraper chaque URL
+  console.log("[Librarian] Falling back to DuckDuckGo");
   const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const ddgResult = await webclawScrape(ddgUrl);
 

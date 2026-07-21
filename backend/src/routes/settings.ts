@@ -13,6 +13,7 @@ import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
+import { getTavilyConfig, setTavilyConfig } from "../tavily.js";
 
 const router = Router();
 
@@ -191,6 +192,29 @@ router.post("/webclaw", (req: Request, res: Response) => {
     const { url, apiKey } = req.body;
     const config = setWebclawConfig({ url, apiKey });
     res.json(config);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── Tavily config ──
+
+router.get("/tavily", (_req: Request, res: Response) => {
+  try {
+    const config = getTavilyConfig();
+    // Masquer partiellement la clé pour la sécurité
+    res.json({ apiKey: config.apiKey ? config.apiKey.substring(0, 8) + "..." : "" });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/tavily", (req: Request, res: Response) => {
+  try {
+    const { apiKey } = req.body;
+    if (apiKey === undefined) return res.status(400).json({ error: "Missing apiKey" });
+    setTavilyConfig({ apiKey });
+    res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

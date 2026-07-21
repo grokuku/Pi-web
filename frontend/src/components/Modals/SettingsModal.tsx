@@ -277,6 +277,10 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [webclawApiKey, setWebclawApiKey] = useState("");
   const [webclawSaved, setWebclawSaved] = useState(false);
 
+  // ── Tavily config state ──
+  const [tavilyApiKey, setTavilyApiKey] = useState("");
+  const [tavilySaved, setTavilySaved] = useState(false);
+
   const loadWebclawConfig = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/webclaw");
@@ -301,6 +305,32 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       }
     } catch (e: any) {
       console.error("[webclaw] Failed to save:", e);
+    }
+  };
+
+  const loadTavilyConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/tavily");
+      if (res.ok) {
+        const data = await res.json();
+        setTavilyApiKey(data.apiKey || "");
+      }
+    } catch {}
+  }, []);
+
+  const saveTavilyConfig = async () => {
+    try {
+      const res = await fetch("/api/settings/tavily", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: tavilyApiKey }),
+      });
+      if (res.ok) {
+        setTavilySaved(true);
+        setTimeout(() => setTavilySaved(false), 2000);
+      }
+    } catch (e: any) {
+      console.error("[tavily] Failed to save:", e);
     }
   };
 
@@ -333,6 +363,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   // Load concurrency config on mount
   useEffect(() => { loadConcurrencyConfig(); }, [loadConcurrencyConfig]);
   useEffect(() => { loadWebclawConfig(); }, [loadWebclawConfig]);
+  useEffect(() => { loadTavilyConfig(); }, [loadTavilyConfig]);
 
   const saveAuth = () => {
     if (authUser) {
@@ -708,6 +739,43 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   >
                     {webclawSaved ? "✓ SAVED" : "SAVE"}
                   </button>
+                </div>
+              </div>
+
+              {/* Tavily Configuration */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>🔍</span> Tavily API Key
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Web search API for the librarian (used when Webclaw search is unavailable)
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-hacker-text-dim text-xs block mb-1">API Key</label>
+                    <input
+                      type="password"
+                      value={tavilyApiKey}
+                      onChange={e => setTavilyApiKey(e.target.value)}
+                      placeholder="tvly-••••••••"
+                      className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] text-hacker-text-dim">
+                      Get a free key at <a href="https://tavily.com" target="_blank" rel="noopener noreferrer" className="text-hacker-accent hover:underline">tavily.com</a> (1000 searches/month free)
+                    </div>
+                    <button
+                      onClick={saveTavilyConfig}
+                      className={`btn-hacker text-xs px-4 py-1.5 ${tavilySaved ? "text-hacker-accent border-hacker-accent" : ""}`}
+                    >
+                      {tavilySaved ? "✓ SAVED" : "SAVE"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
