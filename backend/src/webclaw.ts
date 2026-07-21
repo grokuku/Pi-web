@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
+const DATA_DIR = path.join(__dirname, "..", "..", ".data");
 const WEBCLAW_CONFIG_FILE = path.join(DATA_DIR, "webclaw-config.json");
 
 // ── Types ──────────────────────────────────────────────
