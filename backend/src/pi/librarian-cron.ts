@@ -1,7 +1,6 @@
-import { completeSimple } from "@earendil-works/pi-ai";
 import { scanProjectInventory, getAllItems, type InventoryItem } from "./librarian-scanner.js";
 import { loadIndex, saveIndex, archiveDoc, webclawScrape, webclawSearch, type DocEntry, type DocContent } from "./librarian-service.js";
-import { getModelRegistry, reloadModelRegistry } from "./session.js";
+import { getModelRegistry, getModelRuntime, reloadModelRegistry } from "./session.js";
 import { loadModelLibrary, getLibrarianModel as getLibrarianModelConfig } from "./model-library.js";
 
 const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -11,15 +10,14 @@ let cronTimer: NodeJS.Timeout | null = null;
 
 // ── Model resolution ──
 
-async function getLibrarianModel(): Promise<{ model: any; apiKey?: string } | null> {
+async function getLibrarianModel(): Promise<any | null> {
   try {
-    reloadModelRegistry();
+    await reloadModelRegistry();
     const registry = getModelRegistry();
     const library = loadModelLibrary();
 
     // 1. Try librarian model from library config, then fall back to default
     let model: any = null;
-    let apiKey: string | undefined;
 
     const librarianModel = getLibrarianModelConfig(library);
     if (librarianModel) {
@@ -39,11 +37,7 @@ async function getLibrarianModel(): Promise<{ model: any; apiKey?: string } | nu
       return null;
     }
 
-    // Get API key
-    const auth = await registry.getApiKeyAndHeaders(model);
-    if (auth.ok) apiKey = (auth as any).apiKey;
-
-    return { model, apiKey };
+    return model;
   } catch (e: any) {
     console.error("[Librarian] Failed to resolve model:", e.message);
     return null;
@@ -103,10 +97,9 @@ Règles:
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
 
-    const response = await completeSimple(modelInfo.model, context, {
+    const response = await getModelRuntime().completeSimple(modelInfo, context, {
       temperature: 0.3,
       maxTokens: 2000,
-      apiKey: modelInfo.apiKey,
       signal: controller.signal,
     });
     clearTimeout(timeout);

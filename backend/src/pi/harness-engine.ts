@@ -8,7 +8,7 @@
  * 4. Chaque agent reçoit UNIQUEMENT sa tâche + les fichiers spécifiés — context minimal
  */
 
-import { createAgentSession, SessionManager, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, SessionManager, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emitToSubscribers, getSession } from "./session.js";
 import { concurrencyManager } from "./concurrency.js";
@@ -475,8 +475,7 @@ export class HarnessEngine {
       const result = await createAgentSession({
         cwd,
         sessionManager: tempSessionManager,
-        authStorage: getAuthStorage(),
-        modelRegistry: getModelRegistry(),
+        modelRuntime: getModelRuntime(),
       });
       tempSession = result.session;
 
@@ -689,7 +688,7 @@ export class HarnessEngine {
 // ── Registry helpers (injectés depuis session.ts) ─────
 
 let _modelRegistry: ModelRegistry | null = null;
-let _authStorage: any = null;
+let _modelRuntime: ModelRuntime | null = null;
 
 export function setModelRegistry(registry: ModelRegistry): void {
   _modelRegistry = registry;
@@ -700,11 +699,11 @@ export function getModelRegistry(): ModelRegistry {
   return _modelRegistry;
 }
 
-export function setAuthStorage(storage: any): void {
-  _authStorage = storage;
+export function setModelRuntime(runtime: ModelRuntime): void {
+  _modelRuntime = runtime;
 }
 
-export function getAuthStorage(): any {
-  if (!_authStorage) throw new Error("HarnessEngine: AuthStorage not set. Call setAuthStorage() first.");
-  return _authStorage;
+export function getModelRuntime(): ModelRuntime {
+  if (!_modelRuntime) throw new Error("HarnessEngine: ModelRuntime not set. Call setModelRuntime() first.");
+  return _modelRuntime;
 }

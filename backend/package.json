@@ -9,8 +9,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "latest",
-    "@earendil-works/pi-coding-agent": "latest",
+    "@earendil-works/pi-ai": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.80.10",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "multer": "^2.1.1",

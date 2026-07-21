@@ -273,7 +273,7 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     const preview = await gitCommitPushPreview(project.cwd);
 
     // Gather commit model info (shown in UI) without calling the AI yet
-    const commitModelInfo = getCommitModelInfo();
+    const commitModelInfo = await getCommitModelInfo();
 
     // Only generate AI message when explicitly requested
     let aiMessage: { subject: string; body: string } | null = null;

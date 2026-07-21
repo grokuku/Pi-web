@@ -1,5 +1,4 @@
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
-import { completeSimple } from "@earendil-works/pi-ai";
+import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -61,8 +60,21 @@ export interface PiSessionState {
 const sessionsByProject = new Map<string, PiSessionState>();
 
 // Shared instances - reused across sessions
-let sharedAuthStorage = AuthStorage.create();
-let sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
+// ModelRuntime is async to create, so we initialize lazily
+let sharedModelRuntime: ModelRuntime | null = null;
+let sharedModelRegistry: ModelRegistry | null = null;
+
+/**
+ * Ensure the shared ModelRuntime and ModelRegistry are initialized.
+ * Must be called before any model lookups or session creation.
+ */
+async function ensureModelSystem(): Promise<void> {
+  if (!sharedModelRuntime || !sharedModelRegistry) {
+    sharedModelRuntime = await ModelRuntime.create();
+    sharedModelRegistry = new ModelRegistry(sharedModelRuntime);
+    console.log("[PiSession] ModelRuntime and ModelRegistry initialized");
+  }
+}
 
 // Pending config per project: applied when a session is created/resumed
 const pendingModelByProject = new Map<string, { provider: string; modelId: string }>();
@@ -100,25 +112,33 @@ export function getActiveToolCalls() {
   return activeToolCalls;
 }
 
-export function reloadModelRegistry(): void {
+export async function reloadModelRegistry(): Promise<void> {
+  await ensureModelSystem();
   // Refresh existing registry (keeps dynamically registered providers like Ollama)
   // instead of creating a new empty one that would lose them.
   try {
-    sharedModelRegistry.refresh();
+    await sharedModelRuntime!.reloadConfig();
+    await sharedModelRegistry!.refresh();
   } catch {
     // If refresh fails, recreate from scratch
-    sharedModelRegistry = ModelRegistry.create(sharedAuthStorage);
+    sharedModelRuntime = await ModelRuntime.create();
+    sharedModelRegistry = new ModelRegistry(sharedModelRuntime);
   }
 }
 
 export function getModelRegistry(): ModelRegistry {
+  if (!sharedModelRegistry) throw new Error("ModelRegistry not initialized. Call ensureModelSystem() first.");
   return sharedModelRegistry;
 }
 
-/** Access for HarnessEngine */
-export function getSharedAuthStorage() {
-  return sharedAuthStorage;
+/** Get the shared ModelRuntime for direct API calls (completeSimple, etc.) */
+export function getModelRuntime(): ModelRuntime {
+  if (!sharedModelRuntime) throw new Error("ModelRuntime not initialized. Call ensureModelSystem() first.");
+  return sharedModelRuntime;
 }
+
+// AuthStorage is no longer directly accessible — ModelRuntime handles auth internally.
+// HarnessEngine should use getModelRuntime() instead.
 
 // ── Session timeout helper ──
 // Prevents LLM calls from hanging indefinitely. If prompt()/steer() doesn't
@@ -195,8 +215,8 @@ export async function createPiSession(
     return existing;
   }
 
-  const authStorage = sharedAuthStorage;
-  const modelRegistry = sharedModelRegistry;
+  // ── Ensure model system is initialized ──
+  await ensureModelSystem();
 
   // ── Determine which session to load ──
   let sessionManager: SessionManager;
@@ -230,8 +250,7 @@ export async function createPiSession(
     const { session } = await createAgentSession({
       cwd,
       sessionManager,
-      authStorage,
-      modelRegistry,
+      modelRuntime: sharedModelRuntime!,
       customTools: [...designCustomTools, ...librarianTools],
     });
 
@@ -322,7 +341,7 @@ export async function createPiSession(
     const pendingModel = pendingModelByProject.get(projectId);
     if (pendingModel) {
       try {
-        const model = sharedModelRegistry.find(pendingModel.provider, pendingModel.modelId);
+        const model = sharedModelRegistry!.find(pendingModel.provider, pendingModel.modelId);
         if (model) {
           await session.setModel(model);
           console.log(`Applied pending model for ${projectId}: ${pendingModel.provider}/${pendingModel.modelId}`);
@@ -467,7 +486,7 @@ export async function sendPrompt(
       case "/model": {
         // /model — list available, /model <name> — switch
         if (!args) {
-          const available = session.modelRegistry.getAvailable();
+          const available = getModelRegistry().getAvailable();
           const lines = available.map((m: any) => {
             const isActive = session.model?.provider === m.provider && session.model?.id === m.id;
             return `${isActive ? "→ " : "  "}${m.provider}/${m.id}`;
@@ -475,7 +494,7 @@ export async function sendPrompt(
           return { command: "model", result: `Available models:\n${lines.join("\n")}` };
         }
         // Try to find and set the model
-        const available = session.modelRegistry.getAvailable();
+        const available = getModelRegistry().getAvailable();
         const match = available.find((m: any) =>
           m.id === args || m.name === args ||
           `${m.provider}/${m.id}` === args ||
@@ -745,10 +764,11 @@ export async function runHarness(
   config: any,
   harnessModelId?: string | null,
 ): Promise<string> {
-  const { HarnessEngine, setModelRegistry, setAuthStorage } = await import("./harness-engine.js");
-  // Initialiser le HarnessEngine avec le registry + auth du session.ts
-  setModelRegistry(sharedModelRegistry);
-  setAuthStorage(sharedAuthStorage);
+  const { HarnessEngine, setModelRegistry, setModelRuntime } = await import("./harness-engine.js");
+  // Initialiser le HarnessEngine avec le registry + runtime du session.ts
+  await ensureModelSystem();
+  setModelRegistry(sharedModelRegistry!);
+  setModelRuntime(sharedModelRuntime!);
 
   const state = sessionsByProject.get(projectId);
   if (state) {
@@ -809,9 +829,9 @@ export async function setModel(
   modelId: string,
   projectId?: string
 ): Promise<boolean> {
-  reloadModelRegistry();
+  await reloadModelRegistry();
 
-  const model = sharedModelRegistry.find(provider, modelId);
+  const model = sharedModelRegistry!.find(provider, modelId);
   if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 
   if (projectId) {
@@ -1021,7 +1041,7 @@ export async function disposeAllSessions(): Promise<void> {
  * Reloads the model registry first, then re-applies the current mode model.
  */
 export async function reapplyAllSessions(): Promise<void> {
-  reloadModelRegistry();
+  await reloadModelRegistry();
   const library = loadModelLibrary();
   for (const [projectId, state] of sessionsByProject) {
     if (!state.session) continue;
@@ -1280,8 +1300,8 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Apply model ──
   if (model) {
     try {
-      reloadModelRegistry();
-      const piModel = sharedModelRegistry.find(model.providerId, model.modelId);
+      await reloadModelRegistry();
+      const piModel = sharedModelRegistry!.find(model.providerId, model.modelId);
 
       if (piModel) {
         // Check if we need to override model capabilities (reasoning, contextWindow)
@@ -1295,13 +1315,13 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
           // Re-register the ENTIRE provider with all its models,
           // overriding only the one model that needs capability changes.
           // This avoids losing other models on the same provider.
-          const existingAuth = await sharedModelRegistry.getApiKeyAndHeaders(piModel);
-          const existingApiKey = existingAuth.ok ? existingAuth.apiKey : undefined;
+          const existingAuth = await sharedModelRuntime!.getAuth(piModel);
+          const existingApiKey = existingAuth?.auth?.apiKey;
           const providerApi = (piModel as any).api || "openai-completions";
           const providerBaseUrl = (piModel as any).baseUrl || "";
 
           // Get ALL models from this provider in the registry
-          const allProviderModels = sharedModelRegistry.getAvailable()
+          const allProviderModels = sharedModelRegistry!.getAvailable()
             .filter((m: any) => m.provider === model.providerId);
 
           const models = allProviderModels.map((m: any) => {
@@ -1345,7 +1365,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
           }
 
           console.log(`[mode] Re-registering provider ${model.providerId} with ${models.length} models (override: ${model.modelId})`);
-          sharedModelRegistry.registerProvider(model.providerId, {
+          sharedModelRegistry!.registerProvider(model.providerId, {
             baseUrl: providerBaseUrl,
             api: providerApi,
             apiKey: existingApiKey || "ollama",
@@ -1353,7 +1373,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
           });
 
           // Re-find after re-registration
-          const updatedModel = sharedModelRegistry.find(model.providerId, model.modelId);
+          const updatedModel = sharedModelRegistry!.find(model.providerId, model.modelId);
           if (updatedModel) {
             await session.setModel(updatedModel);
           console.log("[mode] Model set to (updated):", (session as any).model?.id);
@@ -1458,7 +1478,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   // Apply the code-mode model
   if (model) {
     try {
-      const piModel = sharedModelRegistry.find(model.providerId, model.modelId);
+      const piModel = sharedModelRegistry!.find(model.providerId, model.modelId);
       if (piModel) {
         await session.setModel(piModel);
       }
@@ -1620,8 +1640,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     const result = await createAgentSession({
       cwd: state.cwd,
       sessionManager: tempSessionManager,
-      authStorage: sharedAuthStorage,
-      modelRegistry: sharedModelRegistry,
+      modelRuntime: sharedModelRuntime!,
     });
     tempSession = result.session;
 
@@ -1629,7 +1648,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     const reviewModel = getModeModel(library, projectId, "review");
     if (reviewModel) {
       try {
-        const piModel = sharedModelRegistry.find(reviewModel.providerId, reviewModel.modelId);
+        const piModel = sharedModelRegistry!.find(reviewModel.providerId, reviewModel.modelId);
         if (piModel) await tempSession.setModel(piModel);
         if (reviewModel.thinkingLevel) await tempSession.setThinkingLevel(reviewModel.thinkingLevel as any);
       } catch (e: any) {
@@ -1793,12 +1812,12 @@ Rules:
  * Return info about which model would be used for commit AI generation,
  * without actually calling the model. Used by the UI to display model details.
  */
-export function getCommitModelInfo(): {
+export async function getCommitModelInfo(): Promise<{
   provider: string;
   modelId: string;
   source: "default-model" | "session" | "registry" | "none";
   thinkingLevel?: string;
-} {
+}> {
   const library = loadModelLibrary();
 
   // 1. Default model from library
@@ -1825,8 +1844,8 @@ export function getCommitModelInfo(): {
   }
 
   // 3. Registry
-  reloadModelRegistry();
-  const availableModels = sharedModelRegistry.getAvailable();
+  await reloadModelRegistry();
+  const availableModels = sharedModelRegistry!.getAvailable();
   if (availableModels.length > 0) {
     const m = availableModels[0];
     return {
@@ -1842,10 +1861,9 @@ export function getCommitModelInfo(): {
 /**
  * Generate a descriptive commit message using the current Pi model.
  *
- * Works even WITHOUT an active Pi session: falls back to the last used
- * model from ModelRegistry + AuthStorage.
+ * Uses the shared ModelRuntime for LLM calls (handles auth internally).
  *
- * Returns { subject, body } or null if no model/API key is available.
+ * Returns { subject, body } or null if no model is available.
  */
 export async function generateAiCommitMessage(
   diff: string,
@@ -1856,19 +1874,14 @@ export async function generateAiCommitMessage(
   const library = loadModelLibrary();
 
   let model: any = null;
-  let apiKey: string | undefined;
 
   // Ensure registry is loaded
-  reloadModelRegistry();
+  await reloadModelRegistry();
 
   // 1. Use the commit model (or default) from the library
   const commitModel = getCommitModel(library);
   if (commitModel) {
-    model = sharedModelRegistry.find(commitModel.providerId, commitModel.modelId);
-    if (model) {
-      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = (auth as any).apiKey;
-    }
+    model = sharedModelRegistry!.find(commitModel.providerId, commitModel.modelId);
   }
 
   // 2. Fallback: use the session model (if available)
@@ -1876,30 +1889,22 @@ export async function generateAiCommitMessage(
     const state = sessionsByProject.get(projectId);
     if (state?.session?.model) {
       model = state.session.model;
-      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
   // 3. Last resort: first available model from the registry
   if (!model?.id) {
-    const availableModels = sharedModelRegistry.getAvailable();
+    const availableModels = sharedModelRegistry!.getAvailable();
     if (availableModels.length > 0) {
       model = availableModels[0];
-      const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) apiKey = (auth as any).apiKey;
     }
   }
 
   // 4. Absolute last resort: scan all library models
   if (!model?.id) {
     for (const m of library.models) {
-      model = sharedModelRegistry.find(m.providerId, m.modelId);
-      if (model) {
-        const auth = await sharedModelRegistry.getApiKeyAndHeaders(model);
-        if (auth.ok) apiKey = (auth as any).apiKey;
-        break;
-      }
+      model = sharedModelRegistry!.find(m.providerId, m.modelId);
+      if (model) break;
     }
   }
 
@@ -1908,7 +1913,7 @@ export async function generateAiCommitMessage(
     return null;
   }
 
-  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} (apiKey=${apiKey ? "present" : "MISSING"}, api=${model.api}) ===`);
+  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} ===`);
 
   const systemPrompt = COMMIT_INSTRUCTIONS;
 
@@ -1932,10 +1937,9 @@ export async function generateAiCommitMessage(
 
     let commitResult: { subject: string; body: string } | null = null;
     try {
-      const response = await completeSimple(model, context, {
+      const response = await sharedModelRuntime!.completeSimple(model, context, {
         temperature: 0.2,
         maxTokens: 400,
-        apiKey,
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -2166,15 +2170,14 @@ async function runYoloAgent(
     const result = await createAgentSession({
       cwd: state.cwd,
       sessionManager: tempSessionManager,
-      authStorage: sharedAuthStorage,
-      modelRegistry: sharedModelRegistry,
+      modelRuntime: sharedModelRuntime!,
     });
     tempSession = result.session;
 
     // Apply model
     if (modelInfo) {
       try {
-        const piModel = sharedModelRegistry.find(modelInfo.providerId, modelInfo.modelId);
+        const piModel = sharedModelRegistry!.find(modelInfo.providerId, modelInfo.modelId);
         if (piModel) await tempSession.setModel(piModel);
       } catch (e: any) {
         console.warn(`[yolo] Could not set model for ${agentKey}:`, e.message);
@@ -2204,7 +2207,7 @@ async function runYoloAgent(
     await concurrencyManager.acquireAgentSlot(projectId, `yolo-${agentKey}`);
     const tempUnsub = tempSession.subscribe((event) => {
       const modelName = modelInfo
-        ? sharedModelRegistry.getAvailable().find((m: any) => m.provider === modelInfo.providerId && m.id === modelInfo.modelId)?.name
+        ? sharedModelRegistry!.getAvailable().find((m: any) => m.provider === modelInfo.providerId && m.id === modelInfo.modelId)?.name
           || `${modelInfo.providerId}/${modelInfo.modelId}`
         : "unknown";
       const taggedEvent = {
