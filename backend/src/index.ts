@@ -23,6 +23,8 @@ import agentRouter from "./routes/agent.js";
 import agentKeysRouter from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
 import designRouter from "./routes/design.js";
+import librarianRouter from "./routes/librarian.js";
+import { startLibrarianCron } from "./pi/librarian-cron.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
 import {
@@ -128,6 +130,7 @@ app.use("/api/agent", agentRouter);
 app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);
 app.use("/api/design", designRouter);
+app.use("/api/librarian", librarianRouter);
 
 // ── CBM 3D Graph UI proxy ──────────────────────────────
 // The CBM UI is a Vite SPA that uses absolute paths (/assets/..., /rpc, ...).
@@ -800,6 +803,9 @@ httpServer.listen(PORT, async () => {
   } catch (e: any) {
     console.error("[SMB] Auto-mount error:", e.message);
   }
+
+  // Démarrer le cron du libraire
+  startLibrarianCron(() => getAllProjects().map(p => p.cwd));
 
   console.log(`
   ╔══════════════════════════════════════════╗

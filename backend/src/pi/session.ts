@@ -21,6 +21,7 @@ import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
 import { designCustomTools } from "./design-tools.js";
+import { librarianTools } from "./librarian-tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -51,6 +52,7 @@ export interface PiSessionState {
   autoReviewAborted: boolean;   // was auto-review aborted by user
   harnessAborted: boolean;      // was harness run aborted by user
   harnessSteerMessages: string[]; // messages queued for harness while streaming
+  allowWebSearch: boolean;       // allow firecrawl tools (disabled by default, librarian_search replaces them)
 }
 
 // ─── Multi-project session map ──────────────────────────
@@ -230,7 +232,7 @@ export async function createPiSession(
       sessionManager,
       authStorage,
       modelRegistry,
-      customTools: designCustomTools,
+      customTools: [...designCustomTools, ...librarianTools],
     });
 
     const unsubscribe = session.subscribe((event) => {
@@ -311,6 +313,7 @@ export async function createPiSession(
       autoReviewAborted: false,
       harnessAborted: false,
       harnessSteerMessages: [],
+      allowWebSearch: false,
     };
 
     sessionsByProject.set(projectId, newSession);
@@ -1050,23 +1053,27 @@ const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // (no find/ls to prevent full-project exploration — reviewer should focus on diff)
 const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+// Firecrawl web search tools — disabled by default, replaced by librarian_search.
+// Can be re-enabled per-session via state.allowWebSearch.
+const FIRECRAWL_TOOLS = ["firecrawl_search", "firecrawl_scrape", "firecrawl_map"];
 // Harness orchestrator : aucun tool de base — uniquement delegate_to_expert (via extension)
 // L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
 const HARNESS_TOOLS: string[] = [];
 
 /** Get extension tool names registered in the session */
-function getExtensionToolNames(session: any): string[] {
+function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
   try {
     const allTools = session.getAllTools?.() ?? [];
     return allTools
       .map((t: any) => t.name)
-      .filter((name: string) => !BASE_TOOLS.includes(name));
+      .filter((name: string) => !BASE_TOOLS.includes(name))
+      .filter((name: string) => !exclude.includes(name));
   } catch { return []; }
 }
 
 /** Merge base tools + extension tools for a given mode */
-function toolsForMode(session: any, baseTools: string[]): string[] {
-  return [...baseTools, ...getExtensionToolNames(session)];
+function toolsForMode(session: any, baseTools: string[], exclude: string[] = []): string[] {
+  return [...baseTools, ...getExtensionToolNames(session, exclude)];
 }
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
@@ -1370,17 +1377,20 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   }
 
   // ── Apply tool filtering ──
-  // Include extension tools alongside base mode tools
+  // Include extension tools alongside base mode tools.
+  // Firecrawl is disabled by default (librarian_search replaces it).
+  // It can be re-enabled via state.allowWebSearch.
+  const firecrawlExclude = state.allowWebSearch ? [] : FIRECRAWL_TOOLS;
   if (mode === "plan") {
-    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, firecrawlExclude));
   } else if (mode === "review") {
-    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, firecrawlExclude));
   } else if (mode === "harness") {
     // Harness orchestrator: read-only + delegate_to_expert (l'extension l'enregistre)
-    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS, firecrawlExclude));
   } else {
     // Code mode: all base tools + extension tools
-    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, firecrawlExclude));
   }
 
   // ── Inject mode instructions into system prompt ──
@@ -1459,7 +1469,9 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   }
 
   // Restore all tools (base + extension)
-  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
+  // Firecrawl disabled by default (librarian_search replaces it)
+  const firecrawlExclude = state.allowWebSearch ? [] : FIRECRAWL_TOOLS;
+  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, firecrawlExclude));
 
   // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
   let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
@@ -1485,6 +1497,27 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
 export function getActiveMode(projectId: string): AgentMode {
   const state = sessionsByProject.get(projectId);
   return state?.activeMode || "code";
+}
+
+/** Enable or disable firecrawl web search tools for a project session */
+export async function setAllowWebSearch(projectId: string, allowed: boolean): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state) return;
+  state.allowWebSearch = allowed;
+  // Re-apply current mode to update the active tool list
+  if (state.session) {
+    try {
+      await applyModeToSession(state.activeMode || "code", projectId);
+    } catch (e: any) {
+      console.warn(`[setAllowWebSearch] Failed to re-apply mode:`, e.message);
+    }
+  }
+}
+
+/** Get the current allowWebSearch setting for a project */
+export function getAllowWebSearch(projectId: string): boolean {
+  const state = sessionsByProject.get(projectId);
+  return state?.allowWebSearch ?? false;
 }
 
 /** Get auto-review state for a project */
@@ -2150,14 +2183,18 @@ async function runYoloAgent(
 
     // Restrict tools if read-only
     if (readOnly) {
-      (tempSession as any).setActiveToolsByName([
+      const readOnlyTools = [
         "read", "grep", "find", "ls", "list",
-        "firecrawl_scrape", "firecrawl_map", "firecrawl_search",
         "memory_search", "memory_list", "global_memory_search", "global_memory_list",
         // CBM graph tools — all read-only, safe for plan phase
         "cbm_search", "cbm_trace", "cbm_code", "cbm_search_code",
         "cbm_arch", "cbm_cypher", "cbm_schema", "cbm_diff",
-      ]);
+      ];
+      // Include firecrawl only if web search is explicitly allowed
+      if (state.allowWebSearch) {
+        readOnlyTools.push("firecrawl_scrape", "firecrawl_map", "firecrawl_search");
+      }
+      (tempSession as any).setActiveToolsByName(readOnlyTools);
     }
 
     // Inject system prompt
