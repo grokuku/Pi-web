@@ -272,6 +272,38 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
   const [concurrencySaved, setConcurrencySaved] = useState(false);
 
+  // ── Webclaw config state ──
+  const [webclawUrl, setWebclawUrl] = useState("");
+  const [webclawApiKey, setWebclawApiKey] = useState("");
+  const [webclawSaved, setWebclawSaved] = useState(false);
+
+  const loadWebclawConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/webclaw");
+      if (res.ok) {
+        const data = await res.json();
+        setWebclawUrl(data.url || "");
+        setWebclawApiKey(data.apiKey || "");
+      }
+    } catch {}
+  }, []);
+
+  const saveWebclawConfig = async () => {
+    try {
+      const res = await fetch("/api/settings/webclaw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webclawUrl, apiKey: webclawApiKey }),
+      });
+      if (res.ok) {
+        setWebclawSaved(true);
+        setTimeout(() => setWebclawSaved(false), 2000);
+      }
+    } catch (e: any) {
+      console.error("[webclaw] Failed to save:", e);
+    }
+  };
+
   const loadConcurrencyConfig = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/concurrency");
@@ -300,6 +332,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
 
   // Load concurrency config on mount
   useEffect(() => { loadConcurrencyConfig(); }, [loadConcurrencyConfig]);
+  useEffect(() => { loadWebclawConfig(); }, [loadWebclawConfig]);
 
   const saveAuth = () => {
     if (authUser) {
@@ -577,6 +610,54 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                 </select>
               </div>
 
+              {/* Librarian Model */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>📚</span> Librarian Model
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Used for documentation synthesis in the librarian service
+                    </div>
+                  </div>
+                  {library.librarianModelId && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/model-library/librarian-model", { method: "DELETE" });
+                          if (res.ok) setLibrary(await res.json());
+                        } catch (e: any) { setError(e.message); }
+                      }}
+                      className="text-[10px] text-hacker-text-dim hover:text-hacker-error"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={library.librarianModelId || ""}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    if (!id) return;
+                    try {
+                      const res = await fetch(`/api/model-library/librarian-model/${encodeURIComponent(id)}`, { method: "PUT" });
+                      if (res.ok) setLibrary(await res.json());
+                      else { const d = await res.json().catch(() => ({})); setError(d.error || "Failed"); }
+                    } catch (e: any) { setError(e.message); }
+                  }}
+                  className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                >
+                  <option value="">— Use default model —</option>
+                  {(library.models || [])
+                    .map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
               {/* How it works */}
               <div className="border border-hacker-accent/20 bg-hacker-accent/5 rounded p-3">
                 <div className="text-xs text-hacker-text-bright font-bold mb-2">How file analysis works</div>
@@ -585,6 +666,48 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   <div><span className="text-green-400">Images</span> — Sent to the main model if it supports vision, otherwise sent to the Vision Model above</div>
                   <div><span className="text-yellow-400">Audio</span> — Requires a transcription service (not yet available)</div>
                   <div><span className="text-yellow-400">Video</span> — Requires ffmpeg + transcription (not yet available)</div>
+                </div>
+              </div>
+
+              {/* Webclaw Configuration */}
+              <div className="border border-hacker-border rounded p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-bold text-hacker-text-bright flex items-center gap-1.5">
+                      <span>🕸️</span> Webclaw Configuration
+                    </div>
+                    <div className="text-[10px] text-hacker-text-dim mt-0.5">
+                      Web scraping & search service for the librarian
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-hacker-text-dim text-xs block mb-1">URL</label>
+                    <input
+                      type="text"
+                      value={webclawUrl}
+                      onChange={e => setWebclawUrl(e.target.value)}
+                      placeholder="http://localhost:3001"
+                      className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-hacker-text-dim text-xs block mb-1">API Key</label>
+                    <input
+                      type="password"
+                      value={webclawApiKey}
+                      onChange={e => setWebclawApiKey(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
+                    />
+                  </div>
+                  <button
+                    onClick={saveWebclawConfig}
+                    className={`btn-hacker text-xs px-4 py-1.5 ${webclawSaved ? "text-hacker-accent border-hacker-accent" : ""}`}
+                  >
+                    {webclawSaved ? "✓ SAVED" : "SAVE"}
+                  </button>
                 </div>
               </div>
             </div>

@@ -2,7 +2,7 @@ import { completeSimple } from "@earendil-works/pi-ai";
 import { scanProjectInventory, getAllItems, type InventoryItem } from "./librarian-scanner.js";
 import { loadIndex, saveIndex, archiveDoc, webclawScrape, webclawSearch, type DocEntry, type DocContent } from "./librarian-service.js";
 import { getModelRegistry, reloadModelRegistry } from "./session.js";
-import { loadModelLibrary, getDefaultModel } from "./model-library.js";
+import { loadModelLibrary, getLibrarianModel as getLibrarianModelConfig } from "./model-library.js";
 
 const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
 const SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000; // Check toutes les 6h
@@ -17,13 +17,13 @@ async function getLibrarianModel(): Promise<{ model: any; apiKey?: string } | nu
     const registry = getModelRegistry();
     const library = loadModelLibrary();
 
-    // 1. Try default model from library
+    // 1. Try librarian model from library config, then fall back to default
     let model: any = null;
     let apiKey: string | undefined;
 
-    const defaultModel = getDefaultModel(library);
-    if (defaultModel) {
-      model = registry.find(defaultModel.providerId, defaultModel.modelId);
+    const librarianModel = getLibrarianModelConfig(library);
+    if (librarianModel) {
+      model = registry.find(librarianModel.providerId, librarianModel.modelId);
     }
 
     // 2. Fallback: first available model

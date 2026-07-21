@@ -12,6 +12,7 @@ import {
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
 
 const router = Router();
 
@@ -172,6 +173,26 @@ router.post("/models/reload", (_req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Webclaw config ──
+
+router.get("/webclaw", (_req: Request, res: Response) => {
+  try {
+    res.json(getWebclawConfig());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/webclaw", (req: Request, res: Response) => {
+  try {
+    const { url, apiKey } = req.body;
+    const config = setWebclawConfig({ url, apiKey });
+    res.json(config);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
   }
 });
 

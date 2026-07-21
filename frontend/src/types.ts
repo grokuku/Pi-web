@@ -221,6 +221,7 @@ export interface ModelLibrary {
   commitModelId: string | null;
   visionModelId: string | null;     // model for image analysis fallback
   audioModelId: string | null;      // model for audio transcription
+  librarianModelId: string | null;   // model for librarian doc synthesis
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
 }
 

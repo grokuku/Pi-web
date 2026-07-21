@@ -2,13 +2,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import path from "path";
+import { getWebclawConfig } from "../webclaw.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_DIR = join(__dirname, "..", "..", "..", ".data", "docs");
-
-// Configuration Webclaw
-const WEBCLAW_URL = process.env.WEBCLAW_URL || "http://localhost:3001";
-const WEBCLAW_API_KEY = process.env.WEBCLAW_API_KEY || "";
 
 // ── Types ──
 
@@ -90,12 +87,19 @@ function saveDoc(filePath: string, doc: DocContent): void {
 
 // ── Webclaw integration ──
 
+/** Get the current Webclaw connection config from settings */
+export function getWebclawConnection(): { url: string; apiKey: string } {
+  const config = getWebclawConfig();
+  return { url: config.url, apiKey: config.apiKey };
+}
+
 async function webclawScrape(url: string): Promise<{ content: string; title?: string; description?: string }> {
-  const res = await fetch(`${WEBCLAW_URL}/v1/scrape`, {
+  const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
+  const res = await fetch(`${wcUrl}/v1/scrape`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(WEBCLAW_API_KEY ? { "Authorization": `Bearer ${WEBCLAW_API_KEY}` } : {}),
+      ...(wcApiKey ? { "Authorization": `Bearer ${wcApiKey}` } : {}),
     },
     body: JSON.stringify({ url, format: "markdown" }),
   });
@@ -109,11 +113,12 @@ async function webclawScrape(url: string): Promise<{ content: string; title?: st
 }
 
 async function webclawSearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
-  const res = await fetch(`${WEBCLAW_URL}/v1/search`, {
+  const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
+  const res = await fetch(`${wcUrl}/v1/search`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(WEBCLAW_API_KEY ? { "Authorization": `Bearer ${WEBCLAW_API_KEY}` } : {}),
+      ...(wcApiKey ? { "Authorization": `Bearer ${wcApiKey}` } : {}),
     },
     body: JSON.stringify({ query, num, scrape: true }),
   });

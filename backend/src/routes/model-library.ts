@@ -238,6 +238,33 @@ router.delete("/audio-model", async (_req: Request, res: Response) => {
   }
 });
 
+// ── PUT/DELETE set librarian model ────────────────────
+
+router.put("/librarian-model/:id", async (req: Request, res: Response) => {
+  try {
+    const id = safeDecode(req.params.id);
+    const library = loadModelLibrary();
+    library.librarianModelId = id;
+    saveModelLibrary(library);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete("/librarian-model", async (_req: Request, res: Response) => {
+  try {
+    const library = loadModelLibrary();
+    library.librarianModelId = null;
+    saveModelLibrary(library);
+    await syncToModelsJson();
+    res.json(library);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ── GET/PUT project mode config ───────────────────────
 
 router.get("/projects/:projectId/mode", (req: Request, res: Response) => {

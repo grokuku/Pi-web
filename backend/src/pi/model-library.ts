@@ -302,6 +302,7 @@ export interface ModelLibrary {
   commitModelId: string | null;           // model for AI commit messages (null = use default)
   visionModelId: string | null;           // model for image/file analysis (null = use default or fallback)
   audioModelId: string | null;            // model for audio transcription (null = not configured)
+  librarianModelId: string | null;        // model for librarian doc synthesis (null = use default)
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
   concurrency: {                          // Concurrency Manager config
     maxLLMSlots: number;
@@ -331,6 +332,7 @@ function getDefaultLibrary(): ModelLibrary {
     commitModelId: null,
     visionModelId: null,
     audioModelId: null,
+    librarianModelId: null,
     projectModes: {},
     concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 },
   };
@@ -393,6 +395,7 @@ function migrateLibrary(data: any): ModelLibrary {
     commitModelId: data.commitModelId || null,
     visionModelId: data.visionModelId || null,
     audioModelId: data.audioModelId || null,
+    librarianModelId: data.librarianModelId || null,
     projectModes: {},
     concurrency: data.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5 },
   };
@@ -408,7 +411,7 @@ function migrateLibrary(data: any): ModelLibrary {
 }
 
 function migrateFromOldFormat(data: any): ModelLibrary {
-  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, projectModes: {}, concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 } };
+  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, librarianModelId: null, projectModes: {}, concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 } };
 
   // Collect all unique models from all modes
   const seenIds = new Set<string>();
@@ -511,6 +514,23 @@ export function getCommitModel(library: ModelLibrary): RegisteredModel | undefin
     if (m) return m;
   }
   return getDefaultModel(library);
+}
+
+/** Get the librarian model for doc synthesis (falls back to default) */
+export function getLibrarianModel(library: ModelLibrary): RegisteredModel | undefined {
+  if (library.librarianModelId) {
+    const m = library.models.find((m) => m.id === library.librarianModelId);
+    if (m) return m;
+  }
+  return getDefaultModel(library);
+}
+
+/** Set the librarian model id */
+export function setLibrarianModelId(id: string | null): ModelLibrary {
+  const library = loadModelLibrary();
+  library.librarianModelId = id;
+  saveModelLibrary(library);
+  return library;
 }
 
 export function getModeModel(library: ModelLibrary, projectId: string, mode: AgentMode): RegisteredModel | undefined {
@@ -616,6 +636,7 @@ export function removeModel(id: string): ModelLibrary {
   if (library.visionModelId === id) library.visionModelId = null;
   if (library.audioModelId === id) library.audioModelId = null;
   if (library.commitModelId === id) library.commitModelId = null;
+  if (library.librarianModelId === id) library.librarianModelId = null;
 
   saveModelLibrary(library);
   return library;
