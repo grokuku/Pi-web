@@ -295,23 +295,22 @@ export default function (pi: ExtensionAPI) {
 
       try {
         // Créer une session temporaire pour l'expert
-        const { createAgentSession, SessionManager, AuthStorage } = await import("@earendil-works/pi-coding-agent");
+        const { createAgentSession, SessionManager } = await import("@earendil-works/pi-coding-agent");
         const { join } = await import("path");
         const { homedir } = await import("os");
         const { existsSync, mkdirSync, unlinkSync } = await import("fs");
 
         const cwd = ctx.cwd || process.cwd();
         const agentDir = join(homedir(), ".pi", "agent");
-        const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 
         const tempSessionManager = SessionManager.create(cwd);
         const tempSessionFile = tempSessionManager.getSessionFile();
 
+        // SDK 0.80+: modelRuntime remplace authStorage + modelRegistry.
+        // Si on ne passe rien, le SDK crée un ModelRuntime par défaut (~/.pi/agent/auth.json).
         const result = await createAgentSession({
           cwd,
           sessionManager: tempSessionManager,
-          authStorage,
-          modelRegistry: ctx.modelRegistry,
         });
         const tempSession = result.session;
 
