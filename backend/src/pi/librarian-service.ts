@@ -182,11 +182,11 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
 
   // Extraire les URLs et titres depuis le markdown de DuckDuckGo.
   // DuckDuckGo wrap les URLs dans un redirect : //duckduckgo.com/l/?uddg=<url_encodée>&rut=...
-  const results: Array<{ title: string; url: string; snippet: string; content?: string }> = [];
+  // Demander plus de résultats que nécessaire pour compenser les doublons
+  const rawResults: Array<{ title: string; url: string; snippet: string; content?: string }> = [];
   const linkRegex = /\[([^\]]+)\]\(([^)\s]+)\)/g;
   let match;
-  let count = 0;
-  while ((match = linkRegex.exec(ddgResult.content)) !== null && count < num) {
+  while ((match = linkRegex.exec(ddgResult.content)) !== null) {
     const title = match[1];
     let rawUrl = match[2];
 
@@ -203,8 +203,17 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
     if (!rawUrl.startsWith("http")) continue;
     if (rawUrl.includes("duckduckgo.com") || rawUrl.includes("duckduckgo.org")) continue;
 
-    results.push({ title, url: rawUrl, snippet: "", content: undefined });
-    count++;
+    rawResults.push({ title, url: rawUrl, snippet: "", content: undefined });
+  }
+
+  // Dédupliquer par URL — DuckDuckGo retourne souvent le même lien plusieurs fois
+  const seenUrls = new Set<string>();
+  const results: Array<{ title: string; url: string; snippet: string; content?: string }> = [];
+  for (const r of rawResults) {
+    if (seenUrls.has(r.url)) continue;
+    seenUrls.add(r.url);
+    results.push(r);
+    if (results.length >= num) break;
   }
 
   // 3. Scraper le contenu des 3 premiers résultats
