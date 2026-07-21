@@ -112,19 +112,68 @@ async function webclawScrape(url: string): Promise<{ content: string; title?: st
   };
 }
 
+/**
+ * Recherche web via Webclaw.
+ * Essaie d'abord /v1/search (cloud), puis fallback sur /v1/scrape de DuckDuckGo (self-hosted).
+ */
 async function webclawSearch(query: string, num: number = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
   const { url: wcUrl, apiKey: wcApiKey } = getWebclawConnection();
-  const res = await fetch(`${wcUrl}/v1/search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(wcApiKey ? { "Authorization": `Bearer ${wcApiKey}` } : {}),
-    },
-    body: JSON.stringify({ query, num, scrape: true }),
-  });
-  if (!res.ok) throw new Error(`Webclaw search failed: ${res.status}`);
-  const data = await res.json();
-  return data.results || [];
+
+  // 1. Essayer /v1/search (endpoint cloud — peut ne pas exister en self-hosted)
+  try {
+    const res = await fetch(`${wcUrl}/v1/search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(wcApiKey ? { "Authorization": `Bearer ${wcApiKey}` } : {}),
+      },
+      body: JSON.stringify({ query, num, scrape: true }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.results || [];
+    }
+    // 501 = Not Implemented (self-hosted sans search) → fallback
+    if (res.status !== 501) throw new Error(`Webclaw search failed: ${res.status}`);
+  } catch (e: any) {
+    // Si c'est pas une 501, propager l'erreur
+    if (!e.message.includes("501")) throw e;
+  }
+
+  // 2. Fallback : scraper DuckDuckGo HTML pour récupérer les résultats, puis scraper chaque URL
+  console.log("[Librarian] /v1/search unavailable, using DuckDuckGo fallback");
+  const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const ddgResult = await webclawScrape(ddgUrl);
+
+  // Extraire les URLs et titres depuis le markdown de DuckDuckGo
+  const results: Array<{ title: string; url: string; snippet: string; content?: string }> = [];
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let match;
+  let count = 0;
+  while ((match = linkRegex.exec(ddgResult.content)) !== null && count < num) {
+    const title = match[1];
+    const url = match[2];
+    // Filtrer les liens internes DuckDuckGo
+    if (url.includes("duckduckgo.com") || url.includes("duckduckgo.org")) continue;
+    results.push({ title, url, snippet: "", content: undefined });
+    count++;
+  }
+
+  // 3. Scraper le contenu des 3 premiers résultats (pour éviter trop de requêtes)
+  const toScrape = Math.min(3, results.length);
+  for (let i = 0; i < toScrape; i++) {
+    try {
+      const scraped = await webclawScrape(results[i].url);
+      results[i].content = scraped.content.substring(0, 5000);
+      results[i].snippet = scraped.description || scraped.content.substring(0, 200);
+      // Rate limiting
+      await new Promise(r => setTimeout(r, 1000));
+    } catch {
+      // Si une page ne peut pas être scrapée, on continue
+    }
+  }
+
+  return results;
 }
 
 // ── Public API ──
