@@ -117,7 +117,8 @@ export async function reloadModelRegistry(): Promise<void> {
   // Refresh existing registry (keeps dynamically registered providers like Ollama)
   // instead of creating a new empty one that would lose them.
   try {
-    await sharedModelRuntime!.reloadConfig();
+    // reloadConfig() removed in SDK 0.82+ — refresh() on ModelRuntime reloads config & models
+    await sharedModelRuntime!.refresh();
     await sharedModelRegistry!.refresh();
   } catch {
     // If refresh fails, recreate from scratch
