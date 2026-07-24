@@ -264,7 +264,7 @@ export function getDocContent(name: string, version?: string): DocContent | null
   return loadDoc(entry.filePath);
 }
 
-/** Recherche via Webclaw + archivage */
+/** Recherche dans la bibliothèque locale puis sur le web (sans archivage automatique) */
 export async function searchAndArchive(query: string): Promise<{
   results: Array<{ title: string; url: string; snippet: string; content?: string }>;
   archived: boolean;
@@ -287,51 +287,7 @@ export async function searchAndArchive(query: string): Promise<{
   // 2. Sinon, chercher sur le web via Webclaw
   const webResults = await webclawSearch(query, 5);
 
-  // 3. Archiver les résultats qui ont du contenu
-  for (const result of webResults) {
-    if (!result.content || result.content.length < 50) continue;
-
-    // Créer un nom de doc à partir du titre ou de l'URL
-    let docName = result.title || new URL(result.url).hostname;
-    // Nettoyer le nom (pas de caractères spéciaux dans les noms de fichiers)
-    docName = docName.replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, 50);
-
-    // Vérifier si on a déjà archivé cette URL
-    const index = loadIndex();
-    const existing = index.library.find(e => e.sourceUrl === result.url);
-    if (existing) continue; // déjà archivé
-
-    const docContent: DocContent = {
-      meta: {
-        name: docName,
-        version: "latest",
-        type: "web",
-        sourceUrl: result.url,
-        updatedAt: new Date().toISOString(),
-      },
-      summary: result.snippet || result.title || "",
-      keyPoints: [],
-      api: [],
-      examples: [],
-      rawContent: result.content,
-    };
-
-    const filePath = `tools/${docName}@latest.json`;
-    const entry: DocEntry = {
-      name: docName,
-      version: "latest",
-      type: "web",
-      description: result.snippet || result.title || "",
-      filePath,
-      keywords: query.toLowerCase().split(/\s+/).filter(t => t.length > 2),
-      updatedAt: new Date().toISOString(),
-      sourceUrl: result.url,
-    };
-
-    archiveDoc(entry, docContent);
-  }
-
-  return { results: webResults, archived: true };
+  return { results: webResults, archived: false };
 }
 
 /** Archive un document dans la bibliothèque */

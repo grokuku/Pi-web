@@ -255,6 +255,47 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | Recherche | Bibliothèque locale → Webclaw scrape → Tavily (optionnel) → DuckDuckGo fallback |
 | LLM synthèse | Pi SDK `completeSimple` (couplage OK, reste dans Pi-Web) |
 
+### Libraire — État et Améliorations
+
+#### ✅ Implémenté
+
+| Fonctionnalité | Détail |
+|---|---|
+| Recherche web | Webclaw scrape → Tavily optionnel → DuckDuckGo fallback |
+| Recherche locale prioritaire | `searchLocalDocs` avant `webclawSearch` |
+| Tool `librarian_search` | Recherche dans le chat, retourne les résultats au LLM |
+| Tool `librarian_archive` | Le LLM décide d'archiver quand c'est de la doc technique |
+| Hint `💡` | Dans les résultats de recherche pour inciter le LLM à archiver |
+| Sanitization | Emails, clés API, chemins perso, téléphones supprimés |
+| Auth API Key | Pour agents externes (localhost bypass pour Pi-Web) |
+| Scanner de projets étendu | Cherche `package.json` dans sous-dossiers (backend/, frontend/, etc.) |
+| Cron hebdomadaire | Synthèse LLM via `completeSimple` (Pi SDK) |
+| Déduplication DuckDuckGo | Par URL |
+| Doc agents externes | `docs/shared-services.md` |
+
+#### 🔧 À Améliorer
+
+**Recherche sémantique**
+> Le matching local actuel est basique (string matching sur `name` + `description` + `keywords`). Une recherche sur « système de messages » ne trouvera pas une doc archivée sous « hermes ».
+
+- Embeddings (Ollama ou OpenRouter) pour la recherche sémantique
+- Ou LLM-based keyword extraction au moment de l'archivage (générer des synonymes/tags)
+
+**Synthèse à la volée**
+> L'archivage stocke le contenu brut (`rawContent`). Le cron fait une synthèse LLM hebdomadaire, mais l'archivage manuel via `librarian_archive` ne synthétise pas.
+
+- Option : ajouter une étape de synthèse LLM dans `librarian_archive` si un modèle est disponible
+
+**Gestion des versions**
+> Si la doc d'Express 4.21 est archivée et qu'on cherche Express 5, le système retourne la 4.21.
+
+- Détecter les conflits de version et prioriser la version la plus récente
+
+**Expiration / mise à jour**
+> Les docs archivées manuellement n'ont pas de date d'expiration. Le cron ne met à jour que les docs qu'il a lui-même créées.
+
+- Ajouter un mécanisme de staleness pour toutes les docs
+
 ### Webclaw self-hosté — Limitations identifiées
 
 | Capacité | Statut |
