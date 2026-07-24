@@ -1074,9 +1074,8 @@ const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // (no find/ls to prevent full-project exploration — reviewer should focus on diff)
 const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-// Firecrawl web search tools — disabled by default, replaced by librarian_search.
-// Can be re-enabled per-session via state.allowWebSearch.
-const FIRECRAWL_TOOLS = ["firecrawl_search", "firecrawl_scrape", "firecrawl_map"];
+// Firecrawl tools removed — librarian_search replaces them.
+const FIRECRAWL_TOOLS: string[] = [];
 // Harness orchestrator : aucun tool de base — uniquement delegate_to_expert (via extension)
 // L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
 const HARNESS_TOOLS: string[] = [];
@@ -1399,19 +1398,16 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
-  // Firecrawl is disabled by default (librarian_search replaces it).
-  // It can be re-enabled via state.allowWebSearch.
-  const firecrawlExclude = state.allowWebSearch ? [] : FIRECRAWL_TOOLS;
   if (mode === "plan") {
-    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, firecrawlExclude));
+    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS));
   } else if (mode === "review") {
-    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, firecrawlExclude));
+    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS));
   } else if (mode === "harness") {
     // Harness orchestrator: read-only + delegate_to_expert (l'extension l'enregistre)
-    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS, firecrawlExclude));
+    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
   } else {
     // Code mode: all base tools + extension tools
-    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, firecrawlExclude));
+    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
   }
 
   // ── Inject mode instructions into system prompt ──
@@ -1490,9 +1486,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   }
 
   // Restore all tools (base + extension)
-  // Firecrawl disabled by default (librarian_search replaces it)
-  const firecrawlExclude = state.allowWebSearch ? [] : FIRECRAWL_TOOLS;
-  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, firecrawlExclude));
+  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
 
   // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
   let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
@@ -2194,10 +2188,6 @@ async function runYoloAgent(
         "cbm_search", "cbm_trace", "cbm_code", "cbm_search_code",
         "cbm_arch", "cbm_cypher", "cbm_schema", "cbm_diff",
       ];
-      // Include firecrawl only if web search is explicitly allowed
-      if (state.allowWebSearch) {
-        readOnlyTools.push("firecrawl_scrape", "firecrawl_map", "firecrawl_search");
-      }
       (tempSession as any).setActiveToolsByName(readOnlyTools);
     }
 

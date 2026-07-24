@@ -16,7 +16,7 @@ export const librarianSearchToolDef = defineTool({
     "Recherche dans la bibliothèque de documentation locale ET sur le web. Utilise ce tool pour: 1) Trouver la doc d'un outil/librairie spécifique, 2) Rechercher une information technique, 3) Vérifier une API ou un changement de version. Le libraire cherche d'abord dans sa bibliothèque (mise à jour hebdomadairement), puis sur le web si nécessaire, et archive le résultat.",
   promptSnippet: "Search the documentation library and web for technical information",
   promptGuidelines: [
-    "Use librarian_search instead of firecrawl_search for ALL web searches",
+    "Use librarian_search for ALL web and documentation searches",
     "The librarian caches results, so repeated searches for the same topic are fast and free",
     "Results are archived in the documentation library for future use",
   ],
