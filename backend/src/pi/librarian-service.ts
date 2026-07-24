@@ -135,6 +135,14 @@ async function tavilySearch(query: string, num: number = 5): Promise<Array<{ tit
   }));
 }
 
+/** Sanitize content of search results before returning them */
+function sanitizeResults(results: Array<{ title: string; url: string; snippet: string; content?: string }>): Array<{ title: string; url: string; snippet: string; content?: string }> {
+  return results.map(r => ({
+    ...r,
+    content: r.content ? sanitizeContent(r.content) : r.content,
+  }));
+}
+
 /**
  * Recherche web via Webclaw.
  * Essaie d'abord /v1/search (cloud), puis Tavily, puis fallback sur /v1/scrape de DuckDuckGo (self-hosted).
@@ -154,7 +162,7 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
     });
     if (res.ok) {
       const data = await res.json();
-      return data.results || [];
+      return sanitizeResults(data.results || []);
     }
     // 501 = Not Implemented (self-hosted sans search) → fallback
     if (res.status !== 501) throw new Error(`Webclaw search failed: ${res.status}`);
@@ -169,7 +177,7 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
     const tavilyResults = await tavilySearch(query, num);
     if (tavilyResults.length > 0) {
       console.log(`[Librarian] Tavily returned ${tavilyResults.length} results`);
-      return tavilyResults;
+      return sanitizeResults(tavilyResults);
     }
   } catch (e: any) {
     console.log(`[Librarian] Tavily unavailable: ${e.message}`);
@@ -221,7 +229,7 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
   for (let i = 0; i < toScrape; i++) {
     try {
       const scraped = await webclawScrape(results[i].url);
-      results[i].content = scraped.content.substring(0, 5000);
+      results[i].content = sanitizeContent(scraped.content.substring(0, 5000));
       results[i].snippet = scraped.description || scraped.content.substring(0, 200);
       await new Promise(r => setTimeout(r, 1000));
     } catch {
@@ -229,7 +237,7 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
     }
   }
 
-  return results;
+  return sanitizeResults(results);
 }
 
 // ── Public API ──
@@ -283,8 +291,14 @@ export async function searchAndArchive(query: string): Promise<{
 
 /** Archive un document dans la bibliothèque */
 export function archiveDoc(entry: DocEntry, content: DocContent): void {
+  // Sanitize content before persisting
+  const sanitizedContent: DocContent = {
+    ...content,
+    rawContent: content.rawContent ? sanitizeContent(content.rawContent) : undefined,
+  };
+
   ensureDocsDir();
-  saveDoc(entry.filePath, content);
+  saveDoc(entry.filePath, sanitizedContent);
 
   const index = loadIndex();
   const existingIdx = index.library.findIndex(e =>
@@ -344,6 +358,21 @@ export function getLibraryStatus(): { totalDocs: number; lastUpdated: string; la
     lastUpdated: index.lastUpdated,
     lastScan: index.lastScan,
   };
+}
+
+/** Nettoie le contenu pour retirer toute information personnelle avant archivage */
+function sanitizeContent(content: string): string {
+  let cleaned = content;
+  // Emails
+  cleaned = cleaned.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email removed]");
+  // API keys (sk-xxx, tvly-xxx, Bearer xxx)
+  cleaned = cleaned.replace(/(?:sk-[A-Za-z0-9]{20,})|(?:tvly-[A-Za-z0-9]{20,})|(?:Bearer\s+[A-Za-z0-9._-]+)/gi, "[key removed]");
+  // Chemins personnels (/home/user, /Users/name)
+  cleaned = cleaned.replace(/\/(?:home|Users)\/[^\/\s]+/g, "[path removed]");
+  cleaned = cleaned.replace(/C:\\\\Users\\[^\\\s]+/gi, "[path removed]");
+  // Numéros de téléphone (format international et US)
+  cleaned = cleaned.replace(/\b\+?\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3,4}[-.\s]?\d{0,4}\b/g, "[phone removed]");
+  return cleaned;
 }
 
 export type { DocEntry, DocContent, DocIndex };
