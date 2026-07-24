@@ -220,6 +220,73 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 
 ---
 
+## 🤝 Réflexion : Services Partagés (Architecture)
+
+### Contexte
+- Multiples agents LLM : Pi-Web, Openclaw, Hermes, nodes Ollama, etc.
+- Besoin de services communs (libraire, mémoire) sans duplication
+- Contrainte : isolation entre agents publics et privés
+
+### Décision : Pi-Web comme hub central (Option C)
+- Garder Pi-Web monolithique (pas de split UI/Engine)
+- Exposer les services via REST API (déjà existantes)
+- Ajouter une authentification API Key pour les agents externes
+- Localhost = bypass (Pi-Web interne), externe = `X-API-Key` obligatoire
+- Si un jour trop de services → extraire un Pi-Engine (pas pour maintenant)
+
+### Pourquoi pas les autres options
+- **Microservices séparés** → trop de containers, trop de config, déplace le problème
+- **Split Pi-Web (UI + Engine)** → 2× complexité ops, pas nécessaire maintenant
+
+### Protocole : REST API (pas MCP)
+- REST = universel (curl, Python, JS, n'importe quel agent)
+- MCP = intéressant mais écosystème encore jeune, pas tous les agents le supportent
+- MCP possible plus tard comme wrapper léger si besoin
+
+### Libraire — Service partagé (IMPLÉMENTÉ)
+
+| Aspect | Détail |
+|---|---|
+| Fonctions | Recherche web + stockage documentation |
+| Sanitize | `sanitizeContent` : emails, clés API, chemins, téléphones — aucune info perso stockée |
+| Scan de projet | Supprimé des routes partagées (leak potentiel) |
+| Auth externe | API Key (commit `3d09092`) |
+| Doc agents | `docs/shared-services.md` (commit `20be234`) |
+| Recherche | Bibliothèque locale → Webclaw scrape → Tavily (optionnel) → DuckDuckGo fallback |
+| LLM synthèse | Pi SDK `completeSimple` (couplage OK, reste dans Pi-Web) |
+
+### Webclaw self-hosté — Limitations identifiées
+
+| Capacité | Statut |
+|---|---|
+| Scrape pages statiques | ✅ |
+| TLS fingerprinting (bot protection basique) | ✅ |
+| `/v1/search` | ❌ (501 sur self-hosted) |
+| JS rendering | ❌ (Twitter/X retourne vide) |
+| Cloudflare bypass | ⚠️ Partiel |
+
+**Fallbacks :**
+- **DuckDuckGo** scrape via `/v1/scrape`
+- **Tavily** (optionnel) : API search propre, 1000 recherches/mois gratuit
+- **Playwright / FlareSolverr** : pas nécessaires pour la doc technique (quasi toujours statique)
+
+### Mémoire partagée — À VENIR
+- Namespaces obligatoires : `public`, `agent:<id>`, `private`
+- Agent public (Openclaw) → voit `public` + `agent:openclaw`
+- Agent privé (Hermes) → voit `public` + `agent:hermes` + `private`
+- Même pattern que le libraire (REST API + API Key + stockage JSON)
+
+### Futurs services possibles
+
+| Service | Description |
+|---|---|
+| Mémoire partagée | Namespaces `public` / `agent:<id>` / `private` |
+| Scrape direct | Webclaw sans passer par le libraire |
+| CBM scoped par projet | Codebase memory par projet |
+| Event bus inter-agents | Communication asynchrone entre agents |
+
+---
+
 ## 📋 État actuel du système
 
 ### Upload & Analyse de fichiers
