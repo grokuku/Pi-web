@@ -36,43 +36,62 @@ export async function scanProjectInventory(cwd: string): Promise<ProjectInventor
     });
   }
 
-  // 2. package.json
-  const pkgPath = join(cwd, "package.json");
-  if (existsSync(pkgPath)) {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  // 2. package.json — chercher à la racine et dans les sous-dossiers communs
+  const possiblePkgPaths = [
+    join(cwd, "package.json"),
+    join(cwd, "backend", "package.json"),
+    join(cwd, "frontend", "package.json"),
+    join(cwd, "server", "package.json"),
+    join(cwd, "client", "package.json"),
+    join(cwd, "web", "package.json"),
+    join(cwd, "api", "package.json"),
+    join(cwd, "app", "package.json"),
+  ];
 
-    // Dependencies
-    if (pkg.dependencies) {
-      for (const [name, version] of Object.entries(pkg.dependencies)) {
-        inventory.dependencies.push({
-          name,
-          version: version as string,
-          type: "npm",
-          source: `https://www.npmjs.com/package/${name}`,
+  // Utiliser un Set pour ne pas parser deux fois le même fichier
+  const seenPkgPaths = new Set<string>();
+  for (const pkgPath of possiblePkgPaths) {
+    if (!existsSync(pkgPath) || seenPkgPaths.has(pkgPath)) continue;
+    seenPkgPaths.add(pkgPath);
+
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+
+      // Dependencies
+      if (pkg.dependencies) {
+        for (const [name, version] of Object.entries(pkg.dependencies)) {
+          inventory.dependencies.push({
+            name,
+            version: version as string,
+            type: "npm",
+            source: `https://www.npmjs.com/package/${name}`,
+          });
+        }
+      }
+
+      // DevDependencies
+      if (pkg.devDependencies) {
+        for (const [name, version] of Object.entries(pkg.devDependencies)) {
+          inventory.devDependencies.push({
+            name,
+            version: version as string,
+            type: "npm",
+            source: `https://www.npmjs.com/package/${name}`,
+          });
+        }
+      }
+
+      // Engines (Node version requirement)
+      if (pkg.engines?.node) {
+        inventory.runtime.push({
+          name: "node",
+          version: pkg.engines.node,
+          type: "runtime",
+          source: "https://nodejs.org/docs/latest/api/",
         });
       }
-    }
-
-    // DevDependencies
-    if (pkg.devDependencies) {
-      for (const [name, version] of Object.entries(pkg.devDependencies)) {
-        inventory.devDependencies.push({
-          name,
-          version: version as string,
-          type: "npm",
-          source: `https://www.npmjs.com/package/${name}`,
-        });
-      }
-    }
-
-    // Engines (Node version requirement)
-    if (pkg.engines?.node) {
-      inventory.runtime.push({
-        name: "node",
-        version: pkg.engines.node,
-        type: "runtime",
-        source: "https://nodejs.org/docs/latest/api/",
-      });
+    } catch (e) {
+      // package.json invalide, on skip
     }
   }
 
