@@ -172,7 +172,15 @@ async function cbmProxy(req: any, res: any) {
 
     res.status(proxyRes.status);
 
-    proxyRes.headers.forEach((value, key) => {
+    // Supprimer le header CSP qui bloque l'affichage en iframe
+    // Le serveur CBM envoie frame-ancestors 'none', ce qui empêche
+    // d'afficher l'UI CBM dans une iframe sur pi.holaf.fr
+    const respHeaders = new Headers(proxyRes.headers);
+    respHeaders.delete("content-security-policy");
+    respHeaders.delete("content-security-policy-report-only");
+
+    // Envoyer les headers (sans CSP pour permettre l'affichage en iframe)
+    respHeaders.forEach((value, key) => {
       if (key.toLowerCase() !== "transfer-encoding" &&
           key.toLowerCase() !== "content-encoding" &&
           key.toLowerCase() !== "connection") {
