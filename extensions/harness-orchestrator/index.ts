@@ -326,8 +326,11 @@ export default function (pi: ExtensionAPI) {
           }
 
           // Set le system prompt APRÈS setActiveToolsByName (sinon écrasé)
-          (tempSession as any)._baseSystemPrompt = expert.systemPrompt;
-          (tempSession as any).agent.state.systemPrompt = expert.systemPrompt;
+          // Préserver le "Current working directory:" du SDK en l'ajoutant après le prompt de l'expert
+          const cwdLine = (tempSession as any)._baseSystemPrompt?.match(/Current working directory: (.+)/)?.[0] || "";
+          const systemPromptWithCwd = expert.systemPrompt + (cwdLine ? `\n\n${cwdLine}` : "");
+          (tempSession as any)._baseSystemPrompt = systemPromptWithCwd;
+          (tempSession as any).agent.state.systemPrompt = systemPromptWithCwd;
 
           // Construire le prompt de l'expert
           let expertPrompt = task;

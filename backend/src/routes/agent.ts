@@ -342,7 +342,7 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
     const timeout = Math.min(timeoutSecs || 300, 600) * 1000; // max 10 minutes
 
     // 1. Create/resume session
-    const state = await createPiSession(project.cwd, project.id);
+    const state = await createPiSession(project.cwd, project.id, { projectName: project.name });
 
     // 2. Apply mode/model from library config (code mode)
     const library = loadModelLibrary();

@@ -21,6 +21,7 @@ import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
 import { designCustomTools } from "./design-tools.js";
 import { librarianTools } from "./librarian-tools.js";
+import { getProject } from "../projects/manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -207,7 +208,7 @@ function emitSessionUpdate(projectId: string) {
 export async function createPiSession(
   cwd: string,
   projectId: string,
-  options?: { resume?: boolean; sessionId?: string }
+  options?: { resume?: boolean; sessionId?: string; projectName?: string }
 ): Promise<PiSessionState> {
   // ── Reuse existing in-memory session ──
   const existing = sessionsByProject.get(projectId);
@@ -254,6 +255,13 @@ export async function createPiSession(
       modelRuntime: sharedModelRuntime!,
       customTools: [...designCustomTools, ...librarianTools],
     });
+
+    // Inject project context into system prompt
+    if (options?.projectName) {
+      const projectContext = `\n\n<!-- PI_PROJECT_CONTEXT -->\nYou are working on project "${options.projectName}" (ID: ${projectId}).\nWorking directory: ${cwd}\n<!-- /PI_PROJECT_CONTEXT -->`;
+      (session as any)._baseSystemPrompt = (session as any)._baseSystemPrompt + projectContext;
+      (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+    }
 
     const unsubscribe = session.subscribe((event) => {
       // Track tool executions
@@ -460,7 +468,7 @@ export async function sendPrompt(
             if (key.endsWith(`:${projectId}`)) activeToolCalls.delete(key);
           });
         }
-        await createPiSession(state.cwd, projectId, { resume: false });
+        await createPiSession(state.cwd, projectId, { resume: false, projectName: getProject(projectId)?.name });
         // Re-apply current mode to the new session
         const newMode = oldState?.activeMode || "code";
         try { await applyModeToSession(newMode, projectId); } catch {}
@@ -910,7 +918,7 @@ export async function newSession(projectId: string): Promise<void> {
   }
 
   // Create brand new session (no resume)
-  await createPiSession(cwd, projectId, { resume: false });
+  await createPiSession(cwd, projectId, { resume: false, projectName: getProject(projectId)?.name });
   emitSessionUpdate(projectId);
 }
 
@@ -1110,6 +1118,8 @@ function cleanPromptForModeChange(rawPrompt: string): string {
   let prompt = rawPrompt.replace(/\n*<!-- PI_MODE:\w+ -->[\s\S]*?<!-- \/PI_MODE:\w+ -->\n*/g, "\n");
   // Remove identity override block
   prompt = prompt.replace(/\n*<!-- PI_IDENTITY -->[\s\S]*?<!-- \/PI_IDENTITY -->\n*/g, "\n");
+  // Remove project context block
+  prompt = prompt.replace(/\n*<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->\n*/g, "\n");
   return prompt.trim() + "\n";
 }
 
@@ -1396,6 +1406,9 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     }
   }
 
+  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
+  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
+
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
   if (mode === "plan") {
@@ -1429,6 +1442,11 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // Append mode-specific instructions with markers
   if (instructions.trim()) {
     prompt += `\n${MODE_BLOCK_MARKER_START}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
+  }
+
+  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
+  if (projectContextBlock) {
+    prompt += `\n\n${projectContextBlock}`;
   }
 
   (session as any)._baseSystemPrompt = prompt;
@@ -1485,6 +1503,9 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     }
   }
 
+  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
+  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
+
   // Restore all tools (base + extension)
   (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
 
@@ -1500,6 +1521,12 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   }
   prompt = prompt.trim() + "\n";
   prompt += `\n${MODE_BLOCK_MARKER_START}CODE ${MODE_BLOCK_MARKER_END}\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}\n${MODE_BLOCK_MARKER_START.replace("\u003c!-- PI", "\u003c!-- /PI")}CODE ${MODE_BLOCK_MARKER_END}\n`;
+
+  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
+  if (projectContextBlock) {
+    prompt += `\n\n${projectContextBlock}`;
+  }
+
   (session as any)._baseSystemPrompt = prompt;
   (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 

@@ -584,6 +584,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         const state = await createPiSession(cwd, pid, {
           resume: msg.resume !== false, // Resume by default!
           sessionId: msg.sessionId,
+          projectName: project.name,
         });
 
         // Sync git info
