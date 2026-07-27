@@ -38,7 +38,7 @@ export function Graph3DModal({ onClose }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <a
-            href="http://localhost:9749"
+            href="/cbm-ui/"
             target="_blank"
             rel="noopener noreferrer"
             className="text-hacker-text-dim hover:text-hacker-accent p-1"

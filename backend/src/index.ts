@@ -113,6 +113,15 @@ app.all("/api/layout", cbmProxy);
 app.all("/api/adr", cbmProxy);
 app.all("/api/project", cbmProxy);
 app.all("/api/project-health", cbmProxy);
+// NOTE: /api/projects (pluriel) est délibérément NON proxyé vers CBM car il
+// entre en conflit avec projectsRouter (Pi-Web project management API) monté
+// après apiAuth. Le CBM UI utilise /api/project (singulier) déjà proxyé ci-dessus.
+app.all("/api/project-list", cbmProxy);    // au cas où
+app.all("/api/stats", cbmProxy);           // statistiques du graphe
+app.all("/api/graph", cbmProxy);           // données du graphe
+app.all("/api/nodes", cbmProxy);           // nœuds du graphe
+app.all("/api/edges", cbmProxy);           // arêtes du graphe
+app.all("/api/search", cbmProxy);          // recherche dans le graphe
 app.use("/api/browse", cbmProxy);
 
 // ── apiAuth middleware (après les routes CBM proxy) ──

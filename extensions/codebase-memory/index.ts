@@ -270,6 +270,10 @@ const REINDEX_INTERVAL_MS = 5 * 60 * 1000; // 5 min — keeps index fresh withou
 
 /** Get the CBM project name for a given cwd, or derive a fallback. */
 function getProjectName(cwd: string): string {
+  if (!cwd) {
+    console.warn("[cbm] getProjectName called with empty cwd, using fallback 'default'");
+    return "default";
+  }
   return projectByCwd.get(cwd)?.projectName || cwd.split("/").pop() || cwd;
 }
 
