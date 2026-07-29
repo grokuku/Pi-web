@@ -242,16 +242,37 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
 
 // ── Public API ──
 
+// Mots trop courants pour être pertinents seuls
+const STOPWORDS = new Set(["the", "and", "for", "with", "that", "this", "from", "are", "was", "how", "what", "when", "why", "who", "use", "using", "into", "your", "have", "has", "not", "but", "can", "all", "any", "get", "set", "new", "old", "des", "les", "une", "sur", "dan", "par", "pas", "pour", "avec", "tout", "sont", "comment", "cette", "cela"]);
+
 /** Recherche dans la bibliothèque locale */
 export function searchLocalDocs(query: string): DocEntry[] {
   const index = loadIndex();
   const queryLower = query.toLowerCase();
-  const terms = queryLower.split(/\s+/);
+  const allTerms = queryLower.split(/\s+/);
+  // Filtrer : termes de 4+ chars qui ne sont pas des stopwords
+  const terms = allTerms.filter(t => t.length >= 4 && !STOPWORDS.has(t));
 
-  return index.library.filter(entry => {
-    const searchable = (entry.name + " " + entry.description + " " + entry.keywords.join(" ")).toLowerCase();
-    return terms.some(term => searchable.includes(term));
-  });
+  if (terms.length === 0) return [];
+
+  // Scorer chaque doc par le nombre de termes qui matchent
+  const scored = index.library
+    .map(entry => {
+      const searchable = (entry.name + " " + entry.description + " " + entry.keywords.join(" ")).toLowerCase();
+      let matchCount = 0;
+      for (const term of terms) {
+        if (searchable.includes(term)) matchCount++;
+      }
+      return { entry, score: matchCount };
+    })
+    .filter(item => {
+      // Au moins 2 termes doivent matcher, OU au moins 50% des termes
+      const minMatches = Math.max(2, Math.ceil(terms.length * 0.5));
+      return item.score >= minMatches;
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return scored.map(item => item.entry);
 }
 
 /** Récupère le contenu d'un doc */
