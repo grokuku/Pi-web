@@ -62,7 +62,8 @@ export interface HarnessAgentConfig {
 export interface HarnessConfig {
   agents: HarnessAgentConfig[];
   synthesize: boolean;         // whether to synthesize final output
-  agentTimeout?: number;       // per-agent timeout in seconds (default: 300 = 5min)
+  agentTimeout?: number;       // inactivity timeout in seconds (default: 600 = 10min without any event)
+  agentMaxTimeout?: number;     // global max timeout in seconds (default: 1800 = 30min safety net)
   maxTasks?: number;           // safety limit on total tasks (default: 20)
 }
 
@@ -321,7 +322,7 @@ function createDefaultProjectMode(): ProjectModeConfig {
     review: { modelId: null, enabled: false, maxReviews: 1 },
     yolo: { modelId: null, enabled: false, config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
     harness: { modelId: null, enabled: false,
-      config: { agents: [], synthesize: true, agentTimeout: 300, maxTasks: 20 } },
+      config: { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 } },
   };
 }
 
@@ -482,7 +483,8 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
       config: {
         agents: pm?.harness?.config?.agents ?? [],
         synthesize: pm?.harness?.config?.synthesize ?? true,
-        agentTimeout: pm?.harness?.config?.agentTimeout ?? 300,
+        agentTimeout: pm?.harness?.config?.agentTimeout ?? 600,
+        agentMaxTimeout: pm?.harness?.config?.agentMaxTimeout ?? 1800,
         maxTasks: pm?.harness?.config?.maxTasks ?? 20,
       },
     },
@@ -713,6 +715,7 @@ export function setProjectModeHarnessConfig(
     agents?: { role: string; description?: string; modelId: string | null; enabled: boolean; systemPrompt?: string; tools?: string[] }[];
     synthesize?: boolean;
     agentTimeout?: number;
+    agentMaxTimeout?: number;
     maxTasks?: number;
   }
 ): ModelLibrary {
@@ -721,10 +724,11 @@ export function setProjectModeHarnessConfig(
     library.projectModes[projectId] = createDefaultProjectMode();
   }
   const harness = (library.projectModes[projectId] as any).harness;
-  if (!harness.config) harness.config = { agents: [], synthesize: true, agentTimeout: 300, maxTasks: 20 };
+  if (!harness.config) harness.config = { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 };
   if (config.agents !== undefined) harness.config.agents = config.agents;
   if (config.synthesize !== undefined) harness.config.synthesize = config.synthesize;
   if (config.agentTimeout !== undefined) harness.config.agentTimeout = config.agentTimeout;
+  if (config.agentMaxTimeout !== undefined) harness.config.agentMaxTimeout = config.agentMaxTimeout;
   if (config.maxTasks !== undefined) harness.config.maxTasks = Math.max(1, Math.min(50, config.maxTasks));
   saveModelLibrary(library);
   return library;

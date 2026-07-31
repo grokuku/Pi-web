@@ -9,6 +9,11 @@
  * seulement pendant les appels provider. Les files d'attente sont
  * gérées par promesse — la tâche suivante est débloquée quand un
  * slot se libère.
+ *
+ * BUG-59 : la réentrance était basée sur projectId, ce qui causait
+ * un bug : les agents harness partageaient le slot de la session
+ * principale, et le release tuait le slot de la session principale.
+ * Désormais, chaque appel utilise un slotKey unique (ex: "projectId::architect").
  */
 
 // ── Types ─────────────────────────────────────────────────────
@@ -23,15 +28,21 @@ export const DEFAULT_CONFIG: ConcurrencyConfig = {
   maxAgentSlots: 5,
 };
 
+// Temps max d'attente dans la file avant rejet (60s)
+const QUEUE_TIMEOUT_MS = 60_000;
+
 interface QueuedTask {
-  resolve: () => void;
-  projectId: string;
+  slotKey: string;
   label: string;
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
   timestamp: number;
+  aborted: boolean; // true si la tâche a timeouté dans la file
 }
 
 interface SlotInfo {
-  projectId: string;
+  slotKey: string;
   label: string;
   acquiredAt: number;
 }
@@ -41,13 +52,12 @@ interface SlotInfo {
 class ConcurrencyManager {
   private config: ConcurrencyConfig = { ...DEFAULT_CONFIG };
 
+  // Map key = slotKey (unique par appel)
   private llmSlots: Map<string, SlotInfo> = new Map();
   private agentSlots: Map<string, SlotInfo> = new Map();
 
   private llmQueue: QueuedTask[] = [];
   private agentQueue: QueuedTask[] = [];
-
-  private slotCounter = 0;
 
   /** Met à jour la configuration (thread-safe car synchrone) */
   setConfig(config: Partial<ConcurrencyConfig>): void {
@@ -79,28 +89,49 @@ class ConcurrencyManager {
 
   /**
    * Acquiert un slot LLM. Si tous les slots sont pris, la promesse
-   * reste en attente jusqu'à ce qu'un slot se libère.
+   * reste en attente jusqu'à ce qu'un slot se libère ou que le
+   * timeout de file (60s) expire.
+   *
+   * @param slotKey Identifiant unique par appel (ex: "projectId::architect")
+   * @param label   Libellé pour affichage/stats
    */
-  async acquireLLMSlot(projectId: string, label: string): Promise<void> {
-    const slot = this.tryAcquireLLM(projectId, label);
-    if (slot) return;
+  async acquireLLMSlot(slotKey: string, label: string): Promise<void> {
+    // Réentrance safety : si ce slotKey a déjà un slot, ne rien faire
+    if (this.llmSlots.has(slotKey)) return;
 
-    // File d'attente
-    return new Promise<void>((resolve) => {
-      this.llmQueue.push({ resolve, projectId, label, timestamp: Date.now() });
+    if (this.llmSlots.size < this.config.maxLLMSlots) {
+      this.llmSlots.set(slotKey, { slotKey, label, acquiredAt: Date.now() });
+      return;
+    }
+
+    // File d'attente avec timeout
+    return new Promise<void>((resolve, reject) => {
+      const task: QueuedTask = {
+        slotKey,
+        label,
+        resolve,
+        reject,
+        timestamp: Date.now(),
+        aborted: false,
+        timer: undefined as any,
+      };
+      task.timer = setTimeout(() => {
+        task.aborted = true;
+        const idx = this.llmQueue.indexOf(task);
+        if (idx >= 0) this.llmQueue.splice(idx, 1);
+        reject(new Error(
+          `[concurrency] LLM slot acquisition timed out after ${QUEUE_TIMEOUT_MS / 1000}s ` +
+          `(slotKey=${slotKey}, ${this.llmSlots.size}/${this.config.maxLLMSlots} slots used, ` +
+          `${this.llmQueue.length} en attente)`
+        ));
+      }, QUEUE_TIMEOUT_MS);
+      this.llmQueue.push(task);
     });
   }
 
   /** Libère un slot LLM (appelé dans le finally après l'appel provider) */
-  releaseLLMSlot(projectId: string): void {
-    // Trouver et supprimer le slot correspondant
-    for (const [id, info] of this.llmSlots) {
-      if (info.projectId === projectId) {
-        this.llmSlots.delete(id);
-        break;
-      }
-    }
-    // Débloquer la prochaine tâche en attente
+  releaseLLMSlot(slotKey: string): void {
+    this.llmSlots.delete(slotKey);
     this.drainLLMQueue();
   }
 
@@ -108,70 +139,69 @@ class ConcurrencyManager {
 
   /**
    * Acquiert un slot agent (session Pi SDK). Bloque si tous les
-   * slots sont pris.
+   * slots sont pris, avec timeout de file (60s).
+   *
+   * @param slotKey Identifiant unique par appel (ex: "projectId::auto-review")
+   * @param label   Libellé pour affichage/stats
    */
-  async acquireAgentSlot(projectId: string, label: string): Promise<void> {
-    const slot = this.tryAcquireAgent(projectId, label);
-    if (slot) return;
+  async acquireAgentSlot(slotKey: string, label: string): Promise<void> {
+    if (this.agentSlots.has(slotKey)) return;
 
-    return new Promise<void>((resolve) => {
-      this.agentQueue.push({ resolve, projectId, label, timestamp: Date.now() });
+    if (this.agentSlots.size < this.config.maxAgentSlots) {
+      this.agentSlots.set(slotKey, { slotKey, label, acquiredAt: Date.now() });
+      return;
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const task: QueuedTask = {
+        slotKey,
+        label,
+        resolve,
+        reject,
+        timestamp: Date.now(),
+        aborted: false,
+        timer: undefined as any,
+      };
+      task.timer = setTimeout(() => {
+        task.aborted = true;
+        const idx = this.agentQueue.indexOf(task);
+        if (idx >= 0) this.agentQueue.splice(idx, 1);
+        reject(new Error(
+          `[concurrency] Agent slot acquisition timed out after ${QUEUE_TIMEOUT_MS / 1000}s ` +
+          `(slotKey=${slotKey}, ${this.agentSlots.size}/${this.config.maxAgentSlots} slots used, ` +
+          `${this.agentQueue.length} en attente)`
+        ));
+      }, QUEUE_TIMEOUT_MS);
+      this.agentQueue.push(task);
     });
   }
 
   /** Libère un slot agent (session terminée) */
-  releaseAgentSlot(projectId: string): void {
-    for (const [id, info] of this.agentSlots) {
-      if (info.projectId === projectId) {
-        this.agentSlots.delete(id);
-        break;
-      }
-    }
+  releaseAgentSlot(slotKey: string): void {
+    this.agentSlots.delete(slotKey);
     this.drainAgentQueue();
   }
 
   // ── Helpers ──
 
-  private tryAcquireLLM(projectId: string, label: string): string | null {
-    // Vérifier si ce project a déjà un slot (réentrance)
-    for (const [id, info] of this.llmSlots) {
-      if (info.projectId === projectId) return id;
-    }
-
-    if (this.llmSlots.size < this.config.maxLLMSlots) {
-      const id = `llm-${++this.slotCounter}`;
-      this.llmSlots.set(id, { projectId, label, acquiredAt: Date.now() });
-      return id;
-    }
-    return null;
-  }
-
-  private tryAcquireAgent(projectId: string, label: string): string | null {
-    for (const [id, info] of this.agentSlots) {
-      if (info.projectId === projectId) return id;
-    }
-
-    if (this.agentSlots.size < this.config.maxAgentSlots) {
-      const id = `agent-${++this.slotCounter}`;
-      this.agentSlots.set(id, { projectId, label, acquiredAt: Date.now() });
-      return id;
-    }
-    return null;
-  }
-
   private drainLLMQueue(): void {
     while (this.llmQueue.length > 0 && this.llmSlots.size < this.config.maxLLMSlots) {
       const next = this.llmQueue.shift()!;
-      const slot = this.tryAcquireLLM(next.projectId, next.label);
-      if (slot) next.resolve();
+      // Ignorer les tâches qui ont déjà timeouté dans la file
+      if (next.aborted) continue;
+      clearTimeout(next.timer);
+      this.llmSlots.set(next.slotKey, { slotKey: next.slotKey, label: next.label, acquiredAt: Date.now() });
+      next.resolve();
     }
   }
 
   private drainAgentQueue(): void {
     while (this.agentQueue.length > 0 && this.agentSlots.size < this.config.maxAgentSlots) {
       const next = this.agentQueue.shift()!;
-      const slot = this.tryAcquireAgent(next.projectId, next.label);
-      if (slot) next.resolve();
+      if (next.aborted) continue;
+      clearTimeout(next.timer);
+      this.agentSlots.set(next.slotKey, { slotKey: next.slotKey, label: next.label, acquiredAt: Date.now() });
+      next.resolve();
     }
   }
 

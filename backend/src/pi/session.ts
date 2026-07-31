@@ -153,8 +153,10 @@ async function withSessionTimeout(
   projectId: string,
   label: string,
 ): Promise<void> {
+  // BUG-59 : slotKey unique par appel pour éviter la réentrance par projectId
+  const slotKey = `${projectId}::${label}`;
   // Acquire LLM slot (respects max parallel LLM calls)
-  await concurrencyManager.acquireLLMSlot(projectId, label);
+  await concurrencyManager.acquireLLMSlot(slotKey, label);
 
   let timer: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<void>((_, reject) => {
@@ -171,7 +173,7 @@ async function withSessionTimeout(
     return await Promise.race([promise, timeoutPromise]);
   } finally {
     clearTimeout(timer!);
-    concurrencyManager.releaseLLMSlot(projectId);
+    concurrencyManager.releaseLLMSlot(slotKey);
   }
 }
 
@@ -1718,7 +1720,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       "- If the changes look good, say so — don't fabricate issues.";
 
     // Subscribe to temp session events to forward tool calls for UI display
-    await concurrencyManager.acquireAgentSlot(projectId, "auto-review");
+    await concurrencyManager.acquireAgentSlot(`${projectId}::auto-review`, "auto-review");
     const tempUnsub = tempSession.subscribe((event) => {
       const taggedEvent = { ...event, _autoReview: true } as any;
       if (event.type === "tool_execution_start") {
@@ -1762,7 +1764,7 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     }
 
     // Clean up temp session
-    concurrencyManager.releaseAgentSlot(projectId);
+    concurrencyManager.releaseAgentSlot(`${projectId}::auto-review`);
     tempUnsub();
     try { (tempSession as any).dispose?.(); } catch {}
     // Clean up temp session file from disk
@@ -1955,7 +1957,7 @@ export async function generateAiCommitMessage(
     const timeout = setTimeout(() => controller.abort(), 20_000);
 
     // Acquire LLM slot for the provider call
-    await concurrencyManager.acquireLLMSlot(projectId, "commit");
+    await concurrencyManager.acquireLLMSlot(`${projectId}::commit`, "commit");
 
     let commitResult: { subject: string; body: string } | null = null;
     try {
@@ -1982,7 +1984,7 @@ export async function generateAiCommitMessage(
         commitResult = { subject: subject || text, body };
       }
     } finally {
-      concurrencyManager.releaseLLMSlot(projectId);
+      concurrencyManager.releaseLLMSlot(`${projectId}::commit`);
     }
     return commitResult;
   } catch (error: any) {
@@ -2222,7 +2224,7 @@ async function runYoloAgent(
     (tempSession as any).agent.state.systemPrompt = prompt;
 
     // Subscribe to forward events with yolo tags
-    await concurrencyManager.acquireAgentSlot(projectId, `yolo-${agentKey}`);
+    await concurrencyManager.acquireAgentSlot(`${projectId}::yolo-${agentKey}`, `yolo-${agentKey}`);
     const tempUnsub = tempSession.subscribe((event) => {
       const modelName = modelInfo
         ? sharedModelRegistry!.getAvailable().find((m: any) => m.provider === modelInfo.providerId && m.id === modelInfo.modelId)?.name
@@ -2302,7 +2304,7 @@ async function runYoloAgent(
     return fullResponse;
   } catch (err: any) {
     console.error(`[yolo] Agent ${agentKey} error:`, err.message);
-    concurrencyManager.releaseAgentSlot(projectId);
+    concurrencyManager.releaseAgentSlot(`${projectId}::yolo-${agentKey}`);
     return `[Error: ${agentKey} failed — ${err.message}]`;
   }
 }

@@ -467,8 +467,12 @@ export class HarnessEngine {
     let tempSessionFile: string | undefined;
     let tempUnsub: (() => void) | null = null;
 
+    // BUG-59 : slotKey unique par agent pour éviter la réentrance par projectId
+    const agentSlotKey = `${this.projectId}::harness-${label}`;
+    const llmSlotKey = `${this.projectId}::harness-llm-${label}`;
+
     try {
-      await concurrencyManager.acquireAgentSlot(this.projectId, label);
+      await concurrencyManager.acquireAgentSlot(agentSlotKey, label);
 
       const tempSessionManager = SessionManager.create(cwd);
       tempSessionFile = tempSessionManager.getSessionFile();
@@ -540,10 +544,13 @@ export class HarnessEngine {
       (tempSession as any)._baseSystemPrompt = systemPrompt;
       (tempSession as any).agent.state.systemPrompt = systemPrompt;
 
-      // Forward des events vers le frontend
+      // Forward des events vers le frontend + reset du timer d'inactivité
       // FILTRER message_start/message_end de la session temp pour ne pas
       // écraser le assistantId du frontend (le harness gère ses propres message_start/end)
+      let resetInactivityTimer: (() => void) | null = null;
       tempUnsub = tempSession.subscribe((event: any) => {
+        // Chaque event reçu prouve que l'agent travaille → reset du timer d'inactivité
+        if (resetInactivityTimer) resetInactivityTimer();
         if (event.type === "message_start" || event.type === "message_end") return;
         emitToSubscribers({ ...event, _harness: true, _harnessAgent: agent.role } as any, this.projectId);
       });
@@ -556,29 +563,99 @@ export class HarnessEngine {
         args: { role: agent.role, task: label },
       } as any, this.projectId);
 
-      // Appel LLM avec timeout
-      await concurrencyManager.acquireLLMSlot(this.projectId, label);
-      let llmTimer: ReturnType<typeof setTimeout>;
-      const timeoutMs = (this.config.agentTimeout || 300) * 1000;
-      const llmTimeout = new Promise<void>((_, reject) => {
-        llmTimer = setTimeout(() => {
-          tempSession!.abort().catch(() => {});
-          reject(new Error(`[harness-${agent.role}] Timed out after ${timeoutMs / 1000}s`));
-        }, timeoutMs);
-      });
-
       // Vérifier le system prompt juste avant prompt()
       const sp = (tempSession as any)._baseSystemPrompt || "";
       console.log(`[harness] Agent ${agent.role}: _baseSystemPrompt length=${sp.length}, preview=${sp.slice(0, 100)}`);
       console.log(`[harness] Agent ${agent.role}: agent.state.systemPrompt length=${(tempSession as any).agent.state.systemPrompt?.length || 0}`);
 
-      try {
-        console.log(`[harness] Agent ${agent.role}: appel prompt() (prompt length=${prompt.length})...`);
-        await Promise.race([tempSession.prompt(prompt, {}), llmTimeout]);
-        console.log(`[harness] Agent ${agent.role}: prompt() résolu sans erreur`);
-      } finally {
-        clearTimeout(llmTimer!);
-        concurrencyManager.releaseLLMSlot(this.projectId);
+      // BUG-59 : timeout à activité (inactivity) + timeout global max de sécurité
+      // Le timer d'inactivité se reset à chaque event reçu (text_delta, tool_execution_start, etc.).
+      // Tant que l'agent travaille, il n'est pas tué. Il est tué seulement s'il n'y a
+      // plus d'activité pendant agentTimeout secondes (défaut: 600s = 10min).
+      // Un timeout global max (agentMaxTimeout, défault: 1800s = 30min) empêche un agent
+      // de tourner indéfiniment même s'il émet des events régulièrement.
+      const inactivityTimeoutMs = (this.config.agentTimeout || 600) * 1000;
+      const globalMaxTimeoutMs = (this.config.agentMaxTimeout || 1800) * 1000;
+
+      /**
+       * Exécute prompt() avec timeout d'inactivité + timeout global.
+       * Retourne true si succès, false si timeout (pour retry).
+       */
+      const runPromptWithTimeouts = async (): Promise<boolean> => {
+        // Capture non-null pour les callbacks (tempSession est non-null ici)
+        const session = tempSession!;
+        await concurrencyManager.acquireLLMSlot(llmSlotKey, label);
+
+        let inactivityTimer: ReturnType<typeof setTimeout>;
+        let globalTimer: ReturnType<typeof setTimeout>;
+        let rejectTimeout: ((err: Error) => void) | null = null;
+
+        const resetInactivity = () => {
+          clearTimeout(inactivityTimer!);
+          inactivityTimer = setTimeout(() => {
+            session.abort().catch(() => {});
+            rejectTimeout?.(new Error(
+              `[harness-${agent.role}] Inactivity timeout after ${inactivityTimeoutMs / 1000}s without activity`
+            ));
+          }, inactivityTimeoutMs);
+        };
+
+        // Connecter le reset au subscription handler
+        resetInactivityTimer = resetInactivity;
+
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          rejectTimeout = reject;
+          // Démarrer le timer d'inactivité
+          resetInactivity();
+          // Timeout global max (safety net — ne se reset jamais)
+          globalTimer = setTimeout(() => {
+            session.abort().catch(() => {});
+            reject(new Error(
+              `[harness-${agent.role}] Global timeout after ${globalMaxTimeoutMs / 1000}s`
+            ));
+          }, globalMaxTimeoutMs);
+        });
+
+        try {
+          console.log(`[harness] Agent ${agent.role}: appel prompt() (prompt length=${prompt.length}, inactivity=${inactivityTimeoutMs / 1000}s, global=${globalMaxTimeoutMs / 1000}s)...`);
+          await Promise.race([session.prompt(prompt, {}), timeoutPromise]);
+          console.log(`[harness] Agent ${agent.role}: prompt() résolu sans erreur`);
+          return true;
+        } catch (err: any) {
+          const msg = err.message || "";
+          const isTimeout = msg.includes("timeout") || msg.includes("Timed out") || msg.includes("Inactivity") || msg.includes("Global timeout");
+          if (isTimeout) {
+            console.warn(`[harness] Agent ${agent.role}: timeout — ${msg}`);
+            return false; // signal pour retry
+          }
+          throw err; // autre erreur → propagate
+        } finally {
+          clearTimeout(inactivityTimer!);
+          clearTimeout(globalTimer!);
+          resetInactivityTimer = null; // déconnecter le callback
+          concurrencyManager.releaseLLMSlot(llmSlotKey);
+        }
+      };
+
+      // Exécution avec retry (1 retry sur timeout)
+      const maxAttempts = 2;
+      let succeeded = false;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const ok = await runPromptWithTimeouts();
+        if (ok) {
+          succeeded = true;
+          break;
+        }
+        // Timeout — retry si possible
+        if (attempt < maxAttempts) {
+          this.emitText(`\n\n⏱️ **${agent.role} a timeouté (attempt ${attempt}/${maxAttempts}). Retry en cours...**\n\n`);
+          console.log(`[harness] Agent ${agent.role}: retry attempt ${attempt + 1}/${maxAttempts}`);
+        } else {
+          this.emitText(`\n\n❌ **${agent.role} a timeouté définitivement après ${maxAttempts} attempts.**\n\n`);
+        }
+      }
+      if (!succeeded) {
+        throw new Error(`[harness-${agent.role}] Timed out after ${maxAttempts} attempts (inactivity=${inactivityTimeoutMs / 1000}s)`);
       }
 
       // Collecter la réponse
@@ -622,7 +699,7 @@ export class HarnessEngine {
       } as any, this.projectId);
       return `[Error: ${agent.role} failed — ${err.message}]`;
     } finally {
-      concurrencyManager.releaseAgentSlot(this.projectId);
+      concurrencyManager.releaseAgentSlot(agentSlotKey);
       if (tempUnsub) tempUnsub();
       if (tempSession) {
         try { (tempSession as any).dispose?.(); } catch {}

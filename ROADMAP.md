@@ -88,6 +88,7 @@
 | 47 | 🟢 | `_ws_reconnect` jamais émis | 2026-06-29 |
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
 | 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 (system prompt fixé + extraction JSON robuste) |
+| 59 | 🔴 | Harness : timeout global sur `prompt()` tue les experts actifs + bug de réentrance concurrency + pas de timeout sur files d'attente | 2026-06-30 |
 
 ---
 
@@ -199,8 +200,8 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 
 | Fichier | Rôle | Statut |
 |---------|------|--------|
-| `backend/src/pi/harness-engine.ts` | Orchestrateur | ✅ (BUG-58 en cours) |
-| `backend/src/pi/concurrency.ts` | Concurrence | ✅ |
+| `backend/src/pi/harness-engine.ts` | Orchestrateur | ✅ (BUG-58+59 corrigés) |
+| `backend/src/pi/concurrency.ts` | Concurrence | ✅ (BUG-59 corrigé) |
 | `backend/src/pi/model-library.ts` | Types, pool, persistance | ✅ |
 | `backend/src/pi/session.ts` | Intégration /harness | ✅ |
 | `frontend/src/components/Modals/HarnessConfigModal.tsx` | UI config | ✅ |
