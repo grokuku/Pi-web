@@ -97,6 +97,40 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
   - `harness-orchestrator` : sur abort de l'orchestrator, récupérer la réponse partielle de l'expert (`collectExpertResponse`) au lieu de jeter
 - **Restant :** rebuild Docker requis pour appliquer.
 
+#### BUG-68: Erreurs LLM invisibles — « le process s'arrête et rien ne se passe » (mode CODE)
+- **Fichier :** `backend/src/index.ts` + `frontend/src/components/Chat/ChatView.tsx` + `frontend/src/hooks/useChatHistory.ts` + `frontend/src/types.ts` + `frontend/src/App.tsx`
+- **Sévérité :** 🔴 Haute (aucun retour utilisateur sur échec)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** En mode CODE normal, une erreur LLM était avalée à 3 niveaux : (1) le SDK Pi (`handleRunFailure`) transforme toute erreur en message assistant VIDE avec `stopReason:"error"` + `errorMessage` — `session.prompt()` ne reject jamais ; (2) `serializeMessagesForUi()` ne copiait ni `stopReason` ni `errorMessage` → l'erreur était perdue avant le frontend ; (3) le frontend ne faisait que `console.error` sur `on("error")`, un assistant vide ne rendait rien, et `streamingStalled` était codé en dur à `false`. Résultat : l'utilisateur envoyait un message, voyait son message, puis plus rien pendant des minutes sans aucune erreur visible.
+- **Fix :**
+  - `index.ts` `pi_prompt` : le catch envoie maintenant `{ type:"error", projectId, error }` (routeur frontend)
+  - `index.ts` `serializeMessagesForUi` : préserve `stopReason` + `errorMessage`
+  - `ChatView.tsx` : nouveau `useEffect` sur `on("error")` → `setError` + message visible `❌ …` dans la conversation ; bannière d'erreur rouge dans `AssistantGroup` si `stopReason === "error"` / `errorMessage` ; `applyPiEvent` (`message_end`) propage `stopReason`/`errorMessage`
+  - `useChatHistory.ts` : `convertHistoryToDisplayMessages` préserve `stopReason`/`errorMessage` et ne skip plus un turn assistant vide en erreur
+  - `types.ts` : `DisplayMessage` + `stopReason?`/`errorMessage?`
+  - `App.tsx` : `streamingStalled` n'est plus `false` en dur — calculé (vrai si `isStreaming` et aucun event reçu depuis 30s)
+
+#### BUG-69: steer() perdu silencieusement quand l'agent est idle (flags désynchronisés backend/frontend/SDK)
+- **Fichier :** `backend/src/pi/session.ts`
+- **Sévérité :** 🟡 Moyenne (message perdu sans erreur)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** En mode harness, `sendPrompt`/`steerPrompt` appelaient `steer()` dès que `state.isStreaming` était true (flag backend). Après un reload/desync, le flag pouvait rester true alors que l'agent était en réalité idle côté SDK → `steer()` perdait le message sans aucun retour.
+- **Fix :** garde `sdkStreaming = (state.session as any)?.agent?.state?.isStreaming === true` dans les deux branches harness. Si l'agent est idle côté SDK, on fait un `prompt()` complet (avec `withSessionTimeout` 5 min — OK car l'agent n'est pas en délégation longue). Sinon `steer()` comme avant (pas de timeout abortif en délégation, BUG-67 conservé).
+
+#### BUG-70: Race dans le retry de l'extension harness-orchestrator — « Agent is already processing a prompt »
+- **Fichier :** `extensions/harness-orchestrator/index.ts`
+- **Sévérité :** 🟡 Moyenne (2e attempt jeté)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** Sur timeout d'inactivité d'un expert, le retry lançait le 2e `prompt()` alors que l'abort du 1er attempt était encore en cours → « Agent is already processing a prompt ».
+- **Fix :** `await tempSession.waitForIdle()` entre les attempts (résout quand la run et tous les event listeners ont fini).
+
+#### BUG-71: Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler
+- **Fichier :** `backend/src/pi/session.ts`
+- **Sévérité :** 🔴 Haute (mode CODE inopérant : le LLM ne code jamais)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** `getExtensionToolNames()` renvoyait **tous** les tools d'extension sans exclusion → `delegate_to_expert` (enregistré par l'extension harness-orchestrator) était exposé dans TOUS les modes, y compris CODE/PLAN/REVIEW. En mode CODE, le LLM utilisait naturellement ce tool → il délégnait aux experts au lieu de coder directement.
+- **Fix :** nouvelle constante `HARNESS_EXCLUDE = ["delegate_to_expert"]` passée comme 3e argument de `toolsForMode()` dans les branches plan/review/code de `applyModeToSession`, ainsi que dans `restoreCodeMode` (retour mode CODE) et l'auto-review (tempSession REVIEW). La branche harness garde volontairement l'exclusion **non appliquée** : l'orchestrator DOIT conserver `delegate_to_expert` pour déléguer aux experts.
+
 ---
 
 ## ✅ Bugs corrigés (historique)
@@ -143,6 +177,10 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 (system prompt fixé + extraction JSON robuste) |
 | 59 | 🔴 | Harness v2 + extension v3 : timeout global sur `prompt()` tue les experts actifs (fix porté sur harness-orchestrator : timeout à activité + retry) + bug de réentrance concurrency + pas de timeout sur files d'attente + fix `cbm_code` (`qualified_name` requis par le serveur MCP CBM) | 2026-06-30 |
 | 60 | 🟡 | Extension codebase-memory : 4 tools CBM corrigés — cbm_trace (`trace_path` au lieu de `trace_call_path`), cbm_search_code (`pattern` requis au lieu de `query`), cbm_search (`label` string au lieu de `labels` array, ignoré par le serveur), cbm_diff (fallback git local — `detect_changes` inexistant sur le serveur MCP CBM) | 2026-08-01 |
+| 68 | 🔴 | Erreurs LLM invisibles (avalées à 3 niveaux) — le process s'arrête sans message visible | 2026-08-01 |
+| 69 | 🟡 | steer() perdu silencieusement quand l'agent est idle (flags désynchronisés) | 2026-08-01 |
+| 70 | 🟡 | Race retry expert harness — 2e prompt() avant la fin de l'abort du 1er | 2026-08-01 |
+| 71 | 🔴 | Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler | 2026-08-01 |
 
 ---
 

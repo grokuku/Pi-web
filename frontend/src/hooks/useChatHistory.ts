@@ -151,7 +151,10 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
       }
 
       // Skip empty assistant messages (can happen during streaming)
-      if (!text.trim() && !thinking.trim() && toolCalls.length === 0) continue;
+      // BUG-68 : NE PAS skip un turn qui a échoué (stopReason "error" / errorMessage)
+      // — on veut afficher la bannière d'erreur même si le contenu est vide.
+      const isErrorTurn = (msg as any).stopReason === "error" || !!(msg as any).errorMessage;
+      if (!text.trim() && !thinking.trim() && toolCalls.length === 0 && !isErrorTurn) continue;
 
       displayMessages.push({
         id: currentAssistantId,
@@ -165,6 +168,9 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
           output: msg.usage.output || 0,
           cost: { total: msg.usage.cost?.total || 0 },
         } : undefined,
+        // BUG-68 : préserver les métadonnées d'échec LLM pour le rendu de la bannière.
+        stopReason: (msg as any).stopReason,
+        errorMessage: (msg as any).errorMessage,
       });
     }
 

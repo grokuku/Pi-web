@@ -708,7 +708,28 @@ export async function sendPrompt(
     // ABORT ICI TUERAIT L'EXPERT — le travail est perdu (BUG-67).
     // À la place, on met le message en file via steer() : il sera injecté
     // par le SDK après la fin de la délégation en cours.
+    // BUG-69 : options partagées entre les branches (images).
+    const options: any = {};
+    if (imageAttachments && imageAttachments.length > 0) {
+      options.images = imageAttachments;
+    }
     if (state.activeMode === "harness") {
+      // BUG-69 : vérifier que l'agent tourne RÉELLEMENT (flag backend ≠ état SDK
+      // après reload/desync). Si le flag backend est stale (agent idle côté SDK),
+      // steer() perdrait le message silencieusement → on fait un prompt complet.
+      // withSessionTimeout (5 min) est acceptable ici car l'agent n'est PAS en
+      // délégation longue (idle) — un prompt normal ne dépasse pas ce budget.
+      const sdkStreaming = (state.session as any)?.agent?.state?.isStreaming === true;
+      if (!sdkStreaming) {
+        console.log("[prompt] Harness: isStreaming flag stale — traitement comme nouveau prompt");
+        await withSessionTimeout(
+          state.session.prompt(message, options),
+          state.session,
+          projectId,
+          "prompt(harness)",
+        );
+        return;
+      }
       console.log("[prompt] Harness mode streaming — steering message (no abort, expert in progress)");
       try { await state.session.steer(message); } catch (e: any) {
         console.error("[prompt] steer() failed:", e.message);
@@ -719,10 +740,6 @@ export async function sendPrompt(
     // steer() can hang if the previous LLM call is stuck, and the user
     // needs a way to unblock without restarting the backend.
     try { await state.session.abort(); } catch {}
-    const options: any = {};
-    if (imageAttachments && imageAttachments.length > 0) {
-      options.images = imageAttachments;
-    }
     console.log("[prompt] Aborted previous stream, calling session.prompt()...");
     await withSessionTimeout(
       state.session.prompt(message, options),
@@ -771,6 +788,20 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
   // Un steer est injecté par le SDK après la délégation en cours — PAS de timeout
   // abortif ici, sinon on tue l'expert (BUG-67). Les experts ont leur propre timeout.
   if (state.activeMode === "harness") {
+    // BUG-69 : même garde qu'en sendPrompt — si l'agent est idle côté SDK,
+    // steer() perdrait le message silencieusement. On fait un prompt complet.
+    // Le timeout 5 min est OK ici (l'agent n'est pas en délégation, il est idle).
+    const sdkStreaming = (state.session as any)?.agent?.state?.isStreaming === true;
+    if (!sdkStreaming) {
+      console.log("[steer] Harness: agent idle — steer perdu, on fait un prompt complet");
+      await withSessionTimeout(
+        state.session.prompt(message),
+        state.session,
+        projectId,
+        "steer(harness)",
+      );
+      return;
+    }
     console.log("[steer] Harness mode — no abort timeout (expert in progress)");
     await state.session.steer(message);
     return;
@@ -1109,6 +1140,10 @@ const FIRECRAWL_TOOLS: string[] = [];
 // Harness orchestrator : aucun tool de base — uniquement delegate_to_expert (via extension)
 // L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
 const HARNESS_TOOLS: string[] = [];
+// Tools d'orchestration à EXCLURE des modes non-harness (BUG-71).
+// En mode CODE/PLAN/REVIEW, le LLM doit travailler directement,
+// pas déléguer aux experts via delegate_to_expert.
+const HARNESS_EXCLUDE = ["delegate_to_expert"];
 
 /** Get extension tool names registered in the session */
 function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
@@ -1434,15 +1469,16 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
   if (mode === "plan") {
-    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, HARNESS_EXCLUDE));
   } else if (mode === "review") {
-    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS));
+    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, HARNESS_EXCLUDE));
   } else if (mode === "harness") {
     // Harness orchestrator: read-only + delegate_to_expert (l'extension l'enregistre)
+    // Pas d'exclusion : l'orchestrator DOIT garder delegate_to_expert (BUG-71).
     (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
   } else {
-    // Code mode: all base tools + extension tools
-    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
+    // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
+    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
   }
 
   // ── Inject mode instructions into system prompt ──
@@ -1528,8 +1564,8 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
   const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
 
-  // Restore all tools (base + extension)
-  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS));
+  // Restore all tools (base + extension), hors tools d'orchestration (BUG-71)
+  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
 
   // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
   let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
@@ -1700,8 +1736,9 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       }
     }
 
-    // Restrict to read-only tools (include extension tools like cbm_* for graph queries)
-    (tempSession as any).setActiveToolsByName(toolsForMode(tempSession, REVIEW_TOOLS));
+    // Restrict to read-only tools (include extension tools like cbm_* for graph queries,
+    // exclure les tools d'orchestration BUG-71)
+    (tempSession as any).setActiveToolsByName(toolsForMode(tempSession, REVIEW_TOOLS, HARNESS_EXCLUDE));
 
     // Inject review mode instructions
     const instructions = MODE_INSTRUCTIONS.review;

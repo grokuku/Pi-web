@@ -237,6 +237,10 @@ function serializeMessagesForUi(messages: any[]): any[] {
           })
         : rawContent;
       base.usage = m.usage;
+      // BUG-68 : préserver les métadonnées d'échec LLM (stopReason:"error" + errorMessage)
+      // Sinon l'erreur est avalée ici et le frontend ne reçoit qu'un message assistant vide.
+      base.stopReason = m.stopReason;
+      base.errorMessage = m.errorMessage;
       base.thinking = Array.isArray(base.content)
         ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
         : undefined;
@@ -687,7 +691,9 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           }));
         }
       } catch (e: any) {
-        ws.send(JSON.stringify({ type: "error", error: e.message }));
+        // BUG-68 : inclure le projectId pour que le frontend puisse router l'erreur
+        // vers la bonne conversation (sinon elle est ignorée si projectId manquant).
+        ws.send(JSON.stringify({ type: "error", projectId: pid, error: e.message }));
       }
       break;
     }

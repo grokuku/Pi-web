@@ -155,6 +155,10 @@ function applyPiEvent(
             usage: evt.message?.usage
               ? { input: evt.message.usage.input || 0, output: evt.message.usage.output || 0, cost: { total: evt.message.usage.cost?.total || 0 } }
               : ex.usage,
+            // BUG-68 : préserver les métadonnées d'échec LLM pour afficher
+            // une bannière d'erreur au lieu d'un assistant vide.
+            stopReason: evt.message?.stopReason,
+            errorMessage: evt.message?.errorMessage,
           };
         }
         asstId = null;
@@ -472,6 +476,22 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return () => unsub();
   }, [on, projectId, onQuit]);
 
+  // ── BUG-68 : afficher les erreurs WS comme messages visibles ──
+  // Sans ce handler, une erreur backend ({ type: "error" }) n'était que console.error
+  // → l'utilisateur ne voyait rien alors que le process s'était arrêté.
+  useEffect(() => {
+    const unsub = on("error", (msg: any) => {
+      if (msg.projectId && msg.projectId !== projectId) return;
+      const text = typeof msg.error === "string" ? msg.error : "Erreur serveur";
+      setError(text);
+      setMessages(prev => [...prev, {
+        id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: "user", content: `❌ ${text}`,
+        thinking: "", toolCalls: [], timestamp: Date.now(), customType: "pi_command", display: true,
+      }]);
+    });
+    return () => unsub();
+  }, [on, projectId]);
+
   // ── Stable onAbort callback to avoid breaking ChatInputArea's memo ──
   const onAbort = useCallback(() => {
     send({ type: "pi_abort", projectId });
@@ -633,7 +653,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 }
 
 // ── Grouped Messages ──
-interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; }
+interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; }
 
 const MAX_VISIBLE_GROUPS = 200;
 
@@ -806,6 +826,16 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 
           return (
             <div key={msg.id} className={hasMultiple && !isFirst && hasSubstantialContent ? "border-t border-hacker-border/30" : ""}>
+              {/* BUG-68 : bannière d'erreur visible si le turn LLM a échoué
+                  (le SDK renvoie un message assistant vide avec stopReason:"error"). */}
+              {(msg.stopReason === "error" || msg.errorMessage) && (
+                <div className="px-3 py-2">
+                  <div className="flex items-start gap-2 text-xs border border-red-500/40 bg-red-500/10 text-red-400 rounded px-2 py-1.5">
+                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                    <span className="whitespace-pre-wrap">{msg.errorMessage || "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider."}</span>
+                  </div>
+                </div>
+              )}
               {/* Thinking */}
               {showThinking && (
                 <div className="px-3 py-2">

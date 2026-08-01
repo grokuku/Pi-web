@@ -499,6 +499,11 @@ export default function (pi: ExtensionAPI) {
             // Timeout d'inactivité — retry si possible
             if (attempt < MAX_ATTEMPTS) {
               console.log(`[harness-orchestrator] Expert ${role} a timeouté (attempt ${attempt}/${MAX_ATTEMPTS}). Retry en cours...`);
+              // BUG-70 : l'abort du 1er attempt est asynchrone — attendre que la run
+              // soit vraiment terminée (et tous les event listeners settle) sinon le
+              // 2e prompt() jette "Agent is already processing a prompt".
+              // waitForIdle() résout quand la run et les listeners ont fini.
+              try { await tempSession.waitForIdle(); } catch {}
             } else {
               console.error(`[harness-orchestrator] Expert ${role} a timeouté définitivement après ${MAX_ATTEMPTS} attempts.`);
             }

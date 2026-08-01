@@ -165,9 +165,12 @@ function App() {
     ? projectSessionsRef.current.get(activeProject.id)
     : undefined;
   const isStreaming = activeSessionState?.isStreaming ?? false;
-  // NOTE: Stall detector désactivé — trop de faux positifs pendant les longues opérations
-  // (experts harness, tool calls longs, etc.). L'utilisateur peut abort manuellement.
-  const streamingStalled = false;
+  // BUG-68 : streamingStalled est désormais calculé (plus codé en dur à false).
+  // Il devient true quand le projet actif est en streaming mais qu'aucun event
+  // (message_update, tool_execution_*, etc.) n'a été reçu depuis 30s.
+  // L'interval de watchdog ci-dessous met à jour `stallMap` toutes les 15s.
+  const [stallMap, setStallMap] = useState<Record<string, boolean>>({});
+  const streamingStalled = activeProject ? (stallMap[activeProject.id] ?? false) : false;
   const session = activeSessionState?.session ?? null;
   const stats = activeSessionState?.stats ?? null;
 
@@ -357,26 +360,31 @@ function App() {
   // Every 15s, check all projects:
   // - Stalled (>30s since last event): shown as stale in UI (orange dot)
   //
-  // NOTE: on ne reset PLUS isStreaming automatiquement.
-  // L'utilisateur peut annuler manuellement (Esc) s'il estime que c'est vraiment bloqué.
-  // Le reset auto à 60s causait un bug : l'agent continuait de travailler en arrière-plan
-  // mais l'UI ne montrait plus aucun indicateur (ni loading ni stalled).
-  // Le seul reset légitime vient d'un vrai événement agent_end du backend.
+  // BUG-68 : on ne reset PLUS isStreaming automatiquement (le seul reset légitime
+  // vient d'un vrai event agent_end). En revanche on calcule `stallMap` (vrai
+  // streamingStalled) pour afficher un indicateur quand le projet actif est en
+  // streaming sans aucun event reçu depuis 30s. L'utilisateur peut annuler (Esc).
   useEffect(() => {
     const STALL_THRESHOLD = 30 * 1000;  // 30s → show stale indicator
     const CHECK_INTERVAL = 15 * 1000;   // check every 15s
     const interval = setInterval(() => {
       let changed = false;
+      const next: Record<string, boolean> = {};
       for (const [pid, state] of projectSessionsRef.current) {
         if (state.isStreaming) {
           const elapsed = state.lastEventAt > 0 ? Date.now() - state.lastEventAt : Date.now();
-          if (elapsed > STALL_THRESHOLD) {
-            // Still streaming but stalled — mark for visual change
-            // (rerender so the UI can show the stale indicator)
-            changed = true;
-          }
+          const stalled = elapsed > STALL_THRESHOLD;
+          next[pid] = stalled;
+          if (stalled) changed = true;
+        } else {
+          next[pid] = false;
         }
       }
+      setStallMap(prev => {
+        // Éviter un re-render inutile si rien n'a changé
+        const diff = Object.keys(next).some(k => prev[k] !== next[k]);
+        return diff ? next : prev;
+      });
       if (changed) rerender();
     }, CHECK_INTERVAL);
     return () => clearInterval(interval);
