@@ -176,8 +176,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return saved === null ? true : saved === "true";
   });
   const [autoReviewStreaming, setAutoReviewStreaming] = useState(false);
-  const [yoloStreaming, setYoloStreaming] = useState(false);
-  const [yoloStatus, setYoloStatus] = useState<{ phase: string; globalCycle: number; localCycle: number; agent?: string; model?: string } | null>(null);
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [thinkingToast, setThinkingToast] = useState("");
@@ -236,7 +234,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       }
       currentAssistantIdRef.current = null;
     }
-    setYoloStreaming(false); setYoloStatus(null); setAutoReviewStreaming(false);
+    setAutoReviewStreaming(false);
     setError("");
   }, [projectId]);
 
@@ -413,19 +411,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const pid = msg.projectId;
       if (!pid) return;
 
-      // ── UI-only state (autoReview / YOLO) — only for the active project ──
+      // ── UI-only state (autoReview) — only for the active project ──
       if (pid === projectId) {
         if (evt._autoReview && (evt.type === "message_start" || evt.type === "message_update" || evt.type === "message_end")) {
           if (evt.type === "message_start" && evt.message?.role === "assistant") setAutoReviewStreaming(true);
           if (evt.type === "message_end" && evt.message?.role === "assistant") setAutoReviewStreaming(false);
-        }
-        if (evt._yolo) {
-          if (evt.type === "agent_start") { setYoloStreaming(true); setYoloStatus({ phase: evt._yoloPhase, globalCycle: (evt._yoloGlobalCycle||0)+1, localCycle: (evt._yoloLocalCycle||0)+1, agent: evt._yoloAgent, model: evt._yoloModel }); }
-          else if (evt.type === "agent_end") { setYoloStreaming(false); setYoloStatus(null); }
-          else if (evt.type === "yolo_status") {
-            if (evt.phase === "done") { setYoloStreaming(false); setYoloStatus(null); }
-            else { setYoloStreaming(true); setYoloStatus({ phase: evt.phase, globalCycle: (evt.globalCycle||0)+1, localCycle: evt.localCycle||0 }); }
-          }
         }
       }
 
@@ -614,8 +604,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         isStreaming={isStreaming}
         streamingStalled={streamingStalled}
         autoReviewStreaming={autoReviewStreaming}
-        yoloStreaming={yoloStreaming}
-        yoloStatus={yoloStatus}
         gitBranch={activeProject?.git?.branch}
         setError={setError}
         onKeystroke={(latency: number) => {
@@ -869,9 +857,8 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 });
 
 // ── ChatInputArea (unchanged) ──
-const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, autoReviewStreaming, yoloStreaming, yoloStatus, gitBranch, setError, onKeystroke }: {
+const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, autoReviewStreaming, gitBranch, setError, onKeystroke }: {
   onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; streamingStalled?: boolean; autoReviewStreaming: boolean;
-  yoloStreaming: boolean; yoloStatus: { phase:string; globalCycle:number; localCycle:number; agent?:string; model?:string } | null;
   gitBranch?: string; setError: (e:string) => void;
   onKeystroke?: (latency: number) => void;
 }) {
@@ -919,7 +906,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     <div className="border-t border-hacker-border-bright bg-hacker-surface p-3" onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setIsDragOver(true)}} onDragLeave={()=>setIsDragOver(false)} onPaste={handlePaste}>
       {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div></div>}
       {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1"><X size={12}/></button></div>)}</div>}
-      <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn"/> {t('autoReview.inProgress')}</span>}{yoloStreaming&&yoloStatus&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/>YOLO {yoloStatus.phase.toUpperCase()}{yoloStatus.agent?` (${yoloStatus.agent}${yoloStatus.model?`: ${yoloStatus.model}`:""})`:""} — G{yoloStatus.globalCycle}{yoloStatus.localCycle>0?`·${yoloStatus.localCycle}`:""}</span>}{isStreaming&&!streamingStalled&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&!autoReviewStreaming&&!yoloStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> stalled</span>}</span></div>
+      <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn"/> {t('autoReview.inProgress')}</span>}{isStreaming&&!streamingStalled&&!autoReviewStreaming&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&!autoReviewStreaming&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> stalled</span>}</span></div>
       <div className="flex gap-2">
         <textarea
           ref={inputRef}

@@ -78,7 +78,7 @@ Pi-Web tourne dans un conteneur Docker. Il y a deux copies du code :
 
 - `ROADMAP.md` — état du projet, bugs, features planifiées
 - `frontend/src/components/Chat/ChatView.tsx` — composant principal du chat, contient toute la logique de streaming, scroll, messages
-- `backend/src/pi/session.ts` — orchestration des sessions Pi (modes, YOLO, auto-review)
+- `backend/src/pi/session.ts` — orchestration des sessions Pi (modes, auto-review)
 - `docs/agent-api.md` — API REST externe pour agents tiers
 
 ## 🌐 Langue

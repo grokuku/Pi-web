@@ -110,9 +110,8 @@ GET /api/agent/projects/:id/mode
       "code":   { "modelId": "provider_xxx__gemma4:31b", "modelName": "gemma4:31b" },
       "plan":   { "modelId": null, "enabled": false },
       "review": { "modelId": null, "enabled": false, "maxReviews": 1 },
-      "yolo":   { "modelId": null, "enabled": false,
-                  "config": { "model1": null, "model2": null,
-                              "planCycles": 2, "codeCycles": 2, "globalCycles": 1 } }
+      "harness": { "modelId": null, "enabled": false,
+                  "config": { "agents": [], "synthesize": true } }
     }
   }
 
@@ -255,7 +254,7 @@ Query: ?path=/projects/my-app/src/App.tsx
 
 ---
 
-## Extension future (plan / review / yolo)
+## Extension future (plan / review / harness)
 
 Dans une version ultérieure, l'endpoint chat acceptera un champ `mode` pour activer d'autres modes que `code` :
 

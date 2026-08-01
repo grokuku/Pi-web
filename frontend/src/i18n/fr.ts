@@ -251,7 +251,6 @@ export const fr = {
     code: "CODE",
     plan: "PLAN",
     review: "REVUE",
-    yolo: "YOLO",
     alwaysOn: "(toujours actif)",
     switchTo: (mode: string) => `Passer à ${mode}`,
     enable: (mode: string) => `Activer ${mode}`,

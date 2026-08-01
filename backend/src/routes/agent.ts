@@ -274,12 +274,6 @@ router.get("/projects/:id/mode", (req: Request, res: Response) => {
           maxReviews: pm.review.maxReviews,
           ...(modelInfo(pm.review.modelId) || {}),
         },
-        yolo: {
-          modelId: pm.yolo.modelId,
-          enabled: pm.yolo.enabled,
-          config: pm.yolo.config,
-          ...(modelInfo(pm.yolo.modelId) || {}),
-        },
       },
     });
   } catch (e: any) {
@@ -291,8 +285,8 @@ router.put("/projects/:id/mode", async (req: Request, res: Response) => {
   try {
     const { mode, modelId } = req.body;
     if (!mode) return res.status(400).json({ error: "mode is required" });
-    if (!["code", "plan", "review", "yolo"].includes(mode)) {
-      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, plan, review, yolo` });
+    if (!["code", "plan", "review"].includes(mode)) {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, plan, review` });
     }
 
     const library = loadModelLibrary();

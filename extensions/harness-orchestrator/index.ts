@@ -226,6 +226,23 @@ Règles :
 
 const EXPERT_BY_ROLE = new Map(EXPERTS.map(e => [e.role, e]));
 
+/**
+ * Collecte la réponse partielle d'une session d'expert (messages assistant déjà produits).
+ * Utilisée pour récupérer le travail d'un expert interrompu par un abort (BUG-67).
+ */
+function collectExpertResponse(tempSession: any): string {
+  try {
+    const messages: any[] = tempSession?.messages || [];
+    return messages
+      .filter((m: any) => m.role === "assistant")
+      .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "")
+      .filter((t: string) => t.length > 0)
+      .join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
 // ── Tool parameter schema (plain JSON Schema) ──────────
 
 const delegateParams = {
@@ -275,9 +292,16 @@ export default function (pi: ExtensionAPI) {
       _toolCallId: string,
       params: { role: string; task: string; context?: string },
       signal: AbortSignal | undefined,
-      _onUpdate: any,
+      onUpdate: any,
       ctx: any,
     ): Promise<{ content: { type: "text"; text: string }[] }> {
+      // onUpdate permet de forwarder l'activité de l'expert vers le frontend
+      // (tool_execution_update) — fini le silence pendant une délégation (BUG-67).
+      const emitProgress = (text: string) => {
+        try {
+          onUpdate?.({ content: [{ type: "text", text }] });
+        } catch {}
+      };
       const { role, task, context } = params;
       const expert = EXPERT_BY_ROLE.get(role);
 
@@ -361,10 +385,21 @@ export default function (pi: ExtensionAPI) {
           // Callback de reset du timer d'inactivité — connecté au subscribe ci-dessous
           let resetInactivityFn: (() => void) | null = null;
           // Subscription aux events de la session temp : chaque event prouve que l'expert
-          // travaille → reset du timer. Les events ne sont PAS forwardés au frontend
-          // (hors scope) — seul le reset du timer est nécessaire.
-          tempUnsub = tempSession.subscribe((_event: any) => {
+          // travaille → reset du timer. Les events sont AUSSI forwardés vers le frontend
+          // via onUpdate (tool_execution_update) pour montrer l'activité en temps réel
+          // (BUG-67 : plus de silence pendant une délégation).
+          tempUnsub = tempSession.subscribe((event: any) => {
             if (resetInactivityFn) resetInactivityFn();
+            // Forward l'activité vers le frontend (tool_execution_update)
+            try {
+              if (event?.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+                emitProgress(event.assistantMessageEvent.delta || "");
+              } else if (event?.type === "tool_execution_start") {
+                emitProgress(`\n⚙️ ${event.toolName || "outil"} → ${JSON.stringify(event.args || {}).slice(0, 120)}`);
+              } else if (event?.type === "tool_execution_end") {
+                emitProgress(`\n✅ ${event.toolName || "outil"} terminé`);
+              }
+            } catch {}
           });
 
           /**
@@ -428,6 +463,16 @@ export default function (pi: ExtensionAPI) {
               return true;
             } catch (err: any) {
               const msg = err.message || "";
+              // BUG-67 : si l'orchestrator a été aborté pendant que l'expert travaillait,
+              // on tente de récupérer ce que l'expert a déjà produit avant de rendre la main.
+              // Le travail est souvent terminé (fichiers modifiés) — seule la réponse finale manque.
+              if (msg.includes("abort de l'orchestrator")) {
+                const partial = collectExpertResponse(tempSession);
+                if (partial) {
+                  console.log(`[harness-orchestrator] Expert ${role} interrompu mais ${partial.length} chars récupérés`);
+                  throw new Error(`Délégation interrompue par l'utilisateur (abort de l'orchestrator). Travail récupéré (${partial.length} chars) :\n\n${partial.slice(0, 2000)}`);
+                }
+              }
               // Retry UNIQUEMENT sur timeout d'inactivité.
               // Pas de retry sur abort signal ni sur les erreurs modèle.
               if (msg.includes("inactivité") || msg.includes("inactivity") || msg.includes("Inactivity")) {

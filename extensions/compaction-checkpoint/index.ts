@@ -3,12 +3,15 @@
  *
  * When context compaction is about to happen, this extension:
  * 1. Extracts key information from the messages that will be lost
- * 2. Saves it as individual, searchable memories (not one big blob)
- * 3. Also preserves the full compaction summary as a safety net
+ * 2. Preserves the full compaction summary as a safety net (checkpoint)
+ *
+ * The checkpoint is stored in ~/.unipi/memory/<projet>/memory.db, un format
+ * de base SQLite simple, volontairement conservé tel quel pour être réutilisable
+ * par le futur système de mémoire simple (voir ROADMAP).
  *
  * After compaction, the LLM sees a hidden prompt asking it to review
- * the compacted context and save anything important to memory — this
- * leverages the LLM's intelligence to decide what's worth keeping.
+ * the compacted context and make sure the summary keeps anything important —
+ * this leverages the LLM's intelligence to decide what's worth keeping.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -31,17 +34,16 @@ function getProjectName(cwd: string): string {
 function openDb(projectName: string): any | null {
   let Database: any;
   try {
-    try {
-      Database = require("better-sqlite3");
-    } catch {
-      Database = require("/usr/local/lib/node_modules/@pi-unipi/memory/node_modules/better-sqlite3");
-    }
+    Database = require("better-sqlite3");
   } catch {
+    // better-sqlite3 n'est pas disponible : le checkpoint est ignoré silencieusement
     return null;
   }
 
   const dbPath = path.join(MEMORY_DIR, projectName, "memory.db");
   const fs = require("fs");
+  // S'assure que ~/.unipi/memory/<projet> existe (format réutilisable par le futur système de mémoire)
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   if (!fs.existsSync(dbPath)) return null;
 
   try {
@@ -197,9 +199,9 @@ export default function (pi: ExtensionAPI) {
       ["compaction-checkpoint", "auto", projectName]
     );
 
-    // ─── 2. Ask the LLM to save important things from the compacted context ───
+    // ─── 2. Ask the LLM to make sure the summary keeps the important info ───
     // The compaction summary is fresh in context — this is the perfect time
-    // for the LLM to review it and extract individual memories.
+    // for the LLM to review it and make sure nothing important is lost.
     pi.sendMessage(
       {
         customType: "compaction-checkpoint-save-memories",
@@ -208,14 +210,14 @@ export default function (pi: ExtensionAPI) {
           "",
           "A compaction summary has been generated. You can see it above in the conversation.",
           "",
-          "**Please review the summary and save any important information to memory:**",
+          "**Please review the summary and make sure it preserves all important information:**",
           "- User preferences you discovered (coding style, language, workflow)",
           "- Project decisions made (architecture, libraries, naming)",
           "- Errors encountered and their solutions",
           "- Important patterns or conventions",
           "",
-          "Use `memory_store` for each important item. Update existing memories if they already exist.",
-          "Don't save the compaction summary itself — it's already saved automatically.",
+          "If any of these key points are missing from the summary, add them explicitly to it.",
+          "Don't call any memory tool — the checkpoint is saved automatically by the extension.",
           "Focus on the specific, actionable details that would be useful in future sessions.",
         ].join("\n"),
         display: false,

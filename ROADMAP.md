@@ -44,6 +44,58 @@
 - **Sévérité :** 🟢 Basse (performance)
 - **Statut :** Acceptable pour des conversations normales. Envisager la virtualisation si besoin.
 
+### Observations du log de démarrage (2026-08-01)
+
+Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traiter au fil de l'eau.
+
+#### BUG-61: Conflit de port CBM 9749 — UI indisponible + `server.shutdown`
+- **Fichier :** démarrage `codebase-memory-mcp` (PID 520)
+- **Sévérité :** 🔴 Haute (fonctionnalité)
+- **Statut :** À investiguer
+- **Description :** Au démarrage : `level=warn msg=ui.unavailable port=9749 reason=in_use hint=use_--port=N_to_override` puis `server.shutdown` + `watcher.stop`. Le serveur CBM ne peut pas lier son UI sur 9749 (déjà occupé) puis s'arrête. Hypothèse : **process CBM résiduel de l'ancien conteneur** qui tient encore le port (un rebuild Docker ne tue pas forcément les binaires go lancés en background). Impact : l'UI CBM (`/cbm-ui`, Graph 3D) est indisponible, et le MCP qui répond pourrait être un ancien process. Pourtant les 4 fixes CBM ont été validés par curl sur ce port — fonctionnel mais fragile.
+
+#### BUG-62: Embeddings `@pi-unipi/memory` — OpenRouter codé en dur dans entrypoint.sh
+- **Fichier :** `entrypoint.sh` (ancien bloc ~178-207) + `~/.unipi/memory/config.json`
+- **Sévérité :** 🟡 Moyenne (qualité de recherche mémoire)
+- **Statut :** ✅ Résolu par suppression
+- **Description :** Log : `No OpenRouter provider found in models.json — embeddings will use fuzzy-only mode`. Ce message concernait l'extension mémoire `@pi-unipi/memory`, PAS le CBM : `entrypoint.sh` configurait `provider = 'openrouter'` en dur et le modèle `openai/text-embedding-3-small`. **Résolution :** le package `@pi-unipi/memory` a été entièrement supprimé de Pi-Web (jamais utilisé : 0 mémoire stockée, config embeddings absente, 180 packages npm + 3 min de build à chaque rebuild, dépendance OpenRouter codée en dur, package tiers non forké). Le bloc d'auto-configuration OpenRouter de `entrypoint.sh` est retiré, le fallback better-sqlite3 de `compaction-checkpoint` et les tools mémoire du mode YOLO sont nettoyés. **Clarification : le CBM (codebase-memory-mcp) ne dépend PAS d'OpenRouter — binaire C statique, embeddings vectoriels intégrés, recherche sémantique fonctionnelle sans clé API (vérifié : `semantic_query` répond).**
+
+#### BUG-63: Bundle frontend énorme (1.7 MB)
+- **Fichier :** `frontend/` (Vite build)
+- **Sévérité :** 🟡 Moyenne (performance)
+- **Statut :** À noter
+- **Description :** Log : `dist/assets/index-C4QOaryI.js 1,692.16 kB (gzip: 527.55 kB)` + warning Vite `Some chunks are larger than 500 kB`. Premier chargement lent. Piste : code-splitting via `dynamic import()`.
+
+#### BUG-64: `pi-coding-agent version: unknown`
+- **Fichier :** `entrypoint.sh` / check de version
+- **Sévérité :** 🟢 Basse
+- **Statut :** À noter
+- **Description :** Log : `[PI-WEB] pi-coding-agent version: unknown`. La détection de version du SDK échoue ou le package ne l'expose pas. Mineur mais le mécanisme de check ne fonctionne pas.
+
+#### BUG-65: Incohérence CBM — `discovered` vs `fallback` pour le même cwd
+- **Fichier :** `extensions/codebase-memory/index.ts`
+- **Sévérité :** 🟢 Basse
+- **Statut :** À noter
+- **Description :** Log : `Discovered project name: projects-AI-Helper for cwd /projects/AI-Helper` puis `Project name (fallback): AI-Helper`. Deux noms de projet possibles pour le même cwd selon l'appelant → risque de mapping incohérent.
+
+#### BUG-66: `compaction-checkpoint` — aucun log « Extension loaded »
+- **Fichier :** `extensions/compaction-checkpoint/index.ts`
+- **Sévérité :** 🟢 Basse
+- **Statut :** À vérifier
+- **Description :** Au chargement des extensions, on voit `[cbm]`, `[file-analyzer]`, `[harness-orchestrator]` chargés mais rien pour compaction-checkpoint. Soit il ne log pas au chargement (probable), soit il n'est pas chargé. Vérifier en un coup d'œil.
+
+#### BUG-67: Experts tués par abort de l'orchestrator pendant une délégation (travail perdu)
+- **Fichier :** `backend/src/pi/session.ts` + `extensions/harness-orchestrator/index.ts`
+- **Sévérité :** 🔴 Haute (perte de travail)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** Cercle vicieux confirmé en live : (1) l'extension v3 ne forwarde aucun event de l'expert → silence total pendant la délégation ; (2) l'utilisateur s'impatiente et écrit un message ; (3) si `pi_prompt` → `sendPrompt` branche isStreaming fait `session.abort()` direct, si `pi_steer` → `steerPrompt` applique un `withSessionTimeout` de 5 min qui abort la session principale ; (4) l'abort se propage à l'extension via le signal → l'expert est tué alors que son travail (fichiers modifiés) est souvent terminé → la réponse est perdue.
+- **Fix :**
+  - `session.ts` `sendPrompt` : en mode harness, si isStreaming → `steer()` au lieu d'`abort()` (le message est injecté après la délégation en cours)
+  - `session.ts` `steerPrompt` : en mode harness → pas de `withSessionTimeout` abortif (le SDK gère l'injection, les experts ont leurs propres timeouts)
+  - `harness-orchestrator` : forward des events de l'expert vers le frontend via `onUpdate` (tool_execution_update : text_delta, tool_execution_start/end) → l'utilisateur voit l'activité en temps réel
+  - `harness-orchestrator` : sur abort de l'orchestrator, récupérer la réponse partielle de l'expert (`collectExpertResponse`) au lieu de jeter
+- **Restant :** rebuild Docker requis pour appliquer.
+
 ---
 
 ## ✅ Bugs corrigés (historique)
@@ -138,6 +190,7 @@ Extraire à la fois le texte ET les images de chaque page (pdfjs-dist + OCR fall
 
 - ✅ **Statistiques d'utilisation des tokens** — Fait.
 - 💡 **Limite d'appels LLM en parallèle par provider** — Remplacer la limite globale (`maxLLMSlots`) par une limite par provider (ex: 3 pour OpenRouter, 2 pour OpenAI). Permettrait de mieux répartir la charge selon les quotas/RPM de chaque provider. Non prioritaire.
+- 💡 **Système de mémoire simple** — Mémoire persistante inter-sessions pour l'agent (outil de code). Pas besoin d'un système poussé : stockage markdown/SQLite simple, embeddings optionnels (recherche plein texte suffisante au début). Remplace `@pi-unipi/memory` (supprimé, voir BUG-62). Note : `extensions/compaction-checkpoint` continue d'écrire dans `~/.unipi/memory/<projet>/memory.db` (format SQLite simple, conservé tel quel — réutilisable par ce futur système).
 - 💡 **Nettoyage automatique des attachments orphelins** — Cron ou déclencheur.
 - 💡 **Rate limiting** sur les uploads.
 - 💡 **Streaming des résultats d'analyse** — Pour les gros PDFs.
@@ -156,7 +209,7 @@ Extraire à la fois le texte ET les images de chaque page (pdfjs-dist + OCR fall
 
 ### État actuel (v2) — Mode HARNESS optionnel
 
-Mode YOLO déprécié, remplacé par le mode **HARNESS** : orchestration multi-agent avec rôles spécialisés.
+Mode YOLO supprimé — remplacé par le mode **HARNESS** : orchestration multi-agent avec rôles spécialisés.
 
 ```
 1. TECH LEAD (/harness en mode CODE) → synthétise un BRIEF
@@ -355,9 +408,10 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 |---|---|---|
 | file-analyzer | `analyze_file` | ✅ |
 | compaction-checkpoint | `session_compact` | ✅ |
-| @pi-unipi/memory | `memory_store/search/delete/list` | ✅ |
 | @benvargas/pi-firecrawl | `firecrawl_scrape/map/search` | ✅ |
 | codebase-memory | `cbm_search/trace/code/arch/diff/schema` | ✅ |
+
+> ~~@pi-unipi/memory~~ (`memory_store/search/delete/list`) — **supprimé** (jamais utilisé, 180 packages npm + 3 min de build, OpenRouter codé en dur, package tiers non forké). Voir BUG-62 et l'idée « Système de mémoire simple » ci-dessous.
 
 ### Modèles d'analyse
 
@@ -374,7 +428,7 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | CODE | ✅ | Tous les outils + extensions |
 | PLAN | ✅ | Lecture seule, pas de bash modifiant l'état |
 | REVIEW | ✅ | Lecture seule + bash read-only |
-| YOLO | ⏳ Déprécié | Conservé dans le code, masqué de l'UI |
+| YOLO | ❌ Supprimé | Code retiré (backend + frontend), remplacé par HARNESS (2026-08-01) |
 | HARNESS | ✅ | Architecte → agents spécialisés, context isolation |
 | Auto-review | ✅ | Review neutre + fix après prompt CODE |
 

@@ -6,7 +6,7 @@
   "main": "index.ts",
   "pi": {
     "name": "compaction-checkpoint",
-    "description": "Auto-saves compaction checkpoints to @pi-unipi/memory so context survives multiple compactions"
+    "description": "Auto-saves compaction checkpoints to ~/.unipi/memory so context survives multiple compactions"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"

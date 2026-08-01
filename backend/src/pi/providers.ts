@@ -164,7 +164,7 @@ export async function deleteProvider(id: string): Promise<void> {
     if (library.projectModes) {
       for (const [projectId, modes] of Object.entries(library.projectModes)) {
         const m = modes as any;
-        for (const mode of ["code", "plan", "review", "yolo", "harness"]) {
+        for (const mode of ["code", "plan", "review", "harness"]) {
           if (m[mode]?.modelId) {
             const stillExists = library.models.some((mod: any) => mod.id === m[mode].modelId);
             if (!stillExists) m[mode].modelId = null;

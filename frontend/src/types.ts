@@ -162,7 +162,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, {
 
 // ── Model Library ─────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "plan" | "yolo" | "harness";
+export type AgentMode = "code" | "review" | "plan" | "harness";
 
 export interface RegisteredModel {
   id: string;                  // unique internal ID
@@ -179,14 +179,6 @@ export interface RegisteredModel {
 
 export interface ModeConfig {
   modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
-}
-
-export interface YoloConfig {
-  model1: { providerId: string; modelId: string } | null;
-  model2: { providerId: string; modelId: string } | null;
-  planCycles: number;   // N — debate cycles in plan phase
-  codeCycles: number;   // M — debate cycles in code phase
-  globalCycles: number; // P — full plan+code repeats
 }
 
 // ── Harness types ────────────────────────────────────
@@ -211,7 +203,6 @@ export interface ProjectModeConfig {
   code: ModeConfig;
   plan: ModeConfig & { enabled: boolean };
   review: ModeConfig & { enabled: boolean; maxReviews: number };
-  yolo: ModeConfig & { enabled: boolean; config: YoloConfig };
   harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
 }
 

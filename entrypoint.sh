@@ -168,48 +168,6 @@ else
   echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
 fi
 
-# ─── Auto-configure extension API keys from Pi providers ────
-# Extract API keys from models.json and configure extensions automatically
-MODELS_JSON="${PI_AGENT_DIR}/models.json"
-UNIPI_CONFIG_DIR="$(eval echo ~$(whoami))/.unipi/memory"
-UNIPI_CONFIG="${UNIPI_CONFIG_DIR}/config.json"
-
-if [ -f "$MODELS_JSON" ]; then
-  # Extract OpenRouter API key for @pi-unipi/memory embeddings
-  OPENROUTER_KEY=$(node -e "
-    try {
-      const d = JSON.parse(require('fs').readFileSync('$MODELS_JSON', 'utf8'));
-      for (const [pid, prov] of Object.entries(d.providers || {})) {
-        if ((prov.baseUrl || '').toLowerCase().includes('openrouter')) {
-          process.stdout.write(prov.apiKey || '');
-          break;
-        }
-      }
-    } catch(e) {}
-" 2>/dev/null)
-
-  if [ -n "$OPENROUTER_KEY" ]; then
-    mkdir -p "$UNIPI_CONFIG_DIR"
-    # Merge with existing config or create new
-    node -e "
-      const fs = require('fs');
-      const path = '$UNIPI_CONFIG';
-      let config = {};
-      try { config = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
-      config.provider = 'openrouter';
-      config.apiKey = '$OPENROUTER_KEY';
-      if (!config.model) config.model = 'openai/text-embedding-3-small';
-      if (!config.dimensions) config.dimensions = 384;
-      fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-      console.log('[PI-WEB] Configured @pi-unipi/memory embeddings (OpenRouter)');
-    "
-  else
-    echo "[PI-WEB] No OpenRouter provider found in models.json — embeddings will use fuzzy-only mode"
-  fi
-else
-  echo "[PI-WEB] No models.json found, skipping extension API key auto-configure"
-fi
-
 # ── Download codebase-memory-mcp binary if not installed ──
 CBM_BIN="$HOME/.local/bin/codebase-memory-mcp"
 if [ ! -f "$CBM_BIN" ]; then

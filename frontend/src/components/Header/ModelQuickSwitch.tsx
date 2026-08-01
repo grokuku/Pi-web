@@ -428,8 +428,6 @@ function defaultProjectMode(): ProjectModeConfig {
     code: { modelId: null },
     plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1 },
-    yolo: { modelId: null, enabled: false,
-      config: { model1: null, model2: null, planCycles: 2, codeCycles: 2, globalCycles: 1 } },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true } },
   };
