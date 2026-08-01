@@ -74,9 +74,10 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 
 #### BUG-65: Incohérence CBM — `discovered` vs `fallback` pour le même cwd
 - **Fichier :** `extensions/codebase-memory/index.ts`
-- **Sévérité :** 🟢 Basse
-- **Statut :** À noter
-- **Description :** Log : `Discovered project name: projects-AI-Helper for cwd /projects/AI-Helper` puis `Project name (fallback): AI-Helper`. Deux noms de projet possibles pour le même cwd selon l'appelant → risque de mapping incohérent.
+- **Sévérité :** 🟡 Moyenne (tools CBM inopérants)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** `indexProject()` cherchait le projet avec `p.name === dirName` (ex: `"Pi-Web"`) alors que le serveur nomme les projets avec le préfixe `projects-` (ex: `projects-Pi-Web`) → pas de match → fallback `"Pi-Web"` → tous les appels CBM suivants envoyaient un nom de projet inexistant → `"project not found or not indexed"`. Seul `discoverProjectName()` vérifiait `projects-${dirName}` — donc le bug apparaissait selon le chemin d'initialisation (Map en mémoire par session). Fix : `indexProject()` teste maintenant aussi `projects-${dirName}` (aligné sur `discoverProjectName()`).
+- **Découverte annexe (test indexation) :** l'indexation incrémentale d'un fichier modifié prend **~400-800ms** (watcher multi-sec) et la recherche répond en **~16ms**. Très rapide.
 
 #### BUG-66: `compaction-checkpoint` — aucun log « Extension loaded »
 - **Fichier :** `extensions/compaction-checkpoint/index.ts`

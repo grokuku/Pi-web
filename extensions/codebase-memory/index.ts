@@ -323,9 +323,14 @@ async function indexProject(cwd: string): Promise<void> {
       // CBM returns either an array or { projects: [...] }
       const arr = Array.isArray(projects) ? projects : (projects.projects || projects.results || []);
       // Find the project matching our cwd
+      // BUG-65 : le serveur nomme les projets avec le préfixe "projects-" (ex: projects-Pi-Web).
+      // Le fallback par nom de dossier seul ("Pi-Web") ne matche JAMAIS → les appels suivants
+      // envoient un nom de projet inexistant → "project not found". Il faut aussi tester
+      // `projects-${dirName}` comme dans discoverProjectName().
       const match = arr.find((p: any) => {
         const pPath = p.path || p.repo_path || p.repo || "";
-        return pPath === cwd || p.name === cwd.split("/").pop();
+        const dirName = cwd.split("/").pop() || cwd;
+        return pPath === cwd || p.name === dirName || p.name === `projects-${dirName}`;
       });
       if (match?.name) {
         projectByCwd.set(cwd, { projectName: match.name, lastIndexedAt: Date.now() });
