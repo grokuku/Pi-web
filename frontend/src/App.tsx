@@ -365,7 +365,7 @@ function App() {
   // streamingStalled) pour afficher un indicateur quand le projet actif est en
   // streaming sans aucun event reçu depuis 30s. L'utilisateur peut annuler (Esc).
   useEffect(() => {
-    const STALL_THRESHOLD = 30 * 1000;  // 30s → show stale indicator
+    const STALL_THRESHOLD = 60 * 1000;  // 60s → show stale indicator (30s était trop agressif : faux positifs pendant thinking/tool calls longs)
     const CHECK_INTERVAL = 15 * 1000;   // check every 15s
     const interval = setInterval(() => {
       let changed = false;
