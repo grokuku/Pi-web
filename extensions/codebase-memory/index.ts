@@ -579,7 +579,13 @@ export default async function (pi: ExtensionAPI) {
     parameters: searchParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
       const args: Record<string, unknown> = { query: params.query };
-      if (params.labels) args.labels = params.labels;
+      // BUG : le serveur `search_graph` attend `label` (string), pas `labels` (array).
+      // Un tableau `labels` est silencieusement ignoré (vérifié via curl : filtrage inopérant).
+      // Le serveur ne gère qu'un seul label par appel → on envoie le premier élément.
+      // (le join par virgule renvoie 0 résultat : "No nodes with this label").
+      if (Array.isArray(params.labels) && params.labels.length > 0) {
+        args.label = String(params.labels[0]);
+      }
       if (params.name_pattern) args.name_pattern = params.name_pattern;
       if (params.semantic_query) args.semantic_query = params.semantic_query;
       if (params.limit) args.limit = params.limit;
@@ -601,7 +607,8 @@ export default async function (pi: ExtensionAPI) {
     ],
     parameters: traceParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const result = await mcpCallForProject("trace_call_path", ctx.cwd, {
+      // BUG : le serveur expose `trace_path`, pas `trace_call_path` (vérifié via tools/list).
+      const result = await mcpCallForProject("trace_path", ctx.cwd, {
         function_name: params.function_name,
         direction: params.direction,
         depth: params.depth || 3,
@@ -642,7 +649,10 @@ export default async function (pi: ExtensionAPI) {
     promptSnippet: "Full-text search in source code (regex supported)",
     parameters: searchCodeParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const args: Record<string, unknown> = { query: params.query };
+      // BUG : le serveur `search_code` exige `pattern` (requis) — envoyer `query` échoue
+      // avec "pattern is required" (vérifié via curl). On garde `query` dans le schéma
+      // côté LLM (pour ne pas casser les appels existants) et on le mappe vers `pattern`.
+      const args: Record<string, unknown> = { pattern: params.query };
       if (params.file_pattern) args.file_pattern = params.file_pattern;
       if (params.limit) args.limit = params.limit;
       const result = await mcpCallForProject("search_code", ctx.cwd, args, signal);
@@ -663,10 +673,71 @@ export default async function (pi: ExtensionAPI) {
     ],
     parameters: diffParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const args: Record<string, unknown> = {};
-      if (params.path) args.path = params.path;
-      const result = await mcpCallForProject("detect_changes", ctx.cwd, args, signal);
-      return { content: [{ type: "text", text: result }] };
+      // BUG : le serveur MCP CBM ne fournit AUCUN tool `detect_changes` (vérifié via
+      // tools/list : 8 tools seulement, aucun équivalent diff). Fallback LOCAL : lire
+      // le diff git, puis retrouver les symboles affectés via query_graph (nœuds dont
+      // file_path correspond au fichier modifié).
+      const repoDir = params.path || ctx.cwd;
+      let files: string[] = [];
+      try {
+        // Fichiers modifiés/supprimés vs HEAD (staged + unstaged)
+        const diffOut = execSync("git diff --name-only HEAD", {
+          cwd: repoDir,
+          encoding: "utf-8",
+          timeout: 30_000,
+        });
+        // Fichiers untracked (ligne porcelain "?? chemin")
+        const statusOut = execSync("git status --porcelain", {
+          cwd: repoDir,
+          encoding: "utf-8",
+          timeout: 30_000,
+        });
+        const set = new Set<string>();
+        diffOut.split("\n").forEach((l) => { const t = l.trim(); if (t) set.add(t); });
+        statusOut.split("\n").forEach((l) => {
+          // Format porcelain : 2 lettres d'état + espace + chemin ("??" = untracked)
+          const p = l.length > 3 ? l.slice(3).trim() : "";
+          if (p) set.add(p);
+        });
+        files = [...set];
+      } catch (e: any) {
+        return {
+          content: [{
+            type: "text",
+            text: `cbm_diff : impossible de lire le diff git dans "${repoDir}" — ${e.message}. ` +
+              "Vérifiez que ce chemin est un dépôt git valide.",
+          }],
+        };
+      }
+      if (files.length === 0) {
+        return {
+          content: [{ type: "text", text: "cbm_diff : aucune modification détectée (working tree propre)." }],
+        };
+      }
+      const lines: string[] = [`Modifications détectées (${files.length} fichier(s)) :`];
+      for (const file of files) {
+        lines.push(`\n## ${file}`);
+        // Échapper les guillemets du chemin pour la requête Cypher
+        const safePath = file.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        const cypher =
+          `MATCH (n) WHERE n.file_path = "${safePath}" ` +
+          "RETURN n.name, n.label, n.start_line ORDER BY n.start_line";
+        try {
+          const res = await mcpCallForProject("query_graph", repoDir, { query: cypher }, signal);
+          const parsed = JSON.parse(res);
+          const rows: unknown[][] = parsed.rows || [];
+          if (rows.length === 0) {
+            lines.push("  (aucun symbole indexé pour ce fichier)");
+          } else {
+            for (const r of rows) {
+              lines.push(`  - ${r[1]} ${r[0]} (ligne ${r[2]})`);
+            }
+          }
+        } catch (e: any) {
+          lines.push(`  (recherche de symboles impossible : ${e.message})`);
+        }
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   });
 

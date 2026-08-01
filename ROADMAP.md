@@ -89,6 +89,7 @@
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
 | 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 (system prompt fixé + extraction JSON robuste) |
 | 59 | 🔴 | Harness v2 + extension v3 : timeout global sur `prompt()` tue les experts actifs (fix porté sur harness-orchestrator : timeout à activité + retry) + bug de réentrance concurrency + pas de timeout sur files d'attente + fix `cbm_code` (`qualified_name` requis par le serveur MCP CBM) | 2026-06-30 |
+| 60 | 🟡 | Extension codebase-memory : 4 tools CBM corrigés — cbm_trace (`trace_path` au lieu de `trace_call_path`), cbm_search_code (`pattern` requis au lieu de `query`), cbm_search (`label` string au lieu de `labels` array, ignoré par le serveur), cbm_diff (fallback git local — `detect_changes` inexistant sur le serveur MCP CBM) | 2026-08-01 |
 
 ---
 
