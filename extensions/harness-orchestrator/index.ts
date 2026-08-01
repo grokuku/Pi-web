@@ -314,6 +314,10 @@ export default function (pi: ExtensionAPI) {
         });
         const tempSession = result.session;
 
+        // Déclaré ici (try externe) car `let` dans un bloc try n'est pas visible
+        // dans le finally du même try (portées de bloc séparées en JS/TS).
+        let tempUnsub: (() => void) | null = null;
+
         try {
           // Set le modèle — hériter de la session principale
           if (ctx.model) {
@@ -338,34 +342,124 @@ export default function (pi: ExtensionAPI) {
             expertPrompt = `## Contexte\n\n${context}\n\n## Tâche\n\n${task}`;
           }
 
-          // Timeout : 300s par défaut
-          const timeoutMs = 300_000;
-          let timer: ReturnType<typeof setTimeout>;
-          const timeoutPromise = new Promise<void>((_, reject) => {
-            timer = setTimeout(() => {
-              (tempSession as any).abort?.().catch(() => {});
-              reject(new Error(`Expert ${role} timed out after ${timeoutMs / 1000}s`));
-            }, timeoutMs);
+          // ── BUG-59 (porté de la v2 vers la v3) : timeout à activité + retry ──
+          // L'ancien timeout FIXE de 300s couvrait TOUT le cycle prompt() (boucle agent
+          // complète : LLM → tool calls → LLM → ...). Un expert qui lit des fichiers ou
+          // lance bash itère facilement au-delà de 300s → il était tué alors qu'il
+          // travaillait activement.
+          // Désormais :
+          //  - INACTIVITY_TIMEOUT_MS : le timer d'inactivité se reset à chaque event reçu
+          //    de la session temp (text_delta, tool_execution_start, tool_execution_end,
+          //    message_update, etc.). Tant que l'expert travaille, il n'est pas tué.
+          //  - GLOBAL_MAX_TIMEOUT_MS : timeout global max (safety net) qui ne se reset
+          //    JAMAIS, pour empêcher un expert de tourner indéfiniment.
+          //  - Retry (1 retry = 2 attempts max) sur timeout d'inactivité UNIQUEMENT.
+          const INACTIVITY_TIMEOUT_MS = 300_000;   // 5 min sans activité → timeout
+          const GLOBAL_MAX_TIMEOUT_MS = 1_800_000; // 30 min au total (safety net)
+          const MAX_ATTEMPTS = 2;                  // 1 retry sur timeout d'inactivité
+
+          // Callback de reset du timer d'inactivité — connecté au subscribe ci-dessous
+          let resetInactivityFn: (() => void) | null = null;
+          // Subscription aux events de la session temp : chaque event prouve que l'expert
+          // travaille → reset du timer. Les events ne sont PAS forwardés au frontend
+          // (hors scope) — seul le reset du timer est nécessaire.
+          tempUnsub = tempSession.subscribe((_event: any) => {
+            if (resetInactivityFn) resetInactivityFn();
           });
 
-          // Abort signal de l'orchestrator → abort l'expert aussi
-          const abortPromise = signal
-            ? new Promise<void>((_, reject) => {
-                signal.addEventListener("abort", () => {
-                  (tempSession as any).abort?.().catch(() => {});
-                  reject(new Error("Aborted by orchestrator"));
-                });
-              })
-            : new Promise<void>(() => {}); // jamais résout si pas de signal
+          /**
+           * Exécute prompt() avec timeout d'inactivité + timeout global + abort signal.
+           * Retourne true si succès, false si timeout d'inactivité (pour retry).
+           * Throw sur abort signal ou erreurs modèle (pas de retry).
+           */
+          const runPromptWithTimeouts = async (): Promise<boolean> => {
+            // Si le signal est déjà aborté avant le lancement, ne pas relancer un prompt
+            if (signal?.aborted) {
+              throw new Error("Délégation interrompue par l'utilisateur (abort de l'orchestrator)");
+            }
 
-          try {
-            await Promise.race([
-              tempSession.prompt(expertPrompt, {}),
-              timeoutPromise,
-              abortPromise,
-            ]);
-          } finally {
-            clearTimeout(timer!);
+            let inactivityTimer: ReturnType<typeof setTimeout>;
+            let globalTimer: ReturnType<typeof setTimeout>;
+            let rejectTimeout: ((err: Error) => void) | null = null;
+            let abortHandler: (() => void) | null = null;
+
+            const resetInactivity = () => {
+              clearTimeout(inactivityTimer!);
+              inactivityTimer = setTimeout(() => {
+                (tempSession as any).abort?.().catch(() => {});
+                rejectTimeout?.(new Error(
+                  `Expert ${role} inactif depuis ${INACTIVITY_TIMEOUT_MS / 1000}s — timeout d'inactivité`
+                ));
+              }, INACTIVITY_TIMEOUT_MS);
+            };
+
+            // Connecter le reset au subscription handler de la session temp
+            resetInactivityFn = resetInactivity;
+
+            const timeoutPromise = new Promise<void>((_, reject) => {
+              rejectTimeout = reject;
+              resetInactivity();
+              // Timeout global max (safety net — ne se reset jamais)
+              globalTimer = setTimeout(() => {
+                (tempSession as any).abort?.().catch(() => {});
+                reject(new Error(
+                  `Expert ${role} a dépassé le timeout global de ${GLOBAL_MAX_TIMEOUT_MS / 1000}s`
+                ));
+              }, GLOBAL_MAX_TIMEOUT_MS);
+            });
+
+            // Abort signal de l'orchestrator → abort l'expert aussi (message clair)
+            const abortPromise = signal
+              ? new Promise<void>((_, reject) => {
+                  abortHandler = () => {
+                    (tempSession as any).abort?.().catch(() => {});
+                    reject(new Error("Délégation interrompue par l'utilisateur (abort de l'orchestrator)"));
+                  };
+                  signal.addEventListener("abort", abortHandler);
+                })
+              : new Promise<void>(() => {}); // jamais résout si pas de signal
+
+            try {
+              await Promise.race([
+                tempSession.prompt(expertPrompt, {}),
+                timeoutPromise,
+                abortPromise,
+              ]);
+              return true;
+            } catch (err: any) {
+              const msg = err.message || "";
+              // Retry UNIQUEMENT sur timeout d'inactivité.
+              // Pas de retry sur abort signal ni sur les erreurs modèle.
+              if (msg.includes("inactivité") || msg.includes("inactivity") || msg.includes("Inactivity")) {
+                console.warn(`[harness-orchestrator] Expert ${role}: timeout d'inactivité — ${msg}`);
+                return false; // signal pour retry
+              }
+              throw err; // autre erreur → propagate
+            } finally {
+              clearTimeout(inactivityTimer!);
+              clearTimeout(globalTimer!);
+              if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
+              resetInactivityFn = null; // déconnecter le callback
+            }
+          };
+
+          // Exécution avec retry (1 retry sur timeout d'inactivité uniquement)
+          let succeeded = false;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const ok = await runPromptWithTimeouts();
+            if (ok) {
+              succeeded = true;
+              break;
+            }
+            // Timeout d'inactivité — retry si possible
+            if (attempt < MAX_ATTEMPTS) {
+              console.log(`[harness-orchestrator] Expert ${role} a timeouté (attempt ${attempt}/${MAX_ATTEMPTS}). Retry en cours...`);
+            } else {
+              console.error(`[harness-orchestrator] Expert ${role} a timeouté définitivement après ${MAX_ATTEMPTS} attempts.`);
+            }
+          }
+          if (!succeeded) {
+            throw new Error(`Expert ${role} a timeouté après ${MAX_ATTEMPTS} attempts (inactivité > ${INACTIVITY_TIMEOUT_MS / 1000}s)`);
           }
 
           // Collecter la réponse
@@ -386,6 +480,7 @@ export default function (pi: ExtensionAPI) {
           };
         } finally {
           // Cleanup session
+          if (tempUnsub) tempUnsub();
           try { (tempSession as any).dispose?.(); } catch {}
           try {
             if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);

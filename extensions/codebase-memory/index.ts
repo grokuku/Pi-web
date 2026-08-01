@@ -619,7 +619,14 @@ export default async function (pi: ExtensionAPI) {
     promptSnippet: "Get source code for a symbol from the graph",
     parameters: codeParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const args: Record<string, unknown> = { name: params.name };
+      // BUG-59 (cbm_code) : le serveur MCP CBM exige `qualified_name` (champ requis,
+      // vérifié via curl sur localhost:9749/rpc → "qualified_name is required").
+      // `name` seul échoue. On envoie donc name + qualified_name (le serveur tolère
+      // les props inconnues : name/file passent sans erreur, testé via curl).
+      const args: Record<string, unknown> = {
+        name: params.name,
+        qualified_name: params.name,
+      };
       if (params.file) args.file = params.file;
       const result = await mcpCallForProject("get_code_snippet", ctx.cwd, args, signal);
       return { content: [{ type: "text", text: result }] };

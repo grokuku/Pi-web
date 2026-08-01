@@ -88,7 +88,7 @@
 | 47 | 🟢 | `_ws_reconnect` jamais émis | 2026-06-29 |
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
 | 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 (system prompt fixé + extraction JSON robuste) |
-| 59 | 🔴 | Harness : timeout global sur `prompt()` tue les experts actifs + bug de réentrance concurrency + pas de timeout sur files d'attente | 2026-06-30 |
+| 59 | 🔴 | Harness v2 + extension v3 : timeout global sur `prompt()` tue les experts actifs (fix porté sur harness-orchestrator : timeout à activité + retry) + bug de réentrance concurrency + pas de timeout sur files d'attente + fix `cbm_code` (`qualified_name` requis par le serveur MCP CBM) | 2026-06-30 |
 
 ---
 
@@ -206,6 +206,8 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | `backend/src/pi/session.ts` | Intégration /harness | ✅ |
 | `frontend/src/components/Modals/HarnessConfigModal.tsx` | UI config | ✅ |
 | `frontend/src/components/Header/ModelQuickSwitch.tsx` | Toggle harness | ✅ |
+| `extensions/harness-orchestrator/index.ts` | Extension v3 (orchestrator conversationnel) | ✅ (BUG-59 porté : timeout à activité + timeout global + retry) |
+| `extensions/codebase-memory/index.ts` | Extension CBM (cbm_* tools) | ✅ (BUG-59 cbm_code : envoi `qualified_name`) |
 
 ### Fonctionnalités futures
 
