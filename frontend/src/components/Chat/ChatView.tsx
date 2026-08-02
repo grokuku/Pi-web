@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
+import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
@@ -186,6 +187,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const [error, setError] = useState("");
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [confirmNewChat, setConfirmNewChat] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -520,6 +522,12 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     if (!text.trim() && attachmentRefs.length === 0) return;
     setError("");
 
+    // Confirmation avant d'effacer la conversation en cours via la commande /new
+    if (fullMessage.trim() === "/new") {
+      setConfirmNewChat(true);
+      return;
+    }
+
     const isSlash = fullMessage.trim().startsWith("/");
     if (!isSlash) {
       const display = text || (attachmentRefs.length > 0 ? attachmentRefs.map(a => `📎 ${a.name}`).join(", ") : "");
@@ -537,6 +545,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       scrollToBottomInstant();
     });
   }, [send, projectId, activeMode, isStreaming]);
+
+  // ── Commande /new confirmée : envoi réel de la commande ──
+  const handleConfirmNewChat = useCallback(() => {
+    setConfirmNewChat(false);
+    send({ type: "pi_prompt", projectId, message: "/new" });
+    requestAnimationFrame(() => {
+      pinnedToBottomRef.current = true;
+      scrollToBottomInstant();
+    });
+  }, [send, projectId, scrollToBottomInstant]);
 
   if (!activeProject) {
     return <div className="h-full flex items-center justify-center text-hacker-text-dim"><div className="text-center"><div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-16 h-16" /></div><p className="text-lg mb-2">PI CODING AGENT</p><p className="text-sm">Select or create a project to begin...</p></div></div>;
@@ -648,6 +666,13 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           </div>
         </ModalDialog>
       )}
+
+      {/* Confirmation avant nouvelle conversation (/new) */}
+      <NewChatConfirmModal
+        open={confirmNewChat}
+        onClose={() => setConfirmNewChat(false)}
+        onConfirm={handleConfirmNewChat}
+      />
     </div>
   );
 }

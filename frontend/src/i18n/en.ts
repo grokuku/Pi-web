@@ -25,6 +25,11 @@ export const en = {
     queueMessage: "Queue message (steer)...",
     keyboardHints: "📎 Files · Esc abort · Ctrl+L model · Ctrl+T think · Ctrl+O tools · Shift+Tab think±",
   },
+  newChatConfirm: {
+    title: "NEW CONVERSATION",
+    description: "This will start a new conversation and clear the current one.",
+    warning: "The current messages will be permanently lost. This action cannot be undone.",
+  },
   settings: {
     tabs: {
       models: "Model Library",

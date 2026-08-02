@@ -25,6 +25,11 @@ export const fr = {
     queueMessage: "Message en attente (diriger)...",
     keyboardHints: "📎 Fichiers · Esc annuler · Ctrl+L modèle · Ctrl+T réflexion · Ctrl+O outils · Shift+Tab réfl.±",
   },
+  newChatConfirm: {
+    title: "NOUVELLE CONVERSATION",
+    description: "Cette action va démarrer une nouvelle conversation et effacer la conversation actuelle.",
+    warning: "Les messages actuels seront définitivement perdus. Cette action est irréversible.",
+  },
   settings: {
     tabs: {
       models: "Bibliothèque de modèles",

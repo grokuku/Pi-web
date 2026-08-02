@@ -190,6 +190,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **[?] Extension compaction-checkpoint** — Pas testé en conditions réelles.
 - **[?] Historique chat disparait avec 3 panneaux visibles** — `LayoutRenderer.tsx` monte tous les panneaux en permanence (`display:none`). Le state React devrait être préservé, mais des conditions de re-render rares peuvent encore causer le bug.
 - **[?] Conflits raccourcis clavier avec le navigateur** — Ctrl+L/T/O sont interceptés par le navigateur. Pistes : `Ctrl+Shift+T` pour thinking, `Ctrl+Shift+O` pour outils, `Ctrl+Shift+L` pour settings.
+- ✅ **Confirmation avant nouvelle conversation (`/new`)** — Fait (2026-08-01). Ajout d'un modal de confirmation (`NewChatConfirmModal`) déclenché avant d'exécuter la commande `/new`, que ce soit via le bouton de la Sidebar ou via la saisie dans le chat. Évite d'effacer la conversation en cours par accident. i18n fr/en.
 
 ---
 

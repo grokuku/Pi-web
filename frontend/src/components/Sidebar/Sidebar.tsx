@@ -7,6 +7,7 @@ import {
 import { useState, useRef, useCallback, useEffect } from "react";
 import { GitPanel } from "./GitPanel";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
+import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import type { Project } from "../../types";
 
 interface Props {
@@ -33,6 +34,7 @@ export function Sidebar({
   onRefreshGit,
 }: Props) {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [confirmNewChat, setConfirmNewChat] = useState(false);
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
@@ -305,7 +307,7 @@ export function Sidebar({
           ].map(({ cmd, tip }) => (
             <button
               key={cmd}
-              onClick={() => onSendCommand(cmd)}
+              onClick={() => cmd === "/new" ? setConfirmNewChat(true) : onSendCommand(cmd)}
               className="text-xs font-bold tracking-wider px-2 py-1 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50 hover:text-hacker-accent hover:bg-hacker-accent/5 transition-colors rounded"
               title={tip}
             >
@@ -374,6 +376,13 @@ export function Sidebar({
         project={projectToDelete}
         onClose={() => setProjectToDelete(null)}
         onConfirm={handleDeleteConfirm}
+      />
+
+      {/* ── New conversation confirmation modal (/new) ── */}
+      <NewChatConfirmModal
+        open={confirmNewChat}
+        onClose={() => setConfirmNewChat(false)}
+        onConfirm={() => { setConfirmNewChat(false); onSendCommand("/new"); }}
       />
     </aside>
   );

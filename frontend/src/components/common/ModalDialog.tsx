@@ -58,6 +58,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "git-identity": { w: 800, h: 600 },
   "project-switch": { w: 800, h: 700 },
   "delete-project": { w: 800, h: 500 },
+  "new-chat-confirm": { w: 480, h: 300 },
   "file-viewer": { w: 900, h: 700 },
   "extensions": { w: 900, h: 700 },
   "settings": { w: 1200, h: 800 },
