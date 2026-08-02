@@ -166,6 +166,7 @@ async function withSessionTimeout(
       } catch {}
       emitToSubscribers({ type: "agent_end" } as any, projectId);
       emitSessionUpdate(projectId);
+      stopStreamingHeartbeat(projectId);
       reject(new Error(`[${label}] Session request timed out after ${SESSION_TIMEOUT_MS/1000}s`));
     }, SESSION_TIMEOUT_MS);
   });
@@ -196,6 +197,49 @@ function emitSessionUpdate(projectId: string) {
     } catch (e) {
       console.error("Session update callback error:", e);
     }
+  }
+}
+
+// ── Heartbeat applicatif (BUG-72) ──────────────────────────
+// Pendant qu'un run est actif, le SDK peut rester silencieux longtemps
+// (bash silencieux, thinking long, compaction, retry, expert harness).
+// Sans heartbeat, le watchdog frontend détecte un faux "stalled" dès 60s
+// de silence. On émet donc périodiquement un heartbeat vers les subscribers
+// tant que le flag effectif de streaming (state.isStreaming) est true.
+const STREAMING_HEARTBEAT_MS = 10 * 1000; // toutes les 10s (< 60s du watchdog)
+const streamingHeartbeats = new Map<string, ReturnType<typeof setInterval>>();
+
+function startStreamingHeartbeat(projectId: string): void {
+  stopStreamingHeartbeat(projectId); // idempotent
+  const timer = setInterval(() => {
+    const state = sessionsByProject.get(projectId);
+    // Arrêter dès que le flag effectif de streaming passe à false. On utilise
+    // state.isStreaming (maintenu par agent_start/agent_settled, runHarness et
+    // l'auto-review) plutôt que session.isStreaming pour couvrir aussi le batch
+    // harness (sessions expertes dont le main session n'est pas en streaming).
+    if (!state?.isStreaming) {
+      stopStreamingHeartbeat(projectId);
+      return;
+    }
+    emitToSubscribers({ type: "heartbeat", projectId, timestamp: Date.now() } as any, projectId);
+  }, STREAMING_HEARTBEAT_MS);
+  // Ne pas maintenir le process en vie à cause d'un timer orphelin.
+  timer.unref?.();
+  streamingHeartbeats.set(projectId, timer);
+}
+
+function stopStreamingHeartbeat(projectId: string): void {
+  const timer = streamingHeartbeats.get(projectId);
+  if (timer) {
+    clearInterval(timer);
+    streamingHeartbeats.delete(projectId);
+  }
+}
+
+function stopAllStreamingHeartbeats(): void {
+  for (const [pid, timer] of streamingHeartbeats) {
+    clearInterval(timer);
+    streamingHeartbeats.delete(pid);
   }
 }
 
@@ -316,10 +360,31 @@ export async function createPiSession(
             });
           } catch {}
         }
-      } else if (event.type === "agent_end") {
+      } else if (event.type === "agent_start") {
+        // BUG-72 : branche manquante — le flag backend n'était JAMAIS mis à true
+        // en mode normal. Le guard `if (state.isStreaming)` de sendPrompt était
+        // donc du code mort → session.prompt() direct → erreur SDK "Agent is
+        // already processing..." quand le SDK était occupé.
+        const state = sessionsByProject.get(projectId);
+        if (state) state.isStreaming = true;
+        startStreamingHeartbeat(projectId);
+        emitSessionUpdate(projectId);
+      } else if (event.type === "agent_settled") {
+        // BUG-72 : agent_settled est la VRAIE fin du run (retry/compaction/drain
+        // terminés). agent_end n'est pas la fin réelle — le SDK poursuit après.
         const state = sessionsByProject.get(projectId);
         if (state) state.isStreaming = false;
+        stopStreamingHeartbeat(projectId);
         // Clean up tool calls for this project
+        for (const [id, tc] of activeToolCalls) {
+          if (tc.projectId === projectId) activeToolCalls.delete(id);
+        }
+        emitSessionUpdate(projectId);
+      } else if (event.type === "agent_end") {
+        // BUG-72 : NE PAS mettre isStreaming=false ici — le SDK poursuit avec
+        // retry/compaction/drain après agent_end (la vraie fin est agent_settled).
+        // On nettoie seulement les tool calls pour que l'UI ne garde pas de tool
+        // "en cours" pendant la phase post-run.
         for (const [id, tc] of activeToolCalls) {
           if (tc.projectId === projectId) activeToolCalls.delete(id);
         }
@@ -398,6 +463,21 @@ export function getProjectSession(projectId: string): PiSessionState | undefined
 }
 
 /**
+ * État de streaming RÉEL d'un projet : la source de vérité est le SDK
+ * (session.isStreaming reflète run + retry + compaction + drain, jusqu'à
+ * agent_settled). Le flag backend state.isStreaming n'est qu'un fallback
+ * (sessions sans SDK ou desync après reload).
+ *
+ * Optional chaining sur state.session pour ne JAMAIS créer de session
+ * en lisant l'état (un getter ne doit pas avoir d'effet de bord).
+ */
+export function isSessionStreaming(projectId: string): boolean {
+  const state = sessionsByProject.get(projectId);
+  if (!state) return false;
+  return state.session?.isStreaming ?? state.isStreaming;
+}
+
+/**
  * Get the current session for backward compatibility (returns first active session).
  * Prefer getSession(projectId) for multi-project support.
  */
@@ -465,6 +545,7 @@ export async function sendPrompt(
           // Clear messages on the old session
           try { (oldState.session as any).agent.state.messages = []; } catch {}
           // Remove from map so createPiSession won't reuse it
+          stopStreamingHeartbeat(projectId);
           sessionsByProject.delete(projectId);
           activeToolCalls.forEach((_, key) => {
             if (key.endsWith(`:${projectId}`)) activeToolCalls.delete(key);
@@ -702,7 +783,7 @@ export async function sendPrompt(
     }
   }
 
-  if (state.isStreaming) {
+  if (isSessionStreaming(projectId)) {
     // Mode HARNESS (v3) : l'orchestrator est la session principale et peut être
     // en train de déléguer à un expert (tool delegate_to_expert).
     // ABORT ICI TUERAIT L'EXPERT — le travail est perdu (BUG-67).
@@ -714,13 +795,12 @@ export async function sendPrompt(
       options.images = imageAttachments;
     }
     if (state.activeMode === "harness") {
-      // BUG-69 : vérifier que l'agent tourne RÉELLEMENT (flag backend ≠ état SDK
-      // après reload/desync). Si le flag backend est stale (agent idle côté SDK),
-      // steer() perdrait le message silencieusement → on fait un prompt complet.
-      // withSessionTimeout (5 min) est acceptable ici car l'agent n'est PAS en
-      // délégation longue (idle) — un prompt normal ne dépasse pas ce budget.
-      const sdkStreaming = (state.session as any)?.agent?.state?.isStreaming === true;
-      if (!sdkStreaming) {
+      // BUG-72 : `isSessionStreaming` lit l'état RÉEL du SDK (session.isStreaming),
+      // pas le flag backend qui peut rester stale après reload/desync. Si l'agent
+      // est réellement idle côté SDK, steer() perdrait le message silencieusement
+      // → on fait un prompt complet. withSessionTimeout (5 min) est acceptable ici
+      // car l'agent n'est PAS en délégation longue (idle).
+      if (!isSessionStreaming(projectId)) {
         console.log("[prompt] Harness: isStreaming flag stale — traitement comme nouveau prompt");
         await withSessionTimeout(
           state.session.prompt(message, options),
@@ -788,11 +868,10 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
   // Un steer est injecté par le SDK après la délégation en cours — PAS de timeout
   // abortif ici, sinon on tue l'expert (BUG-67). Les experts ont leur propre timeout.
   if (state.activeMode === "harness") {
-    // BUG-69 : même garde qu'en sendPrompt — si l'agent est idle côté SDK,
+    // BUG-69/72 : même garde qu'en sendPrompt — si l'agent est idle côté SDK,
     // steer() perdrait le message silencieusement. On fait un prompt complet.
     // Le timeout 5 min est OK ici (l'agent n'est pas en délégation, il est idle).
-    const sdkStreaming = (state.session as any)?.agent?.state?.isStreaming === true;
-    if (!sdkStreaming) {
+    if (!isSessionStreaming(projectId)) {
       console.log("[steer] Harness: agent idle — steer perdu, on fait un prompt complet");
       await withSessionTimeout(
         state.session.prompt(message),
@@ -836,6 +915,9 @@ export async function runHarness(
   if (state) {
     state.activeMode = "harness";
     state.isStreaming = true;
+    // BUG-72 : les experts du batch harness peuvent rester silencieux > 60s
+    // (thinking long) → heartbeat applicatif pour éviter les faux "stalled".
+    startStreamingHeartbeat(projectId);
   }
 
   // Collecter les messages de steering en attente
@@ -862,6 +944,7 @@ export async function runHarness(
   } finally {
     if (state) {
       state.isStreaming = false;
+      stopStreamingHeartbeat(projectId);
     }
   }
 }
@@ -965,6 +1048,7 @@ export async function newSession(projectId: string): Promise<void> {
 
   // Dispose existing session
   if (state?.session) {
+    stopStreamingHeartbeat(projectId);
     if (state.unsubscribe) state.unsubscribe();
     await state.session.dispose();
     sessionsByProject.delete(projectId);
@@ -1044,7 +1128,8 @@ export function getSessionInfo(projectId?: string) {
   return {
     sessionId: state.session.sessionId,
     sessionFile: state.session.sessionFile,
-    isStreaming: state.isStreaming,
+    // BUG-72 : exposer l'état RÉEL du SDK (source de vérité), pas le flag backend.
+    isStreaming: state.session?.isStreaming ?? state.isStreaming,
     cwd: state.cwd,
     projectId: state.projectId,
     thinkingLevel: state.session.thinkingLevel,
@@ -1075,6 +1160,7 @@ export function getSessionInfo(projectId?: string) {
 export async function disposeSession(projectId: string): Promise<void> {
   const state = sessionsByProject.get(projectId);
   if (state) {
+    stopStreamingHeartbeat(projectId);
     if (state.unsubscribe) state.unsubscribe();
     // Fully dispose the AgentSession so a fresh one is created on next interaction.
     // This ensures extensions/skills are reloaded from settings.
@@ -1091,6 +1177,7 @@ export async function disposeSession(projectId: string): Promise<void> {
  * Dispose all sessions.
  */
 export async function disposeAllSessions(): Promise<void> {
+  stopAllStreamingHeartbeats();
   for (const [projectId, state] of sessionsByProject) {
     if (state.unsubscribe) state.unsubscribe();
     if (state.session) await state.session.dispose();
@@ -1666,7 +1753,9 @@ export function triggerAutoReviewIfNeeded(projectId: string): void {
   if (state.reviewCycle >= maxReviews) return;        // Already done max reviews
   if (state.autoReviewInProgress) return;            // Already running
   if (state.autoReviewAborted) return;              // Aborted by user
-  if (state.isStreaming) return;                     // Still streaming
+  // BUG-72 : avant, `state.isStreaming` n'était jamais true en mode normal → le
+  // guard ne bloquait jamais. On lit l'état réel du SDK (run + retry/compaction).
+  if (isSessionStreaming(projectId)) return;         // Still streaming (SDK réel)
 
   // Check that there's a review model available
   const reviewModel = getModeModel(library, projectId, "review");
@@ -1692,7 +1781,6 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   emitAutoReviewStatus(projectId, "reviewing", cycle, maxReviews);
 
   const library = loadModelLibrary();
-  const pm = getProjectModeConfig(library, projectId);
 
   // Get the git diff AND list of changed files to provide focused context to the reviewer
   let diffSummary = "";
@@ -1800,10 +1888,15 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
         }
       } else if (event.type === "agent_start") {
         state.isStreaming = true;
+        startStreamingHeartbeat(projectId);
+        emitSessionUpdate(projectId);
+      } else if (event.type === "agent_settled") {
+        // BUG-72 : agent_settled = vraie fin du run (retry/compaction terminés).
+        state.isStreaming = false;
+        stopStreamingHeartbeat(projectId);
         emitSessionUpdate(projectId);
       } else if (event.type === "agent_end") {
-        state.isStreaming = false;
-        emitSessionUpdate(projectId);
+        // agent_end n'est pas la fin réelle — ne pas toucher à isStreaming ici.
       }
       emitToSubscribers(taggedEvent, projectId);
     });
@@ -1846,19 +1939,38 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
 
   if (state.autoReviewAborted) { state.autoReviewInProgress = false; await restoreCodeMode(projectId); return; }
 
-  // ── Phase 2: Fix (uses main session so it has full context) ──
+  // ── Phase 2: Fix ou rapport (session principale = contexte complet) ──
   emitModeChange(projectId, "code", true);
-  emitAutoReviewStatus(projectId, "fixing", cycle, maxReviews);
 
   await restoreCodeMode(projectId);
 
-  try {
-    const fixPrompt = reviewFindings
-      ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
-      : "Fix any issues you can find in the recent changes.";
-    await state.session.prompt(fixPrompt, {});
-  } catch (e: any) {
-    console.error("[auto-review] Fix prompt failed:", e.message);
+  // Option « lister seulement » : quand fixWithInstructions est false, on N'injecte
+  // PAS d'instruction de correction au LLM suivant — on affiche uniquement le
+  // rapport de review (liste des bugs) dans la session principale.
+  // On relit la config au moment de la décision (Phase 2) : si l'utilisateur a
+  // basculé le toggle pendant la Phase 1 (review en cours), on respecte le choix
+  // courant — indépendant du mode actif (code/harness/review).
+  const freshLibrary = loadModelLibrary();
+  const freshPm = getProjectModeConfig(freshLibrary, projectId);
+  const fixWithInstructions = freshPm.review.fixWithInstructions ?? true;
+
+  if (fixWithInstructions) {
+    emitAutoReviewStatus(projectId, "fixing", cycle, maxReviews);
+    try {
+      const fixPrompt = reviewFindings
+        ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
+        : "Fix any issues you can find in the recent changes.";
+      await state.session.prompt(fixPrompt, {});
+    } catch (e: any) {
+      console.error("[auto-review] Fix prompt failed:", e.message);
+    }
+  } else {
+    // Mode « lister seulement » : injecte le rapport dans la session principale
+    // (affiché à l'utilisateur, sans déclencher de turn LLM ni instruction de fix).
+    const report = reviewFindings
+      ? `Auto-review — code review:\n\n${reviewFindings}`
+      : "Auto-review — no issues found in the recent changes.";
+    await injectSessionNotification(projectId, report);
   }
 
   state.autoReviewInProgress = false;

@@ -423,8 +423,20 @@ function App() {
           updateProjectSession(projectId, { isStreaming: true });
           break;
         }
-        case "agent_end": {
+        case "agent_settled": {
+          // BUG-72 : agent_settled est la VRAIE fin du run (retry/compaction/drain
+          // terminés). agent_end n'est pas la fin réelle — le SDK poursuit après,
+          // donc on ne coupe PAS isStreaming sur agent_end (désync pendant
+          // compaction/retry).
           updateProjectSession(projectId, { isStreaming: false });
+          break;
+        }
+        case "heartbeat": {
+          // BUG-72 : heartbeat applicatif émis par le backend pendant les phases
+          // silencieuses d'un run actif (bash silencieux, thinking long,
+          // compaction). lastEventAt est déjà rafraîchi en tête de handler pour
+          // tout pi_event → le watchdog stalled ne déclenche plus de faux
+          // "stalled" tant que le run tourne.
           break;
         }
         case "mode_change": {
@@ -504,12 +516,32 @@ function App() {
       }
     });
 
+    // BUG-72 : le backend envoie un message "connected" à chaque connexion WS
+    // (y compris les reconnexions) avec activeSessions contenant le VRAI
+    // isStreaming (lu depuis le SDK). On resynchronise l'état frontend au
+    // reload/reconnect au lieu de garder un flag stale.
+    const unsubConnected = on("connected", (msg: any) => {
+      const sessions = msg.data?.activeSessions || {};
+      for (const [pid, info] of Object.entries(sessions) as [string, any][]) {
+        if (!info) continue;
+        const update: Partial<ProjectSessionState> = { session: info };
+        if (typeof info.isStreaming === "boolean") {
+          update.isStreaming = info.isStreaming;
+        }
+        updateProjectSession(pid, update);
+        if (info.activeMode && pid === activeProject?.id) {
+          setActiveMode(info.activeMode);
+        }
+      }
+    });
+
     return () => {
       unsubPiEvent();
       unsubTerm();
       unsubError();
       unsubHistory();
       unsubStarted();
+      unsubConnected();
     };
   }, [on, getProjectSession, updateProjectSession]);
 

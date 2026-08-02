@@ -219,7 +219,9 @@ export function Sidebar({
             const isThisStreaming = pState?.isStreaming ?? false;
             const hasSession = !!pState?.session;
             const streamingStalled = isThisStreaming && pState?.lastEventAt
-              ? Date.now() - pState.lastEventAt > 30_000
+              // BUG-72 : seuil uniformisé avec le watchdog App.tsx (60s) — 30s
+              // déclenchait des faux positifs pendant thinking/tool calls longs.
+              ? Date.now() - pState.lastEventAt > 60_000
               : false;
             const isDragging = dragIdx === idx;
             const isDragTarget = dragOverIdx === idx;

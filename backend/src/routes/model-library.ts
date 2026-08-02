@@ -10,6 +10,7 @@ import {
   setProjectModeModel,
   setProjectModeEnabled,
   setProjectModeMaxReviews,
+  setProjectModeReviewFix,
   setProjectModeHarnessConfig,
   getProjectModeConfig,
   getModel,
@@ -280,7 +281,7 @@ router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
 router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
   try {
     const { projectId } = req.params;
-    const { mode, modelId, enabled, maxReviews, config, compactToFit } = req.body;
+    const { mode, modelId, enabled, maxReviews, fixWithInstructions, config, compactToFit } = req.body;
 
     if (mode) validateMode(mode);
 
@@ -316,6 +317,9 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     }
     if (maxReviews !== undefined && mode === "review") {
       library = setProjectModeMaxReviews(projectId, maxReviews);
+    }
+    if (fixWithInstructions !== undefined && mode === "review") {
+      library = setProjectModeReviewFix(projectId, fixWithInstructions);
     }
     if (config !== undefined && mode === "harness") {
       library = setProjectModeHarnessConfig(projectId, config);

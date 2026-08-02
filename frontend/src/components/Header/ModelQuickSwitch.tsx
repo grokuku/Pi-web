@@ -427,7 +427,7 @@ function defaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
     plan: { modelId: null, enabled: false },
-    review: { modelId: null, enabled: false, maxReviews: 1 },
+    review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true } },
   };

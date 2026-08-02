@@ -206,7 +206,7 @@ export interface HarnessConfig {
 export interface ProjectModeConfig {
   code: ModeConfig;
   plan: ModeConfig & { enabled: boolean };
-  review: ModeConfig & { enabled: boolean; maxReviews: number };
+  review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
   harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
 }
 

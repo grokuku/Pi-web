@@ -98,6 +98,10 @@ export const en = {
       systemDefault: "System default",
       thinkExpand: "Expand thinking by default",
       thinkExpandDesc: "When thinking is visible, expand blocks automatically",
+      autoReview: "Auto Review",
+      reviewFixDesc: "After the review, automatically fix the detected bugs. Off = only list the bugs, without any fix instruction.",
+      reviewFixOn: "FIX",
+      reviewFixOff: "LIST ONLY",
       auth: {
         title: "WEB INTERFACE AUTHENTICATION",
         description: "Set credentials to protect the web interface with HTTP Basic Authentication. Leave empty to disable authentication.",

@@ -10,6 +10,7 @@ import {
   getSessionInfo,
   getSession,
   getActiveToolCalls,
+  isSessionStreaming,
 } from "../pi/session.js";
 import {
   loadModelLibrary,
@@ -272,6 +273,7 @@ router.get("/projects/:id/mode", (req: Request, res: Response) => {
           modelId: pm.review.modelId,
           enabled: pm.review.enabled,
           maxReviews: pm.review.maxReviews,
+          fixWithInstructions: pm.review.fixWithInstructions ?? true,
           ...(modelInfo(pm.review.modelId) || {}),
         },
       },
@@ -410,7 +412,7 @@ router.get("/projects/:id/chat/status", (req: Request, res: Response) => {
     const currentTool = Array.from(tools.values()).find((t: any) => t.projectId === req.params.id) as any;
 
     res.json({
-      running: state.isStreaming || false,
+      running: isSessionStreaming(req.params.id) || false,
       currentTool: currentTool?.toolName || null,
       tokensUsed: state.session?.messages?.length
         ? state.session.messages.reduce((sum: number, m: any) => sum + (m.usage?.input || 0), 0)
@@ -480,7 +482,8 @@ router.get("/projects/:id/context", (req: Request, res: Response) => {
       contextUsed,
       contextPercent,
       sessionId: state?.session?.sessionId || null,
-      sessionRunning: state?.isStreaming || false,
+      // BUG-72 : état réel du SDK (source de vérité), pas le flag backend stale.
+      sessionRunning: isSessionStreaming(req.params.id) || false,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -39,7 +39,7 @@ export interface ModeConfig {
 export interface ProjectModeConfig {
   code: ModeConfig;
   plan: ModeConfig & { enabled: boolean };
-  review: ModeConfig & { enabled: boolean; maxReviews: number };
+  review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
   harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
 }
 
@@ -312,7 +312,7 @@ function createDefaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
     plan: { modelId: null, enabled: false },
-    review: { modelId: null, enabled: false, maxReviews: 1 },
+    review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 } },
   };
@@ -457,6 +457,7 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
       modelId: pm?.review?.modelId ?? d.review.modelId,
       enabled: pm?.review?.enabled ?? d.review.enabled,
       maxReviews: pm?.review?.maxReviews ?? d.review.maxReviews,
+      fixWithInstructions: pm?.review?.fixWithInstructions ?? d.review.fixWithInstructions,
     },
     harness: {
       modelId: pm?.harness?.modelId ?? d.harness.modelId,
@@ -659,6 +660,17 @@ export function setProjectModeMaxReviews(projectId: string, maxReviews: number):
     library.projectModes[projectId] = createDefaultProjectMode();
   }
   library.projectModes[projectId].review.maxReviews = maxReviews;
+  saveModelLibrary(library);
+  return library;
+}
+
+/** Set whether auto-review should fix the bugs after the review (true) or only list them (false) */
+export function setProjectModeReviewFix(projectId: string, fixWithInstructions: boolean): ModelLibrary {
+  const library = loadModelLibrary();
+  if (!library.projectModes[projectId]) {
+    library.projectModes[projectId] = createDefaultProjectMode();
+  }
+  library.projectModes[projectId].review.fixWithInstructions = fixWithInstructions;
   saveModelLibrary(library);
   return library;
 }

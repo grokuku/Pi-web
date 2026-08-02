@@ -98,6 +98,10 @@ export const fr = {
       systemDefault: "Langue du système",
       thinkExpand: "Déplier la réflexion par défaut",
       thinkExpandDesc: "Quand la réflexion est visible, déplier les blocs automatiquement",
+      autoReview: "Révision automatique",
+      reviewFixDesc: "Après la review, corriger automatiquement les bugs détectés. Désactivé = afficher uniquement la liste des bugs, sans instruction de correction.",
+      reviewFixOn: "CORRIGER",
+      reviewFixOff: "LISTER SEULEMENT",
       auth: {
         title: "AUTHENTIFICATION DE L'INTERFACE WEB",
         description: "Définissez des identifiants pour protéger l'interface web avec l'authentification HTTP Basic. Laissez vide pour désactiver.",

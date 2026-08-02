@@ -131,6 +131,19 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **Description :** `getExtensionToolNames()` renvoyait **tous** les tools d'extension sans exclusion → `delegate_to_expert` (enregistré par l'extension harness-orchestrator) était exposé dans TOUS les modes, y compris CODE/PLAN/REVIEW. En mode CODE, le LLM utilisait naturellement ce tool → il délégnait aux experts au lieu de coder directement.
 - **Fix :** nouvelle constante `HARNESS_EXCLUDE = ["delegate_to_expert"]` passée comme 3e argument de `toolsForMode()` dans les branches plan/review/code de `applyModeToSession`, ainsi que dans `restoreCodeMode` (retour mode CODE) et l'auto-review (tempSession REVIEW). La branche harness garde volontairement l'exclusion **non appliquée** : l'orchestrator DOIT conserver `delegate_to_expert` pour déléguer aux experts.
 
+#### BUG-72: Faux « stalled » pendant les runs + erreur « Agent is already processing » (heartbeat applicatif + SDK comme source de vérité)
+- **Fichier :** `backend/src/pi/session.ts`, `backend/src/routes/agent.ts`, `frontend/src/App.tsx`, `frontend/src/components/Sidebar/Sidebar.tsx`
+- **Sévérité :** 🔴 Haute (faux « stalled » à chaque run silencieux > 60s + prompt en échec quand le SDK est occupé)
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** Cinq causes racines : (1) aucun heartbeat applicatif pendant les phases silencieuses (bash silencieux, thinking long, compaction, retry, expert harness) → tout silence > 60s = faux « stalled » ; (2) `state.isStreaming` backend n'était JAMAIS mis à true en mode normal (aucune branche `agent_start` dans le subscribe principal) → le guard `if (state.isStreaming)` de `sendPrompt` était du code mort → `session.prompt()` direct → erreur SDK « Agent is already processing... » ; (3) `agent_end` n'est pas la fin réelle du run (le SDK poursuit avec retry/compaction/drain ; le vrai marqueur est `agent_settled`) → désync frontend pendant compaction/retry ; (4) pas de réconciliation de `isStreaming` au reload/reconnect WS ; (5) seuils incohérents (60s watchdog App vs 30s Sidebar).
+- **Fix :**
+  - `session.ts` : branche `agent_start` manquante dans le subscribe principal (set `state.isStreaming = true` + démarre le heartbeat) ; `agent_settled` = vraie fin (set `false` + stop heartbeat + cleanup tools) ; `agent_end` ne touche plus à `isStreaming` (le SDK poursuit après). Même traitement pour la session temporaire d'auto-review.
+  - `session.ts` : nouveau helper `isSessionStreaming(projectId)` = `state.session?.isStreaming ?? state.isStreaming` (le getter SDK reflète run + retry + compaction + drain ; optional chaining pour ne JAMAIS créer de session en lisant l'état). Utilisé dans `sendPrompt` (décision steer / abort+re-prompt / prompt), `steerPrompt`, `triggerAutoReviewIfNeeded` (le guard ne bloquait jamais), `getSessionInfo` (expose le bon `isStreaming`). Les checks inline `(state.session as any)?.agent?.state?.isStreaming` (BUG-69) sont remplacés par le helper.
+  - `session.ts` : heartbeat applicatif — `setInterval` 10s par session active (Map projectId → timer) qui émet `{ type: "heartbeat" }` vers les subscribers tant que `session.isStreaming` est true. Nettoyage propre : sur `agent_settled`, timeout (`withSessionTimeout`), `/new`, `newSession`, `disposeSession`, `disposeAllSessions` (`stopAllStreamingHeartbeats`). `timer.unref()` pour ne pas bloquer la sortie du process.
+  - `agent.ts` : `running`/`sessionRunning` des routes agent utilisent `isSessionStreaming` (source de vérité SDK).
+  - `App.tsx` : fin de streaming sur `agent_settled` au lieu d'`agent_end` (cause 3) ; case `heartbeat` (rafraîchit `lastEventAt` déjà mis à jour en tête de handler → le watchdog stalled ne déclenche plus de faux positif) ; nouveau handler du message `connected` (le backend envoie `activeSessions` avec le VRAI `isStreaming` à chaque connexion/reconnexion) pour resynchroniser l'état frontend au reconnect WS (cause 4).
+  - `Sidebar.tsx` : seuil stalled 30s → 60s (uniformisé avec le watchdog App.tsx, cause 5).
+
 ---
 
 ## ✅ Bugs corrigés (historique)
@@ -181,6 +194,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 69 | 🟡 | steer() perdu silencieusement quand l'agent est idle (flags désynchronisés) | 2026-08-01 |
 | 70 | 🟡 | Race retry expert harness — 2e prompt() avant la fin de l'abort du 1er | 2026-08-01 |
 | 71 | 🔴 | Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler | 2026-08-01 |
+| 72 | 🔴 | Faux « stalled » pendant les runs + erreur « Agent is already processing » (heartbeat applicatif + SDK comme source de vérité) | 2026-08-01 |
 
 ---
 
@@ -191,6 +205,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **[?] Historique chat disparait avec 3 panneaux visibles** — `LayoutRenderer.tsx` monte tous les panneaux en permanence (`display:none`). Le state React devrait être préservé, mais des conditions de re-render rares peuvent encore causer le bug.
 - **[?] Conflits raccourcis clavier avec le navigateur** — Ctrl+L/T/O sont interceptés par le navigateur. Pistes : `Ctrl+Shift+T` pour thinking, `Ctrl+Shift+O` pour outils, `Ctrl+Shift+L` pour settings.
 - ✅ **Confirmation avant nouvelle conversation (`/new`)** — Fait (2026-08-01). Ajout d'un modal de confirmation (`NewChatConfirmModal`) déclenché avant d'exécuter la commande `/new`, que ce soit via le bouton de la Sidebar ou via la saisie dans le chat. Évite d'effacer la conversation en cours par accident. i18n fr/en.
+- ✅ **Option « mode review : corriger / lister seulement »** — Fait (2026-08-01). Nouveau réglage par projet `review.fixWithInstructions` (défaut : `true` = comportement actuel : corriger). Quand `false`, l'auto-review n'injecte PLUS l'instruction « Fix each one specifically » au LLM suivant (`fixPrompt` de `runAutoReviewCycle`) : le rapport de review (liste des bugs + contexte) est injecté dans la session principale via `injectSessionNotification` (affichage seul, sans déclencher de turn LLM). Réglable dans Paramètres → Général (toggle CORRIGER / LISTER SEULEMENT, i18n fr/en). Backend : `model-library.ts` (type + défaut + migration + setter `setProjectModeReviewFix`), `routes/model-library.ts` (PUT `/projects/:id/mode`, champ `fixWithInstructions`), `routes/agent.ts` (API agent externe), `pi/session.ts` (Phase 2 de `runAutoReviewCycle`).
 
 ---
 

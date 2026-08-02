@@ -266,6 +266,35 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     return localStorage.getItem("pi-web-thinking-expand") !== "false";
   });
 
+  // Option auto-review « corriger / lister seulement » (par projet)
+  const [reviewFix, setReviewFix] = useState(true);
+  // Synchronise le toggle quand la bibliothèque de modèles est chargée
+  useEffect(() => {
+    const cfg = library?.projectModes?.[activeProjectId ?? ""]?.review;
+    setReviewFix(cfg?.fixWithInstructions ?? true);
+  }, [library, activeProjectId]);
+
+  const handleReviewFixToggle = async () => {
+    if (!activeProjectId) return;
+    const next = !reviewFix;
+    setReviewFix(next);
+    try {
+      const res = await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "review", fixWithInstructions: next }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Failed");
+      }
+      setLibrary(await res.json());
+    } catch (e: any) {
+      console.error("[settings] Failed to set review fix mode:", e);
+      setReviewFix(!next); // rollback en cas d'échec
+    }
+  };
+
   // ── Concurrency state ──
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
   const [maxAgentSlots, setMaxAgentSlots] = useState(5);
@@ -1130,6 +1159,29 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       }`}
                     >
                       {thinkExpand ? t('common.on') : t('common.off')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Auto-review : corriger / lister seulement */}
+              <div className="border border-hacker-border bg-hacker-surface/50">
+                <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🔎 {t('settings.general.autoReview')}</span>
+                </div>
+                <div className="p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-hacker-text-dim">{t('settings.general.reviewFixDesc')}</span>
+                    <button
+                      onClick={handleReviewFixToggle}
+                      disabled={!activeProjectId}
+                      className={`text-xs px-3 py-1 border transition-colors ${
+                        reviewFix
+                          ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                          : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
+                      }`}
+                    >
+                      {reviewFix ? t('settings.general.reviewFixOn') : t('settings.general.reviewFixOff')}
                     </button>
                   </div>
                 </div>
