@@ -10,7 +10,7 @@ interface UsageRecord {
   modelId: string;
   providerId: string;
   modelName: string;
-  mode: string; // "code" | "plan" | "review"
+  mode: string; // "code" | "review" | "harness"
   inputTokens: number;
   outputTokens: number;
   projectId: string;

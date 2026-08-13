@@ -63,6 +63,7 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "extensions": { w: 900, h: 700 },
   "settings": { w: 1200, h: 800 },
   "usage-stats": { w: 1200, h: 800 },
+  "routing-config": { w: 640, h: 720 },
 };
 
 // ── Resize handle positions ──

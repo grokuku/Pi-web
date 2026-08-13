@@ -3,12 +3,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Power, Star, Settings } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
-import { HarnessConfigModal, DEFAULT_HARNESS_AGENTS } from "../Modals/HarnessConfigModal";
-import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, HarnessConfig } from "../../types";
+import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
+import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
   code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
-  plan:   { icon: "🗺", label: "PLAN",   color: "text-hacker-info",       activeBg: "bg-hacker-info/20",    activeBorder: "border-hacker-info" },
   review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
   harness: { icon: "🏭", label: "HARNESS", color: "text-hacker-accent",    activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
 };
@@ -28,7 +27,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const [openMode, setOpenMode] = useState<AgentMode | null>(null);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [showHarnessConfig, setShowHarnessConfig] = useState(false);
+  const [showRoutingConfig, setShowRoutingConfig] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   const loadLibrary = useCallback(async () => {
@@ -110,7 +109,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "plan" | "review" | "harness") => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "review" | "harness") => {
     e.stopPropagation();
     if (!activeProjectId) return;
     const modeCfg = (pm as any)[mode] as { enabled: boolean };
@@ -124,39 +123,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       await loadLibrary();
       onModelApplied?.();
 
-      // If enabling PLAN or HARNESS, also switch to that mode
-      if ((mode === "plan" || mode === "harness") && newEnabled) {
+      // Si on active HARNESS, basculer aussi vers ce mode
+      if (mode === "harness" && newEnabled) {
         onModeSwitch?.(mode);
       }
 
-      // Auto-configure default harness agents if none exist
-      if (mode === "harness" && newEnabled) {
-        const pm = library?.projectModes?.[activeProjectId];
-        const existingAgents = (pm as any)?.harness?.config?.agents;
-        if (!existingAgents || existingAgents.length === 0) {
-          try {
-            await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                mode: "harness",
-                config: {
-                  agents: DEFAULT_HARNESS_AGENTS.map(a => ({
-                    role: a.role,
-                    description: a.description,
-                    modelId: null,
-                    enabled: true,
-                  })),
-                  synthesize: true,
-                  agentTimeout: 300,
-                  maxTasks: 20,
-                },
-              }),
-            });
-            await loadLibrary();
-          } catch (e) { console.error("[ModelQuickSwitch] Failed to set default harness agents:", e); }
-        }
-      }
       // If disabling and was active, switch back to code
       if (!newEnabled && activeMode === mode) {
         onModeSwitch?.("code");
@@ -194,7 +165,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return name.slice(0, 12) + "…";
   };
 
-  const modes: AgentMode[] = ["code", "plan", "review", "harness"];
+  const modes: AgentMode[] = ["code", "review", "harness"];
 
   return (
     <>
@@ -209,11 +180,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
         const isDropdownOpen = openMode === mode;
 
         // Visual states
-        const isPlanActive = pm.plan.enabled && activeMode === "plan";
         const isReviewActive = pm.review.enabled && (activeMode === "review");
+        const isHarnessActive = pm.harness.enabled && (activeMode === "harness");
         const isOverridden = !isCode && (
-          (isPlanActive && mode !== "plan") ||
-          (isReviewActive && mode !== "review" && !pm.review.enabled)
+          (isReviewActive && mode !== "review") ||
+          (isHarnessActive && mode !== "harness")
         );
         // Seul le mode actif doit être visuellement allumé — pas juste "enabled"
         const isVisuallyActive = isActive;
@@ -236,10 +207,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
                 <div
-                  onClick={(e) => handleToggleMode(e, mode as "plan" | "review" | "harness")}
+                  onClick={(e) => handleToggleMode(e, mode as "review" | "harness")}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "plan" | "review" | "harness"); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "review" | "harness"); } }}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -316,14 +287,14 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </button>
                 )}
 
-                {/* Harness config button */}
+                {/* Bouton de configuration du routage */}
                 {mode === "harness" && (
                   <button
-                    onClick={() => { setShowHarnessConfig(true); setOpenMode(null); }}
+                    onClick={() => { setShowRoutingConfig(true); setOpenMode(null); }}
                     className="w-full text-left px-3 py-1.5 text-xs text-hacker-text-dim border-t border-hacker-border/30 hover:bg-hacker-accent/5 flex items-center gap-1.5"
                   >
                     <Settings size={10} />
-                    ⚙ CONFIGURE HARNESS
+                    ⚙ CONFIGURER LE ROUTAGE
                   </button>
                 )}
 
@@ -351,24 +322,26 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
     </div>
 
-      {showHarnessConfig && (
-        <HarnessConfigModal
-          onClose={() => setShowHarnessConfig(false)}
-          onChange={async (cfg) => {
-            if (!activeProjectId) return;
-            try {
-              await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "harness", config: cfg }),
-              });
-              await loadLibrary();
-              onModelApplied?.();
-            } catch (e) { console.error("[ModelQuickSwitch] Failed to save Harness config:", e); }
+      {showRoutingConfig && (
+        <RoutingConfigModal
+          onClose={() => setShowRoutingConfig(false)}
+          onSave={async (routing: RoutingConfig) => {
+            if (!activeProjectId) throw new Error("Aucun projet actif");
+            const res = await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mode: "harness", routing }),
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `HTTP ${res.status}`);
+            }
+            await loadLibrary();
+            onModelApplied?.();
           }}
           models={library?.models || []}
           providers={providers}
-          config={(pm as any)?.harness?.config || { agents: [], synthesize: true }}
+          config={(pm as any)?.harness?.routing || null}
         />
       )}
 
@@ -426,7 +399,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 function defaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
-    plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true } },

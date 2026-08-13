@@ -258,7 +258,6 @@ export const fr = {
   // ── Model Quick Switch ──
   modelSwitch: {
     code: "CODE",
-    plan: "PLAN",
     review: "REVUE",
     alwaysOn: "(toujours actif)",
     switchTo: (mode: string) => `Passer à ${mode}`,

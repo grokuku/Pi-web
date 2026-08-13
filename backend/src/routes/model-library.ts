@@ -12,6 +12,7 @@ import {
   setProjectModeMaxReviews,
   setProjectModeReviewFix,
   setProjectModeHarnessConfig,
+  setProjectRoutingConfig,
   getProjectModeConfig,
   getModel,
   getDefaultModel,
@@ -29,7 +30,7 @@ const router = Router();
 
 // ── Helpers ──────────────────────────────────────────
 
-const VALID_MODES: AgentMode[] = ["code", "review", "plan", "harness"];
+const VALID_MODES: AgentMode[] = ["code", "review", "harness"];
 
 function validateMode(mode: string): AgentMode {
   if (!VALID_MODES.includes(mode as AgentMode)) {
@@ -281,7 +282,7 @@ router.get("/projects/:projectId/mode", (req: Request, res: Response) => {
 router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
   try {
     const { projectId } = req.params;
-    const { mode, modelId, enabled, maxReviews, fixWithInstructions, config, compactToFit } = req.body;
+    const { mode, modelId, enabled, maxReviews, fixWithInstructions, config, routing, compactToFit } = req.body;
 
     if (mode) validateMode(mode);
 
@@ -312,7 +313,7 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     if (modelId !== undefined) {
       library = setProjectModeModel(projectId, mode, modelId);
     }
-    if (enabled !== undefined && (mode === "plan" || mode === "review" || mode === "harness")) {
+    if (enabled !== undefined && (mode === "review" || mode === "harness")) {
       library = setProjectModeEnabled(projectId, mode, enabled);
     }
     if (maxReviews !== undefined && mode === "review") {
@@ -323,6 +324,9 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     }
     if (config !== undefined && mode === "harness") {
       library = setProjectModeHarnessConfig(projectId, config);
+    }
+    if (routing !== undefined && mode === "harness") {
+      library = setProjectRoutingConfig(projectId, routing);
     }
 
     res.json(library);

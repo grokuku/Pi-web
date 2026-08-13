@@ -392,11 +392,6 @@ router.get("/projects/:id/mode", (req: Request, res: Response) => {
       activeMode,
       modes: {
         code: { modelId: pm.code.modelId, ...(modelInfo(pm.code.modelId) || {}) },
-        plan: {
-          modelId: pm.plan.modelId,
-          enabled: pm.plan.enabled,
-          ...(modelInfo(pm.plan.modelId) || {}),
-        },
         review: {
           modelId: pm.review.modelId,
           enabled: pm.review.enabled,
@@ -415,8 +410,8 @@ router.put("/projects/:id/mode", async (req: Request, res: Response) => {
   try {
     const { mode, modelId } = req.body;
     if (!mode) return res.status(400).json({ error: "mode is required" });
-    if (!["code", "plan", "review"].includes(mode)) {
-      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, plan, review` });
+    if (!["code", "review"].includes(mode)) {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, review` });
     }
 
     const library = loadModelLibrary();

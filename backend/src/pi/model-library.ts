@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
+import { DEFAULT_ROUTING_CONFIG, type RoutingConfig } from "./routing-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -30,7 +31,7 @@ export interface RegisteredModel {
   thinkingLevel: string;       // off, minimal, low, medium, high
 }
 
-export type AgentMode = "code" | "review" | "plan" | "harness";
+export type AgentMode = "code" | "review" | "harness";
 
 export interface ModeConfig {
   modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
@@ -38,9 +39,8 @@ export interface ModeConfig {
 
 export interface ProjectModeConfig {
   code: ModeConfig;
-  plan: ModeConfig & { enabled: boolean };
   review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
-  harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
+  harness: ModeConfig & { enabled: boolean; config: HarnessConfig; routing?: RoutingConfig };
 }
 
 export interface HarnessAgentConfig {
@@ -306,15 +306,48 @@ export interface ModelLibrary {
 
 // ── Defaults ─────────────────────────────────────────
 
-const DEFAULT_THINKING: Record<string, string> = { code: "medium", plan: "high", review: "medium" };
+const DEFAULT_THINKING: Record<string, string> = { code: "medium", review: "medium" };
+
+/** Clone la config de routage par défaut pour éviter tout partage de référence. */
+function createDefaultRoutingConfig(): RoutingConfig {
+  return {
+    enabled: DEFAULT_ROUTING_CONFIG.enabled,
+    trivial: { ...DEFAULT_ROUTING_CONFIG.trivial },
+    standard: { ...DEFAULT_ROUTING_CONFIG.standard },
+    complex: { ...DEFAULT_ROUTING_CONFIG.complex },
+    review: { ...DEFAULT_ROUTING_CONFIG.review },
+    reviewRiskThreshold: DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
+    confidenceThreshold: DEFAULT_ROUTING_CONFIG.confidenceThreshold,
+    classifierModelId: DEFAULT_ROUTING_CONFIG.classifierModelId,
+  };
+}
+
+/**
+ * Normalise une config de routage issue du disque (migration/rétro-compatibilité).
+ * Garantit que `enabled` vaut `true` si l'ancienne config ne le renseignait pas.
+ */
+function normalizeRoutingConfig(routing: any): RoutingConfig {
+  const d = createDefaultRoutingConfig();
+  if (!routing || typeof routing !== "object") return d;
+  return {
+    enabled: routing.enabled ?? d.enabled,
+    trivial: { modelId: routing.trivial?.modelId ?? d.trivial.modelId },
+    standard: { modelId: routing.standard?.modelId ?? d.standard.modelId },
+    complex: { modelId: routing.complex?.modelId ?? d.complex.modelId },
+    review: { modelId: routing.review?.modelId ?? d.review.modelId },
+    reviewRiskThreshold: routing.reviewRiskThreshold ?? d.reviewRiskThreshold,
+    confidenceThreshold: routing.confidenceThreshold ?? d.confidenceThreshold,
+    classifierModelId: routing.classifierModelId ?? d.classifierModelId,
+  };
+}
 
 function createDefaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
-    plan: { modelId: null, enabled: false },
     review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
-      config: { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 } },
+      config: { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 },
+      routing: createDefaultRoutingConfig() },
   };
 }
 
@@ -447,12 +480,13 @@ function migrateModel(m: any): RegisteredModel {
 
 function migrateProjectMode(pm: any): ProjectModeConfig {
   const d = createDefaultProjectMode();
+  // Le mode plan a été retiré du backend. Si un projet l'utilisait encore,
+  // on le bascule vers le mode code (comportement par défaut).
+  if (pm?.plan?.enabled === true) {
+    console.warn("[model-library] Migration: le mode plan a été retiré. Le projet était configuré avec plan.enabled=true ; bascule vers le mode code.");
+  }
   return {
     code: { modelId: pm?.code?.modelId ?? d.code.modelId },
-    plan: {
-      modelId: pm?.plan?.modelId ?? d.plan.modelId,
-      enabled: pm?.plan?.enabled ?? d.plan.enabled,
-    },
     review: {
       modelId: pm?.review?.modelId ?? d.review.modelId,
       enabled: pm?.review?.enabled ?? d.review.enabled,
@@ -469,8 +503,33 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
         agentMaxTimeout: pm?.harness?.config?.agentMaxTimeout ?? 1800,
         maxTasks: pm?.harness?.config?.maxTasks ?? 20,
       },
+      routing: normalizeRoutingConfig(pm?.harness?.routing ?? migrateRoutingConfig(pm)),
     },
   };
+}
+
+/**
+ * Migration best-effort de l'ancienne config `harness.config.agents` vers le
+ * nouveau `RoutingConfig`. On ne supprime rien : la config legacy reste en place.
+ * Mapping retenu : architect → complex, code-reviewer/security-reviewer → review.
+ */
+function migrateRoutingConfig(pm: any): RoutingConfig {
+  const routing = createDefaultRoutingConfig();
+  const agents = pm?.harness?.config?.agents;
+  if (!Array.isArray(agents)) return routing;
+
+  for (const agent of agents) {
+    if (!agent?.modelId) continue;
+    if (agent.role === "architect") {
+      // Premier modèle d'architecte trouvé → catégorie complex.
+      if (!routing.complex.modelId) routing.complex.modelId = agent.modelId;
+    } else if (agent.role === "code-reviewer" || agent.role === "security-reviewer") {
+      // Premier modèle de reviewer trouvé → catégorie review.
+      if (!routing.review.modelId) routing.review.modelId = agent.modelId;
+    }
+  }
+
+  return routing;
 }
 
 // ── Helpers ───────────────────────────────────────────
@@ -531,6 +590,24 @@ export function getModeModel(library: ModelLibrary, projectId: string, mode: Age
 
 export function getProjectModeConfig(library: ModelLibrary, projectId: string): ProjectModeConfig {
   return library.projectModes[projectId] || createDefaultProjectMode();
+}
+
+/** Récupère la config de routage d'un projet (fallback sur la config par défaut). */
+export function getProjectRoutingConfig(library: ModelLibrary, projectId: string): RoutingConfig {
+  const pm = getProjectModeConfig(library, projectId);
+  if (pm.harness?.routing) return pm.harness.routing;
+  return createDefaultRoutingConfig();
+}
+
+/** Remplace la config de routage d'un projet. */
+export function setProjectRoutingConfig(projectId: string, routing: RoutingConfig): ModelLibrary {
+  const library = loadModelLibrary();
+  if (!library.projectModes[projectId]) {
+    library.projectModes[projectId] = createDefaultProjectMode();
+  }
+  library.projectModes[projectId].harness.routing = routing;
+  saveModelLibrary(library);
+  return library;
 }
 
 // ── CRUD ──────────────────────────────────────────────
@@ -610,9 +687,17 @@ export function removeModel(id: string): ModelLibrary {
   for (const projectId of Object.keys(library.projectModes)) {
     const pm = library.projectModes[projectId];
     if (pm.code.modelId === id) pm.code.modelId = null;
-    if (pm.plan.modelId === id) pm.plan.modelId = null;
     if (pm.review.modelId === id) pm.review.modelId = null;
     if (pm.harness.modelId === id) pm.harness.modelId = null;
+
+    // Nettoyage des références de routage par catégorie (ajout R1).
+    const routing = pm.harness?.routing;
+    if (routing) {
+      for (const category of ["trivial", "standard", "complex", "review"] as const) {
+        if (routing[category].modelId === id) routing[category].modelId = null;
+      }
+      if (routing.classifierModelId === id) routing.classifierModelId = null;
+    }
   }
 
   // Clean up global model references (BUG-06 + BUG-32 fix)
@@ -644,7 +729,7 @@ export function setProjectModeModel(projectId: string, mode: AgentMode, modelId:
   return library;
 }
 
-export function setProjectModeEnabled(projectId: string, mode: "plan" | "review" | "harness", enabled: boolean): ModelLibrary {
+export function setProjectModeEnabled(projectId: string, mode: "review" | "harness", enabled: boolean): ModelLibrary {
   const library = loadModelLibrary();
   if (!library.projectModes[projectId]) {
     library.projectModes[projectId] = createDefaultProjectMode();

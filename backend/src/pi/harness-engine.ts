@@ -3,7 +3,7 @@
  *
  * Nouveau flow :
  * 1. L'ARCHITECTE explore le code et produit un PLAN structuré en phases/tâches
- * 2. Chaque tâche est assignée à un agent spécialisé (backend, frontend, review, etc.)
+ * 2. Chaque tâche est assignée à une fonction (planning/execute/review/integrate) + catégorie routée
  * 3. Les phases s'exécutent séquentiellement ; les tâches dans chaque phase aussi (V1)
  * 4. Chaque agent reçoit UNIQUEMENT sa tâche + les fichiers spécifiés — context minimal
  */
@@ -12,8 +12,10 @@ import { createAgentSession, SessionManager, ModelRegistry, ModelRuntime } from 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emitToSubscribers, getSession } from "./session.js";
 import { concurrencyManager } from "./concurrency.js";
-import { getDefaultAgent, loadModelLibrary } from "./model-library.js";
+import { getDefaultAgent, getProjectRoutingConfig, loadModelLibrary } from "./model-library.js";
 import type { HarnessConfig, HarnessAgentConfig } from "./model-library.js";
+import { extractSignals, isRoutingEnabled, pickModel, resolveRoute } from "./routing.js";
+import type { Route, RoutingFunction, TaskCategory } from "./routing-types.js";
 import os from "os";
 import { existsSync } from "fs";
 
@@ -21,10 +23,109 @@ import { existsSync } from "fs";
 const MAX_PHASES = 5;
 const MAX_TASKS_TOTAL = 15;
 
+// ── Fonctions du process (routage R4) ────────────────
+
+const FUNCTION_SYSTEM_PROMPTS: Record<RoutingFunction, string> = {
+  planning: `## FONCTION : PLANNING
+
+Tu es un agent de planification. Ta mission est d'analyser le contexte, d'explorer le code si nécessaire, et de produire une solution ou un plan d'implémentation clair.
+
+Règles :
+- Lis les fichiers de contexte fournis avant de commencer
+- Explore le code avec read/grep/find/ls quand c'est nécessaire
+- Propose une solution précise, réaliste et alignée avec les conventions du projet
+- Anticipe les edge cases et les impacts`,
+  execute: `## FONCTION : EXECUTE
+
+Tu es un agent d'implémentation. Ta mission est d'exécuter la tâche assignée en modifiant le code.
+
+Règles :
+- Lis TOUS les fichiers spécifiés dans ta tâche avant de commencer
+- Écris du code de qualité production
+- Suis les conventions existantes du projet
+- Fais des changements atomiques, un fichier à la fois
+- Gère les erreurs et edge cases
+- Teste tes changements avec bash si applicable`,
+  review: `## FONCTION : REVIEW
+
+Tu es un agent de relecture. Ta mission est d'analyser le code ou les changements pour en vérifier la qualité.
+
+Règles :
+- Vérifie la logique, la sécurité, les performances
+- Vérifie les edge cases non gérés
+- Signale les bugs avec fichier:ligne
+- Suggère des corrections concrètes
+- Ne modifie PAS le code toi-même (sauf instruction contraire)`,
+  integrate: `## FONCTION : INTEGRATE
+
+Tu es un agent d'intégration. Ta mission est de finaliser et d'assembler les éléments produits.
+
+Règles :
+- Lis les fichiers de contexte et les sorties des phases précédentes
+- Assemble les changements de façon cohérente
+- Exécute les migrations, tests et vérifications de bout en bout nécessaires
+- Mets à jour la documentation et finalise la livraison`,
+};
+
+const FUNCTION_TOOLS: Record<RoutingFunction, string[]> = {
+  planning: ["read", "grep", "find", "ls"],
+  execute: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+  review: ["read", "grep", "find", "ls", "bash"],
+  integrate: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+};
+
+const FUNCTION_DESCRIPTIONS: Record<RoutingFunction, string> = {
+  planning: "Analyse et conception : explorer le code, concevoir une solution, produire un plan ou un design technique.",
+  execute: "Implémentation : écrire ou modifier le code, corriger des bugs, ajouter des fonctionnalités.",
+  review: "Relecture et audit : vérifier la qualité, la sécurité, les edge cases, sans modifier le code (sauf mention contraire).",
+  integrate: "Intégration et finalisation : assembler les changements, migrations, tests de bout en bout, documentation finale.",
+};
+
+/** Normalise une valeur libre (champ `function` du plan) vers une RoutingFunction. */
+function normalizeFunction(value: string | undefined): RoutingFunction | null {
+  if (!value) return null;
+  const v = value.trim().toLowerCase();
+  if (v === "planning" || v === "plan") return "planning";
+  if (v === "execute" || v === "execution" || v === "implement" || v === "implementation") return "execute";
+  if (v === "review" || v === "reviewer" || v === "code-review") return "review";
+  if (v === "integrate" || v === "integration" || v === "integrator") return "integrate";
+  return null;
+}
+
+/**
+ * Rétro-compatibilité : mappe un rôle d'expert legacy vers une fonction.
+ * architect/planner → planning, reviewers → review, tout le reste → execute.
+ */
+function mapRoleToFunction(role: string | undefined): RoutingFunction {
+  const r = (role || "").trim().toLowerCase();
+  if (r === "architect" || r === "planner") return "planning";
+  if (r === "code-reviewer" || r === "security-reviewer") return "review";
+  return normalizeFunction(role) ?? "execute";
+}
+
+/** Catégorie de repli quand le routage est désactivé (affichage + fallback modèle). */
+function defaultCategoryForFunction(fn: RoutingFunction): TaskCategory {
+  switch (fn) {
+    case "planning":
+      return "complex";
+    case "review":
+      return "review";
+    case "integrate":
+      return "standard";
+    case "execute":
+      return "standard";
+  }
+}
+
 // ── Types du plan ────────────────────────────────────
 
 interface PlanTask {
+  /** Rôle legacy (rétro-compatibilité) — peut aussi contenir une fonction. */
   agent: string;
+  /** Nouvelle assignation par fonction du process. */
+  function?: RoutingFunction;
+  /** Catégorie déduite par le routage (défaut déduit si absente). */
+  category?: TaskCategory;
   title: string;
   instruction: string;
   read_files: string[];
@@ -42,6 +143,51 @@ interface ArchitecturePlan {
   };
   phases: PlanPhase[];
 }
+
+/** Prompt de l'architecte orienté fonctions (R4) — remplace l'assignation par rôles. */
+const ARCHITECT_SYSTEM_PROMPT = `## RÔLE : ARCHITECTE
+
+Tu es l'architecte d'un système multi-agent. Tu reçois une demande utilisateur et tu dois :
+1. Explorer le codebase existant (read, grep, find, ls, ...)
+2. Prendre les décisions techniques clés (langage, framework, approche)
+3. Produire un plan d'exécution structuré en phases et tâches
+
+## Fonctions assignables
+Voici les fonctions que tu peux assigner aux tâches :
+{FUNCTION_LIST}
+
+## Format de sortie OBLIGATOIRE
+Tu DOIS terminer ta réponse par un bloc JSON contenant le plan. Format exact :
+
+\`\`\`json
+{
+  "decisions": {
+    "summary": "Résumé concis de l'approche",
+    "tech": { "clé": "valeur" }
+  },
+  "phases": [
+    {
+      "name": "Nom de la phase",
+      "tasks": [
+        {
+          "function": "planning|execute|review|integrate",
+          "title": "Titre court de la tâche",
+          "instruction": "Instruction détaillée et AUTO-CONTENUE. L'agent ne verra QUE cette instruction, pas la demande originale ni les autres tâches. Sois précis sur ce qu'il faut faire, quels fichiers créer/modifier, et quelles conventions suivre.",
+          "read_files": ["chemin/vers/fichier.ext"]
+        }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+## Règles critiques
+- Assigne à chaque tâche une \`function\` parmi les fonctions listées ci-dessus
+- Chaque instruction doit être COMPLÈTE et AUTO-CONTENUE — l'agent ne voit rien d'autre
+- Spécifie les fichiers que chaque agent doit lire pour avoir le contexte nécessaire
+- Maximum 5 phases et 15 tâches au total
+- Les phases s'exécutent séquentiellement ; dans chaque phase, les tâches s'exécutent une par une
+- Si une tâche dépend d'une phase précédente, mentionne-le dans l'instruction ("les fichiers X et Y ont été créés à la phase précédente")`;
 
 // ── Engine ────────────────────────────────────────────
 
@@ -119,7 +265,7 @@ export class HarnessEngine {
 
       // Afficher le plan au user
       const phaseSummary = plan.phases.map((p, i) =>
-        `**Phase ${i + 1} : ${p.name}**  \n${p.tasks.map(t => `  → _${t.title}_ (${t.agent})`).join("\n")}`
+        `**Phase ${i + 1} : ${p.name}**  \n${p.tasks.map(t => `  → _${t.title}_ (${t.function ?? t.agent})`).join("\n")}`
       ).join("\n\n");
       engine.emitText(`**📐 PLAN D'EXÉCUTION**\n\n${phaseSummary}\n\n`);
 
@@ -152,14 +298,17 @@ export class HarnessEngine {
             break;
           }
 
-          // Trouver l'agent par rôle
-          const agentConfig = activeAgents.find(a => a.role === task.agent);
-          if (!agentConfig) {
-            engine.emitText(`\n\n⚠️ **Agent "${task.agent}" introuvable** dans la config. Tâche ignorée.\n\n`);
+          // Sélectionner l'agent par fonction (rétro-compatibilité rôle conservée)
+          const selection = engine.selectAgentForTask(activeAgents, task);
+          if (!selection) {
+            engine.emitText(`\n\n⚠️ **Aucun agent disponible** pour la tâche "${task.title}". Tâche ignorée.\n\n`);
             continue;
           }
 
-          engine.emitText(`\n### 🔸 ${task.title}\n**Agent :** ${task.agent}  \n\n`);
+          const { agent: agentConfig, functionName } = selection;
+          const routing = engine.resolveTaskRouting(task, agentConfig);
+
+          engine.emitText(`\n### 🔸 ${task.title}\n**Fonction :** ${functionName}  \n**Catégorie :** ${routing.category}  \n**Agent :** ${agentConfig.role}  \n\n`);
 
           // Ajouter les steer messages au début de l'instruction si disponibles
           let taskInstruction = task.instruction;
@@ -174,12 +323,14 @@ export class HarnessEngine {
             task.read_files || [],
             plan.decisions,
             `task-${pi}-${ti}`,
+            functionName,
+            routing.route,
           );
 
           artifacts.push({
             phase: phase.name,
             task: task.title,
-            agent: task.agent,
+            agent: functionName,
             output,
           });
         }
@@ -220,22 +371,19 @@ export class HarnessEngine {
    */
   private async runArchitect(activeAgents: HarnessAgentConfig[]): Promise<ArchitecturePlan | null> {
     const architect = activeAgents.find(a => a.role === "architect")
+      ?? activeAgents.find(a => mapRoleToFunction(a.role) === "planning")
       ?? activeAgents[0]; // fallback : premier agent comme planner
 
-    // Construire la liste des agents disponibles pour l'architecte
-    const agentListStr = activeAgents
-      .filter(a => a.role !== "architect") // l'architecte ne s'assigne pas de tâche à lui-même
-      .map(a => `- **${a.role}** : ${a.description || "Agent spécialisé"}`)
+    // Construire la liste des fonctions assignables pour l'architecte
+    const functionListStr = (Object.keys(FUNCTION_DESCRIPTIONS) as RoutingFunction[])
+      .map(fn => `- **${fn}** : ${FUNCTION_DESCRIPTIONS[fn]}`)
       .join("\n");
 
-    // Prompt spécial pour l'architecte
-    const poolEntry = getDefaultAgent(architect.role);
-    const basePrompt = architect.systemPrompt || poolEntry?.systemPrompt
-      || `## RÔLE : ${architect.role.toUpperCase()}\n\nAnalyse la demande et produit un plan.`;
-
-    const architectPrompt = basePrompt.replace("{AGENT_LIST}", agentListStr || "Aucun agent disponible.");
+    // Prompt orienté fonctions (R4) — n'utilise plus les rôles d'experts
+    const architectPrompt = ARCHITECT_SYSTEM_PROMPT.replace("{FUNCTION_LIST}", functionListStr);
 
     // Outils pour l'architecte (read-only + exploration)
+    const poolEntry = getDefaultAgent(architect.role);
     const tools = architect.tools || poolEntry?.tools || ["read", "grep", "find", "ls"];
 
     // Concaténer l'historique de conversation au prompt de l'architecte
@@ -245,7 +393,17 @@ export class HarnessEngine {
       const history = this.conversationHistory.slice(0, 8000);
       archUserPrompt += `\n\n## Historique de la discussion\n\nVoici les messages récents de la conversation (pour contexte) :\n\n${history}\n\n---`;
     }
-    archUserPrompt += `\n\n## Règles\n- Explore le codebase avant de décider\n- Produis un plan réaliste et précis\n- Maximum ${MAX_PHASES} phases et ${MAX_TASKS_TOTAL} tâches\n- Termine par un bloc JSON valide (\`\`\`json ... \`\`\`)\n- N'assigne des tâches qu'aux agents listés ci-dessus`;
+    archUserPrompt += `\n\n## Règles\n- Explore le codebase avant de décider\n- Produis un plan réaliste et précis\n- Maximum ${MAX_PHASES} phases et ${MAX_TASKS_TOTAL} tâches\n- Termine par un bloc JSON valide (\`\`\`json ... \`\`\`)\n- Assigne à chaque tâche une \`function\` parmi : planning, execute, review, integrate`;
+
+    // L'architecte est la fonction planning : son modèle suit la catégorie complex
+    // (ou la chaîne legacy si le routage est désactivé).
+    const architectRoute: Route | null = isRoutingEnabled()
+      ? (() => {
+          const routingConfig = getProjectRoutingConfig(loadModelLibrary(), this.projectId);
+          const route = resolveRoute(this.userPrompt, routingConfig, extractSignals());
+          return { ...route, function: "planning", category: "complex" };
+        })()
+      : null;
 
     // Exécuter l'architecte
     const response = await this.runSingleAgent(
@@ -254,6 +412,8 @@ export class HarnessEngine {
       tools,
       archUserPrompt,
       "architect",
+      "planning",
+      architectRoute,
     );
 
     if (!response) {
@@ -370,23 +530,30 @@ export class HarnessEngine {
     if (!Array.isArray(parsed.phases) || parsed.phases.length === 0) return null;
 
     const validRoles = new Set(activeAgents.map(a => a.role));
-    // L'architecte lui-même n'est pas dans les tâches, mais le validateur
-    // doit accepter les rôles des agents disponibles (sauf architecte)
 
     const phases: PlanPhase[] = [];
     for (const phase of parsed.phases.slice(0, MAX_PHASES)) {
       if (!phase.name || !Array.isArray(phase.tasks)) continue;
       const tasks: PlanTask[] = [];
       for (const task of phase.tasks.slice(0, MAX_TASKS_TOTAL)) {
-        if (!task.agent || !task.instruction) continue;
-        // Vérifier que l'agent assigné existe
-        if (!validRoles.has(task.agent)) {
-          console.warn(`[harness] Task assigns unknown agent "${task.agent}" — skipping`);
+        if (!task.instruction) continue;
+
+        // Nouveau format R4 : la tâche porte une `function`.
+        const requestedFunction = normalizeFunction(task.function) ?? normalizeFunction(task.agent);
+        // Rétro-compatibilité : `agent` reste un rôle d'expert legacy.
+        const legacyRole = typeof task.agent === "string" && validRoles.has(task.agent) ? task.agent : undefined;
+
+        if (!requestedFunction && !legacyRole) {
+          console.warn(`[harness] Task assigns unknown agent/function "${task.agent ?? task.function}" — skipping`);
           continue;
         }
+
+        const functionName = requestedFunction ?? mapRoleToFunction(legacyRole!);
+
         tasks.push({
-          agent: task.agent,
-          title: task.title || task.agent,
+          agent: legacyRole ?? task.agent ?? functionName,
+          function: functionName,
+          title: task.title || legacyRole || functionName,
           instruction: task.instruction,
           read_files: Array.isArray(task.read_files) ? task.read_files : [],
         });
@@ -407,6 +574,53 @@ export class HarnessEngine {
     };
   }
 
+  // ── Routage R4 des tâches ───────────────────────────
+
+  /** Sélectionne l'agent actif pour une tâche, en privilégiant la fonction (R4) puis le rôle legacy. */
+  private selectAgentForTask(
+    activeAgents: HarnessAgentConfig[],
+    task: PlanTask,
+  ): { agent: HarnessAgentConfig; functionName: RoutingFunction } | null {
+    if (activeAgents.length === 0) return null;
+
+    // Nouveau format R4 : la `function` est prioritaire (même si `agent` legacy est aussi présent).
+    const requestedFunction = normalizeFunction(task.function) ?? normalizeFunction(task.agent);
+    if (requestedFunction) {
+      const byFunction = activeAgents.find(a => mapRoleToFunction(a.role) === requestedFunction);
+      return { agent: byFunction ?? activeAgents[0], functionName: requestedFunction };
+    }
+
+    // Rétro-compatibilité : l'architecte a assigné un rôle d'expert exact.
+    const byRole = activeAgents.find(a => a.role === task.agent);
+    if (byRole) {
+      return { agent: byRole, functionName: mapRoleToFunction(byRole.role) };
+    }
+
+    // Fallback : premier agent actif.
+    return { agent: activeAgents[0], functionName: mapRoleToFunction(activeAgents[0].role) };
+  }
+
+  /** Résout la fonction + la catégorie d'une tâche (routage R4) et la route de modèle associée. */
+  private resolveTaskRouting(
+    task: PlanTask,
+    agent: HarnessAgentConfig,
+  ): { functionName: RoutingFunction; category: TaskCategory; route: Route | null } {
+    const requestedFunction = normalizeFunction(task.function) ?? normalizeFunction(task.agent);
+    const functionName = requestedFunction ?? mapRoleToFunction(agent.role);
+
+    if (!isRoutingEnabled()) {
+      return { functionName, category: defaultCategoryForFunction(functionName), route: null };
+    }
+
+    const routingConfig = getProjectRoutingConfig(loadModelLibrary(), this.projectId);
+    const route = resolveRoute(task.instruction, routingConfig, extractSignals());
+    return {
+      functionName,
+      category: route.category,
+      route: { ...route, function: functionName },
+    };
+  }
+
   // ── Exécution d'une tâche ───────────────────────────
 
   /**
@@ -419,6 +633,8 @@ export class HarnessEngine {
     readFiles: string[],
     architectDecisions: { summary: string; tech?: Record<string, string> },
     label: string,
+    functionName: RoutingFunction,
+    route: Route | null,
   ): Promise<string> {
     const cwd = getSession(this.projectId)?.cwd || os.homedir();
 
@@ -431,8 +647,6 @@ export class HarnessEngine {
       ? `\n## Décisions techniques (définies par l'architecte)\n${Object.entries(architectDecisions.tech).map(([k, v]) => `- **${k}** : ${v}`).join("\n")}`
       : "";
 
-    const steerBlock = ""; // déjà injecté dans taskInstruction
-
     const fullPrompt = [
       `## Contexte du projet\n${architectDecisions.summary}`,
       techBlock,
@@ -441,12 +655,12 @@ export class HarnessEngine {
       `\n---\nExécute ta tâche en utilisant les outils à ta disposition.`,
     ].filter(Boolean).join("\n");
 
-    const poolEntry = getDefaultAgent(agent.role);
-    const systemPrompt = agent.systemPrompt || poolEntry?.systemPrompt
-      || `## RÔLE : ${agent.role.toUpperCase()}\n\nExécute la tâche assignée avec ton expertise.`;
-    const tools = agent.tools || poolEntry?.tools || ["read", "edit", "write", "bash", "grep", "find", "ls"];
+    // R4 : le system prompt et les outils viennent de la fonction, plus du rôle.
+    const systemPrompt = FUNCTION_SYSTEM_PROMPTS[functionName]
+      || `## FONCTION : ${functionName.toUpperCase()}\n\nExécute la tâche assignée avec rigueur.`;
+    const tools = FUNCTION_TOOLS[functionName] || agent.tools || ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
-    return this.runSingleAgent(agent, systemPrompt, tools, fullPrompt, label);
+    return this.runSingleAgent(agent, systemPrompt, tools, fullPrompt, label, functionName, route);
   }
 
   // ── Agent unique (mutualisé) ────────────────────────
@@ -461,6 +675,8 @@ export class HarnessEngine {
     tools: string[],
     prompt: string,
     label: string,
+    functionName: RoutingFunction,
+    route: Route | null,
   ): Promise<string> {
     const cwd = getSession(this.projectId)?.cwd || os.homedir();
     let tempSession: AgentSession | null = null;
@@ -483,54 +699,71 @@ export class HarnessEngine {
       });
       tempSession = result.session;
 
-      // Modèle : priorité au modèle spécifique de l'agent, puis au modèle du mode Harness,
-      // puis à la session principale, puis aux fallbacks.
-      // BUG-58: la session temporaire doit hériter d'un modèle qui fonctionne.
+      // Modèle : R4 → routage par fonction/catégorie via pickModel(resolveRoute(...)).
+      // Fallback legacy : agent.modelId → harnessModelId → session principale → default.
       let modelSet = false;
-      console.log(`[harness] Agent ${agent.role}: recherche modèle (agent.modelId=${agent.modelId}, harnessModelId=${this.harnessModelId})`);
-      if (agent.modelId) {
-        const parts = agent.modelId.split("__");
-        const model = getModelRegistry().find(parts[0], parts[1] || "");
-        if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via agent.modelId → ${model.provider}/${model.id}`); }
-        else console.warn(`[harness] Agent ${agent.role}: modelId=${agent.modelId} non trouvé dans le registry`);
-      } else if (this.harnessModelId) {
-        // Modèle configuré pour le mode HARNESS dans le ModelQuickSwitch
-        const parts = this.harnessModelId.split("__");
-        const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-        if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via harnessModelId → ${model.provider}/${model.id}`); }
-        else console.warn(`[harness] harnessModelId=${this.harnessModelId} non trouvé dans le registry`);
-      } else {
-        // Hériter du modèle de la session principale (qui marche)
-        const mainSession = getSession(this.projectId);
-        const mainModel = (mainSession?.session as any)?.model;
-        if (mainModel) {
-          await tempSession.setModel(mainModel); modelSet = true;
-          console.log(`[harness] Agent ${agent.role}: hérite du modèle de la session principale: ${mainModel.provider}/${mainModel.id}`);
-        } else {
-          console.warn(`[harness] Agent ${agent.role}: pas de modèle sur la session principale, fallback...`);
-          // Derniers fallbacks : defaultModelId puis premier dispo
-          const lib = loadModelLibrary();
-          const defaultModelId = lib.defaultModelId;
-          if (defaultModelId) {
-            const parts = defaultModelId.split("__");
-            const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
-            if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via defaultModelId → ${model.provider}/${model.id}`); }
+      console.log(`[harness] ${functionName}: recherche modèle (routing=${route ? "on" : "off"}, agent.modelId=${agent.modelId}, harnessModelId=${this.harnessModelId})`);
+      if (route) {
+        const routingConfig = getProjectRoutingConfig(loadModelLibrary(), this.projectId);
+        const target = pickModel(route, routingConfig, loadModelLibrary());
+        if (target) {
+          const model = getModelRegistry().find(target.providerId, target.modelId);
+          if (model) {
+            await tempSession.setModel(model);
+            modelSet = true;
+            console.log(`[harness] ${functionName}: modèle set via routing (${route.category}/${route.function}) → ${model.provider}/${model.id}`);
+          } else {
+            console.warn(`[harness] ${functionName}: modèle routing ${target.providerId}/${target.modelId} introuvable dans le registry`);
           }
-          if (!modelSet) {
-            const available = getModelRegistry().getAvailable();
-            console.log(`[harness] Agent ${agent.role}: getAvailable() retourne ${available.length} modèles`);
-            if (available.length > 0) {
-              await tempSession.setModel(available[0]); modelSet = true; console.log(`[harness] Agent ${agent.role}: modèle set via available[0] → ${available[0].provider}/${available[0].id}`);
+        } else {
+          console.warn(`[harness] ${functionName}: pickModel n'a pas trouvé de modèle (bibliothèque vide ?)`);
+        }
+      }
+      if (!modelSet) {
+        if (agent.modelId) {
+          const parts = agent.modelId.split("__");
+          const model = getModelRegistry().find(parts[0], parts[1] || "");
+          if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] ${functionName}: modèle set via agent.modelId → ${model.provider}/${model.id}`); }
+          else console.warn(`[harness] ${functionName}: modelId=${agent.modelId} non trouvé dans le registry`);
+        } else if (this.harnessModelId) {
+          // Modèle configuré pour le mode HARNESS dans le ModelQuickSwitch
+          const parts = this.harnessModelId.split("__");
+          const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
+          if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] ${functionName}: modèle set via harnessModelId → ${model.provider}/${model.id}`); }
+          else console.warn(`[harness] harnessModelId=${this.harnessModelId} non trouvé dans le registry`);
+        } else {
+          // Hériter du modèle de la session principale (qui marche)
+          const mainSession = getSession(this.projectId);
+          const mainModel = (mainSession?.session as any)?.model;
+          if (mainModel) {
+            await tempSession.setModel(mainModel); modelSet = true;
+            console.log(`[harness] ${functionName}: hérite du modèle de la session principale: ${mainModel.provider}/${mainModel.id}`);
+          } else {
+            console.warn(`[harness] ${functionName}: pas de modèle sur la session principale, fallback...`);
+            // Derniers fallbacks : defaultModelId puis premier dispo
+            const lib = loadModelLibrary();
+            const defaultModelId = lib.defaultModelId;
+            if (defaultModelId) {
+              const parts = defaultModelId.split("__");
+              const model = getModelRegistry().find(parts[0], parts.slice(1).join("__") || "");
+              if (model) { await tempSession.setModel(model); modelSet = true; console.log(`[harness] ${functionName}: modèle set via defaultModelId → ${model.provider}/${model.id}`); }
+            }
+            if (!modelSet) {
+              const available = getModelRegistry().getAvailable();
+              console.log(`[harness] ${functionName}: getAvailable() retourne ${available.length} modèles`);
+              if (available.length > 0) {
+                await tempSession.setModel(available[0]); modelSet = true; console.log(`[harness] ${functionName}: modèle set via available[0] → ${available[0].provider}/${available[0].id}`);
+              }
             }
           }
         }
       }
       if (!modelSet) {
-        console.error(`[harness] Agent ${agent.role}: AUCUN MODÈLE trouvé — prompt() ne fera rien`);
+        console.error(`[harness] ${functionName}: AUCUN MODÈLE trouvé — prompt() ne fera rien`);
       }
       // Vérifier que le modèle est bien sur la session
       const sessionModel = (tempSession as any).model;
-      console.log(`[harness] Agent ${agent.role}: tempSession.model = ${sessionModel ? `${sessionModel.provider}/${sessionModel.id}` : "NULL"}`);
+      console.log(`[harness] ${functionName}: tempSession.model = ${sessionModel ? `${sessionModel.provider}/${sessionModel.id}` : "NULL"}`);
 
       // Restreindre les outils — IMPORTANT : faire AVANT de setter le system prompt
       // car setActiveToolsByName() appelle _rebuildSystemPrompt() qui écrase _baseSystemPrompt.
@@ -552,21 +785,21 @@ export class HarnessEngine {
         // Chaque event reçu prouve que l'agent travaille → reset du timer d'inactivité
         if (resetInactivityTimer) resetInactivityTimer();
         if (event.type === "message_start" || event.type === "message_end") return;
-        emitToSubscribers({ ...event, _harness: true, _harnessAgent: agent.role } as any, this.projectId);
+        emitToSubscribers({ ...event, _harness: true, _harnessAgent: functionName } as any, this.projectId);
       });
 
       // Émettre tool_execution_start pour le suivi
       emitToSubscribers({
         type: "tool_execution_start",
         toolCallId: `harness-${label}`,
-        toolName: `harness-${agent.role}`,
-        args: { role: agent.role, task: label },
+        toolName: `harness-${functionName}`,
+        args: { function: functionName, role: agent.role, task: label },
       } as any, this.projectId);
 
       // Vérifier le system prompt juste avant prompt()
       const sp = (tempSession as any)._baseSystemPrompt || "";
-      console.log(`[harness] Agent ${agent.role}: _baseSystemPrompt length=${sp.length}, preview=${sp.slice(0, 100)}`);
-      console.log(`[harness] Agent ${agent.role}: agent.state.systemPrompt length=${(tempSession as any).agent.state.systemPrompt?.length || 0}`);
+      console.log(`[harness] ${functionName}: _baseSystemPrompt length=${sp.length}, preview=${sp.slice(0, 100)}`);
+      console.log(`[harness] ${functionName}: agent.state.systemPrompt length=${(tempSession as any).agent.state.systemPrompt?.length || 0}`);
 
       // BUG-59 : timeout à activité (inactivity) + timeout global max de sécurité
       // Le timer d'inactivité se reset à chaque event reçu (text_delta, tool_execution_start, etc.).
@@ -595,7 +828,7 @@ export class HarnessEngine {
           inactivityTimer = setTimeout(() => {
             session.abort().catch(() => {});
             rejectTimeout?.(new Error(
-              `[harness-${agent.role}] Inactivity timeout after ${inactivityTimeoutMs / 1000}s without activity`
+              `[harness-${functionName}] Inactivity timeout after ${inactivityTimeoutMs / 1000}s without activity`
             ));
           }, inactivityTimeoutMs);
         };
@@ -611,21 +844,21 @@ export class HarnessEngine {
           globalTimer = setTimeout(() => {
             session.abort().catch(() => {});
             reject(new Error(
-              `[harness-${agent.role}] Global timeout after ${globalMaxTimeoutMs / 1000}s`
+              `[harness-${functionName}] Global timeout after ${globalMaxTimeoutMs / 1000}s`
             ));
           }, globalMaxTimeoutMs);
         });
 
         try {
-          console.log(`[harness] Agent ${agent.role}: appel prompt() (prompt length=${prompt.length}, inactivity=${inactivityTimeoutMs / 1000}s, global=${globalMaxTimeoutMs / 1000}s)...`);
+          console.log(`[harness] ${functionName}: appel prompt() (prompt length=${prompt.length}, inactivity=${inactivityTimeoutMs / 1000}s, global=${globalMaxTimeoutMs / 1000}s)...`);
           await Promise.race([session.prompt(prompt, {}), timeoutPromise]);
-          console.log(`[harness] Agent ${agent.role}: prompt() résolu sans erreur`);
+          console.log(`[harness] ${functionName}: prompt() résolu sans erreur`);
           return true;
         } catch (err: any) {
           const msg = err.message || "";
           const isTimeout = msg.includes("timeout") || msg.includes("Timed out") || msg.includes("Inactivity") || msg.includes("Global timeout");
           if (isTimeout) {
-            console.warn(`[harness] Agent ${agent.role}: timeout — ${msg}`);
+            console.warn(`[harness] ${functionName}: timeout — ${msg}`);
             return false; // signal pour retry
           }
           throw err; // autre erreur → propagate
@@ -648,34 +881,34 @@ export class HarnessEngine {
         }
         // Timeout — retry si possible
         if (attempt < maxAttempts) {
-          this.emitText(`\n\n⏱️ **${agent.role} a timeouté (attempt ${attempt}/${maxAttempts}). Retry en cours...**\n\n`);
-          console.log(`[harness] Agent ${agent.role}: retry attempt ${attempt + 1}/${maxAttempts}`);
+          this.emitText(`\n\n⏱️ **${functionName} a timeouté (attempt ${attempt}/${maxAttempts}). Retry en cours...**\n\n`);
+          console.log(`[harness] ${functionName}: retry attempt ${attempt + 1}/${maxAttempts}`);
           // BUG-70 : l'abort du 1er attempt est asynchrone — attendre que la run
           // soit vraiment terminée (et tous les event listeners settle) sinon le
           // 2e prompt() jette "Agent is already processing a prompt".
           // waitForIdle() résout quand la run et les listeners ont fini.
           try { await tempSession!.waitForIdle(); } catch {}
         } else {
-          this.emitText(`\n\n❌ **${agent.role} a timeouté définitivement après ${maxAttempts} attempts.**\n\n`);
+          this.emitText(`\n\n❌ **${functionName} a timeouté définitivement après ${maxAttempts} attempts.**\n\n`);
         }
       }
       if (!succeeded) {
-        throw new Error(`[harness-${agent.role}] Timed out after ${maxAttempts} attempts (inactivity=${inactivityTimeoutMs / 1000}s)`);
+        throw new Error(`[harness-${functionName}] Timed out after ${maxAttempts} attempts (inactivity=${inactivityTimeoutMs / 1000}s)`);
       }
 
       // Collecter la réponse
       const messages: any[] = tempSession.messages || [];
-      console.log(`[harness] Agent ${agent.role}: ${messages.length} messages au total (${messages.filter(m => m.role === "assistant").length} assistant)`);
+      console.log(`[harness] ${functionName}: ${messages.length} messages au total (${messages.filter(m => m.role === "assistant").length} assistant)`);
       // Debug: afficher le contenu brut des messages assistant
       for (const m of messages.filter((mm: any) => mm.role === "assistant")) {
         const contentTypes = m.content?.map((c: any) => c.type || typeof c) || [];
         const textLen = m.content?.map((c: any) => (c.text || "").length).reduce((a: number, b: number) => a + b, 0) || 0;
-        console.log(`[harness] Agent ${agent.role}: assistant msg content types=[${contentTypes}] textLen=${textLen}`);
+        console.log(`[harness] ${functionName}: assistant msg content types=[${contentTypes}] textLen=${textLen}`);
         if (textLen === 0) {
           // Logger l'objet complet pour voir stopReason, thinking, errorMessage, etc.
           const { content, ...rest } = m;
-          console.log(`[harness] Agent ${agent.role}: message complet (sans content)=`, JSON.stringify(rest).slice(0, 800));
-          console.log(`[harness] Agent ${agent.role}: thinking length=${m.thinking?.length || 0}`);
+          console.log(`[harness] ${functionName}: message complet (sans content)=`, JSON.stringify(rest).slice(0, 800));
+          console.log(`[harness] ${functionName}: thinking length=${m.thinking?.length || 0}`);
         }
       }
       const assistantMessages = messages
@@ -686,23 +919,23 @@ export class HarnessEngine {
       emitToSubscribers({
         type: "tool_execution_end",
         toolCallId: `harness-${label}`,
-        toolName: `harness-${agent.role}`,
-        result: { content: [{ type: "text", text: `${agent.role.toUpperCase()} : ${(fullResponse.length / 1024).toFixed(1)}K tokens` }] },
+        toolName: `harness-${functionName}`,
+        result: { content: [{ type: "text", text: `${functionName.toUpperCase()} : ${(fullResponse.length / 1024).toFixed(1)}K tokens` }] },
         isError: false,
       } as any, this.projectId);
 
-      return fullResponse || `[${agent.role} n'a produit aucune réponse]`;
+      return fullResponse || `[${functionName} n'a produit aucune réponse]`;
 
     } catch (err: any) {
-      console.error(`[harness] Agent ${agent.role} error:`, err.message);
+      console.error(`[harness] ${functionName} error:`, err.message);
       emitToSubscribers({
         type: "tool_execution_end",
         toolCallId: `harness-${label}`,
-        toolName: `harness-${agent.role}`,
-        result: { content: [{ type: "text", text: `❌ ${agent.role} a échoué : ${err.message}` }] },
+        toolName: `harness-${functionName}`,
+        result: { content: [{ type: "text", text: `❌ ${functionName} a échoué : ${err.message}` }] },
         isError: true,
       } as any, this.projectId);
-      return `[Error: ${agent.role} failed — ${err.message}]`;
+      return `[Error: ${functionName} failed — ${err.message}]`;
     } finally {
       concurrencyManager.releaseAgentSlot(agentSlotKey);
       if (tempUnsub) tempUnsub();

@@ -166,7 +166,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, {
 
 // ── Model Library ─────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "plan" | "harness";
+export type AgentMode = "code" | "review" | "harness";
 
 export interface RegisteredModel {
   id: string;                  // unique internal ID
@@ -203,11 +203,48 @@ export interface HarnessConfig {
   maxTasks?: number;           // safety limit (default: 20)
 }
 
+// ── Routing types (R6) ─────────────────────────────────
+// Alignés sur backend/src/pi/routing-types.ts. Le routage remplace
+// la liste d'experts HARNESS par 4 catégories configurables.
+
+export type RoutingFunction = "planning" | "execute" | "review" | "integrate";
+
+export type TaskCategory = "trivial" | "standard" | "complex" | "review";
+
+export interface CategoryConfig {
+  modelId: string | null;
+}
+
+export interface RoutingConfig {
+  /** Active/désactive le routage (false = mode basic sans triage). */
+  enabled: boolean;
+  trivial: CategoryConfig;
+  standard: CategoryConfig;
+  complex: CategoryConfig;
+  review: CategoryConfig;
+  /** riskScore >= ce seuil force la catégorie review. */
+  reviewRiskThreshold: number;
+  /** Confiance minimale pour accepter une décision (sinon repli standard/execute). */
+  confidenceThreshold: number;
+  /** Modèle cheap optionnel pour le classifieur LLM (null = off). */
+  classifierModelId: string | null;
+}
+
+export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
+  enabled: true,
+  trivial: { modelId: null },
+  standard: { modelId: null },
+  complex: { modelId: null },
+  review: { modelId: null },
+  reviewRiskThreshold: 0.5,
+  confidenceThreshold: 0.6,
+  classifierModelId: null,
+};
+
 export interface ProjectModeConfig {
   code: ModeConfig;
-  plan: ModeConfig & { enabled: boolean };
   review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
-  harness: ModeConfig & { enabled: boolean; config: HarnessConfig };
+  harness: ModeConfig & { enabled: boolean; config: HarnessConfig; routing?: RoutingConfig };
 }
 
 export interface ModelLibrary {

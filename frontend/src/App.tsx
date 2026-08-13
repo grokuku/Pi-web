@@ -804,7 +804,7 @@ function App() {
 
         <div className="flex-1" />
 
-        {/* Mode chips — CODE / PLAN / REVIEW */}
+        {/* Mode chips — CODE / REVIEW / HARNESS */}
         <ModelQuickSwitch
           activeMode={activeMode}
           activeProjectId={activeProject?.id}

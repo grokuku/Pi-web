@@ -302,7 +302,6 @@ export function Sidebar({
             { cmd: "/new", tip: "New session" },
             { cmd: "/compact", tip: "Compact context" },
             { cmd: "/clear", tip: "Clear screen" },
-            { cmd: "/plan", tip: "Toggle PLAN mode" },
             { cmd: "/review", tip: "Toggle REVIEW mode" },
             { cmd: "/quit", tip: "Return to home" },
             { cmd: "/help", tip: "Show help" },

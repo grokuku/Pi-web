@@ -10,12 +10,15 @@ import {
   getProjectModeConfig,
   getDefaultModel,
   getCommitModel,
+  getModel,
   setProjectModeEnabled,
   getDefaultHarnessAgents,
   setProjectModeHarnessConfig,
-}
-from "./model-library.js";
-import type { AgentMode } from "./model-library.js";
+  getProjectRoutingConfig,
+} from "./model-library.js";
+import type { AgentMode, RegisteredModel } from "./model-library.js";
+import { extractSignals, isRoutingEnabled, pickModel, resolveRoute } from "./routing.js";
+import type { Route, RoutingFunction } from "./routing-types.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
@@ -53,6 +56,7 @@ export interface PiSessionState {
   harnessAborted: boolean;      // was harness run aborted by user
   harnessSteerMessages: string[]; // messages queued for harness while streaming
   allowWebSearch: boolean;       // allow firecrawl tools (disabled by default, librarian_search replaces them)
+  lastRoute?: Route;            // dernière décision de routage (fondation routing R2)
 }
 
 // ─── Multi-project session map ──────────────────────────
@@ -202,7 +206,7 @@ function emitSessionUpdate(projectId: string) {
 
 // ── Heartbeat applicatif (BUG-72) ──────────────────────────
 // Pendant qu'un run est actif, le SDK peut rester silencieux longtemps
-// (bash silencieux, thinking long, compaction, retry, expert harness).
+// (bash silencieux, thinking long, compaction, retry, harness).
 // Sans heartbeat, le watchdog frontend détecte un faux "stalled" dès 60s
 // de silence. On émet donc périodiquement un heartbeat vers les subscribers
 // tant que le flag effectif de streaming (state.isStreaming) est true.
@@ -216,7 +220,7 @@ function startStreamingHeartbeat(projectId: string): void {
     // Arrêter dès que le flag effectif de streaming passe à false. On utilise
     // state.isStreaming (maintenu par agent_start/agent_settled, runHarness et
     // l'auto-review) plutôt que session.isStreaming pour couvrir aussi le batch
-    // harness (sessions expertes dont le main session n'est pas en streaming).
+    // harness (sessions de fonctions dont la session principale n'est pas en streaming).
     if (!state?.isStreaming) {
       stopStreamingHeartbeat(projectId);
       return;
@@ -488,6 +492,33 @@ export function getCurrentSession(): PiSessionState | undefined {
   return undefined;
 }
 
+/**
+ * Assemble les signaux de routage disponibles sans I/O lourde (R3).
+ * - toolErrorRate : ratio d'erreurs sur les tool calls du projet suivis en mémoire.
+ * - contextUsage : usage du contexte courant de la session (0..1).
+ * - changedFiles/diffSize : laissés à 0 pour l'instant (branchement git volontairement
+ *   différé pour ne pas ajouter d'I/O avant chaque prompt).
+ */
+function buildRoutingSignals(projectId: string) {
+  let toolCalls = 0;
+  let toolErrors = 0;
+  for (const tc of activeToolCalls.values()) {
+    if (tc.projectId !== projectId) continue;
+    toolCalls++;
+    if (tc.isError) toolErrors++;
+  }
+
+  const state = sessionsByProject.get(projectId);
+  const contextUsage = Number((state?.session as any)?.getContextUsage?.() ?? 0) || 0;
+
+  return {
+    toolErrorRate: toolCalls > 0 ? toolErrors / toolCalls : 0,
+    contextUsage,
+    changedFiles: 0,
+    diffSize: 0,
+  };
+}
+
 export async function sendPrompt(
   message: string,
   projectId: string,
@@ -498,7 +529,7 @@ export async function sendPrompt(
   // ── Harness mode: no session needed, delegate to HarnessEngine ──
   // NOTE: Le mode HARNESS est maintenant géré par l'extension harness-orchestrator.
   // L'orchestrator reçoit les messages normalement via session.prompt() et
-  // délègue aux experts via le tool delegate_to_expert.
+  // délègue l'exécution aux fonctions de routage via le tool delegate.
   // L'ancien HarnessEngine (batch) reste accessible via la commande /harness.
 
   if (!state?.session) {
@@ -598,23 +629,6 @@ export async function sendPrompt(
         }
         return { command: "model", result: `Model not found: ${args}. Use /model to list available.` };
       }
-      case "/plan": {
-        const library = loadModelLibrary();
-        const currentMode = state.activeMode || "code";
-        if (currentMode === "plan") {
-          // Toggle off → back to code
-          await restoreCodeMode(projectId);
-          return { command: "plan", result: "✓ Switched back to CODE mode" };
-        } else {
-          // Enable plan mode (auto-enable if not already enabled)
-          const pm = getProjectModeConfig(library, projectId);
-          if (!pm.plan?.enabled) {
-            setProjectModeEnabled(projectId, "plan", true);
-          }
-          await switchMode("plan", projectId);
-          return { command: "plan", result: "✓ Switched to PLAN mode" };
-        }
-      }
       case "/review": {
         const library = loadModelLibrary();
         const currentMode = state.activeMode || "code";
@@ -635,7 +649,7 @@ export async function sendPrompt(
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /plan      — Toggle PLAN mode\n  /review    — Toggle REVIEW mode\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /review    — Toggle REVIEW mode\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -783,10 +797,44 @@ export async function sendPrompt(
     }
   }
 
+  // ── Routage par complexité/signaux (R3) ──
+  // Uniquement en mode code : le mode review manuel et le mode harness gardent
+  // leur configuration dédiée. Le routage ajuste modèle/thinking/outils AVANT
+  // l'appel au LLM, sans toucher aux branches streaming/steer/harness/timeouts.
+  // Le flag global isRoutingEnabled() peut être complété par le flag projet
+  // `routingConfig.enabled` (switch « routage actif »).
+  if (state.activeMode === "code") {
+    const library = loadModelLibrary();
+    const routingConfig = getProjectRoutingConfig(library, projectId);
+
+    if (isRoutingEnabled() && routingConfig.enabled) {
+      try {
+        const signals = extractSignals(buildRoutingSignals(projectId));
+        const route = resolveRoute(message, routingConfig, signals);
+        state.lastRoute = route;
+        console.log(
+          `[routing] ${route.function}/${route.category} risk=${route.riskScore} conf=${route.confidence} — ${route.reason}`,
+        );
+        await applyRouteToSession(route, projectId);
+      } catch (e: any) {
+        console.warn("[routing] Failed to apply route:", e?.message || e);
+      }
+    } else {
+      // Routage désactivé (globalement ou pour ce projet) : comportement legacy.
+      // On réapplique le mode code pour restaurer modèle/thinking/outils après
+      // un éventuel overlay de routage précédent.
+      try {
+        await applyModeToSession(state.activeMode || "code", projectId);
+      } catch (e: any) {
+        console.warn("[routing] Failed to apply legacy mode:", e?.message || e);
+      }
+    }
+  }
+
   if (isSessionStreaming(projectId)) {
     // Mode HARNESS (v3) : l'orchestrator est la session principale et peut être
-    // en train de déléguer à un expert (tool delegate_to_expert).
-    // ABORT ICI TUERAIT L'EXPERT — le travail est perdu (BUG-67).
+    // en train de déléguer à une fonction de routage (tool delegate).
+    // ABORT ICI TUERAIT LA FONCTION EN COURS — le travail est perdu (BUG-67).
     // À la place, on met le message en file via steer() : il sera injecté
     // par le SDK après la fin de la délégation en cours.
     // BUG-69 : options partagées entre les branches (images).
@@ -810,7 +858,7 @@ export async function sendPrompt(
         );
         return;
       }
-      console.log("[prompt] Harness mode streaming — steering message (no abort, expert in progress)");
+      console.log("[prompt] Harness mode streaming — steering message (no abort, function in progress)");
       try { await state.session.steer(message); } catch (e: any) {
         console.error("[prompt] steer() failed:", e.message);
       }
@@ -834,11 +882,11 @@ export async function sendPrompt(
       options.images = imageAttachments;
     }
     console.log("[prompt] Calling session.prompt()...");
-    // En mode harness, l'orchestrator peut déléguer à plusieurs experts successivement.
-    // Chaque expert a son propre timeout (300s dans l'extension), mais le total peut dépasser 5 min.
+    // En mode harness, l'orchestrator peut déléguer à plusieurs fonctions de routage successivement.
+    // Chaque fonction a son propre timeout (300s dans l'extension), mais le total peut dépasser 5 min.
     // On désactive le timeout global en harness pour ne pas tuer l'orchestrator en pleine délégation.
     if (state.activeMode === "harness") {
-      console.log("[prompt] Harness mode — no session timeout (experts have their own)");
+      console.log("[prompt] Harness mode — no session timeout (functions have their own)");
       await state.session.prompt(message, options);
     } else {
       await withSessionTimeout(
@@ -864,9 +912,9 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
-  // Mode HARNESS (v3) : l'orchestrator délègue à un expert (tool delegate_to_expert).
+  // Mode HARNESS (v3) : l'orchestrator délègue à une fonction de routage (tool delegate).
   // Un steer est injecté par le SDK après la délégation en cours — PAS de timeout
-  // abortif ici, sinon on tue l'expert (BUG-67). Les experts ont leur propre timeout.
+  // abortif ici, sinon on tue la fonction en cours (BUG-67). Les fonctions ont leur propre timeout.
   if (state.activeMode === "harness") {
     // BUG-69/72 : même garde qu'en sendPrompt — si l'agent est idle côté SDK,
     // steer() perdrait le message silencieusement. On fait un prompt complet.
@@ -881,7 +929,7 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
       );
       return;
     }
-    console.log("[steer] Harness mode — no abort timeout (expert in progress)");
+    console.log("[steer] Harness mode — no abort timeout (function in progress)");
     await state.session.steer(message);
     return;
   }
@@ -915,7 +963,7 @@ export async function runHarness(
   if (state) {
     state.activeMode = "harness";
     state.isStreaming = true;
-    // BUG-72 : les experts du batch harness peuvent rester silencieux > 60s
+    // BUG-72 : les fonctions du batch harness peuvent rester silencieux > 60s
     // (thinking long) → heartbeat applicatif pour éviter les faux "stalled".
     startStreamingHeartbeat(projectId);
   }
@@ -954,7 +1002,7 @@ export async function abortPi(projectId?: string): Promise<void> {
     const state = sessionsByProject.get(projectId);
     if (state?.session) {
       // Abort la session quelle que soit le mode (y compris harness orchestrator).
-      // L'abort signal se propage au tool delegate_to_expert via l'extension.
+      // L'abort signal se propage au tool delegate via l'extension.
       state.harnessAborted = true;
       await state.session.abort();
     }
@@ -1150,6 +1198,7 @@ export function getSessionInfo(projectId?: string) {
     // JSON.stringify). Le frontend récupère l'historique via pi_history.
     activeMode: state.activeMode || "code",
     contextUsage: (state.session as any).getContextUsage?.() || null,
+    lastRoute: state.lastRoute ?? null,
   };
 }
 
@@ -1215,7 +1264,7 @@ export function getSessionMessages(projectId: string): any[] {
 // ── Mode Management ───────────────────────────────────
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
-// For plan mode: no bash at all — it can create files
+// Outils de planification/exploration (réutilisés plus tard pour une fonction de routage).
 const PLAN_TOOLS = ["read", "grep", "find", "ls"];
 // For review mode: bash + read + grep for inspecting changed files
 // (no find/ls to prevent full-project exploration — reviewer should focus on diff)
@@ -1223,13 +1272,13 @@ const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 // Firecrawl tools removed — librarian_search replaces them.
 const FIRECRAWL_TOOLS: string[] = [];
-// Harness orchestrator : aucun tool de base — uniquement delegate_to_expert (via extension)
+// Harness orchestrator : aucun tool de base — uniquement delegate (via extension)
 // L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
 const HARNESS_TOOLS: string[] = [];
 // Tools d'orchestration à EXCLURE des modes non-harness (BUG-71).
-// En mode CODE/PLAN/REVIEW, le LLM doit travailler directement,
-// pas déléguer aux experts via delegate_to_expert.
-const HARNESS_EXCLUDE = ["delegate_to_expert"];
+// En mode CODE/REVIEW, le LLM doit travailler directement,
+// pas déléguer via delegate.
+const HARNESS_EXCLUDE = ["delegate"];
 
 /** Get extension tool names registered in the session */
 function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
@@ -1257,7 +1306,7 @@ const MODE_BLOCK_MARKER_START = "<!-- PI_MODE:" ;
 const MODE_BLOCK_MARKER_END = "-->";
 
 function cleanPromptForModeChange(rawPrompt: string): string {
-  // Remove existing mode blocks (e.g. <!-- PI_MODE:PLAN -->...<!-- /PI_MODE:PLAN -->)
+  // Remove existing mode blocks (e.g. <!-- PI_MODE:REVIEW -->...<!-- /PI_MODE:REVIEW -->)
   let prompt = rawPrompt.replace(/\n*<!-- PI_MODE:\w+ -->[\s\S]*?<!-- \/PI_MODE:\w+ -->\n*/g, "\n");
   // Remove identity override block
   prompt = prompt.replace(/\n*<!-- PI_IDENTITY -->[\s\S]*?<!-- \/PI_IDENTITY -->\n*/g, "\n");
@@ -1300,8 +1349,7 @@ function stripDefaultIdentity(prompt: string): { identity: string; rest: string 
 const MODE_IDENTITIES: Record<string, string> = {
   code: "",  // Keep default identity for code mode
   review: "You are a senior code reviewer. Your job is to READ code, analyze it, and provide detailed feedback. You do NOT make changes.",
-  plan: "You are a PLANNING agent. You do NOT write code, edit files, or suggest shell commands. You analyze the codebase and produce structured implementation plans.",
-  harness: "Tu es le chef de projet de Pi-Web. Ton rôle est d'orchestrer les experts et d'être l'interface entre l'utilisateur et l'équipe.",
+  harness: "Tu es le chef de projet de Pi-Web. Ton rôle est d'orchestrer les fonctions de routage et d'être l'interface entre l'utilisateur et l'équipe.",
 };
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -1327,18 +1375,6 @@ When the project has been indexed by the knowledge graph (cbm_* tools are visibl
 
 These are 100x more token-efficient than file-by-file exploration. Use them when possible.
 grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
-  plan: `You are in PLAN mode — you analyze the codebase and produce structured implementation plans WITHOUT modifying any files.
-
-## Core Rules
-- You CANNOT use: edit, write (file modifications are disabled)
-- You CAN ONLY READ files and describe changes verbally
-- Bash is restricted to read-only commands: cat, head, tail, wc, find, grep, ls, tree, du, pwd, file, stat
-- NEVER execute any command that modifies the filesystem or state
-- NEVER attempt to edit files — the edit tool will fail in this mode
-- Focus on producing clear, actionable implementation plans
-
-## Knowledge Graph
-When available (cbm_* tools visible), use cbm_arch for architecture overview, cbm_trace for call chains, cbm_search to find code by name/pattern. Much faster than reading files one by one.`,
   review: `You are in REVIEW mode — a focused code review of **recently changed files only**.
 
 ## Core Rules
@@ -1373,73 +1409,213 @@ For each finding:
 When available (cbm_* tools visible), use cbm_diff to analyze git diff impact (affected symbols, blast radius). Use cbm_trace to find callers of changed functions. Use cbm_search for targeted lookups instead of grep+read chains.`,
   harness: `## Mode HARNESS — Chef de Projet
 
-Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécution aux experts.
+Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécution aux fonctions de routage.
 
 ### Tes responsabilités
 - Comprendre la demande de l'utilisateur
 - Évaluer la complexité de la tâche
-- Choisir le bon expert et lui déléguer
+- Choisir la bonne fonction de routage et lui déléguer
 - Présenter les résultats à l'utilisateur de façon claire
-- Coordonner plusieurs experts si nécessaire
+- Coordonner plusieurs fonctions de routage si nécessaire
 
 ### Règles ABSOLUES
 - Tu ne codes JAMAIS. Tu ne débugges JAMAIS. Tu ne fais JAMAIS de plan détaillé.
-- Tu ne lis JAMAIS le code pour investiguer un bug. L'investigation est le job des experts.
-- Tu délègues TOUJOURS l'exécution aux experts via le tool delegate_to_expert.
+- Tu ne lis JAMAIS le code pour investiguer un bug. L'investigation est le job des fonctions de routage.
+- Tu délègues TOUJOURS l'exécution via le tool delegate.
 - Tu peux répondre directement aux questions simples (conseils, explications, clarifications).
-- Quand l'utilisateur signale un bug, délègue IMMÉDIATEMENT à l'expert approprié (code-reviewer pour investiguer, backend-dev/frontend-dev pour fixer). Ne fais pas de recherche toi-même.
+- Quand l'utilisateur signale un bug, délègue IMMÉDIATEMENT à la fonction appropriée (review pour investiguer, execute pour fixer). Ne fais pas de recherche toi-même.
 - Quand tu n'es pas sûr, demande à l'utilisateur.
 
 ### Quand déléguer vs répondre directement
 - **Réponds directement** : questions simples, conseils, explications, clarifications, synthèse de résultats
-- **Délègue à un expert** : toute tâche d'exécution (code, debug, review, test, doc, plan)
-- **Tâche complexe** : délègue d'abord à l'architecte (role: "architect") pour un plan, puis aux experts appropriés
-- **Tâche simple** : délègue directement à l'expert approprié (ex: backend-dev pour une API, frontend-dev pour un composant)
+- **Délègue** : toute tâche d'exécution (code, debug, review, test, doc, plan)
+- **Tâche complexe** : délègue d'abord à la fonction planning pour un plan, puis à la fonction execute
+- **Tâche simple** : délègue directement à la fonction execute
+- **Relecture / audit** : délègue à la fonction review
+- **Synthèse / rapport final** : délègue à la fonction integrate
 
-### Experts disponibles
-| Rôle | Spécialité |
-|------|------------|
-| architect | Planification, exploration, architecture |
-| backend-dev | Logique serveur, API, middleware |
-| frontend-dev | UI, composants, routing |
-| database-engineer | Schémas, migrations, queries |
-| api-designer | Contrats API, validation |
-| code-reviewer | Review de code, qualité |
-| qa-tester | Tests, QA, validation |
-| test-writer | Tests unitaires, integration |
-| docs-writer | Documentation, README |
-| devops | CI/CD, Docker, déploiement |
-| security-reviewer | Audit sécurité |
-| refactoring | Refactoring, dette technique |
+### Fonctions de routage disponibles
+| Fonction | Rôle |
+|----------|------|
+| planning | Planification, exploration, architecture |
+| execute | Implémentation : code, debug, tests, documentation |
+| review | Relecture, audit, qualité, sécurité |
+| integrate | Synthèse, rapport final, intégration |
 
 ### Comment déléguer
-Utilise le tool delegate_to_expert avec :
-- role : le rôle exact de l'expert (ex: "backend-dev")
+Utilise le tool delegate avec :
+- function : la fonction à appeler, parmi planning, execute, review, integrate
 - task : la tâche précise et auto-contenue
 - context : fichiers à lire, décisions précédentes, contraintes (optionnel)
 
-L'expert ne voit QUE ce que tu lui passes — sois précis et complet.
+La fonction ne voit QUE ce que tu lui passes — sois précis et complet.
 
 ### Après une délégation
-- Analyse le résultat retourné par l'expert
-- Si l'expert signale un problème ou un besoin de clarification -> demande à l'utilisateur
+- Analyse le résultat retourné par la fonction
+- Si la fonction signale un problème ou un besoin de clarification -> demande à l'utilisateur
 - Si la tâche est terminée -> résume le résultat pour l'utilisateur
-- Si tu as besoin d'un autre expert -> délègue à nouveau`,
+- Si tu as besoin d'une autre fonction -> délègue à nouveau`,
+};
+
+// Instructions/identités spécifiques aux fonctions de routage (R3).
+// On réutilise autant que possible les blocs de mode existants pour rester cohérent.
+const FUNCTION_IDENTITIES: Record<RoutingFunction, string> = {
+  execute: MODE_IDENTITIES.code,
+  integrate: MODE_IDENTITIES.code,
+  review: MODE_IDENTITIES.review,
+  planning:
+    "You are a planning-focused coding assistant. Your job is to explore, analyze and produce a clear implementation plan. You do NOT modify code.",
+};
+
+const FUNCTION_INSTRUCTIONS: Record<RoutingFunction, string> = {
+  execute: MODE_INSTRUCTIONS.code,
+  integrate: MODE_INSTRUCTIONS.code,
+  review: MODE_INSTRUCTIONS.review,
+  planning: `You are in PLANNING mode — read-only exploration and planning.
+
+## Core Rules
+- You can ONLY use read-only tools: read, grep, find, ls (and cbm_* graph tools when available)
+- You CANNOT use: edit, write, or bash commands that modify the filesystem
+- Do NOT modify any file
+- Focus on understanding the codebase and producing a clear, actionable plan
+
+## Planning Focus
+1. Identify affected files, functions and dependencies
+2. Break the work into atomic, testable steps
+3. Flag risks, edge cases, and data/schema impacts
+4. Keep the plan concise and concrete (files, functions, approach)
+
+## Output Format
+- **Plan** : liste d'étapes ordonnées, avec fichiers concernés
+- **Risques** : points de vigilance
+- **Questions** : clarifications nécessaires avant exécution`,
 };
 
 // Default thinking levels per mode
 const DEFAULT_THINKING: Record<string, string> = {
   code: "medium",
   review: "medium",
-  plan: "high",
   harness: "medium",
 };
+
+/**
+ * Applique un RegisteredModel + thinking level à la session active.
+ * Factorisé depuis applyModeToSession pour être réutilisé par applyRouteToSession
+ * sans dupliquer la logique de surcharge des capacités (reasoning/contextWindow).
+ */
+async function applyModelAndThinking(
+  model: RegisteredModel | null | undefined,
+  projectId: string,
+  thinkingFallback: string,
+): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) return;
+  const session = state.session;
+
+  if (!model) return;
+
+  try {
+    await reloadModelRegistry();
+    const piModel = sharedModelRegistry!.find(model.providerId, model.modelId);
+
+    if (piModel) {
+      // Check if we need to override model capabilities (reasoning, contextWindow)
+      const needsOverride = (
+        (model.reasoning !== undefined && piModel.reasoning !== model.reasoning) ||
+        (model.contextWindow !== undefined && piModel.contextWindow !== model.contextWindow) ||
+        (model.maxTokens !== undefined && piModel.maxTokens !== model.maxTokens)
+      );
+
+      if (needsOverride) {
+        // Re-register the ENTIRE provider with all its models,
+        // overriding only the one model that needs capability changes.
+        // This avoids losing other models on the same provider.
+        const existingAuth = await sharedModelRuntime!.getAuth(piModel);
+        const existingApiKey = existingAuth?.auth?.apiKey;
+        const providerApi = (piModel as any).api || "openai-completions";
+        const providerBaseUrl = (piModel as any).baseUrl || "";
+
+        // Get ALL models from this provider in the registry
+        const allProviderModels = sharedModelRegistry!.getAvailable()
+          .filter((m: any) => m.provider === model.providerId);
+
+        const models = allProviderModels.map((m: any) => {
+          // Override our target model's capabilities
+          if (m.id === model.modelId || m.id === piModel.id) {
+            return {
+              id: m.id,
+              name: m.name || m.id,
+              api: m.api || providerApi,
+              reasoning: model.reasoning ?? m.reasoning ?? false,
+              input: m.input || (model.vision ? ["text", "image"] : ["text"]),
+              contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
+              maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
+              cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            };
+          }
+          return {
+            id: m.id,
+            name: m.name || m.id,
+            api: m.api || providerApi,
+            reasoning: m.reasoning ?? false,
+            input: m.input || ["text"],
+            contextWindow: m.contextWindow ?? 128000,
+            maxTokens: m.maxTokens ?? 16384,
+            cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+        });
+
+        // If no other models were found, at least include the target model
+        if (models.length === 0) {
+          models.push({
+            id: piModel.id || model.modelId,
+            name: piModel.name || model.name || model.modelId,
+            api: providerApi,
+            reasoning: model.reasoning ?? piModel.reasoning ?? false,
+            input: (piModel as any).input || (model.vision ? ["text", "image"] : ["text"]),
+            contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
+            maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
+            cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          });
+        }
+
+        console.log(`[session] Re-registering provider ${model.providerId} with ${models.length} models (override: ${model.modelId})`);
+        sharedModelRegistry!.registerProvider(model.providerId, {
+          baseUrl: providerBaseUrl,
+          api: providerApi,
+          apiKey: existingApiKey || "ollama",
+          models,
+        });
+
+        // Re-find after re-registration
+        const updatedModel = sharedModelRegistry!.find(model.providerId, model.modelId);
+        if (updatedModel) {
+          await session.setModel(updatedModel);
+          console.log("[session] Model set to (updated):", (session as any).model?.id);
+        } else {
+          await session.setModel(piModel);
+        }
+      } else {
+        // No override needed — just set the model
+        await session.setModel(piModel);
+      }
+    } else {
+      // Model not in registry — try setModel with provider/id
+      await setModel(model.providerId, model.modelId, projectId);
+    }
+
+    await setThinkingLevel(model.thinkingLevel || thinkingFallback || "medium", projectId);
+  } catch (e: any) {
+    console.error(`[session] Failed to apply model for ${model.providerId}/${model.modelId}:`, e.message);
+    console.log("[session] Model switch FAILED, session model is now:", (session as any).model?.id || "unknown");
+  }
+}
 
 /**
  * Apply a mode's configuration to the Pi session:
  * - Switch model (from project-specific mode config or default)
  * - Set thinking level
- * - Filter tools (read-only for plan/review)
+ * - Filter tools (read-only for review)
  * - Inject mode instructions into system prompt
  */
 export async function applyModeToSession(mode: AgentMode, projectId: string): Promise<void> {
@@ -1450,117 +1626,19 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   const session = state.session;
   const model = getModeModel(library, projectId, mode);
 
-  // ── Apply model ──
-  if (model) {
-    try {
-      await reloadModelRegistry();
-      const piModel = sharedModelRegistry!.find(model.providerId, model.modelId);
-
-      if (piModel) {
-        // Check if we need to override model capabilities (reasoning, contextWindow)
-        const needsOverride = (
-          (model.reasoning !== undefined && piModel.reasoning !== model.reasoning) ||
-          (model.contextWindow !== undefined && piModel.contextWindow !== model.contextWindow) ||
-          (model.maxTokens !== undefined && piModel.maxTokens !== model.maxTokens)
-        );
-
-        if (needsOverride) {
-          // Re-register the ENTIRE provider with all its models,
-          // overriding only the one model that needs capability changes.
-          // This avoids losing other models on the same provider.
-          const existingAuth = await sharedModelRuntime!.getAuth(piModel);
-          const existingApiKey = existingAuth?.auth?.apiKey;
-          const providerApi = (piModel as any).api || "openai-completions";
-          const providerBaseUrl = (piModel as any).baseUrl || "";
-
-          // Get ALL models from this provider in the registry
-          const allProviderModels = sharedModelRegistry!.getAvailable()
-            .filter((m: any) => m.provider === model.providerId);
-
-          const models = allProviderModels.map((m: any) => {
-            // Override our target model's capabilities
-            if (m.id === model.modelId || m.id === piModel.id) {
-              return {
-                id: m.id,
-                name: m.name || m.id,
-                api: m.api || providerApi,
-                reasoning: model.reasoning ?? m.reasoning ?? false,
-                input: m.input || (model.vision ? ["text", "image"] : ["text"]),
-                contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
-                maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
-                cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              };
-            }
-            return {
-              id: m.id,
-              name: m.name || m.id,
-              api: m.api || providerApi,
-              reasoning: m.reasoning ?? false,
-              input: m.input || ["text"],
-              contextWindow: m.contextWindow ?? 128000,
-              maxTokens: m.maxTokens ?? 16384,
-              cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            };
-          });
-
-          // If no other models were found, at least include the target model
-          if (models.length === 0) {
-            models.push({
-              id: piModel.id || model.modelId,
-              name: piModel.name || model.name || model.modelId,
-              api: providerApi,
-              reasoning: model.reasoning ?? piModel.reasoning ?? false,
-              input: (piModel as any).input || (model.vision ? ["text", "image"] : ["text"]),
-              contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
-              maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
-              cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            });
-          }
-
-          console.log(`[mode] Re-registering provider ${model.providerId} with ${models.length} models (override: ${model.modelId})`);
-          sharedModelRegistry!.registerProvider(model.providerId, {
-            baseUrl: providerBaseUrl,
-            api: providerApi,
-            apiKey: existingApiKey || "ollama",
-            models,
-          });
-
-          // Re-find after re-registration
-          const updatedModel = sharedModelRegistry!.find(model.providerId, model.modelId);
-          if (updatedModel) {
-            await session.setModel(updatedModel);
-          console.log("[mode] Model set to (updated):", (session as any).model?.id);
-          } else {
-            await session.setModel(piModel);
-          }
-        } else {
-          // No override needed — just set the model
-          await session.setModel(piModel);
-        }
-      } else {
-        // Model not in registry — try setModel with provider/id
-        await setModel(model.providerId, model.modelId, projectId);
-      }
-
-      await setThinkingLevel(model.thinkingLevel || DEFAULT_THINKING[mode] || "medium", projectId);
-    } catch (e: any) {
-      console.error(`[mode] Failed to apply model for ${mode}:`, e.message);
-      console.log("[mode] Model switch FAILED, session model is now:", (session as any).model?.id || "unknown");
-    }
-  }
+  // ── Apply model + thinking level ──
+  await applyModelAndThinking(model, projectId, DEFAULT_THINKING[mode] || "medium");
 
   // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
   const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
 
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
-  if (mode === "plan") {
-    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, HARNESS_EXCLUDE));
-  } else if (mode === "review") {
+  if (mode === "review") {
     (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, HARNESS_EXCLUDE));
   } else if (mode === "harness") {
-    // Harness orchestrator: read-only + delegate_to_expert (l'extension l'enregistre)
-    // Pas d'exclusion : l'orchestrator DOIT garder delegate_to_expert (BUG-71).
+    // Harness orchestrator: read-only + delegate (l'extension l'enregistre)
+    // Pas d'exclusion : l'orchestrator DOIT garder delegate (BUG-71).
     (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
   } else {
     // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
@@ -1575,7 +1653,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   const rawPrompt = (session as any)._baseSystemPrompt || "";
   let prompt = cleanPromptForModeChange(rawPrompt);
 
-  // For plan/review: replace the default identity paragraph
+  // Pour les modes avec identité spécifique, remplace l'identité par défaut.
   if (identityOverride) {
     const { rest } = stripDefaultIdentity(prompt);
     prompt = rest.trim() + "\n";
@@ -1606,6 +1684,76 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 }
 
 /**
+ * Applique une décision de routage à la session active (R3).
+ *
+ * - Résout le modèle cible via pickModel (catégorie → config projet → défaut).
+ * - Ajuste le thinking level (avec le même chemin que applyModeToSession).
+ * - Sélectionne les outils selon route.function.
+ * - Injecte les instructions/identités de fonction.
+ *
+ * Ne modifie PAS state.activeMode : le routage est un overlay dynamique, pas un
+ * changement de mode persistant. Cela préserve le gate d'auto-review (qui exige
+ * activeMode === "code") et le cycle de vie des modes manuels.
+ */
+export async function applyRouteToSession(route: Route, projectId: string): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) throw new Error("No active Pi session");
+
+  const library = loadModelLibrary();
+  const session = state.session;
+  const routingConfig = getProjectRoutingConfig(library, projectId);
+  const model = pickModel(route, routingConfig, library);
+
+  // ── Apply model + thinking level ──
+  await applyModelAndThinking(model, projectId, DEFAULT_THINKING.code || "medium");
+
+  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
+  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
+
+  // ── Apply tool filtering according to route.function ──
+  const fn = route.function;
+  if (fn === "planning") {
+    // Exploration/planification : lecture seule + outils cbm_* (via extension tools).
+    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, HARNESS_EXCLUDE));
+  } else if (fn === "review") {
+    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, HARNESS_EXCLUDE));
+  } else {
+    // execute / integrate : outils de code complets, hors orchestration (BUG-71).
+    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
+  }
+
+  // ── Inject function instructions into system prompt ──
+  const instructions = FUNCTION_INSTRUCTIONS[fn] || MODE_INSTRUCTIONS.code;
+  const identityOverride = FUNCTION_IDENTITIES[fn] || "";
+
+  // Clean any previously injected mode blocks and identity overrides
+  const rawPrompt = (session as any)._baseSystemPrompt || "";
+  let prompt = cleanPromptForModeChange(rawPrompt);
+
+  // Pour les fonctions avec identité spécifique, remplace l'identité par défaut.
+  if (identityOverride) {
+    const { rest } = stripDefaultIdentity(prompt);
+    prompt = rest.trim() + "\n";
+    prompt += `\n${MODE_IDENTITY_MARKER}\n${identityOverride}\n${MODE_IDENTITY_MARKER.replace("<!-- PI", "<!-- /PI")}\n\n`;
+  }
+
+  // Append function-specific instructions with markers
+  if (instructions.trim()) {
+    prompt += `\n${MODE_BLOCK_MARKER_START}${fn.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Function: ${fn.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${fn.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
+  }
+
+  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
+  if (projectContextBlock) {
+    prompt += `\n\n${projectContextBlock}`;
+  }
+
+  (session as any)._baseSystemPrompt = prompt;
+  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+
+  emitSessionUpdate(projectId);
+}
+
+/**
  * Switch to a different mode.
  */
 export async function switchMode(mode: AgentMode, projectId: string): Promise<void> {
@@ -1614,8 +1762,8 @@ export async function switchMode(mode: AgentMode, projectId: string): Promise<vo
 
   // Check mode is enabled (code is always enabled)
   if (mode !== "code") {
-    const modeCfg = pm[mode as "plan" | "review"];
-    if (!modeCfg.enabled) {
+    const modeCfg = pm[mode];
+    if (!modeCfg?.enabled) {
       throw new Error(`Mode ${mode} is not enabled`);
     }
   }
@@ -1658,7 +1806,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   // Restore default identity if it was stripped
   const { identity } = stripDefaultIdentity(prompt);
   if (!identity) {
-    // Default identity was stripped by plan/review mode — we can't restore it perfectly,
+    // Default identity was stripped by a mode with a custom identity — we can't restore it perfectly,
     // but the rest of the prompt (tools, guidelines, context) is still there.
     // The Pi framework will have set it originally, so we just need to make sure
     // the "Available tools" and other sections remain intact.
@@ -1747,6 +1895,21 @@ export function triggerAutoReviewIfNeeded(projectId: string): void {
 
   // Check conditions
   if (state.activeMode !== "code") return;            // Only after code mode
+
+  // R3 — gate de relecture par le risque. Le routage ne déclenche l'auto-review
+  // que si la route est une review ou si le riskScore dépasse le seuil projet.
+  // Sans routage (flag global off OU flag projet routing.enabled false), on
+  // conserve le comportement historique (review après chaque prompt code),
+  // toujours soumis aux conditions ci-dessous.
+  const routingConfig = getProjectRoutingConfig(library, projectId);
+  const reviewRiskThreshold = routingConfig.reviewRiskThreshold ?? 0.5;
+  const routingActive = isRoutingEnabled() && routingConfig.enabled;
+  const riskTriggered =
+    !routingActive ||
+    state.lastRoute?.category === "review" ||
+    (state.lastRoute?.riskScore ?? 0) >= reviewRiskThreshold;
+  if (!riskTriggered) return;                         // Risk gate not passed
+
   if (!pm.review.enabled) return;                     // Review must be enabled
   if (maxReviews <= 0) return;                        // Auto-review disabled
   if (state.reviewCycle >= maxReviews) return;        // Already done max reviews
@@ -1814,7 +1977,17 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
     tempSession = result.session;
 
     // Apply review model
-    const reviewModel = getModeModel(library, projectId, "review");
+    let reviewModel = getModeModel(library, projectId, "review");
+    const routingConfig = getProjectRoutingConfig(library, projectId);
+    const routingActive = isRoutingEnabled() && routingConfig.enabled;
+    if (routingActive) {
+      // R3 : en routage actif, la relecture utilise le modèle configuré pour la
+      // catégorie review (fallback modèle par défaut), pas le mode review legacy.
+      const reviewModelId = routingConfig.review?.modelId;
+      reviewModel = reviewModelId
+        ? (getModel(library, reviewModelId) ?? getDefaultModel(library) ?? reviewModel)
+        : (getDefaultModel(library) ?? reviewModel);
+    }
     if (reviewModel) {
       try {
         const piModel = sharedModelRegistry!.find(reviewModel.providerId, reviewModel.modelId);
