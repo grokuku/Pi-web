@@ -19,7 +19,7 @@ import type { AgentMode } from "./model-library.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
-import { designCustomTools } from "./design-tools.js";
+import { createDesignTools } from "./design-tools.js";
 import { librarianTools } from "./librarian-tools.js";
 import { getProject } from "../projects/manager.js";
 
@@ -299,7 +299,7 @@ export async function createPiSession(
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
-      customTools: [...designCustomTools, ...librarianTools],
+      customTools: [...createDesignTools(projectId), ...librarianTools],
     });
 
     // Inject project context into system prompt
@@ -1071,11 +1071,12 @@ export async function compactSession(
 }
 
 /**
- * List all sessions for a project directory.
+ * Liste toutes les sessions d'un projet, dans son répertoire de sessions
+ * dédié (le même que celui utilisé par createPiSession).
  */
-export async function listSessions(cwd: string): Promise<any[]> {
+export async function listSessions(cwd: string, projectId: string): Promise<any[]> {
   try {
-    return await SessionManager.list(cwd);
+    return await SessionManager.list(cwd, getProjectSessionDir(projectId));
   } catch {
     return [];
   }
@@ -1144,11 +1145,9 @@ export function getSessionInfo(projectId?: string) {
         }
       : null,
     messageCount: state.session.messages?.length || 0,
-    messages: state.session.messages?.map((m: any) => ({
-      role: m.role,
-      content: m.content,
-      id: m.id,
-    })) || [],
+    // On n'inclut volontairement pas les messages complets ici : le payload
+    // `connected`/`session_update` serait trop lourd (risque de blocage sur
+    // JSON.stringify). Le frontend récupère l'historique via pi_history.
     activeMode: state.activeMode || "code",
     contextUsage: (state.session as any).getContextUsage?.() || null,
   };
@@ -1800,6 +1799,8 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
   let reviewFindings = "";
   let tempSession: AgentSession | null = null;
   let tempSessionFile: string | undefined;
+  let tempUnsub: (() => void) | null = null;
+  let agentSlotAcquired = false;
 
   try {
     // Create a fresh, temporary session for neutral review
@@ -1865,65 +1866,75 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       "- If the changes look good, say so — don't fabricate issues.";
 
     // Subscribe to temp session events to forward tool calls for UI display
-    await concurrencyManager.acquireAgentSlot(`${projectId}::auto-review`, "auto-review");
-    const tempUnsub = tempSession.subscribe((event) => {
-      const taggedEvent = { ...event, _autoReview: true } as any;
-      if (event.type === "tool_execution_start") {
-        activeToolCalls.set(event.toolCallId, {
-          toolName: event.toolName,
-          args: event.args,
-          output: "",
-          startTime: Date.now(),
-          projectId,
-        });
-      } else if (event.type === "tool_execution_update") {
-        const existing = activeToolCalls.get(event.toolCallId);
-        if (existing && event.partialResult?.content) {
-          existing.output = event.partialResult.content.map((c: any) => c.text || "").join("");
+    const slotKey = `${projectId}::auto-review`;
+    await concurrencyManager.acquireAgentSlot(slotKey, "auto-review");
+    agentSlotAcquired = true;
+    try {
+      tempUnsub = tempSession.subscribe((event) => {
+        const taggedEvent = { ...event, _autoReview: true } as any;
+        if (event.type === "tool_execution_start") {
+          activeToolCalls.set(event.toolCallId, {
+            toolName: event.toolName,
+            args: event.args,
+            output: "",
+            startTime: Date.now(),
+            projectId,
+          });
+        } else if (event.type === "tool_execution_update") {
+          const existing = activeToolCalls.get(event.toolCallId);
+          if (existing && event.partialResult?.content) {
+            existing.output = event.partialResult.content.map((c: any) => c.text || "").join("");
+          }
+        } else if (event.type === "tool_execution_end") {
+          const existing = activeToolCalls.get(event.toolCallId);
+          if (existing && event.result?.content) {
+            existing.output = event.result.content.map((c: any) => c.text || "").join("");
+          }
+        } else if (event.type === "agent_start") {
+          state.isStreaming = true;
+          startStreamingHeartbeat(projectId);
+          emitSessionUpdate(projectId);
+        } else if (event.type === "agent_settled") {
+          // BUG-72 : agent_settled = vraie fin du run (retry/compaction terminés).
+          state.isStreaming = false;
+          stopStreamingHeartbeat(projectId);
+          emitSessionUpdate(projectId);
+        } else if (event.type === "agent_end") {
+          // agent_end n'est pas la fin réelle — ne pas toucher à isStreaming ici.
         }
-      } else if (event.type === "tool_execution_end") {
-        const existing = activeToolCalls.get(event.toolCallId);
-        if (existing && event.result?.content) {
-          existing.output = event.result.content.map((c: any) => c.text || "").join("");
+        emitToSubscribers(taggedEvent, projectId);
+      });
+
+      // Run the review prompt
+      await tempSession.prompt(reviewPrompt, {});
+
+      // Extract the last assistant message as the review findings
+      const messages: any[] = tempSession.messages || [];
+      const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
+      if (lastAssistant) {
+        reviewFindings = lastAssistant.content
+          ? lastAssistant.content.map((c: any) => c.text || "").join("")
+          : JSON.stringify(lastAssistant);
+      }
+    } finally {
+      // Toujours libérer le slot agent, succès comme échec (garde anti double-libération).
+      if (agentSlotAcquired) {
+        concurrencyManager.releaseAgentSlot(slotKey);
+        agentSlotAcquired = false;
+      }
+      if (tempUnsub) {
+        try { tempUnsub(); } catch {}
+        tempUnsub = null;
+      }
+      // Nettoyer la session temporaire (mémoire + fichier disque)
+      try { (tempSession as any).dispose?.(); } catch {}
+      if (tempSessionFile) {
+        try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch (e: any) {
+          console.warn("[auto-review] Failed to clean temp session file:", e.message);
         }
-      } else if (event.type === "agent_start") {
-        state.isStreaming = true;
-        startStreamingHeartbeat(projectId);
-        emitSessionUpdate(projectId);
-      } else if (event.type === "agent_settled") {
-        // BUG-72 : agent_settled = vraie fin du run (retry/compaction terminés).
-        state.isStreaming = false;
-        stopStreamingHeartbeat(projectId);
-        emitSessionUpdate(projectId);
-      } else if (event.type === "agent_end") {
-        // agent_end n'est pas la fin réelle — ne pas toucher à isStreaming ici.
       }
-      emitToSubscribers(taggedEvent, projectId);
-    });
-
-    // Run the review prompt
-    await tempSession.prompt(reviewPrompt, {});
-
-    // Extract the last assistant message as the review findings
-    const messages: any[] = tempSession.messages || [];
-    const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
-    if (lastAssistant) {
-      reviewFindings = lastAssistant.content
-        ? lastAssistant.content.map((c: any) => c.text || "").join("")
-        : JSON.stringify(lastAssistant);
+      tempSession = null;
     }
-
-    // Clean up temp session
-    concurrencyManager.releaseAgentSlot(`${projectId}::auto-review`);
-    tempUnsub();
-    try { (tempSession as any).dispose?.(); } catch {}
-    // Clean up temp session file from disk
-    if (tempSessionFile) {
-      try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch (e: any) {
-        console.warn("[auto-review] Failed to clean temp session file:", e.message);
-      }
-    }
-    tempSession = null;
   } catch (e: any) {
     console.error("[auto-review] Review session failed:", e.message);
     if (tempSession) {
@@ -1960,7 +1971,12 @@ async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: 
       const fixPrompt = reviewFindings
         ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
         : "Fix any issues you can find in the recent changes.";
-      await state.session.prompt(fixPrompt, {});
+      await withSessionTimeout(
+        state.session.prompt(fixPrompt, {}),
+        state.session,
+        projectId,
+        "auto-review-fix",
+      );
     } catch (e: any) {
       console.error("[auto-review] Fix prompt failed:", e.message);
     }

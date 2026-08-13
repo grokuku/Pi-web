@@ -6,10 +6,12 @@ import {
   deleteProvider,
   getProvider,
   testProviderConnection,
+  toPublicProvider,
   type ProviderConfig,
   type ProviderType,
   PROVIDER_PRESETS,
 } from "../pi/providers.js";
+import { validateHttpUrl } from "../utils/ssrf.js";
 
 const router = Router();
 
@@ -18,7 +20,7 @@ const router = Router();
 router.get("/", (_req: Request, res: Response) => {
   try {
     const providers = loadProviders();
-    res.json(providers);
+    res.json(providers.map(toPublicProvider));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -42,7 +44,7 @@ router.post("/", (req: Request, res: Response) => {
       apiKey: apiKey || undefined,
     });
 
-    res.json(provider);
+    res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -70,7 +72,7 @@ router.put("/:id", (req: Request, res: Response) => {
     if (apiKey !== undefined) updates.apiKey = apiKey;
 
     const provider = updateProvider(id, updates);
-    res.json(provider);
+    res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -112,6 +114,15 @@ router.post("/:id/test", async (req: Request, res: Response) => {
     const testProvider = { ...provider };
     if (req.body?.baseUrl) testProvider.baseUrl = req.body.baseUrl;
     if (req.body?.apiKey) testProvider.apiKey = req.body.apiKey;
+
+    // SSRF : autorise les réseaux privés/loopback uniquement pour les types
+    // couramment auto-hébergés (ollama, openai-compatible). Pour anthropic et
+    // google (SaaS publics), on bloque tout sauf les IP publiques.
+    const allowLocal = testProvider.type === "ollama" || testProvider.type === "openai-compatible";
+    await validateHttpUrl(testProvider.baseUrl, {
+      allowPrivate: allowLocal,
+      allowLoopback: allowLocal,
+    });
 
     const result = await testProviderConnection(testProvider);
     res.json(result);

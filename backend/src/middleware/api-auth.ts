@@ -1,78 +1,114 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { validateToken, isAgentEnabled } from "../routes/agent-keys.js";
+import { getAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
 
 /**
- * Global API authentication middleware (BUG-29 fix).
+ * Middleware d'authentification globale de l'API.
  *
- * Strategy:
- *   1. Public endpoints (health, status) → always allowed
- *   2. Same-origin requests (web UI on the same server) → allowed
- *      Detected via Sec-Fetch-Site: same-origin (modern browsers)
- *      or Origin/Host hostname match (fallback)
- *   3. External requests (curl, other sites) → require valid Bearer token
+ * Stratégie (correctif sécurité) :
+ *   1. Endpoints publics (health, status) → toujours autorisés.
+ *   2. Jeton valide (Bearer ou ?token=) → autorisé quel que soit l'Origin.
+ *      C'est le seul mode d'accès fiable pour les clients non-navigateur.
+ *   3. Appels internes depuis localhost (extensions, proxy Vite en dev) → autorisés.
+ *   4. Requêtes navigateur :
+ *        - GET/HEAD same-origin sans Origin → autorisées si Sec-Fetch-Site
+ *          vaut "same-origin" (comportement standard des navigateurs modernes).
+ *        - Requêtes avec Origin → autorisées si l'Origin est autorisée (liste
+ *          explicite, ou `*` en mode allow-all) ET si Sec-Fetch-Site est présent
+ *          (signature navigateur).
+ *   5. Tout le reste → 401/403.
  *
- * This has ZERO impact on the web UI experience: browser requests from
- * the same Express server are automatically same-origin and pass through.
- * Only external/non-browser access requires a token.
- *
- * Route-specific middlewares (agentAuth, adminAuth) run AFTER this one
- * and may add additional restrictions (e.g. agent API requires Bearer
- * even for same-origin).
+ * On ne compare plus jamais Origin à Host. Sec-Fetch-Site n'est pas une preuve
+ * absolue (un client non-navigateur peut le forger) ; pour une protection
+ * parfaite des GET same-origin sans Origin, le frontend devrait envoyer le
+ * jeton. Avec `*`, l'origine n'est volontairement pas une barrière.
  */
 
-// Endpoints that must remain publicly accessible (no auth at all)
+// Origines autorisées figées au démarrage (`*` = allow-all).
+const ALLOWED_ORIGINS = getAllowedOrigins();
+
+// Endpoints publics (aucune authentification requise).
+// NB: le middleware est monté sur /api, donc req.path est relatif au montage
+// (ex: /api/health → /health).
 const PUBLIC_PATHS = new Set([
-  "/api/health",
-  "/api/agent/health",
-  "/api/status",
-  "/api/status/update",
+  "/health",
+  "/agent/health",
+  "/status",
+  "/status/update",
 ]);
 
-function isSameOrigin(req: Request): boolean {
-  // Modern browsers send Sec-Fetch-Site.
-  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
-  if (fetchSite === "same-origin") return true;
-  if (fetchSite === "cross-site" || fetchSite === "none") return false;
+function getBearerToken(req: Request): string | null {
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+    return auth.slice(7);
+  }
+  return null;
+}
 
-  // Fallback for older browsers: compare Origin header against Host
+function getQueryToken(req: Request): string | null {
+  const token = req.query.token;
+  return typeof token === "string" && token.length > 0 ? token : null;
+}
+
+function hasValidToken(req: Request): boolean {
+  const token = getBearerToken(req) || getQueryToken(req);
+  return token !== null && validateToken(token) !== null;
+}
+
+function isLocalhost(req: Request): boolean {
+  const remoteIp = req.ip || req.socket.remoteAddress;
+  return remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1";
+}
+
+/**
+ * Détecte une requête navigateur légitime.
+ *
+ * - Les navigateurs modernes envoient Sec-Fetch-Site sur les requêtes same-site
+ *   et cross-site. On l'exige en complément d'une Origin autorisée, afin qu'un
+ *   client non-navigateur qui envoie un Origin autorisé ne suffise pas à passer.
+ * - Les GET/HEAD same-origin n'envoient pas d'Origin : on se rabat sur
+ *   Sec-Fetch-Site: same-origin (limite documentée : en-tête forgeable par un
+ *   client non-navigateur).
+ */
+function isBrowserRequest(req: Request): boolean {
+  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
+  const hasFetchSite = typeof fetchSite === "string" && fetchSite.trim().length > 0;
   const origin = req.headers.origin as string | undefined;
-  const host = req.headers.host as string | undefined;
-  if (origin && host) {
-    try {
-      const originUrl = new URL(origin);
-      // Allow if Origin hostname matches Host hostname
-      // (ignores port differences, useful for Vite dev proxy: localhost:5173 → localhost:3000)
-      return originUrl.hostname === host.split(":")[0];
-    } catch {}
+
+  if ((req.method === "GET" || req.method === "HEAD") && !origin) {
+    return hasFetchSite && fetchSite!.toLowerCase() === "same-origin";
   }
 
-  // No Origin and no Sec-Fetch-Site: non-browser request (curl, Postman, etc.)
-  return false;
+  return !!origin && isAllowedOrigin(origin, ALLOWED_ORIGINS) && hasFetchSite;
 }
 
 export function apiAuth(req: Request, res: Response, next: NextFunction): void {
-  // Allow public endpoints
+  // Endpoints publics
   if (PUBLIC_PATHS.has(req.path)) {
     next();
     return;
   }
 
-  // Same-origin requests from the web UI are allowed
-  if (isSameOrigin(req)) {
+  // Jeton valide : prioritaire, fonctionne quel que soit l'Origin envoyé.
+  if (hasValidToken(req)) {
     next();
     return;
   }
 
-  // Allow internal server-to-server calls (extensions calling the API via localhost)
-  // Le file-analyzer fait un fetch HTTP interne pour analyser les fichiers attachés.
-  // Sans headers navigateur, isSameOrigin() retourne false, donc on autorise localhost.
-  const remoteIp = req.ip || req.socket.remoteAddress;
-  if (remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1") {
+  // Appels internes serveur-à-serveur (extensions appelant l'API en localhost).
+  // Le file-analyzer fait un fetch HTTP interne pour analyser les fichiers,
+  // et le proxy Vite de dev arrive également depuis 127.0.0.1.
+  if (isLocalhost(req)) {
     next();
     return;
   }
 
-  // External requests require a valid Bearer token
+  // Requêtes navigateur same-origin / cross-origin explicitement autorisées.
+  if (isBrowserRequest(req)) {
+    next();
+    return;
+  }
+
   if (!isAgentEnabled()) {
     res.status(401).json({
       error:
@@ -81,15 +117,14 @@ export function apiAuth(req: Request, res: Response, next: NextFunction): void {
     return;
   }
 
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const token = getBearerToken(req) || getQueryToken(req);
+  if (!token) {
     res.status(401).json({
       error: "Authentication required for external access. Use: Bearer <agent-token>",
     });
     return;
   }
 
-  const token = authHeader.slice(7);
   const key = validateToken(token);
   if (!key) {
     res.status(403).json({ error: "Invalid token" });

@@ -650,6 +650,11 @@ export class HarnessEngine {
         if (attempt < maxAttempts) {
           this.emitText(`\n\n⏱️ **${agent.role} a timeouté (attempt ${attempt}/${maxAttempts}). Retry en cours...**\n\n`);
           console.log(`[harness] Agent ${agent.role}: retry attempt ${attempt + 1}/${maxAttempts}`);
+          // BUG-70 : l'abort du 1er attempt est asynchrone — attendre que la run
+          // soit vraiment terminée (et tous les event listeners settle) sinon le
+          // 2e prompt() jette "Agent is already processing a prompt".
+          // waitForIdle() résout quand la run et les listeners ont fini.
+          try { await tempSession!.waitForIdle(); } catch {}
         } else {
           this.emitText(`\n\n❌ **${agent.role} a timeouté définitivement après ${maxAttempts} attempts.**\n\n`);
         }

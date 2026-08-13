@@ -91,8 +91,8 @@ export interface DisplayMessage {
   // Permettent d'afficher une bannière d'erreur au lieu d'un message vide.
   stopReason?: string;
   errorMessage?: string;
-  // Images attached to user message (server URLs instead of inline base64)
-  images?: { attachmentId: string; name: string; mimeType: string }[];
+  // Images attached to user message (server URLs or inline base64 for legacy messages)
+  images?: { attachmentId?: string; data?: string; name: string; mimeType: string }[];
   // Text/code files attached to user message (legacy, kept for old messages)
   attachments?: { name: string; content: string; mimeType: string }[];
   // Attachment references (uploaded file IDs)

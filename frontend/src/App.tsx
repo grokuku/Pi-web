@@ -242,9 +242,24 @@ function App() {
   const updateProjectSession = useCallback(
     (projectId: string, update: Partial<ProjectSessionState>) => {
       const state = getProjectSession(projectId);
+      const isActive = projectId === activeProject?.id;
+      const prevIsStreaming = state.isStreaming;
+      const prevSession = state.session;
+      const prevStats = state.stats;
       Object.assign(state, update);
-      // Always re-render on streaming state changes (sidebar shows background streams)
-      if (!activeProject || projectId !== activeProject.id || update.isStreaming !== undefined) {
+
+      // Projets en arrière-plan : le sidebar doit refléter leur état.
+      if (!isActive) {
+        rerender();
+        return;
+      }
+
+      // Projet actif : ne re-render que si une valeur affichée change
+      // (isStreaming, session pour le modèle/contexte, stats pour la barre).
+      const streamingChanged = update.isStreaming !== undefined && update.isStreaming !== prevIsStreaming;
+      const sessionChanged = update.session !== undefined && update.session !== prevSession;
+      const statsChanged = update.stats !== undefined && update.stats !== prevStats;
+      if (streamingChanged || sessionChanged || statsChanged) {
         rerender();
       }
     },

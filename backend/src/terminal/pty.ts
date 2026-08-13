@@ -1,7 +1,8 @@
 import { spawn, type IPty } from "node-pty";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, realpathSync } from "fs";
 import { EventEmitter } from "events";
 import { execSync } from "child_process";
+import { isCwdAllowed } from "../utils/path-security.js";
 
 interface TerminalSession {
   pty: IPty;
@@ -48,7 +49,17 @@ export function createTerminal(projectId: string, cwd: string): IPty {
   }
 
   // ── Create new terminal ──
-  const effectiveCwd = existsSync(cwd) ? cwd : "/";
+  if (!existsSync(cwd)) {
+    throw new Error(`Terminal cwd does not exist: ${cwd}`);
+  }
+
+  // Résout les liens symboliques et vérifie que le cwd est bien autorisé.
+  // L'appelant (index.ts) confirme aussi le confinement au projet concerné.
+  const effectiveCwd = realpathSync(cwd);
+  if (!isCwdAllowed(effectiveCwd)) {
+    throw new Error(`Terminal cwd is not allowed: ${effectiveCwd}`);
+  }
+
   const shell = process.platform === "win32" ? "powershell.exe" : "bash";
 
   const pty = spawn(shell, [], {

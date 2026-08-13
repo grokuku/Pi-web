@@ -36,6 +36,17 @@ export interface DiscoveredModel {
   vision?: boolean;        // real vision support
 }
 
+/** Vue publique d'un provider : la clé API n'est jamais renvoyée. */
+export type PublicProviderConfig = Omit<ProviderConfig, "apiKey"> & {
+  hasApiKey: boolean;
+};
+
+/** Masque la clé API réelle en la remplaçant par un booléen hasApiKey. */
+export function toPublicProvider(provider: ProviderConfig): PublicProviderConfig {
+  const { apiKey, ...rest } = provider;
+  return { ...rest, hasApiKey: !!apiKey };
+}
+
 // ── Provider type presets ────────────────────────────
 
 export const PROVIDER_PRESETS: Record<ProviderType, {

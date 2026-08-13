@@ -20,6 +20,18 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// Construit la source d'une image utilisateur : URL serveur si attachmentId,
+// sinon data URL à partir du base64 legacy.
+function getImageSrc(img: NonNullable<DisplayMessage["images"]>[number]): string {
+  if (img.attachmentId) return `/api/attachments/${img.attachmentId}/file`;
+  if (img.data) {
+    return img.data.startsWith("data:")
+      ? img.data
+      : `data:${img.mimeType || "image/png"};base64,${img.data}`;
+  }
+  return "";
+}
+
 // ── File helpers (unchanged) ──
 const TEXT_MIME_TYPES = new Set([
   "text/plain", "text/csv", "text/markdown", "text/html", "text/css",
@@ -639,6 +651,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       <ChatInputArea
         onSend={handleSend}
         onAbort={onAbort}
+        projectId={projectId}
         isStreaming={isStreaming}
         streamingStalled={streamingStalled}
         autoReviewStreaming={autoReviewStreaming}
@@ -711,7 +724,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
-        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => <div key={i} className="relative group"><img src={`/api/attachments/${img.attachmentId}/file`} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:`/api/attachments/${img.attachmentId}/file`,name:img.name})} /><a href={`/api/attachments/${img.attachmentId}/file`} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={12} /></a></div>)}</div>}
+        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={12} /></a></div>; })}</div>}
         {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="image") onFileClick({type:"image",src:fu,name:ref.name}); else if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={10} /></a></div>; })}</div>}
         {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={10} /></a></div>)}</div>}
         {message.usage && <span className="text-[9px] text-hacker-text-dim shrink-0">{message.usage.input + message.usage.output}t</span>}
@@ -912,9 +925,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
 });
 
 // ── ChatInputArea (unchanged) ──
-const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, autoReviewStreaming, gitBranch, setError, onKeystroke }: {
+const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, autoReviewStreaming, gitBranch, projectId, setError, onKeystroke }: {
   onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; streamingStalled?: boolean; autoReviewStreaming: boolean;
-  gitBranch?: string; setError: (e:string) => void;
+  gitBranch?: string; projectId: string; setError: (e:string) => void;
   onKeystroke?: (latency: number) => void;
 }) {
   const { t } = useTranslation();
@@ -930,7 +943,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     const localPreview = category==="image" ? URL.createObjectURL(file) : undefined;
     setAttachments(prev => [...prev, { id:uid, name:file.name, mimeType:file.type||"application/octet-stream", size:file.size, category, data:"", preview:localPreview, uploadStatus:"uploading" }]);
     try {
-      const fd = new FormData(); fd.append("files", file);
+      const fd = new FormData(); fd.append("files", file); fd.append("projectId", projectId);
       const r = await fetch("/api/attachments/upload", { method:"POST", body:fd });
       if (!r.ok) { const ed = await r.json().catch(()=>({error:"Upload failed"})); throw new Error(ed.error||`Upload failed: ${r.status}`); }
       const data = await r.json(); const uploaded = data.attachments?.[0];
@@ -940,7 +953,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
       setAttachments(prev => prev.map(a => a.id===uid ? {...a, uploadStatus:"error", uploadError:err.message} : a));
       setError(`Upload failed: ${err.message}`);
     }
-  }, [attachments.length, setError]);
+  }, [attachments.length, setError, projectId]);
 
   const handleSendClick = useCallback(() => {
     const txt = input.trim();

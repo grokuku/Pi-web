@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { getDocContent, listLibrary, getLibraryStatus, searchAndArchive, archiveDoc, type DocEntry, type DocContent } from "../pi/librarian-service.js";
+import { getDocContent, listLibrary, getLibraryStatus, searchAndArchive, archiveDoc, sanitizeDocPathComponent, type DocEntry, type DocContent } from "../pi/librarian-service.js";
 import { librarianAuth, librarianAdminOnly, loadKeys, createKey, revokeKey } from "../pi/librarian-auth.js";
 import { getAllProjects } from "../projects/manager.js";
 
@@ -84,10 +84,20 @@ router.post("/archive", librarianAuth, (req: Request, res: Response) => {
     if (!name || !version || !content) {
       return res.status(400).json({ error: "Missing required fields: name, version, content" });
     }
+
+    // Neutralise tout path traversal dans name/version avant construction du chemin.
+    const safeName = sanitizeDocPathComponent(name);
+    const safeVersion = sanitizeDocPathComponent(version);
+    if (!safeName || !safeVersion) {
+      return res.status(400).json({
+        error: "name and version must be valid path components (no slashes, no backslashes, no '..')",
+      });
+    }
+
     const docContent: DocContent = {
       meta: {
-        name,
-        version,
+        name: safeName,
+        version: safeVersion,
         type: type || "tool",
         sourceUrl,
         updatedAt: new Date().toISOString(),
@@ -100,14 +110,14 @@ router.post("/archive", librarianAuth, (req: Request, res: Response) => {
       rawContent: content.rawContent,
     };
 
-    const filePath = `tools/${name}@${version}.json`;
+    const filePath = `tools/${safeName}@${safeVersion}.json`;
     const entry: DocEntry = {
-      name,
-      version,
+      name: safeName,
+      version: safeVersion,
       type: type || "tool",
       description: (content.summary || "").substring(0, 200),
       filePath,
-      keywords: [name, ...(content.keyPoints || []).slice(0, 5)],
+      keywords: [safeName, ...(content.keyPoints || []).slice(0, 5)],
       updatedAt: new Date().toISOString(),
       sourceUrl,
     };

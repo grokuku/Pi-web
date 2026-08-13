@@ -240,6 +240,28 @@ export async function webclawSearch(query: string, num: number = 5): Promise<Arr
   return sanitizeResults(results);
 }
 
+/**
+ * Sanitize un nom ou une version pour construire un chemin de fichier sûr.
+ * Même règle que librarian-tools.ts : caractères autorisés [a-zA-Z0-9_-],
+ * les séparateurs de chemin et les traversées sont refusés.
+ */
+export function sanitizeDocPathComponent(value: string, maxLength = 50): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  if (
+    value.includes("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value === "." ||
+    value === ".." ||
+    value.includes("..")
+  ) {
+    return null;
+  }
+
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, maxLength);
+  return safe.length > 0 ? safe : null;
+}
+
 // ── Public API ──
 
 // Mots trop courants pour être pertinents seuls

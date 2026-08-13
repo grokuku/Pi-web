@@ -3,6 +3,7 @@ import path from "path";
 import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
 import { Mutex } from "../utils/mutex.js";
+import { isCwdAllowed } from "../utils/path-security.js";
 import { encryptSmbPassword } from "./smb.js";
 import { deleteAttachmentsForProject } from "../routes/attachments.js";
 
@@ -89,7 +90,19 @@ function loadProjects(): Project[] {
     if (existsSync(PROJECTS_FILE)) {
       const raw = JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
       if (Array.isArray(raw)) {
-        return raw.map(migrateProject);
+        return raw
+          .map(migrateProject)
+          .filter((p) => {
+            // Sécurité : un projet dont le cwd est invalide (ex: /etc ou un
+            // symlink sortant) ne doit jamais être utilisé par les routes.
+            if (!p.cwd || !isCwdAllowed(p.cwd)) {
+              console.error(
+                `[Projects] Projet ignoré (cwd non autorisé) : ${p.name || p.id} -> ${p.cwd}`
+              );
+              return false;
+            }
+            return true;
+          });
       }
     }
   } catch {
@@ -148,6 +161,13 @@ export async function createProject(
     throw new Error(`A project already uses working directory: ${cwd}`);
   }
 
+  // Sécurité : refuser les cwd hors des racines de travail autorisées.
+  // Sinon un appelant authentifié pourrait créer un projet avec cwd=/etc
+  // puis lire des fichiers sensibles via les endpoints de fichiers.
+  if (!isCwdAllowed(cwd)) {
+    throw new Error("Working directory must be within an allowed root (/projects, /mnt/smb)");
+  }
+
   // cwd is the full path (frontend already includes the project name as subfolder)
   if (!existsSync(cwd)) {
     mkdirSync(cwd, { recursive: true });
@@ -196,6 +216,11 @@ export async function updateProject(
     const index = projects.findIndex((p) => p.id === id);
 
     if (index === -1) throw new Error(`Project not found: ${id}`);
+
+    // Sécurité : un cwd mis à jour doit aussi rester sous une racine autorisée.
+    if (updates.cwd !== undefined && !isCwdAllowed(updates.cwd)) {
+      throw new Error("Working directory must be within an allowed root (/projects, /mnt/smb)");
+    }
 
     projects[index] = {
       ...projects[index],

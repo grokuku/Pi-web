@@ -238,40 +238,35 @@ router.get("/download", (req: Request, res: Response) => {
       return;
     }
 
-    // Directory or multiple items — use tar.gz
+    // Répertoire ou plusieurs éléments : le téléchargement de répertoire est
+    // désactivé (sécurité) car `tar -czf - .` inclurait les fichiers sensibles
+    // deny-listés (.env, .git, credentials.enc, ...). On n'autorise que des
+    // fichiers, qui ont déjà été validés un par un par isPathAllowed().
+    if (resolvedPaths.some((rp) => statSync(rp).isDirectory())) {
+      return res.status(400).json({
+        error: "Directory download is disabled for security. Select files instead.",
+      });
+    }
+
+    // Plusieurs fichiers — archive tar.gz construite depuis un parent commun,
+    // en passant uniquement les fichiers explicitement validés.
     const firstPath = resolvedPaths[0];
     const basename = resolvedPaths.length === 1 ? path.basename(firstPath) : "download";
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Disposition", `attachment; filename="${basename}.tar.gz"`);
 
     import("child_process").then(({ spawn }) => {
-      let tarArgs: string[];
-      if (resolvedPaths.length === 1 && statSync(firstPath).isDirectory()) {
-        // Single directory
-        tarArgs = ["-czf", "-", "."];
-        const child = spawn("tar", tarArgs, { cwd: firstPath });
-        child.stdout.pipe(res);
-        child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
-        child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
-        child.on("close", (code: number) => {
-          if (code !== 0 && !res.headersSent) {
-            res.status(500).json({ error: `tar exited with code ${code}` });
-          }
-        });
-      } else {
-        // Multiple paths — use common parent as base
-        const commonParent = path.dirname(firstPath);
-        const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
-        const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames], { cwd: commonParent });
-        child.stdout.pipe(res);
-        child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
-        child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
-        child.on("close", (code: number) => {
-          if (code !== 0 && !res.headersSent) {
-            res.status(500).json({ error: `tar exited with code ${code}` });
-          }
-        });
-      }
+      const commonParent = path.dirname(firstPath);
+      const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
+      const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames], { cwd: commonParent });
+      child.stdout.pipe(res);
+      child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
+      child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
+      child.on("close", (code: number) => {
+        if (code !== 0 && !res.headersSent) {
+          res.status(500).json({ error: `tar exited with code ${code}` });
+        }
+      });
     }).catch((e: any) => {
       if (!res.headersSent) res.status(500).json({ error: e.message });
     });
@@ -297,10 +292,24 @@ router.post("/upload", async (req: Request, res: Response) => {
       const files = req.files as Express.Multer.File[];
       const uploaded: string[] = [];
       for (const file of files) {
-        const dest = path.join(resolved, file.originalname);
+        // Le nom original est contrôlé par le client : on le réduit à un
+        // simple nom de fichier pour neutraliser tout path traversal.
+        const safeName = path.basename(file.originalname);
+        if (!safeName || safeName === "." || safeName === "..") {
+          try { unlinkSync(file.path); } catch {}
+          continue;
+        }
+        const dest = path.join(resolved, safeName);
+        // Valide la destination finale avant écriture (et pas seulement targetPath).
+        // isPathAllowed résout les liens symboliques réels du chemin existant,
+        // ou valide le parent réel si le fichier n'existe pas encore.
+        if (!isPathAllowed(path.resolve(dest))) {
+          try { unlinkSync(file.path); } catch {}
+          return res.status(403).json({ error: "Access denied" });
+        }
         copyFileSync(file.path, dest);
         try { unlinkSync(file.path); } catch {}
-        uploaded.push(file.originalname);
+        uploaded.push(safeName);
       }
       res.json({ success: true, uploaded, path: targetPath });
     });

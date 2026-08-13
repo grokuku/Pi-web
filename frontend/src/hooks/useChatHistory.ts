@@ -90,8 +90,8 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
       const images = contentBlocks
         .filter((b: any) => b.type === "image" && (b.data || b.attachmentId))
         .map((b: any) => b.attachmentId
-          ? { attachmentId: b.attachmentId, name: b.name || "image", mimeType: b.mimeType }
-          : { attachmentId: "", name: "image", mimeType: b.mimeType || "image/png" }  // legacy base64 — preview lost
+          ? { attachmentId: b.attachmentId, name: b.name || "image", mimeType: b.mimeType || "image/png" }
+          : { data: b.data, name: b.name || "image", mimeType: b.mimeType || "image/png" }  // legacy base64 — conservée pour l'affichage direct
         );
 
       // Skip empty user messages (unless they have images)

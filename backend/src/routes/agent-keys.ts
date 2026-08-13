@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -14,35 +15,30 @@ const router = Router();
 // Agent key management routes need authentication.
 // Strategy:
 //   1. Bootstrap: if NO agent keys exist yet → allow POST / to create the first key
-//   2. Same-origin: requests from the web UI (browser on same server) are allowed
-//      via Sec-Fetch-Site: same-origin header (modern browsers) or Origin/Host match
+//   2. Same-origin: requests from the web UI (browser) are allowed via
+//      Sec-Fetch-Site + an allowed Origin (explicit list, or `*` allow-all).
+//      On ne compare jamais Origin à Host.
 //   3. External requests (curl, other websites, etc.) → require a valid Bearer token
 //
 // This prevents unauthenticated external access to key management while allowing
 // the web UI to work without additional configuration.
 // If you lose your only key, delete agent-keys.json and restart to re-bootstrap.
-function isSameOrigin(req: Request): boolean {
-  // Modern browsers (Chrome 76+, Firefox 90+, Safari 16.1+) send Sec-Fetch-Site.
-  // "same-origin" = request comes from the same origin as the target URL.
-  // This works in both production (same Express server) and dev (Vite proxy).
-  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
-  if (fetchSite === "same-origin") return true;
-  if (fetchSite === "cross-site" || fetchSite === "none") return false;
+const ADMIN_ALLOWED_ORIGINS = getAllowedOrigins();
 
-  // Fallback for older browsers: compare Origin header against Host
+function isSameOrigin(req: Request): boolean {
+  // On ne compare plus jamais Origin à Host (tous deux contrôlables par le
+  // client). La provenance navigateur est détectée par Sec-Fetch-Site, puis
+  // l'Origin est comparée à ALLOWED_ORIGINS/PUBLIC_BASE_URL (`*` = allow-all).
+  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
+  const hasFetchSite = typeof fetchSite === "string" && fetchSite.trim().length > 0;
   const origin = req.headers.origin as string | undefined;
-  const host = req.headers.host as string | undefined;
-  if (origin && host) {
-    try {
-      const originUrl = new URL(origin);
-      // Allow if Origin hostname matches Host hostname
-      // (ignores port differences, useful for Vite dev proxy: localhost:5173 → localhost:3000)
-      return originUrl.hostname === host.split(":")[0];
-    } catch {}
+
+  // GET/HEAD same-origin sans Origin (comportement standard des navigateurs).
+  if ((req.method === "GET" || req.method === "HEAD") && !origin) {
+    return hasFetchSite && fetchSite!.toLowerCase() === "same-origin";
   }
 
-  // No Origin and no Sec-Fetch-Site: non-browser request (curl, Postman, etc.)
-  return false;
+  return !!origin && isAllowedOrigin(origin, ADMIN_ALLOWED_ORIGINS) && hasFetchSite;
 }
 
 function adminAuth(req: Request, res: Response, next: NextFunction): void {

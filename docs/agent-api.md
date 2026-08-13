@@ -10,7 +10,7 @@
 Authorization: Bearer <pi-web-agent-token>
 ```
 
-Le token est configuré dans **Settings → General**, stocké côté backend dans `agent-config.json`.
+Le token est configuré dans **Settings → General**, stocké côté backend dans `agent-keys.json`.
 
 ---
 
@@ -30,7 +30,7 @@ Le token est configuré dans **Settings → General**, stocké côté backend da
 | `GET` | `/api/agent/projects/:id/chat/status` | Statut traitement en cours |
 | `POST` | `/api/agent/projects/:id/chat/abort` | Annuler le traitement |
 | `GET` | `/api/agent/projects/:id/context` | Usage contexte (tokens, %) |
-| `GET` | `/api/agent/projects/:id/files/changed` | Fichiers modifiés (git diff) |
+| `GET` | `/api/agent/projects/:id/files/changed` | Fichiers modifiés (git diff + untracked, fallback fs) |
 | `GET` | `/api/agent/projects/:id/files` | Browse le projet |
 | `GET` | `/api/agent/projects/:id/files/read` | Lire un fichier |
 
@@ -190,8 +190,8 @@ POST /api/agent/projects/:id/chat/abort
 2. Applique le mode et le modèle configurés (`applyModeToSession`)
 3. Envoie le prompt (`sendPrompt`) et s'abonne aux événements de session
 4. Attend l'événement `agent_end` (ou timeout, ou abort)
-5. Détecte les fichiers modifiés via `git diff --name-only` (snapshot du cwd avant/après)
-6. Sans git : compare les timestamps des fichiers dans le cwd
+5. Détecte les fichiers modifiés via un snapshot git du cwd avant/après : `git diff --name-only` (fichiers suivis) + `git ls-files --others --exclude-standard` (fichiers non suivis, créés par l'agent)
+6. Sans git : compare des snapshots `fs` (chemin relatif → mtime) avant/après le prompt
 7. Retourne la conversation complète + métadonnées
 
 ---
@@ -250,7 +250,7 @@ Query: ?path=/projects/my-app/src/App.tsx
 → { "path": "/projects/my-app/src/App.tsx", "content": "import...", "size": 2048 }
 ```
 
-**Note :** `files/changed` utilise `git diff --name-status` si le projet a un dépôt git. Sans git, fallback sur `stat` des fichiers vs le timestamp `since`.
+**Note :** `files/changed` combine, quand le projet a un dépôt git, `git diff --name-status` (fichiers suivis) et `git ls-files --others --exclude-standard` (fichiers non suivis, statut `A`). Sans git, fallback implémenté : snapshot `fs` (chemin → mtime) comparé au timestamp `since` (ou statut `A` pour tous si `since` absent).
 
 ---
 
@@ -331,6 +331,6 @@ print(f"Context: {ctx['contextUsed']} / {ctx['model']['contextWindow']} ({ctx['c
 | Route API | `backend/src/routes/agent.ts` |
 | Auth middleware | `backend/src/middleware/agent-auth.ts` |
 | Orchestrateur chat | Réutilise `createPiSession()` + `sendPrompt()` |
-| Détection fichiers modifiés | `git diff --name-only` snapshot avant/après prompt |
-| Configuration token | `agent-config.json`, UI dans Settings → General |
+| Détection fichiers modifiés | snapshot git (diff + untracked) avant/après prompt, fallback fs (mtime) |
+| Configuration token | `agent-keys.json`, UI dans Settings → General |
 | Tests | `backend/src/__tests__/agent.test.ts` |

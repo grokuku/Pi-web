@@ -109,17 +109,12 @@ export function TerminalView({ send, on, activeProject, isActive }: Props) {
     resizeObserver.observe(containerRef.current);
 
     // ── Request terminal create or reconnect ──
-    // The backend will send existing buffer if terminal already exists
+    // createTerminal réémet déjà le buffer existant lors d'une reconnexion.
+    // On n'envoie donc pas de terminal_buffer en plus, pour éviter la duplication.
     send({
       type: "terminal_create",
       projectId: activeProject.id,
       cwd: activeProject.cwd,
-    });
-
-    // ── Also request existing buffer for reconnection ──
-    send({
-      type: "terminal_buffer",
-      projectId: activeProject.id,
     });
 
     // Listen for terminal output from backend

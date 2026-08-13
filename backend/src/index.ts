@@ -20,7 +20,7 @@ import attachmentsRouter from "./routes/attachments.js";
 import { usageRouter, recordUsage } from "./routes/usage.js";
 import piSettingsRouter from "./routes/pi-settings.js";
 import agentRouter from "./routes/agent.js";
-import agentKeysRouter from "./routes/agent-keys.js";
+import agentKeysRouter, { validateToken } from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
 import designRouter from "./routes/design.js";
 import librarianRouter from "./routes/librarian.js";
@@ -60,6 +60,8 @@ import {
   terminalEvents,
 } from "./terminal/pty.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
+import { isCwdAllowed, isPathAllowed } from "./utils/path-security.js";
+import { getAllowedOrigins, parseAllowedOrigins, isAllowedOrigin, isAllOriginsAllowed } from "./utils/origins.js";
 import { credentialStore } from "./projects/credential-store.js";
 
 import os from "os";
@@ -72,17 +74,15 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: ALLOWED_ORIGINS env var (comma-separated origins). Default: deny all.
-const corsOrigins: string[] | boolean = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS === "*"
-    ? (console.warn("[CORS] WARNING: ALLOWED_ORIGINS=* allows all origins. This is insecure."), true)
-    : process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
-  : false; // Default: deny all
+// CORS: ALLOWED_ORIGINS env var (comma-separated origins). `*` = allow-all.
+// Sans valeur configurée, on refuse tout (deny all).
+const corsOrigins: string[] = getAllowedOrigins();
+const corsAllowAll = isAllOriginsAllowed(corsOrigins);
 app.use(cors({
-  origin: corsOrigins,
+  origin: corsAllowAll ? "*" : (corsOrigins.length > 0 ? corsOrigins : false),
 }));
-if (corsOrigins === false) {
-  console.warn("[CORS] WARNING: No ALLOWED_ORIGINS set. CORS is disabled (deny all).");
+if (!corsAllowAll && corsOrigins.length === 0) {
+  console.warn("[CORS] WARNING: No ALLOWED_ORIGINS/PUBLIC_BASE_URL set. CORS is disabled (deny all).");
 }
 app.use(express.json({ limit: "50mb" }));
 
@@ -95,15 +95,16 @@ if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
 }
 
-// API Routes (BUG-29 fix: global auth middleware — same-origin requests
-// from the web UI pass through; external requests require a Bearer token)
-// NOTE: les routes proxy CBM (/api/index, /api/logs, etc.) sont montées AVANT
-// le middleware apiAuth car le CBM UI (SPA externe) ne peut pas envoyer de token.
-// Elles sont en same-origin depuis le navigateur, donc le CORS protège l'accès.
+// ── apiAuth middleware ──
+// Toutes les routes /api passent par l'authentification globale. Les routes
+// proxy CBM ci-dessous sont montées APRÈS ce middleware : elles sont donc
+// protégées comme le reste de l'API (same-origin navigateur sans token).
+app.use("/api", apiAuth);
 
-// ── CBM 3D Graph UI proxy routes — AVANT apiAuth pour éviter l'ambiguïté (BUG-48) ──
-// Le CBM UI est un SPA externe qui ne peut pas s'authentifier via Bearer.
-// Ces routes doivent être accessibles sans token (same-origin uniquement).
+// ── CBM 3D Graph UI proxy routes — protégées par apiAuth (BUG-48/50) ──
+// Le CBM UI est servi par ce même serveur (same-origin) : les requêtes du
+// navigateur passent apiAuth sans jeton. Les clients externes, eux, doivent
+// présenter un jeton valide.
 app.all("/api/index", cbmProxy);
 app.all("/api/index-status", cbmProxy);
 app.all("/api/logs", cbmProxy);
@@ -124,8 +125,6 @@ app.all("/api/edges", cbmProxy);           // arêtes du graphe
 app.all("/api/search", cbmProxy);          // recherche dans le graphe
 app.use("/api/browse", cbmProxy);
 
-// ── apiAuth middleware (après les routes CBM proxy) ──
-app.use("/api", apiAuth);
 app.use("/api/projects", projectsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/ollama", ollamaRouter);
@@ -425,46 +424,75 @@ if (existsSync(frontendDist)) {
 const httpServer = createServer(app);
 
 // ── WebSocket Server ──────────────────────────────────
-// WS_ALLOWED_ORIGINS env var (comma-separated origins). Default: deny all.
-const wsAllowAllOrigins = process.env.WS_ALLOWED_ORIGINS === "*";
-const wsAllowedOrigins: string[] = (!wsAllowAllOrigins && process.env.WS_ALLOWED_ORIGINS)
-  ? process.env.WS_ALLOWED_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
-  : [];
-if (wsAllowAllOrigins) {
-  console.warn("[WS] WARNING: WS_ALLOWED_ORIGINS=* allows all origins. This is insecure.");
-}
-if (wsAllowedOrigins.length === 0 && !wsAllowAllOrigins) {
-  console.warn("[WS] WARNING: No WS_ALLOWED_ORIGINS set. WebSocket connections will be denied except non-browser clients.");
+// WS_ALLOWED_ORIGINS env var (comma-separated origins). `*` = allow-all.
+// Si WS_ALLOWED_ORIGINS est absent, on retombe sur ALLOWED_ORIGINS/PUBLIC_BASE_URL.
+// Sans valeur configurée, on refuse les connexions sans jeton/hors localhost.
+const wsAllowedOrigins: string[] = (() => {
+  const raw = process.env.WS_ALLOWED_ORIGINS;
+  if (raw && raw.trim() !== "") {
+    return parseAllowedOrigins(raw, "WS_ALLOWED_ORIGINS");
+  }
+  return getAllowedOrigins();
+})();
+const wsAllowAll = isAllOriginsAllowed(wsAllowedOrigins);
+if (!wsAllowAll && wsAllowedOrigins.length === 0) {
+  console.warn("[WS] WARNING: No WS_ALLOWED_ORIGINS set. WebSocket connections require a valid token (or localhost).");
 }
 
+/**
+ * Valide l'Origin d'une connexion WebSocket.
+ *
+ * En mode `*` (allow-all), on accepte toute origine, y compris l'absence
+ * d'en-tête Origin : l'origine n'est alors volontairement pas une barrière.
+ * En mode liste explicite, seules les origines configurées sont acceptées.
+ * On ne compare jamais l'Origin au Host (contrôlable par le client).
+ */
 function validateOrigin(origin: string | undefined): boolean {
-  if (!origin) return true; // Allow non-browser clients (curl, etc.)
-  if (wsAllowAllOrigins) return true;
+  if (wsAllowAll) return true;
+  return isAllowedOrigin(origin, wsAllowedOrigins);
+}
+
+/** Extrait un jeton d'authentification d'une requête WebSocket. */
+function extractWsToken(req: any): string | null {
   try {
-    const url = new URL(origin);
-    return wsAllowedOrigins.some(allowed => {
-      try {
-        const allowedUrl = new URL(allowed.startsWith("http") ? allowed : `https://${allowed}`);
-        // Match by hostname (ignoring protocol and port)
-        return url.hostname === allowedUrl.hostname
-          || origin === allowed
-          || origin === allowed.replace(/^http:/, "https:")
-          || origin === allowed.replace(/^https:/, "http:");
-      } catch { return false; }
-    });
-  } catch { return false; }
+    const url = new URL(req.url || "/", "http://localhost");
+    const token = url.searchParams.get("token");
+    if (token) return token;
+  } catch {}
+
+  const auth = req.headers.authorization as string | undefined;
+  if (auth && auth.startsWith("Bearer ")) return auth.slice(7);
+  return null;
 }
 
 const wss = new WebSocketServer({
   server: httpServer,
   verifyClient: (info, callback) => {
     const origin = info.req.headers.origin as string | undefined;
-    if (!validateOrigin(origin)) {
-      console.log(`[WS] Rejected connection from origin: ${origin}`);
-      callback(false, 403, "Forbidden");
+
+    // 1) Jeton valide : clients non-navigateur et cross-origin.
+    const token = extractWsToken(info.req);
+    if (token && validateToken(token)) {
+      callback(true);
       return;
     }
-    callback(true);
+
+    // 2) Connexion locale (extensions, proxy Vite en dev).
+    const remoteIp = info.req.socket.remoteAddress;
+    if (remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1") {
+      callback(true);
+      return;
+    }
+
+    // 3) Navigateur avec une Origin explicitement autorisée.
+    if (validateOrigin(origin)) {
+      callback(true);
+      return;
+    }
+
+    console.log(`[WS] Rejected connection (origin: ${origin || "none"})`);
+    callback(false, 401, "Unauthorized");
+    return;
   },
 });
 
@@ -665,7 +693,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         return;
       }
       try {
-        const sessions = await listSessions(project.cwd);
+        const sessions = await listSessions(project.cwd, project.id);
         ws.send(JSON.stringify({ type: "pi_sessions_list", projectId, sessions }));
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
@@ -753,7 +781,25 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const { projectId: termProjectId, cwd } = msg;
       const pid = termProjectId || projectId;
       const project = getProject(pid);
-      const termCwd = cwd || project?.cwd || process.cwd();
+      if (!project) {
+        ws.send(JSON.stringify({ type: "error", error: `Project not found: ${pid}` }));
+        break;
+      }
+
+      const termCwd = path.resolve(cwd || project.cwd);
+      // Le terminal doit rester confiné au cwd du projet concerné et sous une
+      // racine autorisée. On refuse tout cwd arbitraire (ex: /etc) ou symlink
+      // pointant hors du projet.
+      if (!isCwdAllowed(termCwd) || !isPathAllowed(termCwd, project.cwd)) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            error: "Terminal cwd is not allowed for this project",
+          })
+        );
+        break;
+      }
+
       createTerminal(pid, termCwd);
       break;
     }
@@ -831,12 +877,15 @@ httpServer.listen(PORT, async () => {
   // Démarrer le cron du libraire
   startLibrarianCron(() => getAllProjects().map(p => p.cwd));
 
+  const originSummary = wsAllowAll
+    ? "all origins (allow-all)"
+    : `${wsAllowedOrigins.length} allowed origin(s)`;
   console.log(`
   ╔══════════════════════════════════════════╗
   ║  ⚡ PI-WEB  ███▓▓▒▒░░  v${piWebVersion}  ░░▒▒▓▓███  ║
   ╠══════════════════════════════════════════╣
   ║  HTTP+WS → http://localhost:${PORT}                  ║
-  ║  CORS/WS → ${wsAllowAllOrigins ? "allow all" : wsAllowedOrigins.length + " origins"}                  ║
+  ║  CORS/WS → ${originSummary}                  ║
   ╚══════════════════════════════════════════╝
   `);
 });

@@ -16,6 +16,14 @@ interface DesignListItem {
   updatedAt: string;
 }
 
+interface DesignPage {
+  id: string;
+  name: string;
+  html: string;
+  css: string;
+  thumbnail?: string | null;
+}
+
 export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps) {
   const [designs, setDesigns] = useState<DesignListItem[]>([]);
   const [currentDesign, setCurrentDesign] = useState<{
@@ -23,6 +31,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
     name: string;
     html: string;
     css: string;
+    pages: DesignPage[];
   } | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [mode, setMode] = useState<"selector" | "editor">("selector");
@@ -92,7 +101,13 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
       if (!createRes.ok) throw new Error("Failed to create design");
       const newDesign = await createRes.json();
 
-      setCurrentDesign({ id: newDesign.id, name: newDesign.name, html: data.html, css: data.css });
+      setCurrentDesign({
+        id: newDesign.id,
+        name: newDesign.name,
+        html: data.html,
+        css: data.css,
+        pages: Array.isArray(newDesign.pages) ? newDesign.pages : [],
+      });
       setHtmlContent(data.html);
       setCssContent(data.css);
       setIsDirty(false);
@@ -138,14 +153,17 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
         const res = await fetch(`/api/design/${id}`);
         if (!res.ok) throw new Error("Failed to load design");
         const data = await res.json();
+        // Le backend stocke le contenu dans `pages[]` et non dans des champs top-level html/css.
+        const firstPage = Array.isArray(data.pages) && data.pages.length > 0 ? data.pages[0] : null;
         setCurrentDesign({
           id: data.id,
           name: data.name,
-          html: data.html || "",
-          css: data.css || "",
+          html: firstPage?.html || "",
+          css: firstPage?.css || "",
+          pages: Array.isArray(data.pages) ? data.pages : [],
         });
-        setHtmlContent(data.html || "");
-        setCssContent(data.css || "");
+        setHtmlContent(firstPage?.html || "");
+        setCssContent(firstPage?.css || "");
         setIsDirty(false);
         setMode("editor");
       } catch (err: any) {
@@ -162,16 +180,46 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
     if (!currentDesign || !currentDesign.id) return;
     const html = editorRef.current?.getHtml?.() ?? htmlContent;
     const css = editorRef.current?.getCss?.() ?? cssContent;
+    // Le backend attend `pages[]`, pas des champs top-level html/css.
+    const firstPage = currentDesign.pages[0];
     try {
       const res = await fetch(`/api/design/${currentDesign.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html, css }),
+        body: JSON.stringify({
+          pages: [
+            {
+              id: firstPage?.id || crypto.randomUUID(),
+              name: firstPage?.name || "Page 1",
+              html,
+              css,
+              thumbnail: firstPage?.thumbnail || null,
+            },
+          ],
+        }),
       });
       if (!res.ok) throw new Error("Failed to save");
       setIsDirty(false);
       setHtmlContent(html);
       setCssContent(css);
+      setCurrentDesign((prev) =>
+        prev
+          ? {
+              ...prev,
+              html,
+              css,
+              pages: [
+                {
+                  id: firstPage?.id || prev.pages[0]?.id || crypto.randomUUID(),
+                  name: firstPage?.name || prev.pages[0]?.name || "Page 1",
+                  html,
+                  css,
+                  thumbnail: firstPage?.thumbnail ?? prev.pages[0]?.thumbnail ?? null,
+                },
+              ],
+            }
+          : prev
+      );
     } catch (err: any) {
       setError(err.message);
     }
@@ -246,14 +294,17 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
       });
       if (!res.ok) throw new Error("Échec de la création");
       const data = await res.json();
+      // Le backend renvoie un objet Design avec `pages[]`.
+      const firstPage = Array.isArray(data.pages) && data.pages.length > 0 ? data.pages[0] : null;
       setCurrentDesign({
         id: data.id,
         name: data.name,
-        html: data.html || "",
-        css: data.css || "",
+        html: firstPage?.html || "",
+        css: firstPage?.css || "",
+        pages: Array.isArray(data.pages) ? data.pages : [],
       });
-      setHtmlContent(data.html || "");
-      setCssContent(data.css || "");
+      setHtmlContent(firstPage?.html || "");
+      setCssContent(firstPage?.css || "");
       setIsDirty(false);
       setMode("editor");
       // Refresh list in background

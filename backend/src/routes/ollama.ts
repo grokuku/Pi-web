@@ -6,6 +6,7 @@ import {
   writeOllamaModelsJson,
 } from "../ollama.js";
 import { reloadModelRegistry } from "../pi/session.js";
+import { validateHttpUrl } from "../utils/ssrf.js";
 
 const router = Router();
 
@@ -38,6 +39,10 @@ router.post("/connect", async (req: Request, res: Response) => {
     const config = getOllamaConfig();
     const url = req.body.url || config.url;
 
+    // SSRF : autorise http/https, loopback et réseaux privés (Ollama est un
+    // outil local/LAN) mais bloque le lien-local (cloud metadata, etc.).
+    await validateHttpUrl(url, { allowPrivate: true, allowLoopback: true });
+
     // Save the URL
     config.url = url;
     config.enabled = true;
@@ -65,6 +70,8 @@ router.post("/refresh", async (_req: Request, res: Response) => {
     if (!config.enabled) {
       return res.status(400).json({ error: "Ollama not configured" });
     }
+
+    await validateHttpUrl(config.url, { allowPrivate: true, allowLoopback: true });
 
     const models = await fetchOllamaModels(config.url);
     await writeOllamaModelsJson(models, config.url);

@@ -16,12 +16,6 @@
 - **Statut :** Toléré — non bloquant, phase de dev. Nécessaire pour les montages CIFS.
 - **Description :** Le conteneur tourne en mode `privileged` — accès complet à tous les devices du host.
 
-#### BUG-50: `ALLOWED_ORIGINS=*` et `WS_ALLOWED_ORIGINS=*` (sécurité)
-- **Fichier :** `docker-compose.yml`
-- **Sévérité :** 🔴 Haute (sécurité — en production)
-- **Statut :** Toléré — non bloquant, phase de dev. À configurer avant toute exposition internet.
-- **Description :** Les deux variables à `*` désactivent toutes les protections CORS et WebSocket.
-
 ### Bugs connus non bloquants
 
 #### BUG-03: `reapplyAllSessions()` non awaité
@@ -82,8 +76,8 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 #### BUG-66: `compaction-checkpoint` — aucun log « Extension loaded »
 - **Fichier :** `extensions/compaction-checkpoint/index.ts`
 - **Sévérité :** 🟢 Basse
-- **Statut :** À vérifier
-- **Description :** Au chargement des extensions, on voit `[cbm]`, `[file-analyzer]`, `[harness-orchestrator]` chargés mais rien pour compaction-checkpoint. Soit il ne log pas au chargement (probable), soit il n'est pas chargé. Vérifier en un coup d'œil.
+- **Statut :** ✅ Corrigé (2026-08-01)
+- **Description :** Au chargement des extensions, on voyait `[cbm]`, `[file-analyzer]`, `[harness-orchestrator]` chargés mais rien pour compaction-checkpoint. En réalité l'extension n'écrivait jamais ses checkpoints : un `require()` en ESM la faisait échouer au chargement et une garde empêchait la création du store. **Fix :** log `Extension loaded` ajouté, import dynamique ESM de `better-sqlite3`, et **fallback JSON** (`~/.unipi/memory/<projet>/memory.json`) quand better-sqlite3 est absent du runtime — le checkpoint n'est plus jamais perdu.
 
 #### BUG-67: Experts tués par abort de l'orchestrator pendant une délégation (travail perdu)
 - **Fichier :** `backend/src/pi/session.ts` + `extensions/harness-orchestrator/index.ts`
@@ -170,7 +164,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 22 | 🟡 | Pas de limite de taille pour localStorage | 2026-06-29 |
 | 24 | 🟢 | `showProjectSwitch` / `pendingProject` code mort | 2026-06-29 (via BUG-17) |
 | 25+26 | 🟡 | `isPathAllowed` vulnérable + ALLOWED_ROOTS hardcoded | 2026-06-29 |
-| 27 | 🟢 | `gitInit` pas de tracking upstream | 2026-06-29 |
+| 27 | 🟢 | `gitInit` pas de tracking upstream ; suivi 2026-08-01 : upstream posé seulement si commit + ref distante existent (sinon `gitInit` échouait systématiquement) | 2026-06-29 |
 | 28 | 🔴 | Command injection dans `pi-settings.ts` | 2026-06-23 |
 | 29 | 🔴 | Aucune auth sur la majorité des routes API | 2026-06-23 |
 | 30 | 🟡 | `process.exit(0)` sans auth | 2026-06-23 |
@@ -187,6 +181,10 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 46 | 🟢 | Code de sérialisation dupliqué dans `index.ts` | 2026-06-29 |
 | 47 | 🟢 | `_ws_reconnect` jamais émis | 2026-06-29 |
 | 48 | 🟢 | Conflit de routes API CBM proxy | 2026-06-29 |
+| 50 | 🔴 | `ALLOWED_ORIGINS=*` / `WS_ALLOWED_ORIGINS=*` — sécurisés par l'auth refondue (apiAuth) + WebSocket derrière Authentik ; origines rétablies à `*` volontairement | 2026-08-01 |
+| 51 | 🔴 | Path traversal upload neutralisé (attachments/files) | 2026-08-01 |
+| 52 | 🔴 | cwd arbitraire refusé — racines réduites à `/projects` + `/mnt/smb` | 2026-08-01 |
+| 53 | 🔴 | Scan arbitraire `/code-stats` confiné (realpath + isPathAllowed) | 2026-08-01 |
 | 58 | 🔴 | Harness : session temporaire sans modèle valide → échec immédiat | 2026-06-30 (system prompt fixé + extraction JSON robuste) |
 | 59 | 🔴 | Harness v2 + extension v3 : timeout global sur `prompt()` tue les experts actifs (fix porté sur harness-orchestrator : timeout à activité + retry) + bug de réentrance concurrency + pas de timeout sur files d'attente + fix `cbm_code` (`qualified_name` requis par le serveur MCP CBM) | 2026-06-30 |
 | 60 | 🟡 | Extension codebase-memory : 4 tools CBM corrigés — cbm_trace (`trace_path` au lieu de `trace_call_path`), cbm_search_code (`pattern` requis au lieu de `query`), cbm_search (`label` string au lieu de `labels` array, ignoré par le serveur), cbm_diff (fallback git local — `detect_changes` inexistant sur le serveur MCP CBM) | 2026-08-01 |
@@ -195,8 +193,27 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 70 | 🟡 | Race retry expert harness — 2e prompt() avant la fin de l'abort du 1er | 2026-08-01 |
 | 71 | 🔴 | Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler | 2026-08-01 |
 | 72 | 🔴 | Faux « stalled » pendant les runs + erreur « Agent is already processing » (heartbeat applicatif + SDK comme source de vérité) | 2026-08-01 |
+| 73 | 🔴 | Module Design cassé — contrat frontend/backend `pages[]` réaligné | 2026-08-01 |
+| 74 | 🟡 | `render_design`/`get_design` projectId toujours `unknown` — projectId capturé par `createDesignTools` | 2026-08-01 |
+| 75 | 🟡 | Fuite de slot agent dans l'auto-review — libération dans `finally` | 2026-08-01 |
+| 76 | 🟡 | Attachements uploadés sans `projectId` (front + back) — UUID requis | 2026-08-01 |
+| 77 | 🟡 | API agent `filesChanged` incomplet (untracked) + fallback sans git implémenté | 2026-08-01 |
+| 78 | 🟢 | UI stale sur le projet actif — `updateProjectSession` ne re-render que sur changement visible et gère l'arrière-plan | 2026-08-01 |
+| 79 | 🔴 | Aperçu de commit destructeur (`gitCommitPushPreview`) — simulation sans effet de bord sur l'index | 2026-08-01 |
+| 80 | 🟡 | Prompt auto-review sans timeout — `withSessionTimeout` sur le fix prompt | 2026-08-01 |
 
 ---
+
+### 🔒 Correctifs de sécurité (2026-08-01)
+
+- **BUG-51 — Path traversal upload :** `attachments.ts` et `files.ts` neutralisent les noms de fichier contrôlés par le client (`sanitizeFileName` / `path.basename`) et valident la destination finale réelle avant écriture.
+- **BUG-52 — cwd arbitraire :** `isCwdAllowed()` refuse tout cwd hors `/projects` et `/mnt/smb` (strictement sous la racine). Utilisé par `projects/manager.ts` et le terminal WS (`terminal_create`).
+- **BUG-53 — Scan arbitraire `/code-stats` :** `routes/cbm.ts` exige `isPathAllowed` + `realpathSync` avant de parcourir le chemin.
+- **Durcissement chemins :** `path-security.ts` résout les liens symboliques (`realpathSync`), refuse les symlinks cassés, élargit la deny-list (`.data`/`agent-keys.json`, credentials, clés SSH, `.env*`…) et réduit les racines par défaut à `/projects` + `/mnt/smb`. Les routes fichiers/agent confinent l'accès au cwd du projet.
+- **Masquage des clés API providers :** `toPublicProvider()` remplace `apiKey` par `hasApiKey` — la clé n'est plus exposée par l'API.
+- **Sanitization librarian :** `sanitizeContent()` supprime emails, clés API, chemins personnels et téléphones avant archivage.
+- **SSRF :** `validateHttpUrl()` bloque link-local/loopback/privé, sauf autorisation explicite pour Ollama/openai-compatible auto-hébergés.
+- **Auth refondue :** `apiAuth` (jeton valide → localhost → navigateur same-origin/origin autorisée) remplace l'ancienne comparaison Origin/Host. `ALLOWED_ORIGINS`/`WS_ALLOWED_ORIGINS` sont rétablis à `*` volontairement ; le WebSocket est protégé par Authentik en frontal (voir BUG-50).
 
 ## 🟡 Bugs mineurs / améliorations
 
@@ -206,6 +223,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **[?] Conflits raccourcis clavier avec le navigateur** — Ctrl+L/T/O sont interceptés par le navigateur. Pistes : `Ctrl+Shift+T` pour thinking, `Ctrl+Shift+O` pour outils, `Ctrl+Shift+L` pour settings.
 - ✅ **Confirmation avant nouvelle conversation (`/new`)** — Fait (2026-08-01). Ajout d'un modal de confirmation (`NewChatConfirmModal`) déclenché avant d'exécuter la commande `/new`, que ce soit via le bouton de la Sidebar ou via la saisie dans le chat. Évite d'effacer la conversation en cours par accident. i18n fr/en.
 - ✅ **Option « mode review : corriger / lister seulement »** — Fait (2026-08-01). Nouveau réglage par projet `review.fixWithInstructions` (défaut : `true` = comportement actuel : corriger). Quand `false`, l'auto-review n'injecte PLUS l'instruction « Fix each one specifically » au LLM suivant (`fixPrompt` de `runAutoReviewCycle`) : le rapport de review (liste des bugs + contexte) est injecté dans la session principale via `injectSessionNotification` (affichage seul, sans déclencher de turn LLM). Réglable dans Paramètres → Général (toggle CORRIGER / LISTER SEULEMENT, i18n fr/en). Backend : `model-library.ts` (type + défaut + migration + setter `setProjectModeReviewFix`), `routes/model-library.ts` (PUT `/projects/:id/mode`, champ `fixWithInstructions`), `routes/agent.ts` (API agent externe), `pi/session.ts` (Phase 2 de `runAutoReviewCycle`).
+- ✅ **Correctifs mineurs (2026-08-01)** — `listSessions` utilise le bon répertoire de sessions par projet ; `getSessionInfo` n'embarque plus les messages (payload `connected`/`session_update` allégé) ; reconnexion terminal sans duplication de buffer ; `usage.ts` sérialise les écritures (mutex + écriture atomique tmp/rename) ; images legacy restaurées dans `useChatHistory` ; race retry harness-engine corrigée (`waitForIdle()` entre attempts, cf. BUG-70).
 
 ---
 

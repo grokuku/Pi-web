@@ -1,7 +1,8 @@
 import { Router, type Request, type Response } from "express";
-import { existsSync, readdirSync, statSync, readFileSync, lstatSync } from "fs";
+import { existsSync, readdirSync, statSync, readFileSync, realpathSync } from "fs";
 import { execSync } from "child_process";
-import { join, extname, basename, relative } from "path";
+import { join, extname, basename, relative, resolve } from "path";
+import { isPathAllowed } from "../utils/path-security.js";
 import os from "os";
 
 const router = Router();
@@ -263,10 +264,20 @@ router.post("/code-stats", (req: Request, res: Response) => {
   try {
     const { path: projectPath } = req.body as { path?: string };
     if (!projectPath) return res.status(400).json({ error: "path is required" });
-    if (!existsSync(projectPath)) return res.status(404).json({ error: "Path not found" });
 
+    // Sécurité : ne scanner que des chemins explicitement autorisés.
+    // isPathAllowed résout les liens symboliques avant de comparer aux racines.
+    const resolved = resolve(projectPath);
+    if (!isPathAllowed(resolved)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    if (!existsSync(resolved)) return res.status(404).json({ error: "Path not found" });
+
+    // Parcourir le chemin réel (et non le chemin lexical) pour éviter qu'un
+    // symlink racine ne soit suivi vers un emplacement hors racine autorisée.
+    const realRoot = realpathSync(resolved);
     const start = Date.now();
-    const files = walkDir(projectPath, projectPath);
+    const files = walkDir(realRoot, realRoot);
 
     // Group by language (code only)
     const langStats: Record<string, { files: number; lines: number; blank: number; codeLines: number }> = {};

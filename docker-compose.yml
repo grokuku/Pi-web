@@ -10,8 +10,12 @@ services:
       - /mnt/user/appdata-ssd/Pi-web/data/pi-sessions:/sessions
       - /mnt/user/appdata-ssd/Pi-web/data/pi-appdata:/app/.data
     environment:
+      # `*` = autoriser toutes les origines (comportement allow-all historique).
+      # Pour restreindre, remplacer par une liste explicite, ex.
+      # http://localhost:5173,http://localhost:3005 (et/ou PUBLIC_BASE_URL).
       - ALLOWED_ORIGINS=*
       - WS_ALLOWED_ORIGINS=*
+      # - PUBLIC_BASE_URL=https://pi.holaf.fr
     privileged: true
     stdin_open: true
     tty: true

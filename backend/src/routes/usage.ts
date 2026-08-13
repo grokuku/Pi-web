@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync } from "fs";
 import { join } from "path";
+import { Mutex } from "../utils/mutex.js";
 
 // ── Types ────────────────────────────────────────────
 
@@ -26,6 +27,9 @@ interface AggregatedBucket {
 
 const USAGE_DIR = process.env.USAGE_DIR || "/data/usage";
 
+// Sérialise les écritures read-modify-write du fichier d'usage journalier.
+const usageMutex = new Mutex();
+
 function ensureDir() {
   if (!existsSync(USAGE_DIR)) {
     mkdirSync(USAGE_DIR, { recursive: true });
@@ -49,13 +53,21 @@ function readDayRecords(date: Date): UsageRecord[] {
   }
 }
 
-function appendRecord(record: UsageRecord) {
+async function appendRecord(record: UsageRecord): Promise<void> {
   ensureDir();
-  const now = new Date();
-  const file = getDayFile(now);
-  const records = readDayRecords(now);
-  records.push(record);
-  writeFileSync(file, JSON.stringify(records), "utf-8");
+  // Le mutex évite qu'un tour concurrent écrase l'enregistrement d'un autre
+  // tour entre le read et le write (perte d'enregistrements).
+  await usageMutex.run(() => {
+    const now = new Date();
+    const file = getDayFile(now);
+    const records = readDayRecords(now);
+    records.push(record);
+    // Écriture atomique (tmp + rename) pour qu'une lecture concurrente voie
+    // toujours l'ancienne ou la nouvelle version complète, jamais un fichier tronqué.
+    const tmpFile = `${file}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify(records), "utf-8");
+    renameSync(tmpFile, file);
+  });
 }
 
 function readRecordsInRange(from: Date, to: Date): UsageRecord[] {
@@ -165,9 +177,9 @@ function aggregateBy(
 export const usageRouter = Router();
 
 // Record a turn's token usage
-export function recordUsage(record: UsageRecord) {
+export async function recordUsage(record: UsageRecord): Promise<void> {
   try {
-    appendRecord(record);
+    await appendRecord(record);
   } catch (e) {
     console.error("[usage] Failed to record usage:", e);
   }

@@ -5,9 +5,11 @@
  * 1. Extracts key information from the messages that will be lost
  * 2. Preserves the full compaction summary as a safety net (checkpoint)
  *
- * The checkpoint is stored in ~/.unipi/memory/<projet>/memory.db, un format
- * de base SQLite simple, volontairement conservé tel quel pour être réutilisable
- * par le futur système de mémoire simple (voir ROADMAP).
+ * The checkpoint is stored in ~/.unipi/memory/<projet>/memory.db (base SQLite
+ * simple, réutilisable par le futur système de mémoire simple — voir ROADMAP).
+ * Si better-sqlite3 n'est pas disponible au runtime, l'extension bascule sur
+ * un stockage JSON (~/.unipi/memory/<projet>/memory.json) pour ne jamais
+ * perdre le checkpoint.
  *
  * After compaction, the LLM sees a hidden prompt asking it to review
  * the compacted context and make sure the summary keeps anything important —
@@ -17,6 +19,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import path from "path";
 import os from "os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 // ─── Config ──────────────────────────────────────────────
 const MEMORY_DIR = path.join(os.homedir(), ".unipi", "memory");
@@ -29,49 +32,184 @@ function getProjectName(cwd: string): string {
   return path.basename(cwd).replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
-// ─── Direct DB Access (for programmatic storage) ─────────
+// ─── Stockage des checkpoints ───────────────────────────
+// Cible privilégiée : SQLite `memory.db`, réutilisable par le futur système de
+// mémoire simple. Si better-sqlite3 n'est pas installé (extensions locales
+// chargées sans `npm install`), on bascule sur un fichier JSON `memory.json`
+// pour ne jamais perdre un checkpoint.
 
-function openDb(projectName: string): any | null {
-  let Database: any;
+type MemoryType = "preference" | "decision" | "pattern" | "summary";
+
+interface MemoryRecord {
+  id: string;
+  title: string;
+  content: string;
+  tags: string;
+  project: string;
+  type: MemoryType;
+  created: string;
+  updated: string;
+  embedding?: string | null;
+}
+
+// Cache du constructeur better-sqlite3 : chargé à la première écriture.
+let DatabaseCtor: any | undefined;
+let databaseUnavailable: boolean = false;
+
+async function loadBetterSqlite3(): Promise<any | null> {
+  if (DatabaseCtor) return DatabaseCtor;
+  if (databaseUnavailable) return null;
+
   try {
-    Database = require("better-sqlite3");
-  } catch {
-    // better-sqlite3 n'est pas disponible : le checkpoint est ignoré silencieusement
-    return null;
-  }
-
-  const dbPath = path.join(MEMORY_DIR, projectName, "memory.db");
-  const fs = require("fs");
-  // S'assure que ~/.unipi/memory/<projet> existe (format réutilisable par le futur système de mémoire)
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  if (!fs.existsSync(dbPath)) return null;
-
-  try {
-    return new Database(dbPath, { readonly: false });
-  } catch {
+    // Import dynamique ESM : ne fait pas planter l'extension si la dépendance
+    // native n'est pas disponible dans le runtime.
+    const mod = await import("better-sqlite3");
+    DatabaseCtor = (mod as any).default ?? mod;
+    return DatabaseCtor;
+  } catch (err) {
+    databaseUnavailable = true;
+    console.warn(
+      `[compaction-checkpoint] better-sqlite3 indisponible, bascule sur le stockage JSON : ${(err as Error).message}`
+    );
     return null;
   }
 }
 
-function storeMemory(
+async function openDb(projectName: string): Promise<any | null> {
+  const Database = await loadBetterSqlite3();
+  if (!Database) return null;
+
+  const dbPath = path.join(MEMORY_DIR, projectName, "memory.db");
+  let db: any = null;
+  try {
+    // Crée le dossier parent si nécessaire ; better-sqlite3 crée le fichier
+    // de base lorsqu'il n'existe pas encore.
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    db = new Database(dbPath);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tags TEXT,
+        project TEXT,
+        type TEXT,
+        created TEXT,
+        updated TEXT,
+        embedding TEXT
+      );
+    `);
+    return db;
+  } catch (err) {
+    if (db) {
+      try {
+        db.close();
+      } catch {
+        // On ignore l'erreur de fermeture pour ne pas masquer l'erreur d'ouverture.
+      }
+    }
+    console.warn(
+      `[compaction-checkpoint] Impossible d'ouvrir/créer ${dbPath} : ${(err as Error).message}`
+    );
+    return null;
+  }
+}
+
+function getJsonPath(projectName: string): string {
+  return path.join(MEMORY_DIR, projectName, "memory.json");
+}
+
+function loadJsonMemories(projectName: string): MemoryRecord[] {
+  const jsonPath = getJsonPath(projectName);
+  if (!existsSync(jsonPath)) return [];
+
+  try {
+    const parsed = JSON.parse(readFileSync(jsonPath, "utf8"));
+    return Array.isArray(parsed) ? (parsed as MemoryRecord[]) : [];
+  } catch (err) {
+    console.warn(
+      `[compaction-checkpoint] Fichier mémoire illisible ${jsonPath} : ${(err as Error).message}`
+    );
+    return [];
+  }
+}
+
+function saveJsonMemories(projectName: string, memories: MemoryRecord[]): boolean {
+  const jsonPath = getJsonPath(projectName);
+  try {
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
+    writeFileSync(jsonPath, JSON.stringify(memories, null, 2), "utf8");
+    return true;
+  } catch (err) {
+    console.warn(
+      `[compaction-checkpoint] Impossible d'écrire ${jsonPath} : ${(err as Error).message}`
+    );
+    return false;
+  }
+}
+
+function upsertJsonMemory(
   projectName: string,
   title: string,
   content: string,
-  type: "preference" | "decision" | "pattern" | "summary",
+  type: MemoryType,
   tags: string[]
 ): boolean {
-  let db: any;
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const now = new Date().toISOString();
+  const tagsJson = JSON.stringify(tags);
+
+  const memories = loadJsonMemories(projectName);
+  const existing = memories.find((m) => m.id === id);
+
+  if (existing) {
+    existing.title = title;
+    existing.content = content;
+    existing.tags = tagsJson;
+    existing.type = type;
+    existing.updated = now;
+    existing.embedding = null;
+  } else {
+    memories.push({
+      id,
+      title,
+      content,
+      tags: tagsJson,
+      project: projectName,
+      type,
+      created: now,
+      updated: now,
+      embedding: null,
+    });
+  }
+
+  return saveJsonMemories(projectName, memories);
+}
+
+async function storeMemory(
+  projectName: string,
+  title: string,
+  content: string,
+  type: MemoryType,
+  tags: string[]
+): Promise<boolean> {
+  if (content.length > MAX_CONTENT_LENGTH) {
+    content = content.slice(0, MAX_CONTENT_LENGTH) + `\n\n[... truncated]`;
+  }
+
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const now = new Date().toISOString();
+  const tagsJson = JSON.stringify(tags);
+
+  let db: any = null;
   try {
-    db = openDb(projectName);
-    if (!db) return false;
-
-    if (content.length > MAX_CONTENT_LENGTH) {
-      content = content.slice(0, MAX_CONTENT_LENGTH) + `\n\n[... truncated]`;
+    db = await openDb(projectName);
+    if (!db) {
+      // better-sqlite3 absent ou base inutilisable : on écrit quand même le
+      // checkpoint au format JSON pour ne rien perdre.
+      return upsertJsonMemory(projectName, title, content, type, tags);
     }
-
-    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-    const now = new Date().toISOString();
-    const tagsJson = JSON.stringify(tags);
 
     const existing = db.prepare("SELECT id, created FROM memories WHERE id = ?").get(id) as { id: string; created: string } | undefined;
 
@@ -89,7 +227,7 @@ function storeMemory(
 
     return true;
   } catch (err) {
-    console.warn(`[compaction-checkpoint] DB error: ${(err as Error).message}`);
+    console.warn(`[compaction-checkpoint] Erreur d'écriture mémoire : ${(err as Error).message}`);
     return false;
   } finally {
     if (db) db.close();
@@ -162,6 +300,8 @@ function extractFromMessages(messages: any[]): ExtractedInfo {
 // ─── Extension ──────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  console.log("[compaction-checkpoint] Extension loaded");
+
   // ─── BEFORE compaction: extract key info from messages about to be lost ───
   // We don't block compaction — just extract what we can programmatically
   // and inject a prompt for the LLM to save memories after compaction.
@@ -191,7 +331,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    storeMemory(
+    await storeMemory(
       projectName,
       `Compaction checkpoint: ${projectName}`,
       summaryContent,

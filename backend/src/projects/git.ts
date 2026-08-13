@@ -1,4 +1,4 @@
-import { simpleGit, type SimpleGit, type LogResult, ResetMode } from "simple-git";
+import { simpleGit, type SimpleGit, type LogResult } from "simple-git";
 import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -631,6 +631,71 @@ export interface CommitPushResult {
   remoteUrl?: string;
 }
 
+/**
+ * Construit un statut "comme après `git add -A`" sans toucher au dépôt.
+ * Utilisé par l'aperçu de commit pour montrer ce qui serait commité sans modifier
+ * l'état du staging de l'utilisateur (l'ancien `git add -A` + `git reset` était
+ * destructeur). On reste sur l'état réel si le dépôt est propre ou en conflit.
+ */
+function simulateCommitAllStatus(status: GitStatusFull): GitStatusFull {
+  // On ne simule que lorsqu'un `git add -A` apporterait réellement un changement
+  // (fichiers non suivis, modifiés ou supprimés hors index). Sinon, le statut réel
+  // est déjà celui qui serait commité. En cas de conflit, on ne touche à rien et on
+  // renvoie le statut réel pour ne surtout pas altérer l'état du merge.
+  const hasUnstaged =
+    status.modified.length > 0 || status.created.length > 0 || status.deleted.length > 0;
+  if (status.isClean || status.conflict.length > 0 || !hasUnstaged) {
+    return status;
+  }
+
+  // `f.status` est le code porcelain déjà trimé par getGitStatus
+  // (ex. "A", "M", "D", "R" ou "??"). On en déduit le code index après add.
+  const files = status.files
+    .map((f) => {
+      const idx = f.status[0] ?? " ";
+      const ws = f.status[1] ?? " ";
+
+      let newIdx: string;
+      if (idx === "?" && ws === "?") {
+        newIdx = "A"; // non-suivi → ajouté
+      } else if (idx === "A") {
+        newIdx = "A"; // déjà ajouté dans l'index, le restera
+      } else if (idx === "D" || ws === "D") {
+        newIdx = "D"; // suppression
+      } else if (ws !== " " && ws !== "?") {
+        newIdx = ws; // modification du worktree stagée telle quelle
+      } else {
+        newIdx = idx !== " " ? idx : "M";
+      }
+
+      return { path: f.path, status: newIdx };
+    })
+    // `git status` trie par chemin dans ce cas ; on reproduit l'ordre post-add.
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  // Après un `git add -A`, toutes les modifications sont dans l'index.
+  // getGitStatus range les suppressions dans `deleted` et le reste dans `staged`.
+  const staged: string[] = [];
+  const deleted: string[] = [];
+  for (const f of files) {
+    if (f.status === "D") deleted.push(f.path);
+    else staged.push(f.path);
+  }
+
+  return {
+    branch: status.branch,
+    ahead: status.ahead,
+    behind: status.behind,
+    staged,
+    modified: [],
+    deleted,
+    created: [],
+    conflict: status.conflict,
+    files,
+    isClean: false,
+  };
+}
+
 export async function gitCommitPushPreview(
   cwd: string
 ): Promise<{ status: GitStatusFull; proposedMessage: { subject: string; body: string } }> {
@@ -640,35 +705,10 @@ export async function gitCommitPushPreview(
     throw new Error("Not a git repository");
   }
 
-  // If clean, re-read to get accurate staged state
-  let effectiveStatus = status;
-  if (!status.isClean && (status.modified.length > 0 || status.created.length > 0 || status.deleted.length > 0)) {
-    try {
-      const git: SimpleGit = simpleGit(cwd);
-      await git.add("-A");
-      const stagedStatus = await getGitStatus(cwd);
-      await git.reset(ResetMode.MIXED);
-      if (!("notRepo" in stagedStatus)) {
-        effectiveStatus = stagedStatus;
-      }
-    } catch (err: any) {
-      if (isLockError(err?.message || "")) {
-        cleanupGitLock(cwd);
-        // Retry once after clearing lock
-        try {
-          const git: SimpleGit = simpleGit(cwd);
-          await git.add("-A");
-          const stagedStatus = await getGitStatus(cwd);
-          await git.reset(ResetMode.MIXED);
-          if (!("notRepo" in stagedStatus)) {
-            effectiveStatus = stagedStatus;
-          }
-        } catch {
-          // Still failed — use the original status as fallback
-        }
-      }
-    }
-  }
+  // Fix aperçu de commit : ne plus faire `git add -A` + `git reset` ici, car cela
+  // dé-stage les modifications préalablement stagées par l'utilisateur. On simule
+  // le statut "tout stagé" à partir du statut réel, sans effet de bord sur l'index.
+  const effectiveStatus = simulateCommitAllStatus(status);
 
   const proposedMessage = generateCommitMessage(effectiveStatus);
   return { status: effectiveStatus, proposedMessage };
@@ -834,14 +874,35 @@ export async function gitClone(
   }
 }
 
+/**
+ * Vérifie qu'une référence git existe sans lever d'erreur.
+ * Utilisé par gitInit pour ne définir l'upstream que si c'est possible.
+ */
+async function gitRefExists(git: SimpleGit, ref: string): Promise<boolean> {
+  try {
+    await git.raw(["rev-parse", "--verify", ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function gitInit(cwd: string, remote: string, branch: string = "main"): Promise<string> {
   const git: SimpleGit = simpleGit(cwd);
   try {
     await git.init();
     await git.addRemote("origin", remote);
     await git.checkoutLocalBranch(branch);
-    // BUG-27 fix: configurer le tracking upstream pour que le premier push fonctionne
-    await git.raw(["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+
+    // Fix gitInit : ne configurer l'upstream que si le dépôt a au moins un commit
+    // ET que la ref distante existe. Sinon `git branch --set-upstream-to` échoue
+    // sur un dépôt fraîchement initialisé (aucun commit) ou sans ref distante.
+    const hasCommit = await gitRefExists(git, "HEAD");
+    const hasRemoteRef = await gitRefExists(git, `origin/${branch}`);
+    if (hasCommit && hasRemoteRef) {
+      await git.raw(["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+    }
+
     return `Initialized repo, remote set to ${remote}`;
   } catch (error: any) {
     throw new Error(`Git init failed: ${error.message}`);

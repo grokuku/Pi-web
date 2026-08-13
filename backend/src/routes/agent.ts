@@ -39,22 +39,97 @@ router.use(agentAuth);
 
 import { isPathAllowed } from "../utils/path-security.js";
 
-/** Take a git snapshot of changed files in the cwd. Returns set of relative paths. */
-function gitSnapshot(cwd: string): Set<string> {
+/** Vérifie si le cwd est un dépôt git utilisable.
+ *  On exige un `.git` dans le cwd (comme `detectGit`) pour ne pas considérer
+ *  un sous-dossier d'un dépôt parent comme un projet git à part entière. */
+function isGitRepo(cwd: string): boolean {
+  if (!existsSync(path.join(cwd, ".git"))) return false;
   try {
-    const output = execSync("git diff --name-only", {
+    const output = execSync("git rev-parse --is-inside-work-tree", {
       cwd,
       encoding: "utf-8",
       timeout: 5000,
     });
-    const files = output.trim().split("\n").filter(Boolean);
-    return new Set(files);
+    return output.trim() === "true";
   } catch {
-    return new Set();
+    return false;
   }
 }
 
-/** Diff two snapshots. Returns files that appear in `after` but not in `before`.
+/** Prend un instantané git des fichiers modifiés dans le cwd.
+ *  Combine `git diff` (fichiers suivis) et `git ls-files --others` (fichiers
+ *  non suivis), car `git diff` ne voit pas les nouveaux fichiers créés par l'agent.
+ *  Retourne un set de chemins relatifs. */
+function gitSnapshot(cwd: string): Set<string> {
+  const files = new Set<string>();
+
+  try {
+    const diff = execSync("git diff --name-only", {
+      cwd,
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    for (const f of diff.trim().split("\n")) {
+      if (f) files.add(f);
+    }
+  } catch {
+    // Pas un dépôt git — on laisse le set vide, le fallback fs prendra le relais.
+  }
+
+  try {
+    const untracked = execSync("git ls-files --others --exclude-standard", {
+      cwd,
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    for (const f of untracked.trim().split("\n")) {
+      if (f) files.add(f);
+    }
+  } catch {
+    // Ignoré : pas de dépôt git ou aucun fichier non suivi.
+  }
+
+  return files;
+}
+
+/** Prend un instantané des fichiers du cwd sans passer par git.
+ *  Retourne une map chemin relatif → mtime (ms) pour comparer les fichiers modifiés. */
+function fsSnapshot(cwd: string): Map<string, number> {
+  const files = new Map<string, number>();
+
+  const walk = (dir: string, prefix: string) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      // On ignore les métadonnées git et les dépendances pour rester pertinent
+      // (et éviter de parcourir des milliers de fichiers inutilement).
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const full = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        walk(full, rel);
+      } else if (entry.isFile()) {
+        try {
+          files.set(rel, statSync(full).mtimeMs);
+        } catch {
+          // Fichier inaccessible (permissions, suppression concurrente) — ignoré.
+        }
+      }
+    }
+  };
+
+  walk(cwd, "");
+  return files;
+}
+
+/** Diff two git snapshots. Returns files that appear in `after` but not in `before`.
  *  Note: this gives us files that were modified DURING the prompt. */
 function diffSnapshots(before: Set<string>, after: Set<string>): string[] {
   const changed: string[] = [];
@@ -64,21 +139,74 @@ function diffSnapshots(before: Set<string>, after: Set<string>): string[] {
   return changed;
 }
 
-/** Get changed files via git status (for the /files/changed endpoint) */
-function getChangedFiles(cwd: string): Array<{ path: string; status: string }> {
+/** Diff two filesystem snapshots. Returns files created or touched between the snapshots. */
+function diffFsSnapshots(before: Map<string, number>, after: Map<string, number>): string[] {
+  const changed: string[] = [];
+  for (const [file, mtime] of after) {
+    const beforeMtime = before.get(file);
+    if (beforeMtime === undefined || beforeMtime !== mtime) changed.push(file);
+  }
+  return changed;
+}
+
+/** Fichiers modifiés en mode git (diff + untracked) pour /files/changed. */
+function getGitChangedFiles(cwd: string): Array<{ path: string; status: string }> {
+  const files: Array<{ path: string; status: string }> = [];
+
   try {
     const output = execSync("git diff --name-status", {
       cwd,
       encoding: "utf-8",
       timeout: 5000,
     });
-    return output.trim().split("\n").filter(Boolean).map(line => {
+    const tracked = output.trim().split("\n").filter(Boolean).map(line => {
       const [status, ...rest] = line.split("\t");
       return { path: rest.join("\t"), status: status || "M" };
     });
+    files.push(...tracked);
   } catch {
-    return [];
+    // Pas de dépôt git — le fallback fs prendra le relais.
   }
+
+  try {
+    const untracked = execSync("git ls-files --others --exclude-standard", {
+      cwd,
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    for (const f of untracked.trim().split("\n")) {
+      // Un fichier non suivi est un ajout du point de vue de l'agent.
+      if (f) files.push({ path: f, status: "A" });
+    }
+  } catch {
+    // Ignoré.
+  }
+
+  return files;
+}
+
+/** Fichiers modifiés sans git : on compare les mtimes au timestamp `since`. */
+function getFsChangedFiles(cwd: string, since?: string): Array<{ path: string; status: string }> {
+  const snapshot = fsSnapshot(cwd);
+  const files: Array<{ path: string; status: string }> = [];
+  const sinceMs = since ? Date.parse(since) : NaN;
+
+  for (const [file, mtime] of snapshot) {
+    if (Number.isNaN(sinceMs)) {
+      // Sans git ni timestamp de référence, tous les fichiers sont considérés ajoutés.
+      files.push({ path: file, status: "A" });
+    } else if (mtime > sinceMs) {
+      files.push({ path: file, status: "M" });
+    }
+  }
+
+  return files;
+}
+
+/** Get changed files for the /files/changed endpoint (git puis fallback fs). */
+function getChangedFiles(cwd: string, since?: string): Array<{ path: string; status: string }> {
+  if (isGitRepo(cwd)) return getGitChangedFiles(cwd);
+  return getFsChangedFiles(cwd, since);
 }
 
 /** Collect messages from a session for the agent API response */
@@ -355,8 +483,11 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
       }
     }
 
-    // 3. Snapshot files before prompt
-    const beforeSnapshot = gitSnapshot(project.cwd);
+    // 3. Snapshot files before prompt (git si possible, sinon timestamps fs)
+    const hasGit = isGitRepo(project.cwd);
+    const beforeSnapshot: Set<string> | Map<string, number> = hasGit
+      ? gitSnapshot(project.cwd)
+      : fsSnapshot(project.cwd);
 
     // 4. Send prompt and wait for completion
     const abortController = new AbortController();
@@ -384,8 +515,12 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
     clearTimeout(timeoutHandle);
 
     // 5. Snapshot files after prompt
-    const afterSnapshot = gitSnapshot(project.cwd);
-    const filesChanged = diffSnapshots(beforeSnapshot, afterSnapshot);
+    const afterSnapshot: Set<string> | Map<string, number> = hasGit
+      ? gitSnapshot(project.cwd)
+      : fsSnapshot(project.cwd);
+    const filesChanged = hasGit
+      ? diffSnapshots(beforeSnapshot as Set<string>, afterSnapshot as Set<string>)
+      : diffFsSnapshots(beforeSnapshot as Map<string, number>, afterSnapshot as Map<string, number>);
 
     // 6. Collect messages
     const freshState = getSession(project.id);
@@ -496,7 +631,16 @@ router.get("/projects/:id/files/changed", (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found" });
-    const files = getChangedFiles(project.cwd);
+
+    const sinceParam = req.query.since;
+    if (sinceParam !== undefined && typeof sinceParam !== "string") {
+      return res.status(400).json({ error: "Invalid since date" });
+    }
+    if (sinceParam !== undefined && Number.isNaN(Date.parse(sinceParam))) {
+      return res.status(400).json({ error: "Invalid since date" });
+    }
+
+    const files = getChangedFiles(project.cwd, sinceParam);
     res.json({ files });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -511,7 +655,9 @@ router.get("/projects/:id/files", (req: Request, res: Response) => {
     const targetPath = (req.query.path as string) || project.cwd;
     const resolved = path.resolve(targetPath);
 
-    if (!isPathAllowed(resolved)) {
+    // Confinement au cwd du projet : un agent du projet A ne peut pas lire
+    // les fichiers du projet B même s'ils partagent une racine globale.
+    if (!isPathAllowed(resolved, project.cwd)) {
       return res.status(403).json({ error: "Access denied" });
     }
     if (!existsSync(resolved)) {
@@ -544,7 +690,8 @@ router.get("/projects/:id/files/read", (req: Request, res: Response) => {
     const filePath = (req.query.path as string) || "";
     const resolved = path.resolve(filePath);
 
-    if (!isPathAllowed(resolved)) {
+    // Confinement au cwd du projet (même logique que /projects/:id/files).
+    if (!isPathAllowed(resolved, project.cwd)) {
       return res.status(403).json({ error: "Access denied" });
     }
     if (!existsSync(resolved)) {

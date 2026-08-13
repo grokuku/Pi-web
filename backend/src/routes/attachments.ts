@@ -21,6 +21,20 @@ const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_FILES_PER_UPLOAD = 20;
 
+// ─── ID validation ───────────────────────────────────────
+const ATTACHMENT_ID_RE = /^[0-9a-f-]{36}$/i;
+const PROJECT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Valide un id d'attachment avant toute construction de chemin. */
+function isValidAttachmentId(id: string): boolean {
+  return ATTACHMENT_ID_RE.test(id);
+}
+
+/** Valide le projectId avant stockage (évite les attachements orphelins). */
+function isValidProjectId(id: string): boolean {
+  return PROJECT_ID_RE.test(id);
+}
+
 // ─── Filename Sanitization ───────────────────────────────
 /**
  * Sanitize a filename to prevent path traversal and remove dangerous characters.
@@ -271,7 +285,15 @@ router.post("/upload", async (req: Request, res: Response) => {
         return res.status(400).json({ error: "No files provided" });
       }
 
-      const projectId = req.body.projectId as string | undefined;
+      const rawProjectId = req.body.projectId;
+      if (typeof rawProjectId !== "string" || !isValidProjectId(rawProjectId)) {
+        // Nettoyer les fichiers temporaires déjà écrits par multer avant de rejeter.
+        for (const file of files) {
+          try { unlinkSync(file.path); } catch {}
+        }
+        return res.status(400).json({ error: "projectId (UUID) is required" });
+      }
+      const projectId = rawProjectId;
       const results: AttachmentMeta[] = [];
 
       for (const file of files) {
@@ -346,6 +368,9 @@ router.get("/", (req: Request, res: Response) => {
  */
 router.get("/:id", (req: Request, res: Response) => {
   const { id } = req.params;
+  if (!isValidAttachmentId(id)) {
+    return res.status(400).json({ error: "Invalid attachment id" });
+  }
   const meta = readMeta(id);
   if (!meta) {
     return res.status(404).json({ error: "Attachment not found" });
@@ -359,6 +384,9 @@ router.get("/:id", (req: Request, res: Response) => {
  */
 router.get("/:id/file", (req: Request, res: Response) => {
   const { id } = req.params;
+  if (!isValidAttachmentId(id)) {
+    return res.status(400).json({ error: "Invalid attachment id" });
+  }
   const meta = readMeta(id);
   if (!meta) {
     return res.status(404).json({ error: "Attachment not found" });
@@ -386,6 +414,9 @@ router.get("/:id/file", (req: Request, res: Response) => {
  */
 router.delete("/:id", (req: Request, res: Response) => {
   const { id } = req.params;
+  if (!isValidAttachmentId(id)) {
+    return res.status(400).json({ error: "Invalid attachment id" });
+  }
   const meta = readMeta(id);
   if (!meta) {
     return res.status(404).json({ error: "Attachment not found" });
@@ -419,6 +450,9 @@ router.delete("/:id", (req: Request, res: Response) => {
  */
 router.post("/:id/analyze", async (req: Request, res: Response) => {
   const { id } = req.params;
+  if (!isValidAttachmentId(id)) {
+    return res.status(400).json({ error: "Invalid attachment id" });
+  }
   const { query, page, force } = req.body as { query?: string; page?: number; force?: boolean };
 
   const meta = readMeta(id);
