@@ -332,17 +332,18 @@ export default function (pi: ExtensionAPI) {
         // locale (localhost, déjà autorisée par api-auth).
         const routing = await resolveRoutingDecision(cwd, task);
 
-        // Le routeur backend fait foi quand il renvoie une fonction connue.
-        // Exception : `integrate` (synthèse finale) n'est jamais produite par le
-        // routeur — on la conserve si elle est explicitement demandée.
+        // Le choix EXPLICITE de l'orchestrator PRIME sur le routeur backend.
+        // Le routeur ne sert que de fallback quand aucune fonction valide n'est
+        // demandée (il fournit aussi la recommandation de modèle). Sans cette
+        // priorité, une demande « execute » re-classée « planning » par le triage
+        // perdrait l'accès en écriture et ne produirait qu'un plan.
         let effectiveFunction = functionName;
-        if (
-          routing?.function &&
-          FUNCTION_BY_NAME.has(routing.function) &&
-          functionName !== "integrate"
-        ) {
-          effectiveFunction = routing.function;
+        if (!effectiveFunction || !FUNCTION_BY_NAME.has(effectiveFunction)) {
+          if (routing?.function && FUNCTION_BY_NAME.has(routing.function)) {
+            effectiveFunction = routing.function;
+          }
         }
+        if (!effectiveFunction) effectiveFunction = "execute";
         const effectiveFunc = FUNCTION_BY_NAME.get(effectiveFunction)!;
         if (effectiveFunction !== functionName) {
           console.log(`[harness-orchestrator] Route backend : ${functionName} → ${effectiveFunction}`);

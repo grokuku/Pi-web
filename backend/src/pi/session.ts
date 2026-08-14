@@ -308,6 +308,15 @@ export async function createPiSession(
       (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
     }
 
+
+    // Wrap prompt() : réinjecte la bannière de mode avant chaque interaction LLM.
+    // Le SDK reconstruit _baseSystemPrompt à chaque setActiveToolsByName, donc on
+    // garantit que le mode est toujours visible au moment de l'appel.
+    const origPrompt = (session as any).prompt.bind(session);
+    (session as any).prompt = (message: any, options?: any) => {
+      reapplyModeBanner(session, projectId);
+      return origPrompt(message, options);
+    };
     const unsubscribe = session.subscribe((event) => {
       // Track tool executions
       if (event.type === "tool_execution_start") {
@@ -1196,6 +1205,43 @@ function toolsForMode(session: any, baseTools: string[], exclude: string[] = [])
 const MODE_IDENTITY_MARKER = "<!-- PI_IDENTITY -->";
 const MODE_BLOCK_MARKER_START = "<!-- PI_MODE:" ;
 const MODE_BLOCK_MARKER_END = "-->";
+// Bannière de mode proéminente (marqueurs DÉDIÉS, distincts des instructions de mode)
+const MODE_BANNER_START = "<!-- PI_MODE_BANNER -->";
+const MODE_BANNER_END = "<!-- /PI_MODE_BANNER -->";
+
+/** Renvoie les noms des outils actifs de la session (pour la bannière de mode). */
+function getActiveToolNamesForBanner(session: any): string[] {
+  try {
+    return (session as any).getActiveToolNames?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Réinjecte une bannière de mode PROÉMINENTE en tête du prompt système.
+ * Pourquoi : le SDK Pi reconstruit `_baseSystemPrompt` à chaque setActiveToolsByName
+ * (agent-session.js), ce qui efface le marqueur de mode injecté par applyModeToSession.
+ * Sans cette bannière, l'agent ne sait pas s'il est en mode code (travail direct)
+ * ou routing (orchestrateur qui délègue) — et essaie les outils de l'autre mode.
+ */
+function reapplyModeBanner(session: any, projectId: string): void {
+  const state = sessionsByProject.get(projectId);
+  const mode = state?.activeMode || "code";
+  const tools = getActiveToolNamesForBanner(session);
+  const toolsList = tools.length > 0 ? tools.join(", ") : "(aucun)";
+
+  const banner = mode === "harness"
+    ? `${MODE_BANNER_START}\n## ⚠️ MODE ACTUEL : ROUTING — VOUS ÊTES L'ORCHESTRATEUR\n\nRÈGLE ABSOLUE : déléguez TOUTE tâche d'exécution via le tool \`delegate\` (fonctions : planning, execute, review, integrate). Ne codez JAMAIS vous-même, ne faites JAMAIS de recherche/exploration vous-même — déléguez. Vos outils : ${toolsList}.\n${MODE_BANNER_END}\n\n`
+    : `${MODE_BANNER_START}\n## MODE ACTUEL : CODE — travail direct\n\nVous travaillez directement avec vos outils. Le tool \`delegate\` n'est PAS disponible dans ce mode. Vos outils : ${toolsList}.\n${MODE_BANNER_END}\n\n`;
+
+  // Nettoyer une éventuelle bannière précédente, puis préfixer la nouvelle en tête de prompt
+  let prompt = (session as any)._baseSystemPrompt || "";
+  prompt = prompt.replace(/\n*<!-- PI_MODE_BANNER -->[\s\S]*?<!-- \/PI_MODE_BANNER -->\n*/g, "\n");
+  (session as any)._baseSystemPrompt = banner + prompt.trimStart();
+  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+}
+
 
 function cleanPromptForModeChange(rawPrompt: string): string {
   // Remove existing mode blocks (e.g. <!-- PI_MODE:REVIEW -->...<!-- /PI_MODE:REVIEW -->)
@@ -1499,6 +1545,9 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Update state ──
   state.activeMode = mode;
 
+  // Bannière de mode proéminente (réinjectée aussi avant chaque prompt via le wrapper)
+  reapplyModeBanner(session, projectId);
+
   emitModeChange(projectId, mode, false);
   emitSessionUpdate(projectId);
 }
@@ -1573,6 +1622,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 
   state.activeMode = "code";
+  reapplyModeBanner(session, projectId);
   emitModeChange(projectId, "code", false);
   emitSessionUpdate(projectId);
 }
