@@ -98,10 +98,6 @@ export const fr = {
       systemDefault: "Langue du système",
       thinkExpand: "Déplier la réflexion par défaut",
       thinkExpandDesc: "Quand la réflexion est visible, déplier les blocs automatiquement",
-      autoReview: "Révision automatique",
-      reviewFixDesc: "Après la review, corriger automatiquement les bugs détectés. Désactivé = afficher uniquement la liste des bugs, sans instruction de correction.",
-      reviewFixOn: "CORRIGER",
-      reviewFixOff: "LISTER SEULEMENT",
       auth: {
         title: "AUTHENTIFICATION DE L'INTERFACE WEB",
         description: "Définissez des identifiants pour protéger l'interface web avec l'authentification HTTP Basic. Laissez vide pour désactiver.",
@@ -222,13 +218,6 @@ export const fr = {
     result: "Résultat de l'analyse",
     error: "Échec de l'analyse",
   },
-  autoReview: {
-    title: "Révision automatique",
-    inProgress: "Révision du code en cours...",
-    completed: "Révision terminée",
-    failed: "Échec de la révision",
-    fix: "Correction",
-  },
 
   // ── Welcome View ──
   welcome: {
@@ -257,8 +246,8 @@ export const fr = {
 
   // ── Model Quick Switch ──
   modelSwitch: {
-    code: "CODE",
-    review: "REVUE",
+    code: "Modèle par défaut",
+    harness: "ROUTING",
     alwaysOn: "(toujours actif)",
     switchTo: (mode: string) => `Passer à ${mode}`,
     enable: (mode: string) => `Activer ${mode}`,

@@ -45,11 +45,8 @@ import {
   setThinkingLevel,
   cycleModel,
   switchMode,
-  restoreCodeMode,
   applyModeToSession,
   getActiveMode,
-  getAutoReviewState,
-  abortAutoReview,
 } from "./pi/session.js";
 import {
   createTerminal,
@@ -731,8 +728,6 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     case "pi_abort": {
       const pid = msg.projectId || projectId;
       if (!getValidatedProject(pid)) return;
-      // Also abort any running auto-review
-      abortAutoReview(pid);
       try {
         await abortPi(pid);
       } catch (e: any) {

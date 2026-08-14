@@ -50,9 +50,6 @@ export interface PiSessionState {
   unsubscribe: (() => void) | null;
   projectId: string;
   activeMode: AgentMode;       // current active mode (default "code")
-  reviewCycle: number;          // current auto-review cycle count
-  autoReviewInProgress: boolean; // is an auto-review cycle running
-  autoReviewAborted: boolean;   // was auto-review aborted by user
   harnessAborted: boolean;      // was harness run aborted by user
   harnessSteerMessages: string[]; // messages queued for harness while streaming
   allowWebSearch: boolean;       // allow firecrawl tools (disabled by default, librarian_search replaces them)
@@ -407,9 +404,6 @@ export async function createPiSession(
       unsubscribe,
       projectId,
       activeMode: "code",
-      reviewCycle: 0,
-      autoReviewInProgress: false,
-      autoReviewAborted: false,
       harnessAborted: false,
       harnessSteerMessages: [],
       allowWebSearch: false,
@@ -629,27 +623,10 @@ export async function sendPrompt(
         }
         return { command: "model", result: `Model not found: ${args}. Use /model to list available.` };
       }
-      case "/review": {
-        const library = loadModelLibrary();
-        const currentMode = state.activeMode || "code";
-        if (currentMode === "review") {
-          // Toggle off → back to code
-          await restoreCodeMode(projectId);
-          return { command: "review", result: "✓ Switched back to CODE mode" };
-        } else {
-          // Enable review mode (auto-enable if not already enabled)
-          const pm = getProjectModeConfig(library, projectId);
-          if (!pm.review?.enabled) {
-            setProjectModeEnabled(projectId, "review", true);
-          }
-          await switchMode("review", projectId);
-          return { command: "review", result: "✓ Switched to REVIEW mode" };
-        }
-      }
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /review    — Toggle REVIEW mode\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -873,12 +850,10 @@ export async function sendPrompt(
     // needs a way to unblock without restarting the backend.
     try { await state.session.abort(); } catch {}
     console.log("[prompt] Aborted previous stream, calling session.prompt()...");
-    await withSessionTimeout(
-      state.session.prompt(message, options),
-      state.session,
-      projectId,
-      "prompt(steer)",
-    );
+    // Option A : pas de timeout global en mode code (un tour d'agent peut
+    // légitimement durer > 5 min, ex. refactor multi-fichiers). L'utilisateur
+    // garde le bouton ABORT pour interrompre manuellement.
+    await state.session.prompt(message, options);
     console.log("[prompt] session.prompt() returned!");
   } else {
     const options: any = {};
@@ -893,21 +868,11 @@ export async function sendPrompt(
       console.log("[prompt] Harness mode — no session timeout (functions have their own)");
       await state.session.prompt(message, options);
     } else {
-      await withSessionTimeout(
-        state.session.prompt(message, options),
-        state.session,
-        projectId,
-        "prompt",
-      );
+      // Option A : pas de timeout global en mode code non plus (cf. harness).
+      // L'utilisateur garde le bouton ABORT pour le contrôle manuel.
+      await state.session.prompt(message, options);
     }
     console.log("[prompt] session.prompt() returned!");
-  }
-
-  // ── Trigger auto-review if applicable ──
-  // Slash commands are handled above and return early
-  // so this only runs after a real AI prompt
-  if (!trimmed.startsWith("/")) {
-    triggerAutoReviewIfNeeded(projectId);
   }
 }
 
@@ -971,12 +936,8 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
     await state.session.steer(message);
     return;
   }
-  await withSessionTimeout(
-    state.session.steer(message),
-    state.session,
-    projectId,
-    "steer",
-  );
+  // Option A : pas de timeout global en mode code (cf. sendPrompt).
+  await state.session.steer(message);
 }
 
 // ── Harness Engine ───────────────────────────────────
@@ -1672,9 +1633,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
-  if (mode === "review") {
-    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, HARNESS_EXCLUDE));
-  } else if (mode === "harness") {
+  if (mode === "harness") {
     // Harness orchestrator: read-only + delegate (l'extension l'enregistre)
     // Pas d'exclusion : l'orchestrator DOIT garder delegate (BUG-71).
     (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
@@ -1714,8 +1673,6 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 
   // ── Update state ──
   state.activeMode = mode;
-  state.reviewCycle = 0;
-  state.autoReviewAborted = false;
 
   emitModeChange(projectId, mode, false);
   emitSessionUpdate(projectId);
@@ -1892,329 +1849,10 @@ export function getAllowWebSearch(projectId: string): boolean {
   return state?.allowWebSearch ?? false;
 }
 
-/** Get auto-review state for a project */
-export function getAutoReviewState(projectId: string): {
-  inProgress: boolean; cycle: number; maxReviews: number; mode: AgentMode
-} {
-  const state = sessionsByProject.get(projectId);
-  const library = loadModelLibrary();
-  const pm = getProjectModeConfig(library, projectId);
-  return {
-    inProgress: state?.autoReviewInProgress ?? false,
-    cycle: state?.reviewCycle ?? 0,
-    maxReviews: pm.review.maxReviews ?? 1,
-    mode: state?.activeMode ?? "code",
-  };
-}
-
-/** Abort any running auto-review */
-export function abortAutoReview(projectId: string): void {
-  const state = sessionsByProject.get(projectId);
-  if (state) {
-    state.autoReviewAborted = true;
-    state.autoReviewInProgress = false;
-  }
-}
-
-/**
- * After a CODE mode prompt completes, trigger auto-review if enabled.
- * Runs in background — does not block the caller.
- */
-export function triggerAutoReviewIfNeeded(projectId: string): void {
-  const state = sessionsByProject.get(projectId);
-  if (!state?.session) return;
-
-  const library = loadModelLibrary();
-  const pm = getProjectModeConfig(library, projectId);
-  const maxReviews = pm.review.maxReviews ?? 1;
-
-  // Reset cycle counter on each new prompt so auto-review triggers again
-  state.reviewCycle = 0;
-
-  // Check conditions
-  if (state.activeMode !== "code") return;            // Only after code mode
-
-  // R3 — gate de relecture par le risque. Le routage ne déclenche l'auto-review
-  // que si la route est une review ou si le riskScore dépasse le seuil projet.
-  // Sans routage (flag global off OU flag projet routing.enabled false), on
-  // conserve le comportement historique (review après chaque prompt code),
-  // toujours soumis aux conditions ci-dessous.
-  const routingConfig = getProjectRoutingConfig(library, projectId);
-  const reviewRiskThreshold = routingConfig.reviewRiskThreshold ?? 0.5;
-  const routingActive = isRoutingEnabled() && routingConfig.enabled;
-  const riskTriggered =
-    !routingActive ||
-    state.lastRoute?.category === "review" ||
-    (state.lastRoute?.riskScore ?? 0) >= reviewRiskThreshold;
-  if (!riskTriggered) return;                         // Risk gate not passed
-
-  if (!pm.review.enabled) return;                     // Review must be enabled
-  if (maxReviews <= 0) return;                        // Auto-review disabled
-  if (state.reviewCycle >= maxReviews) return;        // Already done max reviews
-  if (state.autoReviewInProgress) return;            // Already running
-  if (state.autoReviewAborted) return;              // Aborted by user
-  // BUG-72 : avant, `state.isStreaming` n'était jamais true en mode normal → le
-  // guard ne bloquait jamais. On lit l'état réel du SDK (run + retry/compaction).
-  if (isSessionStreaming(projectId)) return;         // Still streaming (SDK réel)
-
-  // Check that there's a review model available
-  const reviewModel = getModeModel(library, projectId, "review");
-  if (!reviewModel) return;                          // No model for review
-
-  state.autoReviewInProgress = true;
-  state.reviewCycle++;
-
-  // Run auto-review in background
-  runAutoReviewCycle(projectId, state.reviewCycle, maxReviews).catch(err => {
-    console.error("[auto-review] Error:", err);
-    state.autoReviewInProgress = false;
-  });
-}
-
-async function runAutoReviewCycle(projectId: string, cycle: number, maxReviews: number): Promise<void> {
-  const state = sessionsByProject.get(projectId);
-  if (!state?.session) return;
-  if (state.autoReviewAborted) { state.autoReviewInProgress = false; return; }
-
-  // ── Phase 1: Review (NEUTRAL — fresh session, no conversation history) ──
-  emitModeChange(projectId, "review", true);
-  emitAutoReviewStatus(projectId, "reviewing", cycle, maxReviews);
-
-  const library = loadModelLibrary();
-
-  // Get the git diff AND list of changed files to provide focused context to the reviewer
-  let diffSummary = "";
-  let changedFiles: string[] = [];
-  try {
-    const { getGitDiff, getChangedFiles } = await import("../projects/git.js");
-    const diff = await getGitDiff(state.cwd);
-    if (diff && !diff.startsWith("No changes")) {
-      // Truncate to 20K for review
-      diffSummary = diff.length > 20000 ? diff.slice(0, 20000) + "\n... (truncated)" : diff;
-    }
-    changedFiles = await getChangedFiles(state.cwd);
-  } catch (e: any) {
-    console.warn("[auto-review] Could not get git diff:", e.message);
-  }
-
-  let reviewFindings = "";
-  let tempSession: AgentSession | null = null;
-  let tempSessionFile: string | undefined;
-  let tempUnsub: (() => void) | null = null;
-  let agentSlotAcquired = false;
-
-  try {
-    // Create a fresh, temporary session for neutral review
-    const tempSessionManager = SessionManager.create(state.cwd);
-    tempSessionFile = tempSessionManager.getSessionFile();
-    const result = await createAgentSession({
-      cwd: state.cwd,
-      sessionManager: tempSessionManager,
-      modelRuntime: sharedModelRuntime!,
-    });
-    tempSession = result.session;
-
-    // Apply review model
-    let reviewModel = getModeModel(library, projectId, "review");
-    const routingConfig = getProjectRoutingConfig(library, projectId);
-    const routingActive = isRoutingEnabled() && routingConfig.enabled;
-    if (routingActive) {
-      // R3 : en routage actif, la relecture utilise le modèle configuré pour la
-      // catégorie review (fallback modèle par défaut), pas le mode review legacy.
-      const reviewModelId = routingConfig.review?.modelId;
-      reviewModel = reviewModelId
-        ? (getModel(library, reviewModelId) ?? getDefaultModel(library) ?? reviewModel)
-        : (getDefaultModel(library) ?? reviewModel);
-    }
-    if (reviewModel) {
-      try {
-        const piModel = sharedModelRegistry!.find(reviewModel.providerId, reviewModel.modelId);
-        if (piModel) await tempSession.setModel(piModel);
-        if (reviewModel.thinkingLevel) await tempSession.setThinkingLevel(reviewModel.thinkingLevel as any);
-      } catch (e: any) {
-        console.warn("[auto-review] Could not set review model:", e.message);
-      }
-    }
-
-    // Restrict to read-only tools (include extension tools like cbm_* for graph queries,
-    // exclure les tools d'orchestration BUG-71)
-    (tempSession as any).setActiveToolsByName(toolsForMode(tempSession, REVIEW_TOOLS, HARNESS_EXCLUDE));
-
-    // Inject review mode instructions
-    const instructions = MODE_INSTRUCTIONS.review;
-    const basePrompt = (tempSession as any)._baseSystemPrompt || "";
-    const modeBlock = `\n\n## Current Mode: REVIEW\n\n${instructions}`;
-    (tempSession as any)._baseSystemPrompt = basePrompt + modeBlock;
-    (tempSession as any).agent.state.systemPrompt = (tempSession as any)._baseSystemPrompt;
-
-    // Build the review prompt — focused on changed files ONLY
-    let reviewPrompt =
-      "Perform a focused code review of the recently changed files in this project.\n" +
-      "Do NOT explore or review the entire project — focus ONLY on the files listed below.\n";
-    if (changedFiles.length > 0) {
-      reviewPrompt +=
-        "\n## Changed files to review (review ONLY these):\n" +
-        changedFiles.map(f => `- ${f}`).join("\n") + "\n";
-    }
-    if (diffSummary) {
-      reviewPrompt +=
-        "\nHere is the git diff showing the exact changes:\n\n```diff\n" + diffSummary + "\n```\n";
-    }
-    if (!diffSummary && changedFiles.length === 0) {
-      reviewPrompt +=
-        "\nNo git changes were detected. Review the most recent conversation context for any code that was written or modified.\n";
-    }
-    reviewPrompt +=
-      "\n## Instructions\n" +
-      "- Review ONLY the changed files listed above. Do NOT use find/ls to browse the project.\n" +
-      "- You may use `read` to open a changed file for full context, and `grep` to check how a function/variable is used.\n" +
-      "- Do NOT read files that are not in the changed files list unless absolutely necessary for understanding a change.\n" +
-      "- For each finding, provide:\n" +
-      "  - **File:Line** location\n" +
-      "  - **[HIGH/MEDIUM/LOW]** severity\n" +
-      "  - **Description** of the issue\n" +
-      "  - **Suggested fix** (specific code, not vague advice)\n" +
-      "- If the changes look good, say so — don't fabricate issues.";
-
-    // Subscribe to temp session events to forward tool calls for UI display
-    const slotKey = `${projectId}::auto-review`;
-    await concurrencyManager.acquireAgentSlot(slotKey, "auto-review");
-    agentSlotAcquired = true;
-    try {
-      tempUnsub = tempSession.subscribe((event) => {
-        const taggedEvent = { ...event, _autoReview: true } as any;
-        if (event.type === "tool_execution_start") {
-          activeToolCalls.set(event.toolCallId, {
-            toolName: event.toolName,
-            args: event.args,
-            output: "",
-            startTime: Date.now(),
-            projectId,
-          });
-        } else if (event.type === "tool_execution_update") {
-          const existing = activeToolCalls.get(event.toolCallId);
-          if (existing && event.partialResult?.content) {
-            existing.output = event.partialResult.content.map((c: any) => c.text || "").join("");
-          }
-        } else if (event.type === "tool_execution_end") {
-          const existing = activeToolCalls.get(event.toolCallId);
-          if (existing && event.result?.content) {
-            existing.output = event.result.content.map((c: any) => c.text || "").join("");
-          }
-        } else if (event.type === "agent_start") {
-          state.isStreaming = true;
-          startStreamingHeartbeat(projectId);
-          emitSessionUpdate(projectId);
-        } else if (event.type === "agent_settled") {
-          // BUG-72 : agent_settled = vraie fin du run (retry/compaction terminés).
-          state.isStreaming = false;
-          stopStreamingHeartbeat(projectId);
-          emitSessionUpdate(projectId);
-        } else if (event.type === "agent_end") {
-          // agent_end n'est pas la fin réelle — ne pas toucher à isStreaming ici.
-        }
-        emitToSubscribers(taggedEvent, projectId);
-      });
-
-      // Run the review prompt
-      await tempSession.prompt(reviewPrompt, {});
-
-      // Extract the last assistant message as the review findings
-      const messages: any[] = tempSession.messages || [];
-      const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
-      if (lastAssistant) {
-        reviewFindings = lastAssistant.content
-          ? lastAssistant.content.map((c: any) => c.text || "").join("")
-          : JSON.stringify(lastAssistant);
-      }
-    } finally {
-      // Toujours libérer le slot agent, succès comme échec (garde anti double-libération).
-      if (agentSlotAcquired) {
-        concurrencyManager.releaseAgentSlot(slotKey);
-        agentSlotAcquired = false;
-      }
-      if (tempUnsub) {
-        try { tempUnsub(); } catch {}
-        tempUnsub = null;
-      }
-      // Nettoyer la session temporaire (mémoire + fichier disque)
-      try { (tempSession as any).dispose?.(); } catch {}
-      if (tempSessionFile) {
-        try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch (e: any) {
-          console.warn("[auto-review] Failed to clean temp session file:", e.message);
-        }
-      }
-      tempSession = null;
-    }
-  } catch (e: any) {
-    console.error("[auto-review] Review session failed:", e.message);
-    if (tempSession) {
-      try { (tempSession as any).dispose?.(); } catch {}
-    }
-    if (tempSessionFile) {
-      try { if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile); } catch {}
-    }
-    state.autoReviewInProgress = false;
-    await restoreCodeMode(projectId);
-    return;
-  }
-
-  if (state.autoReviewAborted) { state.autoReviewInProgress = false; await restoreCodeMode(projectId); return; }
-
-  // ── Phase 2: Fix ou rapport (session principale = contexte complet) ──
-  emitModeChange(projectId, "code", true);
-
-  await restoreCodeMode(projectId);
-
-  // Option « lister seulement » : quand fixWithInstructions est false, on N'injecte
-  // PAS d'instruction de correction au LLM suivant — on affiche uniquement le
-  // rapport de review (liste des bugs) dans la session principale.
-  // On relit la config au moment de la décision (Phase 2) : si l'utilisateur a
-  // basculé le toggle pendant la Phase 1 (review en cours), on respecte le choix
-  // courant — indépendant du mode actif (code/harness/review).
-  const freshLibrary = loadModelLibrary();
-  const freshPm = getProjectModeConfig(freshLibrary, projectId);
-  const fixWithInstructions = freshPm.review.fixWithInstructions ?? true;
-
-  if (fixWithInstructions) {
-    emitAutoReviewStatus(projectId, "fixing", cycle, maxReviews);
-    try {
-      const fixPrompt = reviewFindings
-        ? `A code review found the following issues. Fix each one specifically. Do not make any other changes.\n\n${reviewFindings}`
-        : "Fix any issues you can find in the recent changes.";
-      await withSessionTimeout(
-        state.session.prompt(fixPrompt, {}),
-        state.session,
-        projectId,
-        "auto-review-fix",
-      );
-    } catch (e: any) {
-      console.error("[auto-review] Fix prompt failed:", e.message);
-    }
-  } else {
-    // Mode « lister seulement » : injecte le rapport dans la session principale
-    // (affiché à l'utilisateur, sans déclencher de turn LLM ni instruction de fix).
-    const report = reviewFindings
-      ? `Auto-review — code review:\n\n${reviewFindings}`
-      : "Auto-review — no issues found in the recent changes.";
-    await injectSessionNotification(projectId, report);
-  }
-
-  state.autoReviewInProgress = false;
-  emitAutoReviewStatus(projectId, "done", cycle, maxReviews);
-
-  // Check if another cycle is needed
-  if (!state.autoReviewAborted && state.reviewCycle < maxReviews) {
-    triggerAutoReviewIfNeeded(projectId);
-  }
-}
 function emitModeChange(projectId: string, mode: AgentMode, auto: boolean): void {
   emitToSubscribers({ type: "mode_change", mode, auto } as any, projectId);
 }
 
-function emitAutoReviewStatus(projectId: string, phase: string, cycle: number, maxReviews: number): void {
-  emitToSubscribers({ type: "auto_review_status", phase, cycle, maxReviews } as any, projectId);
-}
 
 // Commit message instructions (hardcoded)
 const COMMIT_INSTRUCTIONS = `You generate commit messages from git diffs. You must be concise, specific, and descriptive.

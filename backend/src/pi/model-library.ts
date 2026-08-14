@@ -31,7 +31,7 @@ export interface RegisteredModel {
   thinkingLevel: string;       // off, minimal, low, medium, high
 }
 
-export type AgentMode = "code" | "review" | "harness";
+export type AgentMode = "code" | "harness";
 
 export interface ModeConfig {
   modelId: string | null;     // RegisteredModel.id to use for this mode (null = default)
@@ -39,7 +39,6 @@ export interface ModeConfig {
 
 export interface ProjectModeConfig {
   code: ModeConfig;
-  review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
   harness: ModeConfig & { enabled: boolean; config: HarnessConfig; routing?: RoutingConfig };
 }
 
@@ -306,7 +305,7 @@ export interface ModelLibrary {
 
 // ── Defaults ─────────────────────────────────────────
 
-const DEFAULT_THINKING: Record<string, string> = { code: "medium", review: "medium" };
+const DEFAULT_THINKING: Record<string, string> = { code: "medium" };
 
 /** Clone la config de routage par défaut pour éviter tout partage de référence. */
 function createDefaultRoutingConfig(): RoutingConfig {
@@ -344,7 +343,6 @@ function normalizeRoutingConfig(routing: any): RoutingConfig {
 function createDefaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
-    review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true, agentTimeout: 600, agentMaxTimeout: 1800, maxTasks: 20 },
       routing: createDefaultRoutingConfig() },
@@ -487,12 +485,6 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
   }
   return {
     code: { modelId: pm?.code?.modelId ?? d.code.modelId },
-    review: {
-      modelId: pm?.review?.modelId ?? d.review.modelId,
-      enabled: pm?.review?.enabled ?? d.review.enabled,
-      maxReviews: pm?.review?.maxReviews ?? d.review.maxReviews,
-      fixWithInstructions: pm?.review?.fixWithInstructions ?? d.review.fixWithInstructions,
-    },
     harness: {
       modelId: pm?.harness?.modelId ?? d.harness.modelId,
       enabled: pm?.harness?.enabled ?? d.harness.enabled,
@@ -687,7 +679,6 @@ export function removeModel(id: string): ModelLibrary {
   for (const projectId of Object.keys(library.projectModes)) {
     const pm = library.projectModes[projectId];
     if (pm.code.modelId === id) pm.code.modelId = null;
-    if (pm.review.modelId === id) pm.review.modelId = null;
     if (pm.harness.modelId === id) pm.harness.modelId = null;
 
     // Nettoyage des références de routage par catégorie (ajout R1).
@@ -735,27 +726,6 @@ export function setProjectModeEnabled(projectId: string, mode: "review" | "harne
     library.projectModes[projectId] = createDefaultProjectMode();
   }
   (library.projectModes[projectId] as any)[mode].enabled = enabled;
-  saveModelLibrary(library);
-  return library;
-}
-
-export function setProjectModeMaxReviews(projectId: string, maxReviews: number): ModelLibrary {
-  const library = loadModelLibrary();
-  if (!library.projectModes[projectId]) {
-    library.projectModes[projectId] = createDefaultProjectMode();
-  }
-  library.projectModes[projectId].review.maxReviews = maxReviews;
-  saveModelLibrary(library);
-  return library;
-}
-
-/** Set whether auto-review should fix the bugs after the review (true) or only list them (false) */
-export function setProjectModeReviewFix(projectId: string, fixWithInstructions: boolean): ModelLibrary {
-  const library = loadModelLibrary();
-  if (!library.projectModes[projectId]) {
-    library.projectModes[projectId] = createDefaultProjectMode();
-  }
-  library.projectModes[projectId].review.fixWithInstructions = fixWithInstructions;
   saveModelLibrary(library);
   return library;
 }

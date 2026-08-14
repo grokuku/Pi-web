@@ -98,10 +98,6 @@ export const en = {
       systemDefault: "System default",
       thinkExpand: "Expand thinking by default",
       thinkExpandDesc: "When thinking is visible, expand blocks automatically",
-      autoReview: "Auto Review",
-      reviewFixDesc: "After the review, automatically fix the detected bugs. Off = only list the bugs, without any fix instruction.",
-      reviewFixOn: "FIX",
-      reviewFixOff: "LIST ONLY",
       auth: {
         title: "WEB INTERFACE AUTHENTICATION",
         description: "Set credentials to protect the web interface with HTTP Basic Authentication. Leave empty to disable authentication.",
@@ -222,14 +218,6 @@ export const en = {
     result: "Analysis result",
     error: "Analysis failed",
   },
-  autoReview: {
-    title: "Auto Review",
-    inProgress: "Reviewing code...",
-    completed: "Review complete",
-    failed: "Review failed",
-    fix: "Fixing",
-  },
-
   // ── Welcome View ──
   welcome: {
     title: "PI-WEB",
@@ -257,8 +245,8 @@ export const en = {
 
   // ── Model Quick Switch ──
   modelSwitch: {
-    code: "CODE",
-    review: "REVIEW",
+    code: "Default model",
+    harness: "ROUTING",
     alwaysOn: "(always on)",
     switchTo: (mode: string) => `Switch to ${mode}`,
     enable: (mode: string) => `Enable ${mode}`,

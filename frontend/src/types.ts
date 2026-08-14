@@ -166,7 +166,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, {
 
 // ── Model Library ─────────────────────────────────────
 
-export type AgentMode = "code" | "review" | "harness";
+export type AgentMode = "code" | "harness";
 
 export interface RegisteredModel {
   id: string;                  // unique internal ID
@@ -243,7 +243,6 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
 
 export interface ProjectModeConfig {
   code: ModeConfig;
-  review: ModeConfig & { enabled: boolean; maxReviews: number; fixWithInstructions: boolean };
   harness: ModeConfig & { enabled: boolean; config: HarnessConfig; routing?: RoutingConfig };
 }
 

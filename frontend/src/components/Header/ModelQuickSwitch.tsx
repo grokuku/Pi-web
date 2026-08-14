@@ -7,9 +7,8 @@ import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
-  code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "CODE",   color: "text-hacker-accent",      activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
-  review: { icon: "📋", label: "REVIEW", color: "text-hacker-warn",       activeBg: "bg-hacker-warn/20",    activeBorder: "border-hacker-warn" },
-  harness: { icon: "🏭", label: "HARNESS", color: "text-hacker-accent",    activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
+  code:   { icon: <PiLogo className="w-3.5 h-3.5 inline" />, label: "DEFAULT",  color: "text-hacker-accent",   activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
+  harness: { icon: "🏭", label: "ROUTING", color: "text-hacker-accent", activeBg: "bg-hacker-accent/20", activeBorder: "border-hacker-accent" },
 };
 
 interface Props {
@@ -109,7 +108,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
   };
 
-  const handleToggleMode = async (e: React.MouseEvent, mode: "review" | "harness") => {
+  const handleToggleMode = async (e: React.MouseEvent, mode: "harness") => {
     e.stopPropagation();
     if (!activeProjectId) return;
     const modeCfg = (pm as any)[mode] as { enabled: boolean };
@@ -135,18 +134,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     } catch (e) { console.error("[ModelQuickSwitch] Failed to toggle mode:", e); }
   };
 
-  const handleMaxReviews = async (maxReviews: number) => {
-    if (!activeProjectId) return;
-    try {
-      await fetch(`/api/model-library/projects/${activeProjectId}/mode`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "review", maxReviews }),
-      });
-      await loadLibrary();
-    } catch (e) { console.error("[ModelQuickSwitch] Failed to set max reviews:", e); }
-  };
-
   const handleChipClick = (mode: AgentMode) => {
     if (openMode === mode) { setOpenMode(null); return; }
     setOpenMode(mode);
@@ -165,7 +152,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     return name.slice(0, 12) + "…";
   };
 
-  const modes: AgentMode[] = ["code", "review", "harness"];
+  const modes: AgentMode[] = ["code", "harness"];
 
   return (
     <>
@@ -180,12 +167,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
         const isDropdownOpen = openMode === mode;
 
         // Visual states
-        const isReviewActive = pm.review.enabled && (activeMode === "review");
         const isHarnessActive = pm.harness.enabled && (activeMode === "harness");
-        const isOverridden = !isCode && (
-          (isReviewActive && mode !== "review") ||
-          (isHarnessActive && mode !== "harness")
-        );
+        const isOverridden = !isCode && (isHarnessActive && mode !== "harness");
         // Seul le mode actif doit être visuellement allumé — pas juste "enabled"
         const isVisuallyActive = isActive;
 
@@ -207,10 +190,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               {/* ON/OFF toggle zone (left part of button) */}
               {!isCode && (
                 <div
-                  onClick={(e) => handleToggleMode(e, mode as "review" | "harness")}
+                  onClick={(e) => handleToggleMode(e, mode as "harness")}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "review" | "harness"); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "harness"); } }}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -231,7 +214,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 }`}>
                   {t('modelSwitch.' + mode)}
                 </span>
-                {isVisuallyActive && (
+                {isVisuallyActive && mode === "code" && (
                   <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
@@ -248,8 +231,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </span>
                 </div>
 
-                {/* Model list — always shown */}
-                {library && library.models.length > 0 ? (
+                {/* Modèle : uniquement en mode code. En ROUTING, le modèle est défini par le routage. */}
+                {mode === "harness" ? (
+                  <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic border-b border-hacker-border/30">
+                    Modèle défini par le routage (configurable ci-dessous)
+                  </div>
+                ) : library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
                     {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
@@ -298,22 +285,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </button>
                 )}
 
-                {/* Max reviews (REVIEW only, always show if enabled) */}
-                {mode === "review" && isEnabled && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 border-t border-hacker-border/30">
-                    <span className="text-[11px] text-hacker-text-dim">🔄 MAX REVIEWS</span>
-                    <select
-                      value={(pm.review as any).maxReviews ?? 1}
-                      onChange={(e) => handleMaxReviews(Number(e.target.value))}
-                      className="select-hacker text-[10px] py-0 px-1 max-w-[48px]"
-                    >
-                      <option value={0}>OFF</option>
-                      <option value={1}>1</option>
-                      <option value={2}>2</option>
-                      <option value={3}>3</option>
-                    </select>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -399,7 +370,6 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 function defaultProjectMode(): ProjectModeConfig {
   return {
     code: { modelId: null },
-    review: { modelId: null, enabled: false, maxReviews: 1, fixWithInstructions: true },
     harness: { modelId: null, enabled: false,
       config: { agents: [], synthesize: true } },
   };

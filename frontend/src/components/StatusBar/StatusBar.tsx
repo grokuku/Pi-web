@@ -10,7 +10,6 @@ interface Props {
   session: any;
   connected: boolean;
   activeMode?: string;
-  autoReviewState?: { inProgress: boolean; cycle: number; maxReviews: number; phase?: string } | null;
   onOpenUsage?: () => void;
 }
 
@@ -22,7 +21,6 @@ export function StatusBar({
   session,
   connected,
   activeMode = "code",
-  autoReviewState,
   onOpenUsage,
 }: Props) {
   const { t } = useTranslation();
@@ -70,18 +68,8 @@ export function StatusBar({
       {/* Active mode */}
       {activeMode && activeMode !== "code" && (
         <>
-          <span className={activeMode === "review" ? "text-hacker-warn" : "text-hacker-accent"}>
-            {activeMode === "review" ? "📋" : <PiLogo className="w-3 h-3 inline" />} {activeMode.toUpperCase()}
-          </span>
-          <span className="text-hacker-border-bright">│</span>
-        </>
-      )}
-
-      {/* Auto-review indicator */}
-      {autoReviewState?.inProgress && (
-        <>
-          <span className="text-hacker-warn animate-pulse">
-            🔄 {autoReviewState.phase === "reviewing" ? t('autoReview.inProgress') : t('autoReview.fix')} ({autoReviewState.cycle}/{autoReviewState.maxReviews})
+          <span className="text-hacker-accent">
+            <PiLogo className="w-3 h-3 inline" /> {activeMode.toUpperCase()}
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

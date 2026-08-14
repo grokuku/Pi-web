@@ -181,7 +181,6 @@ function App() {
   const [showGraph3D, setShowGraph3D] = useState(false);
   const [showCbmStats, setShowCbmStats] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
-  const [autoReviewState, setAutoReviewState] = useState<{inProgress: boolean; cycle: number; maxReviews: number; phase?: string} | null>(null);
 
   // ── Layout config (persisted) ──
   const [layoutCfg, setLayoutCfg] = useState(() => {
@@ -460,17 +459,6 @@ function App() {
           }
           // Reload model library when mode changes (enabled state may have changed)
           setModelChangeVersion(v => v + 1);
-          break;
-        }
-        case "auto_review_status": {
-          if (projectId === activeProject?.id) {
-            setAutoReviewState({
-              inProgress: evt.phase !== "done",
-              cycle: evt.cycle,
-              maxReviews: evt.maxReviews,
-              phase: evt.phase,
-            });
-          }
           break;
         }
         case "turn_end": {
@@ -804,7 +792,7 @@ function App() {
 
         <div className="flex-1" />
 
-        {/* Mode chips — CODE / REVIEW / HARNESS */}
+        {/* Mode chips — Modèle par défaut / ROUTING */}
         <ModelQuickSwitch
           activeMode={activeMode}
           activeProjectId={activeProject?.id}
@@ -950,7 +938,6 @@ function App() {
                 session={session}
                 connected={connected}
                 activeMode={activeMode}
-                autoReviewState={autoReviewState}
                 onOpenUsage={() => setShowUsageStats(true)}
               />
             </>

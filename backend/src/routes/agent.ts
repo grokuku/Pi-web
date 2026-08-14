@@ -392,13 +392,6 @@ router.get("/projects/:id/mode", (req: Request, res: Response) => {
       activeMode,
       modes: {
         code: { modelId: pm.code.modelId, ...(modelInfo(pm.code.modelId) || {}) },
-        review: {
-          modelId: pm.review.modelId,
-          enabled: pm.review.enabled,
-          maxReviews: pm.review.maxReviews,
-          fixWithInstructions: pm.review.fixWithInstructions ?? true,
-          ...(modelInfo(pm.review.modelId) || {}),
-        },
       },
     });
   } catch (e: any) {
@@ -410,8 +403,8 @@ router.put("/projects/:id/mode", async (req: Request, res: Response) => {
   try {
     const { mode, modelId } = req.body;
     if (!mode) return res.status(400).json({ error: "mode is required" });
-    if (!["code", "review"].includes(mode)) {
-      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, review` });
+    if (!["code", "harness"].includes(mode)) {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Valid: code, harness` });
     }
 
     const library = loadModelLibrary();
