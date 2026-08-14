@@ -14,11 +14,9 @@ import {
   setProjectModeEnabled,
   getDefaultHarnessAgents,
   setProjectModeHarnessConfig,
-  getProjectRoutingConfig,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
-import { extractSignals, isRoutingEnabled, llmClassifier, pickModel, resolveRoute } from "./routing.js";
-import type { Route, RoutingFunction } from "./routing-types.js";
+import type { Route } from "./routing-types.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
@@ -486,33 +484,6 @@ export function getCurrentSession(): PiSessionState | undefined {
   return undefined;
 }
 
-/**
- * Assemble les signaux de routage disponibles sans I/O lourde (R3).
- * - toolErrorRate : ratio d'erreurs sur les tool calls du projet suivis en mémoire.
- * - contextUsage : usage du contexte courant de la session (0..1).
- * - changedFiles/diffSize : laissés à 0 pour l'instant (branchement git volontairement
- *   différé pour ne pas ajouter d'I/O avant chaque prompt).
- */
-function buildRoutingSignals(projectId: string) {
-  let toolCalls = 0;
-  let toolErrors = 0;
-  for (const tc of activeToolCalls.values()) {
-    if (tc.projectId !== projectId) continue;
-    toolCalls++;
-    if (tc.isError) toolErrors++;
-  }
-
-  const state = sessionsByProject.get(projectId);
-  const contextUsage = Number((state?.session as any)?.getContextUsage?.() ?? 0) || 0;
-
-  return {
-    toolErrorRate: toolCalls > 0 ? toolErrors / toolCalls : 0,
-    contextUsage,
-    changedFiles: 0,
-    diffSize: 0,
-  };
-}
-
 export async function sendPrompt(
   message: string,
   projectId: string,
@@ -774,44 +745,6 @@ export async function sendPrompt(
     }
   }
 
-  // ── Routage par complexité/signaux (R3) ──
-  // Uniquement en mode code : le mode review manuel et le mode harness gardent
-  // leur configuration dédiée. Le routage ajuste modèle/thinking/outils AVANT
-  // l'appel au LLM, sans toucher aux branches streaming/steer/harness/timeouts.
-  // Le flag global isRoutingEnabled() peut être complété par le flag projet
-  // `routingConfig.enabled` (switch « routage actif »).
-  if (state.activeMode === "code") {
-    const library = loadModelLibrary();
-    const routingConfig = getProjectRoutingConfig(library, projectId);
-
-    if (isRoutingEnabled() && routingConfig.enabled) {
-      try {
-        const signals = extractSignals(buildRoutingSignals(projectId));
-        let llmRoute: Route | null = null;
-        if (routingConfig.classifierModelId) {
-          llmRoute = await classifyRoute(message, routingConfig.classifierModelId);
-        }
-        const route = resolveRoute(message, routingConfig, signals, llmRoute);
-        state.lastRoute = route;
-        console.log(
-          `[routing] ${route.function}/${route.category} risk=${route.riskScore} conf=${route.confidence} — ${route.reason}`,
-        );
-        await applyRouteToSession(route, projectId);
-      } catch (e: any) {
-        console.warn("[routing] Failed to apply route:", e?.message || e);
-      }
-    } else {
-      // Routage désactivé (globalement ou pour ce projet) : comportement legacy.
-      // On réapplique le mode code pour restaurer modèle/thinking/outils après
-      // un éventuel overlay de routage précédent.
-      try {
-        await applyModeToSession(state.activeMode || "code", projectId);
-      } catch (e: any) {
-        console.warn("[routing] Failed to apply legacy mode:", e?.message || e);
-      }
-    }
-  }
-
   if (isSessionStreaming(projectId)) {
     // Mode HARNESS (v3) : l'orchestrator est la session principale et peut être
     // en train de déléguer à une fonction de routage (tool delegate).
@@ -873,40 +806,6 @@ export async function sendPrompt(
       await state.session.prompt(message, options);
     }
     console.log("[prompt] session.prompt() returned!");
-  }
-}
-
-const CLASSIFIER_TIMEOUT_MS = 2500;
-
-/**
- * Classifie la demande via le classifieur LLM (non bloquant).
- * Timeout court (~2,5 s) : en cas d'échec/timeout/runtime absent, retourne null
- * pour que l'appelant retombe sur l'heuristique sans bloquer le flux.
- */
-async function classifyRoute(
-  message: string,
-  classifierModelId: string | null | undefined,
-): Promise<Route | null> {
-  if (!classifierModelId) return null;
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const runtime = sharedModelRuntime;
-    if (!runtime) return null;
-
-    const timeoutPromise = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), CLASSIFIER_TIMEOUT_MS);
-    });
-
-    return await Promise.race([
-      llmClassifier(message, runtime, classifierModelId),
-      timeoutPromise,
-    ]);
-  } catch (error: any) {
-    console.warn("[routing] classifyRoute failed:", error?.message || error);
-    return null;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1262,12 +1161,6 @@ export function getSessionMessages(projectId: string): any[] {
 
 // ── Mode Management ───────────────────────────────────
 
-const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
-// Outils de planification/exploration (réutilisés plus tard pour une fonction de routage).
-const PLAN_TOOLS = ["read", "grep", "find", "ls"];
-// For review mode: bash + read + grep for inspecting changed files
-// (no find/ls to prevent full-project exploration — reviewer should focus on diff)
-const REVIEW_TOOLS = ["read", "bash", "grep"];
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 // Firecrawl tools removed — librarian_search replaces them.
 const FIRECRAWL_TOOLS: string[] = [];
@@ -1347,7 +1240,6 @@ function stripDefaultIdentity(prompt: string): { identity: string; rest: string 
 /** Identity overrides for each mode — replaces the default "expert coding assistant" paragraph */
 const MODE_IDENTITIES: Record<string, string> = {
   code: "",  // Keep default identity for code mode
-  review: "You are a senior code reviewer. Your job is to READ code, analyze it, and provide detailed feedback. You do NOT make changes.",
   harness: "Tu es le chef de projet de Pi-Web. Ton rôle est d'orchestrer les fonctions de routage et d'être l'interface entre l'utilisateur et l'équipe.",
 };
 
@@ -1374,38 +1266,6 @@ When the project has been indexed by the knowledge graph (cbm_* tools are visibl
 
 These are 100x more token-efficient than file-by-file exploration. Use them when possible.
 grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
-  review: `You are in REVIEW mode — a focused code review of **recently changed files only**.
-
-## Core Rules
-- You can ONLY use read-only tools: read, bash (read-only commands), grep
-- You CANNOT use: edit, write, find, ls (file modifications and project-wide exploration are disabled)
-- Bash is restricted to read-only commands: cat, head, tail, wc, grep, git status, git log, git diff, git show, pwd, echo
-- NEVER execute any command that modifies the filesystem or state
-- NEVER browse the entire project — focus ONLY on the files listed in the review context
-
-## Review Focus
-1. **Correctness** — Logic errors, off-by-one, null handling, race conditions, missing error handling
-2. **Security** — Injection risks, exposed secrets, insecure defaults, missing input validation
-3. **Performance** — Unnecessary allocations, N+1 queries, memory leaks, blocking operations
-4. **Readability** — Naming, code organization, dead code, overly complex logic
-5. **Maintainability** — Hardcoded values, tight coupling, missing types, undocumented behavior
-
-## Review Format
-For each finding:
-- **[HIGH/MEDIUM/LOW]** Severity level
-- **File:Line** Location
-- **Description** What the issue is
-- **Suggestion** How to fix it (specific code, not vague advice)
-
-## Important
-- Review ONLY the changed files provided in the context — do NOT explore the rest of the project
-- Be specific — cite exact file paths and line numbers
-- Prioritize findings by severity (HIGH first)
-- If code looks good, say so — don't fabricate issues
-- If you lack context to judge something, state it explicitly
-
-## Knowledge Graph
-When available (cbm_* tools visible), use cbm_diff to analyze git diff impact (affected symbols, blast radius). Use cbm_trace to find callers of changed functions. Use cbm_search for targeted lookups instead of grep+read chains.`,
   harness: `## Mode HARNESS — Chef de Projet
 
 Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécution aux fonctions de routage.
@@ -1456,44 +1316,9 @@ La fonction ne voit QUE ce que tu lui passes — sois précis et complet.
 - Si tu as besoin d'une autre fonction -> délègue à nouveau`,
 };
 
-// Instructions/identités spécifiques aux fonctions de routage (R3).
-// On réutilise autant que possible les blocs de mode existants pour rester cohérent.
-const FUNCTION_IDENTITIES: Record<RoutingFunction, string> = {
-  execute: MODE_IDENTITIES.code,
-  integrate: MODE_IDENTITIES.code,
-  review: MODE_IDENTITIES.review,
-  planning:
-    "You are a planning-focused coding assistant. Your job is to explore, analyze and produce a clear implementation plan. You do NOT modify code.",
-};
-
-const FUNCTION_INSTRUCTIONS: Record<RoutingFunction, string> = {
-  execute: MODE_INSTRUCTIONS.code,
-  integrate: MODE_INSTRUCTIONS.code,
-  review: MODE_INSTRUCTIONS.review,
-  planning: `You are in PLANNING mode — read-only exploration and planning.
-
-## Core Rules
-- You can ONLY use read-only tools: read, grep, find, ls (and cbm_* graph tools when available)
-- You CANNOT use: edit, write, or bash commands that modify the filesystem
-- Do NOT modify any file
-- Focus on understanding the codebase and producing a clear, actionable plan
-
-## Planning Focus
-1. Identify affected files, functions and dependencies
-2. Break the work into atomic, testable steps
-3. Flag risks, edge cases, and data/schema impacts
-4. Keep the plan concise and concrete (files, functions, approach)
-
-## Output Format
-- **Plan** : liste d'étapes ordonnées, avec fichiers concernés
-- **Risques** : points de vigilance
-- **Questions** : clarifications nécessaires avant exécution`,
-};
-
 // Default thinking levels per mode
 const DEFAULT_THINKING: Record<string, string> = {
   code: "medium",
-  review: "medium",
   harness: "medium",
 };
 
@@ -1675,76 +1500,6 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   state.activeMode = mode;
 
   emitModeChange(projectId, mode, false);
-  emitSessionUpdate(projectId);
-}
-
-/**
- * Applique une décision de routage à la session active (R3).
- *
- * - Résout le modèle cible via pickModel (catégorie → config projet → défaut).
- * - Ajuste le thinking level (avec le même chemin que applyModeToSession).
- * - Sélectionne les outils selon route.function.
- * - Injecte les instructions/identités de fonction.
- *
- * Ne modifie PAS state.activeMode : le routage est un overlay dynamique, pas un
- * changement de mode persistant. Cela préserve le gate d'auto-review (qui exige
- * activeMode === "code") et le cycle de vie des modes manuels.
- */
-export async function applyRouteToSession(route: Route, projectId: string): Promise<void> {
-  const state = sessionsByProject.get(projectId);
-  if (!state?.session) throw new Error("No active Pi session");
-
-  const library = loadModelLibrary();
-  const session = state.session;
-  const routingConfig = getProjectRoutingConfig(library, projectId);
-  const model = pickModel(route, routingConfig, library);
-
-  // ── Apply model + thinking level ──
-  await applyModelAndThinking(model, projectId, DEFAULT_THINKING.code || "medium");
-
-  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
-  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
-
-  // ── Apply tool filtering according to route.function ──
-  const fn = route.function;
-  if (fn === "planning") {
-    // Exploration/planification : lecture seule + outils cbm_* (via extension tools).
-    (session as any).setActiveToolsByName(toolsForMode(session, PLAN_TOOLS, HARNESS_EXCLUDE));
-  } else if (fn === "review") {
-    (session as any).setActiveToolsByName(toolsForMode(session, REVIEW_TOOLS, HARNESS_EXCLUDE));
-  } else {
-    // execute / integrate : outils de code complets, hors orchestration (BUG-71).
-    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
-  }
-
-  // ── Inject function instructions into system prompt ──
-  const instructions = FUNCTION_INSTRUCTIONS[fn] || MODE_INSTRUCTIONS.code;
-  const identityOverride = FUNCTION_IDENTITIES[fn] || "";
-
-  // Clean any previously injected mode blocks and identity overrides
-  const rawPrompt = (session as any)._baseSystemPrompt || "";
-  let prompt = cleanPromptForModeChange(rawPrompt);
-
-  // Pour les fonctions avec identité spécifique, remplace l'identité par défaut.
-  if (identityOverride) {
-    const { rest } = stripDefaultIdentity(prompt);
-    prompt = rest.trim() + "\n";
-    prompt += `\n${MODE_IDENTITY_MARKER}\n${identityOverride}\n${MODE_IDENTITY_MARKER.replace("<!-- PI", "<!-- /PI")}\n\n`;
-  }
-
-  // Append function-specific instructions with markers
-  if (instructions.trim()) {
-    prompt += `\n${MODE_BLOCK_MARKER_START}${fn.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Function: ${fn.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${fn.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
-  }
-
-  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
-  if (projectContextBlock) {
-    prompt += `\n\n${projectContextBlock}`;
-  }
-
-  (session as any)._baseSystemPrompt = prompt;
-  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-
   emitSessionUpdate(projectId);
 }
 

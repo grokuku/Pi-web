@@ -152,35 +152,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
           utiliser le modèle par défaut du projet.
         </p>
 
-        {/* Interrupteur principal : active/désactive le routage */}
-        <div className="border border-hacker-border bg-hacker-surface/30 rounded p-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold text-hacker-text-bright">🔀 Routage actif</span>
-              <p className="text-[10px] text-hacker-text-dim mt-0.5">
-                Désactive pour revenir au mode basic, sans triage automatique des tâches.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setRouting(prev => ({ ...prev, enabled: !prev.enabled }))}
-              aria-pressed={routing.enabled}
-              className={`text-[10px] px-2 py-1 rounded border transition-colors shrink-0 ml-3 ${
-                routing.enabled
-                  ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-                  : "border-hacker-border text-hacker-text-dim"
-              }`}
-            >
-              {routing.enabled ? "● ON" : "○ OFF"}
-            </button>
-          </div>
-        </div>
-
-        {/* Configuration grisée quand le routage est inactif (les valeurs sont conservées) */}
-        <div
-          className={routing.enabled ? "" : "opacity-50 pointer-events-none select-none"}
-          aria-disabled={!routing.enabled}
-        >
+        <div>
         {/* Catégories */}
         <div className="space-y-2">
           {CATEGORIES.map(cat => (
@@ -199,7 +171,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
                 models={models}
                 providers={providers}
                 noneLabel="— Défaut (modèle par défaut) —"
-                disabled={!routing.enabled}
+                disabled={false}
               />
               <p className="text-[10px] text-hacker-text-dim mt-1.5 leading-relaxed">{cat.hint}</p>
             </div>
@@ -222,7 +194,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
               step={0.05}
               value={routing.reviewRiskThreshold}
               onChange={e => setRouting(prev => ({ ...prev, reviewRiskThreshold: Number(e.target.value) }))}
-              disabled={!routing.enabled}
+              disabled={false}
               className="w-full accent-hacker-accent"
             />
             <div className="flex justify-between text-[9px] text-hacker-text-dim">
@@ -248,7 +220,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
               step={0.05}
               value={routing.confidenceThreshold}
               onChange={e => setRouting(prev => ({ ...prev, confidenceThreshold: Number(e.target.value) }))}
-              disabled={!routing.enabled}
+              disabled={false}
               className="w-full accent-hacker-accent"
             />
             <div className="flex justify-between text-[9px] text-hacker-text-dim">
@@ -272,7 +244,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
             models={models}
             providers={providers}
             noneLabel="— Aucun (triage heuristique) —"
-            disabled={!routing.enabled}
+            disabled={false}
           />
           <p className="text-[10px] text-hacker-text-dim mt-1.5">
             Modèle cheap optionnel pour le triage LLM. Laisse « aucun » pour utiliser le tri

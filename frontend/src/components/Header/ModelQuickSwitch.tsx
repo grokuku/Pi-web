@@ -214,7 +214,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 }`}>
                   {t('modelSwitch.' + mode)}
                 </span>
-                {isVisuallyActive && mode === "code" && (
+                {isVisuallyActive && (
                   <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
@@ -234,7 +234,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 {/* Modèle : uniquement en mode code. En ROUTING, le modèle est défini par le routage. */}
                 {mode === "harness" ? (
                   <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic border-b border-hacker-border/30">
-                    Modèle défini par le routage (configurable ci-dessous)
+                    Orchestrateur : {getShortModelName(model)} — les fonctions utilisent les modèles du routage (⚙ ci-dessous)
                   </div>
                 ) : library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
