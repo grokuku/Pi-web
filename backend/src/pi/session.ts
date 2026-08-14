@@ -17,7 +17,7 @@ import {
   getProjectRoutingConfig,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
-import { extractSignals, isRoutingEnabled, pickModel, resolveRoute } from "./routing.js";
+import { extractSignals, isRoutingEnabled, llmClassifier, pickModel, resolveRoute } from "./routing.js";
 import type { Route, RoutingFunction } from "./routing-types.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
@@ -810,7 +810,11 @@ export async function sendPrompt(
     if (isRoutingEnabled() && routingConfig.enabled) {
       try {
         const signals = extractSignals(buildRoutingSignals(projectId));
-        const route = resolveRoute(message, routingConfig, signals);
+        let llmRoute: Route | null = null;
+        if (routingConfig.classifierModelId) {
+          llmRoute = await classifyRoute(message, routingConfig.classifierModelId);
+        }
+        const route = resolveRoute(message, routingConfig, signals, llmRoute);
         state.lastRoute = route;
         console.log(
           `[routing] ${route.function}/${route.category} risk=${route.riskScore} conf=${route.confidence} — ${route.reason}`,
@@ -904,6 +908,40 @@ export async function sendPrompt(
   // so this only runs after a real AI prompt
   if (!trimmed.startsWith("/")) {
     triggerAutoReviewIfNeeded(projectId);
+  }
+}
+
+const CLASSIFIER_TIMEOUT_MS = 2500;
+
+/**
+ * Classifie la demande via le classifieur LLM (non bloquant).
+ * Timeout court (~2,5 s) : en cas d'échec/timeout/runtime absent, retourne null
+ * pour que l'appelant retombe sur l'heuristique sans bloquer le flux.
+ */
+async function classifyRoute(
+  message: string,
+  classifierModelId: string | null | undefined,
+): Promise<Route | null> {
+  if (!classifierModelId) return null;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const runtime = sharedModelRuntime;
+    if (!runtime) return null;
+
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), CLASSIFIER_TIMEOUT_MS);
+    });
+
+    return await Promise.race([
+      llmClassifier(message, runtime, classifierModelId),
+      timeoutPromise,
+    ]);
+  } catch (error: any) {
+    console.warn("[routing] classifyRoute failed:", error?.message || error);
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

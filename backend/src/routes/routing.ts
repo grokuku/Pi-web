@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { loadModelLibrary, getProjectRoutingConfig } from "../pi/model-library.js";
-import { extractSignals, resolveRoute, pickModel } from "../pi/routing.js";
-import type { SignalsInput } from "../pi/routing-types.js";
+import { extractSignals, resolveRoute, pickModel, llmClassifier, isRoutingEnabled } from "../pi/routing.js";
+import type { Route, SignalsInput } from "../pi/routing-types.js";
 
 const router = Router();
 
@@ -74,10 +74,32 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
     const library = loadModelLibrary();
     const config = getProjectRoutingConfig(library, projectId);
     const signals = extractSignals(buildSignalsInput(req));
-    const route = resolveRoute(request, config, signals);
+
+    let llmRoute: Route | null = null;
+    let llmClassifierError: string | null = null;
+    if (config.classifierModelId) {
+      try {
+        const { getModelRuntime } = await import("../pi/session.js");
+        const runtime = getModelRuntime();
+        llmRoute = await llmClassifier(request, runtime, config.classifierModelId);
+      } catch (e: any) {
+        llmClassifierError = e?.message || String(e);
+      }
+    }
+
+    const route = resolveRoute(request, config, signals, llmRoute);
     const model = pickModel(route, config, library);
 
-    res.json({ route, modelId: model?.id ?? null });
+    res.json({
+      route,
+      modelId: model?.id ?? null,
+      reason: route.reason,
+      reviewRiskThreshold: config.reviewRiskThreshold,
+      routingEnabled: isRoutingEnabled(),
+      configEnabled: config.enabled,
+      llmClassifierUsed: llmRoute !== null,
+      llmClassifierError,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

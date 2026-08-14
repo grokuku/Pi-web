@@ -8,6 +8,7 @@
  */
 
 import {
+  COMPLEXITY_KEYWORDS,
   DEFAULT_ROUTING_CONFIG,
   functionForCategory,
   RISK_KEYWORDS,
@@ -52,12 +53,66 @@ export function extractSignals(input: SignalsInput = {}): RoutingSignals {
   };
 }
 
-/** Détecte les mots-clés de risque dans la demande (insensible à la casse). */
-function detectRiskKeywords(request: string): number {
-  const lower = request.toLowerCase();
-  return RISK_KEYWORDS.reduce((count, keyword) => {
-    return count + (lower.includes(keyword) ? 1 : 0);
+/** Normalise un texte pour la recherche de mots-clés : minuscules + sans accents. */
+function normalizeForKeywordMatch(text: string): string {
+  return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+/** Échappe les caractères spéciaux d'une expression régulière. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Compte les mots-clés présents (frontières de mots, insensible casse/accents). */
+function countKeywordHits(request: string, keywords: string[]): number {
+  const normalizedText = normalizeForKeywordMatch(request);
+  return keywords.reduce((count, keyword) => {
+    const normalizedKeyword = normalizeForKeywordMatch(keyword);
+    if (!normalizedKeyword) return count;
+    const regex = new RegExp(`\\b${escapeRegExp(normalizedKeyword)}\\b`, "i");
+    return count + (regex.test(normalizedText) ? 1 : 0);
   }, 0);
+}
+
+/** Détecte les mots-clés de risque dans la demande. */
+function detectRiskKeywords(request: string): number {
+  return countKeywordHits(request, RISK_KEYWORDS);
+}
+
+/** Détecte les mots-clés de complexité sémantique dans la demande. */
+function detectComplexityKeywords(request: string): number {
+  return countKeywordHits(request, COMPLEXITY_KEYWORDS);
+}
+
+/** Verbes d'action triviaux (tâche courte et localisée). */
+const TRIVIAL_ACTION_VERBS: string[] = [
+  "corrige",
+  "corriger",
+  "fix",
+  "bug",
+  "ajoute",
+  "ajouter",
+  "modifie",
+  "modifier",
+  "change",
+  "changer",
+  "crée",
+  "implémente",
+  "supprime",
+  "supprimer",
+  "renomme",
+  "renommer",
+];
+
+/** Détecte la présence d'un verbe d'action trivial. */
+function detectTrivialActionVerbs(request: string): boolean {
+  return countKeywordHits(request, TRIVIAL_ACTION_VERBS) > 0;
+}
+
+/** Détecte la mention de « fichier » ou d'un nom de fichier avec extension. */
+function mentionsFile(request: string): boolean {
+  if (/\bfichiers?\b/.test(normalizeForKeywordMatch(request))) return true;
+  return /(?:^|[\s/\\])[a-z0-9_.-]+\.[a-z]{1,6}\b/i.test(request);
 }
 
 /**
@@ -78,26 +133,50 @@ function computeRiskScore(request: string, signals: RoutingSignals): number {
   const base = 0.1;
   const riskKeywordContribution = riskKeywordFlag ? 0.35 + Math.min(0.1, keywordHits * 0.03) : 0;
   const spinningContribution = signals.spinning ? 0.15 : 0;
+  const contextContribution = Math.min(0.1, signals.contextUsage * 0.15);
+  const productionContribution = Math.min(0.1, signals.recentProductionIntensity * 0.2);
 
-  return clamp(base + riskKeywordContribution + diffContribution + toolErrorContribution + explorationContribution + spinningContribution);
+  return clamp(
+    base +
+      riskKeywordContribution +
+      diffContribution +
+      toolErrorContribution +
+      explorationContribution +
+      spinningContribution +
+      contextContribution +
+      productionContribution,
+  );
 }
 
 /** Classifieur heuristique gratuit (aucun appel LLM). */
-export function heuristicClassifier(request: string, signals: RoutingSignals): Route {
+export function heuristicClassifier(
+  request: string,
+  signals: RoutingSignals,
+  reviewRiskThreshold: number = DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
+): Route {
   const trimmed = request.trim();
   const requestLength = trimmed.length;
+  const riskKeywordHits = detectRiskKeywords(request);
+  const complexityHits = detectComplexityKeywords(request);
+  const hasRiskKeyword = signals.riskKeywords || riskKeywordHits > 0;
+  const hasActionVerb = detectTrivialActionVerbs(request);
+  const citesFile = mentionsFile(request);
   // Arrondi à 4 décimales pour éviter le bruit flottant (ex. 0.839999999).
   const riskScore = Math.round(computeRiskScore(request, signals) * 10000) / 10000;
 
   let category: TaskCategory;
   let confidence: number;
 
-  if (riskScore >= DEFAULT_ROUTING_CONFIG.reviewRiskThreshold) {
+  if (riskScore >= reviewRiskThreshold) {
     category = "review";
     confidence = 0.7;
   } else if (
     requestLength <= 80 &&
     riskScore < 0.35 &&
+    complexityHits === 0 &&
+    !hasActionVerb &&
+    !citesFile &&
+    !hasRiskKeyword &&
     !signals.spinning &&
     signals.exploringRatio < 0.4 &&
     signals.changedFiles <= 1 &&
@@ -106,6 +185,7 @@ export function heuristicClassifier(request: string, signals: RoutingSignals): R
     category = "trivial";
     confidence = 0.7;
   } else if (
+    complexityHits > 0 ||
     riskScore >= 0.4 ||
     signals.spinning ||
     signals.exploringRatio >= 0.5 ||
@@ -127,7 +207,7 @@ export function heuristicClassifier(request: string, signals: RoutingSignals): R
     modelId: null,
     confidence,
     riskScore,
-    reason: buildHeuristicReason(category, riskScore, requestLength, signals),
+    reason: buildHeuristicReason(category, riskScore, reviewRiskThreshold, requestLength, signals, complexityHits),
   };
 }
 
@@ -135,17 +215,23 @@ export function heuristicClassifier(request: string, signals: RoutingSignals): R
 function buildHeuristicReason(
   category: TaskCategory,
   riskScore: number,
+  reviewRiskThreshold: number,
   requestLength: number,
   signals: RoutingSignals,
+  complexityHits: number,
 ): string {
   const parts: string[] = [
     `heuristique: catégorie ${category}`,
     `riskScore=${riskScore.toFixed(2)}`,
+    `seuil=${reviewRiskThreshold.toFixed(2)}`,
     `longueur=${requestLength}`,
+    `complexityHits=${complexityHits}`,
     `toolErrorRate=${signals.toolErrorRate.toFixed(2)}`,
     `exploringRatio=${signals.exploringRatio.toFixed(2)}`,
     `changedFiles=${signals.changedFiles}`,
     `diffSize=${signals.diffSize}`,
+    `contextUsage=${signals.contextUsage.toFixed(2)}`,
+    `recentProductionIntensity=${signals.recentProductionIntensity.toFixed(2)}`,
   ];
   if (signals.spinning) parts.push("spinning=true");
   if (signals.riskKeywords) parts.push("riskKeywords=true");
@@ -280,7 +366,7 @@ export function resolveRoute(
       confidence: clamp(llmRoute.confidence),
     };
   } else {
-    route = heuristicClassifier(request, signals);
+    route = heuristicClassifier(request, signals, reviewRiskThreshold);
   }
 
   // Gate review : un risque élevé force une relecture à contexte séparé.
