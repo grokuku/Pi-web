@@ -61,6 +61,7 @@ import { getProject, getAllProjects } from "./projects/manager.js";
 import { isCwdAllowed, isPathAllowed } from "./utils/path-security.js";
 import { getAllowedOrigins, parseAllowedOrigins, isAllowedOrigin, isAllOriginsAllowed } from "./utils/origins.js";
 import { credentialStore } from "./projects/credential-store.js";
+import { cbmStdioCall } from "./pi/cbm-stdio.js";
 
 import os from "os";
 import { syncGitInfo } from "./projects/git.js";
@@ -148,6 +149,40 @@ async function cbmProxy(req: any, res: any) {
   // e.g. app.use("/rpc") makes req.url="/" but req.originalUrl="/rpc"
   const fullPath = req.originalUrl || req.url;
   const urlPath = fullPath.startsWith("/cbm-ui") ? fullPath.slice(7) : fullPath;
+
+  // ── POST /rpc → route through the stdio MCP client (FULL surface) ──
+  // The UI-mode HTTP /rpc on :9749 only allows list_projects + get_code_snippet;
+  // everything else (get_graph_schema, search_graph, query_graph, trace_path,
+  // tools/list, ...) returns 403 "UI RPC method is not allowed". stdio exposes
+  // the complete MCP surface, so we answer /rpc from here instead of forwarding.
+  // The response is the exact JSON-RPC envelope the SPA expects:
+  //   {jsonrpc:"2.0", id, result:{content:[...], structuredContent, isError}}
+  if (urlPath === "/rpc" && req.method === "POST") {
+    const body = req.body || {};
+    const method: unknown = body.method;
+    if (typeof method !== "string" || method === "") {
+      return res.status(400).json({
+        jsonrpc: "2.0",
+        id: typeof body.id === "number" ? body.id : null,
+        error: { code: -32600, message: "Invalid Request: missing 'method'" },
+      });
+    }
+    try {
+      const result = await cbmStdioCall(method, body.params, {
+        id: typeof body.id === "number" ? body.id : undefined,
+      });
+      res.status(200).json(result);
+    } catch (e: any) {
+      console.error("[cbm-proxy] stdio RPC failed:", method, e.message);
+      res.status(502).json({
+        jsonrpc: "2.0",
+        id: typeof body.id === "number" ? body.id : null,
+        error: { code: -32000, message: e.message || "codebase-memory-mcp stdio call failed" },
+      });
+    }
+    return;
+  }
+
   const cbmUrl = `http://127.0.0.1:9749${urlPath}`;
   try {
     const controller = new AbortController();
