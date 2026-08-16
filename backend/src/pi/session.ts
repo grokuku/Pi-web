@@ -11,9 +11,7 @@ import {
   getDefaultModel,
   getCommitModel,
   getModel,
-  setProjectModeEnabled,
-  getDefaultHarnessAgents,
-  setProjectModeHarnessConfig,
+  setProjectActiveMode,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route } from "./routing-types.js";
@@ -215,9 +213,9 @@ function startStreamingHeartbeat(projectId: string): void {
   const timer = setInterval(() => {
     const state = sessionsByProject.get(projectId);
     // Arrêter dès que le flag effectif de streaming passe à false. On utilise
-    // state.isStreaming (maintenu par agent_start/agent_settled, runHarness et
-    // l'auto-review) plutôt que session.isStreaming pour couvrir aussi le batch
-    // harness (sessions de fonctions dont la session principale n'est pas en streaming).
+    // state.isStreaming (maintenu par agent_start/agent_settled et l'auto-review)
+    // plutôt que session.isStreaming pour couvrir aussi le batch harness (sessions
+    // de fonctions dont la session principale n'est pas en streaming).
     if (!state?.isStreaming) {
       stopStreamingHeartbeat(projectId);
       return;
@@ -465,6 +463,20 @@ export async function createPiSession(
       pendingThinkingByProject.delete(projectId);
     }
 
+    // Applique le mode actif persisté sur disque (survit au redémarrage / upgrade
+    // du conteneur). La session doit déjà exister dans sessionsByProject pour que
+    // applyModeToSession puisse la retrouver. Si pm.activeMode === "code", on laisse
+    // le défaut (state.activeMode initialisé à "code") — aucune écriture nécessaire.
+    try {
+      const library = loadModelLibrary();
+      const pm = getProjectModeConfig(library, projectId);
+      if (pm.activeMode === "harness") {
+        await applyModeToSession("harness", projectId);
+      }
+    } catch (e: any) {
+      console.error(`[PiSession] Failed to apply persisted activeMode for ${projectId}:`, e?.message || e);
+    }
+
     console.log(`[PiSession] Session ready for project ${projectId}: ${session.sessionId}`);
     emitSessionUpdate(projectId);
     return newSession;
@@ -522,11 +534,10 @@ export async function sendPrompt(
 ): Promise<{ command?: string; result?: string } | void> {
   const state = sessionsByProject.get(projectId);
 
-  // ── Harness mode: no session needed, delegate to HarnessEngine ──
-  // NOTE: Le mode HARNESS est maintenant géré par l'extension harness-orchestrator.
+  // ── Harness mode ──
+  // Le mode HARNESS est géré par l'extension harness-orchestrator.
   // L'orchestrator reçoit les messages normalement via session.prompt() et
   // délègue l'exécution aux fonctions de routage via le tool delegate.
-  // L'ancien HarnessEngine (batch) reste accessible via la commande /harness.
 
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
@@ -628,7 +639,7 @@ export async function sendPrompt(
       case "/help": {
         return {
           command: "help",
-          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /harness   — Generate a brief from context and launch Harness\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
+          result: `Available commands:\n  /new       — Start a new session\n  /compact   — Compact conversation context\n  /reload    — Reload extensions, skills, and settings\n  /clear     — Clear screen (keep session)\n  /quit      — Return to home screen\n  /help      — Show this help`,
         };
       }
       case "/clear": {
@@ -650,77 +661,6 @@ export async function sendPrompt(
           }
         }
         return { command: "reload", result: "No active session to reload" };
-      }
-      case "/harness": {
-        // Tech lead mode : le modèle de la session principale résume le contexte,
-        // puis le brief est passé à l'architecte du Harness pour exécution.
-        const lib = loadModelLibrary();
-        const pm = getProjectModeConfig(lib, projectId);
-
-        // Vérifier que le mode Harness est configuré
-        let harnessConfig = pm.harness?.config;
-        if (!harnessConfig?.agents?.length) {
-          // Auto-configurer les agents par défaut
-          console.log("[harness] Aucun agent configuré — auto-configuration du pool par défaut");
-          const defaultAgents = getDefaultHarnessAgents();
-          setProjectModeHarnessConfig(projectId, { agents: defaultAgents, synthesize: true, agentTimeout: 300, maxTasks: 20 });
-          harnessConfig = { agents: defaultAgents, synthesize: true, agentTimeout: 300, maxTasks: 20 };
-          // Activer le mode
-          setProjectModeEnabled(projectId, "harness", true);
-        }
-
-        // Forcer le mode harness
-        state.activeMode = "harness";
-        emitModeChange(projectId, "harness", false);
-        emitSessionUpdate(projectId);
-
-        // Générer un brief via le modèle de la session principale
-        // (il a tout le contexte de la conversation)
-        try {
-          const summaryInstruction =
-            "Résume les besoins, décisions techniques et contraintes de cette conversation " +
-            "en un brief concis et opérationnel, prêt à être exécuté par une équipe de développement. " +
-            "Sois précis, technique, et inclus les fichiers/dossiers concernés si mentionnés.";
-
-          emitToSubscribers({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "\n\n**📋 Génération du brief par le modèle principal...**\n\n" },
-          } as any, projectId);
-
-          await withSessionTimeout(
-            state.session.prompt(summaryInstruction, {}),
-            state.session,
-            projectId,
-            "harness-brief",
-          );
-
-          // Extraire le dernier message assistant = le brief
-          const msgs: any[] = state.session.messages || [];
-          const lastAssistant = [...msgs].reverse().find((m: any) => m.role === "assistant");
-          const brief = lastAssistant?.content
-            ?.map((c: any) => c.text || "")
-            .join("")
-            .trim();
-
-          if (brief) {
-            console.log(`[harness] Brief généré (${brief.length} chars), lancement Harness...`);
-            runHarness(projectId, brief, harnessConfig, pm.harness?.modelId).catch(err => {
-              console.error("[harness] Execution error:", err.message);
-            });
-          } else {
-            console.warn("[harness] Brief vide, fallback sur le message brut");
-            runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
-              console.error("[harness] Execution error:", err.message);
-            });
-          }
-        } catch (e: any) {
-          console.error("[harness] Brief generation failed:", e.message);
-          runHarness(projectId, message, harnessConfig, pm.harness?.modelId).catch(err => {
-            console.error("[harness] Execution error:", err.message);
-          });
-        }
-
-        return { command: "harness", result: "" };
       }
       default: {
         // Unknown command — try extension commands via session.prompt()
@@ -868,62 +808,6 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
   }
   // Option A : pas de timeout global en mode code (cf. sendPrompt).
   await state.session.steer(message);
-}
-
-// ── Harness Engine ───────────────────────────────────
-
-/**
- * Lance un cycle Harness (multi-agent orchestré) et renvoie
- * le résultat synthétisé.
- */
-export async function runHarness(
-  projectId: string,
-  prompt: string,
-  config: any,
-  harnessModelId?: string | null,
-): Promise<string> {
-  const { HarnessEngine, setModelRegistry, setModelRuntime } = await import("./harness-engine.js");
-  // Initialiser le HarnessEngine avec le registry + runtime du session.ts
-  await ensureModelSystem();
-  setModelRegistry(sharedModelRegistry!);
-  setModelRuntime(sharedModelRuntime!);
-
-  const state = sessionsByProject.get(projectId);
-  if (state) {
-    state.activeMode = "harness";
-    state.isStreaming = true;
-    // BUG-72 : les fonctions du batch harness peuvent rester silencieux > 60s
-    // (thinking long) → heartbeat applicatif pour éviter les faux "stalled".
-    startStreamingHeartbeat(projectId);
-  }
-
-  // Collecter les messages de steering en attente
-  const steerMessages = state ? [...state.harnessSteerMessages] : [];
-  if (state) state.harnessSteerMessages = [];
-
-  // Collecter l'historique récent de la session principale pour donner du contexte à l'architecte
-  // (limité aux 20 derniers messages pour ne pas saturer le prompt)
-  let conversationHistory: string | undefined;
-  if (state?.session?.messages) {
-    const msgs = state.session.messages.slice(-20);
-    const lines = msgs
-      .filter((m: any) => m.role === "user" || m.role === "assistant")
-      .map((m: any) => {
-        const text = m.content?.map?.((c: any) => c.text || "").join("") || "";
-        return m.role === "user" ? `**Utilisateur :** ${text}` : `**Assistant :** ${text}`;
-      });
-    conversationHistory = lines.join("\n\n");
-  }
-
-  try {
-    const result = await HarnessEngine.run(projectId, prompt, config, steerMessages, conversationHistory, harnessModelId);
-    return result;
-  } finally {
-    if (state) {
-      state.isStreaming = false;
-      stopStreamingHeartbeat(projectId);
-    }
-  }
 }
 
 export async function abortPi(projectId?: string): Promise<void> {
@@ -1568,6 +1452,18 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Update state ──
   state.activeMode = mode;
 
+  // Persiste le mode actif sur disque (survit au redémarrage / reboot).
+  // On n'écrit que si la valeur persistée diffère, pour éviter des écritures
+  // inutiles (applyModeToSession est aussi appelé pour re-appliquer le mode courant).
+  try {
+    const persistedMode = getProjectModeConfig(library, projectId).activeMode || "code";
+    if (persistedMode !== mode) {
+      setProjectActiveMode(projectId, mode);
+    }
+  } catch (e: any) {
+    console.warn(`[mode] Failed to persist activeMode for ${projectId}:`, e?.message || e);
+  }
+
   // Bannière de mode proéminente (réinjectée aussi avant chaque prompt via le wrapper)
   reapplyModeBanner(session, projectId);
 
@@ -1645,6 +1541,17 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 
   state.activeMode = "code";
+
+  // Persiste le retour au mode code sur disque.
+  try {
+    const persistedMode = getProjectModeConfig(library, projectId).activeMode || "code";
+    if (persistedMode !== "code") {
+      setProjectActiveMode(projectId, "code");
+    }
+  } catch (e: any) {
+    console.warn(`[mode] Failed to persist activeMode for ${projectId}:`, e?.message || e);
+  }
+
   reapplyModeBanner(session, projectId);
   emitModeChange(projectId, "code", false);
   emitSessionUpdate(projectId);

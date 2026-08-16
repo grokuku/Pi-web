@@ -4,7 +4,7 @@
  *
  * IMPORTANT : ce fichier n'importe PAS session.ts (pour éviter les cycles).
  * Les signaux sont reçus sous forme de `SignalsInput` plat, assemblés par
- * l'appelant (sendPrompt/harness), puis normalisés via `extractSignals`.
+ * l'appelant (sendPrompt), puis normalisés via `extractSignals`.
  */
 
 import {

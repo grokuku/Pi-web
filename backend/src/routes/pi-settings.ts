@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { execSync, execFileSync } from "child_process";
 import path from "path";
 import os from "os";
-import { runHarness } from "../pi/session.js";
 
 const router = Router();
 
@@ -442,32 +441,6 @@ router.post("/toggle", (req: Request, res: Response) => {
     settings[type] = list;
     saveSettings(settings);
     res.json({ success: true, [type]: list });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Harness route ──
-
-router.post("/harness", async (req: Request, res: Response) => {
-  try {
-    const { projectId, prompt, config } = req.body;
-    if (!projectId || !prompt) {
-      return res.status(400).json({ error: "projectId and prompt are required" });
-    }
-    if (!config?.agents?.length) {
-      return res.status(400).json({ error: "Harness config must have at least one agent" });
-    }
-
-    console.log(`[harness] Starting for ${projectId}: ${prompt.substring(0, 80)}...`);
-
-    // Respond immediately — harness runs in background
-    res.json({ status: "ok", message: "Harness session started", agentCount: config.agents.length });
-
-    // Launch harness asynchronously
-    runHarness(projectId, prompt, config).catch(err => {
-      console.error("[harness] Session error:", err.message);
-    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
