@@ -181,6 +181,13 @@ function App() {
   const [showGraph3D, setShowGraph3D] = useState(false);
   const [showCbmStats, setShowCbmStats] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
+  // BUG mode-sync : l'activeMode réel du backend est exposé dans le payload WS
+  // `connected` (data.activeSessions) qui arrive AVANT que le projet actif soit
+  // connu (activeProject est null au reload). Sans ce ref, ce mode était jeté et
+  // l'UI restait bloquée sur CODE alors que le backend était resté en ROUTING.
+  // On mémorise ici l'activeMode par projet pour le réutiliser dès que le projet
+  // actif devient connu (activateProject / effet de resynchronisation).
+  const activeModeByProjectRef = useRef<Map<string, string>>(new Map());
 
   // ── Layout config (persisted) ──
   const [layoutCfg, setLayoutCfg] = useState(() => {
@@ -457,6 +464,9 @@ function App() {
           if (projectId === activeProject?.id) {
             setActiveMode(evt.mode);
           }
+          if (typeof evt.mode === "string") {
+            activeModeByProjectRef.current.set(projectId, evt.mode);
+          }
           // Reload model library when mode changes (enabled state may have changed)
           setModelChangeVersion(v => v + 1);
           break;
@@ -491,6 +501,9 @@ function App() {
               };
             }
             updateProjectSession(projectId, { session: evt.session });
+            if (evt.session.activeMode) {
+              activeModeByProjectRef.current.set(projectId, evt.session.activeMode);
+            }
             if (evt.session.activeMode && projectId === activeProject?.id) {
               setActiveMode(evt.session.activeMode);
             }
@@ -527,6 +540,13 @@ function App() {
       const sessions = msg.data?.activeSessions || {};
       for (const [pid, info] of Object.entries(sessions) as [string, any][]) {
         if (!info) continue;
+        // Mémoriser l'activeMode réel du backend pour CHAQUE projet (pas seulement
+        // le projet actif) : au reload activeProject est null quand ce payload
+        // arrive, le mode doit donc être conservé pour une resynchronisation
+        // ultérieure au moment où le projet actif est sélectionné.
+        if (info.activeMode) {
+          activeModeByProjectRef.current.set(pid, info.activeMode);
+        }
         const update: Partial<ProjectSessionState> = { session: info };
         if (typeof info.isStreaming === "boolean") {
           update.isStreaming = info.isStreaming;
@@ -575,18 +595,32 @@ function App() {
         });
       }
 
-      // Load active mode for this project
-      fetch(`/api/model-library/projects/${project.id}/mode`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.activeMode) setActiveMode(data.activeMode);
-        })
-        .catch(() => {});
-
       rerender();
     },
     [send, getProjectSession]
   );
+
+  // ── Resynchronisation du mode actif quand le projet actif devient connu ──
+  // BUG mode-sync : `activeMode` démarre à "code" et le payload WS `connected`
+  // (qui contient l'activeMode réel) arrive avant que le projet actif soit connu
+  // → le mode réel était perdu au reload. Cet effet s'exécute à chaque changement
+  // de projet actif : il applique d'abord le mode mémorisé depuis `connected`
+  // (fast path, déjà dispo), puis re-fetch GET /mode comme source de vérité.
+  useEffect(() => {
+    const pid = activeProject?.id;
+    if (!pid) return;
+    const knownMode = activeModeByProjectRef.current.get(pid);
+    if (knownMode) setActiveMode(knownMode);
+    fetch(`/api/model-library/projects/${pid}/mode`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.activeMode) {
+          setActiveMode(data.activeMode);
+          activeModeByProjectRef.current.set(pid, data.activeMode);
+        }
+      })
+      .catch(() => {});
+  }, [activeProject?.id]);
 
   // ── Add/delete project ──
   const handleAddProject = () => {
@@ -666,7 +700,10 @@ function App() {
           .then(data => {
             if (data) {
               updateProjectSession(activeProject.id, { session: data });
-              if (data.activeMode) setActiveMode(data.activeMode);
+              if (data.activeMode) {
+                setActiveMode(data.activeMode);
+                activeModeByProjectRef.current.set(activeProject.id, data.activeMode);
+              }
             }
           })
           .catch(() => {});
