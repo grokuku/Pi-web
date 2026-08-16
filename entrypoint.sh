@@ -186,7 +186,12 @@ fi
 export CBM_CACHE_DIR="/app/.data/cbm"
 mkdir -p "$CBM_CACHE_DIR"
 
-# Start CBM HTTP server in background (3D graph UI + MCP API on port 9749)
+# Start CBM HTTP server in background (3D graph UI on port 9749).
+# NOTE (v0.10.4): in --ui mode the HTTP /rpc endpoint is restricted — only
+# list_projects and get_code_snippet are allowed; everything else returns 403
+# "UI RPC method is not allowed". The Pi extension (extensions/codebase-memory)
+# therefore talks to the binary over MCP stdio for the FULL tool surface;
+# this HTTP server is kept alive for the Pi-Web 3D graph UI (/cbm-ui/).
 # The binary is an MCP stdio server — it exits if stdin closes.
 # We keep stdin open with `tail -f /dev/null` so the HTTP UI stays alive.
 if [ -f "$CBM_BIN" ]; then

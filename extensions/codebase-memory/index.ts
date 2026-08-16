@@ -6,9 +6,13 @@
  *
  * On first session start:
  *   1. Downloads the binary if not installed (~15 MB, ~5s)
- *   2. Starts the HTTP server on localhost:9749
- *   3. Indexes the current project
- *   4. Registers Pi tools that proxy to the MCP server
+ *   2. Starts the HTTP server on localhost:9749 (3D graph UI — the Pi-Web
+ *      frontend embeds it via /cbm-ui/)
+ *   3. Spawns a stdio MCP client for the FULL tool surface.
+ *      (HTTP /rpc in --ui mode only allows list_projects + get_code_snippet;
+ *      everything else → 403 "UI RPC method is not allowed")
+ *   4. Indexes the current project
+ *   5. Registers Pi tools that proxy to the MCP server (over stdio)
  *
  * Tools exposed:
  *   - cbm_search      : Search the graph by label, name pattern, semantic query
@@ -93,6 +97,23 @@ export function getCbmStatus(): CbmStatus {
 }
 
 let child: ChildProcess | null = null;
+
+// ── MCP stdio client state ──────────────────────────────
+// codebase-memory-mcp v0.10.4: in --ui mode the HTTP /rpc endpoint only allows
+// list_projects and get_code_snippet; all other methods return 403
+// ("UI RPC method is not allowed"). The binary exposes the FULL MCP surface
+// over stdio, so tool calls are routed through a stdio JSON-RPC 2.0 client
+// instead of POST /rpc.
+let stdioChild: ChildProcess | null = null;
+let stdioReady = false;
+let stdioBuf = "";
+let stdioReqId = 0;
+let stdioReadyPromise: Promise<void> | null = null;
+let stdioError: string | null = null;
+const stdioPending = new Map<
+  number,
+  { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+>();
 
 // ── Utility ─────────────────────────────────────────────
 
@@ -201,15 +222,211 @@ async function spawnServer(): Promise<void> {
 }
 
 // ── MCP Communication ────────────────────────────────────
+// All tool calls go through a stdio MCP client (full surface). The HTTP
+// /rpc endpoint is only used as a last-resort fallback for the two methods
+// it still allows in --ui mode (list_projects, get_code_snippet).
 
-let requestId = 0;
+function onStdioData(d: Buffer): void {
+  stdioBuf += d.toString("utf8");
+  let idx: number;
+  while ((idx = stdioBuf.indexOf("\n")) >= 0) {
+    const line = stdioBuf.slice(0, idx).trim();
+    stdioBuf = stdioBuf.slice(idx + 1);
+    if (!line) continue;
+    let msg: any;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (msg && typeof msg.id === "number") {
+      const p = stdioPending.get(msg.id);
+      if (p) {
+        clearTimeout(p.timer);
+        stdioPending.delete(msg.id);
+        if (msg.error) {
+          p.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        } else {
+          p.resolve(msg.result);
+        }
+      }
+    }
+  }
+}
 
-async function mcpCall(
+function onStdioExit(code: number | null): void {
+  console.error(`[cbm] stdio MCP exited (code ${code})`);
+  stdioReady = false;
+  stdioChild = null;
+  stdioError = `codebase-memory-mcp stdio exited (code ${code})`;
+  for (const p of stdioPending.values()) {
+    clearTimeout(p.timer);
+    p.reject(new Error(stdioError));
+  }
+  stdioPending.clear();
+}
+
+async function ensureStdioClient(): Promise<void> {
+  if (stdioChild && stdioReady) return;
+  if (stdioReadyPromise) return stdioReadyPromise;
+  stdioReadyPromise = (async () => {
+    if (stdioChild && stdioReady) return;
+    if (!existsSync(BIN_PATH)) {
+      throw new Error("codebase-memory-mcp binary not installed");
+    }
+    stdioError = null;
+    console.log("[cbm] Starting MCP client over stdio (full tool surface)");
+    const child = spawn(BIN_PATH, [], { stdio: ["pipe", "pipe", "pipe"] });
+    stdioChild = child;
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", onStdioData);
+    child.stderr.on("data", (d) => {
+      const s = d.toString().trim();
+      if (s) console.error("[cbm:stdio]", s.slice(0, 1000));
+    });
+    child.on("error", (err) => {
+      stdioReady = false;
+      stdioChild = null;
+      stdioError = err.message;
+    });
+    child.on("exit", onStdioExit);
+
+    // MCP initialize handshake — also proves the process is alive.
+    const id = ++stdioReqId;
+    const initOk = await new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        stdioPending.delete(id);
+        resolve(false);
+      }, 15_000);
+      stdioPending.set(id, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+        timer,
+      });
+      child.stdin!.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "pi-web-cbm", version: "1.0.0" },
+          },
+        }) + "\n",
+        (err) => {
+          if (err) {
+            clearTimeout(timer);
+            stdioPending.delete(id);
+            reject(new Error(`stdio write failed: ${err.message}`));
+          }
+        }
+      );
+    });
+
+    if (!initOk) {
+      stdioReady = false;
+      throw new Error("codebase-memory-mcp stdio did not respond to initialize");
+    }
+    stdioReady = true;
+    status.running = true;
+    console.log("[cbm] MCP stdio client ready");
+  })().finally(() => {
+    stdioReadyPromise = null;
+  });
+  return stdioReadyPromise;
+}
+
+function stopStdioClient(): void {
+  if (stdioChild) {
+    try {
+      stdioChild.stdin?.end();
+    } catch {
+      /* ignore */
+    }
+    stdioChild.kill();
+    stdioChild = null;
+  }
+  stdioReady = false;
+  for (const p of stdioPending.values()) {
+    clearTimeout(p.timer);
+    p.reject(new Error("codebase-memory-mcp stdio stopped"));
+  }
+  stdioPending.clear();
+}
+
+async function mcpCallStdio(
+  toolName: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<any> {
+  await ensureStdioClient();
+  const child = stdioChild;
+  if (!child || !stdioReady || !child.stdin || !child.stdout) {
+    throw new Error(stdioError || "codebase-memory-mcp stdio client not ready");
+  }
+  const id = ++stdioReqId;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      stdioPending.delete(id);
+      reject(new Error(`MCP call timed out: ${toolName}`));
+    }, 120_000);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      stdioPending.delete(id);
+      reject(new Error(`MCP call aborted: ${toolName}`));
+    };
+    const settle = (fn: () => void): void => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      fn();
+    };
+    stdioPending.set(id, {
+      resolve: (v) => settle(() => resolve(v)),
+      reject: (e) => settle(() => reject(e)),
+      timer,
+    });
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    child.stdin!.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name: toolName, arguments: args },
+      }) + "\n",
+      (err) => {
+        if (err) {
+          clearTimeout(timer);
+          const p = stdioPending.get(id);
+          if (p) {
+            stdioPending.delete(id);
+            p.reject(new Error(`MCP write failed: ${err.message}`));
+          }
+          if (signal) signal.removeEventListener("abort", onAbort);
+        }
+      }
+    );
+  });
+}
+
+async function mcpCallHttp(
   toolName: string,
   args: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<string> {
-  const id = ++requestId;
+  const id = ++stdioReqId;
   const res = await fetch(`${BASE}/rpc`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -221,23 +438,42 @@ async function mcpCall(
     }),
     signal,
   });
-
   if (!res.ok) {
     throw new Error(`MCP call failed: ${res.status} ${res.statusText}`);
   }
-
   const data = await res.json();
   if (data.error) {
     throw new Error(`MCP error: ${data.error.message || JSON.stringify(data.error)}`);
   }
-
-  // MCP tools/call returns { content: [{ type: "text", text: "..." }] }
   if (data.result?.content) {
-    return data.result.content
-      .map((c: any) => c.text || "")
-      .join("\n");
+    return data.result.content.map((c: any) => c.text || "").join("\n");
   }
   return JSON.stringify(data.result, null, 2);
+}
+
+async function mcpCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<string> {
+  let data: any;
+  try {
+    data = await mcpCallStdio(toolName, args, signal);
+  } catch (e: any) {
+    // Last-resort fallback: the UI-mode HTTP /rpc still accepts these two.
+    if (toolName === "list_projects" || toolName === "get_code_snippet") {
+      return mcpCallHttp(toolName, args, signal);
+    }
+    throw e;
+  }
+  if (data && data.error) {
+    throw new Error(`MCP error: ${data.error.message || JSON.stringify(data.error)}`);
+  }
+  // MCP tools/call returns { content: [{ type: "text", text: "..." }] }
+  if (data?.content) {
+    return data.content.map((c: any) => c.text || "").join("\n");
+  }
+  return JSON.stringify(data, null, 2);
 }
 
 /** Call an MCP tool with the correct project parameter injected. */
@@ -811,13 +1047,17 @@ export default async function (pi: ExtensionAPI) {
         const newVersion = getVersion();
         status.version = newVersion;
 
-        // Restart the server
+        // Restart the server (HTTP UI) + stdio MCP client
         if (child) {
           child.kill();
           child = null;
         }
+        stopStdioClient();
         status.running = false;
         await spawnServer();
+        await ensureStdioClient().catch((e: any) =>
+          console.warn("[cbm] stdio respawn after update failed:", e.message)
+        );
 
         ctx.ui.setStatus("cbm", `Ready (v${newVersion})`);
         ctx.ui.notify(`Updated to ${newVersion}!`, "info");
