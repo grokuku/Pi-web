@@ -9,7 +9,8 @@ import {
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
-import { generateAiCommitMessage, getCommitModelInfo, injectSessionNotification } from "../pi/session.js";
+import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification } from "../pi/session.js";
+import { getDraft, getCleanedCommit, saveCleanedCommit, clearDraft } from "../pi/commit-draft.js";
 
 const router = Router();
 
@@ -227,8 +228,12 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     const result = await gitCommitAndPush(project.cwd, subject, body);
     await syncGitInfo(project);
 
-    // Notify the AI session that code was pushed to GitHub
+    // Commit draft incrémental : reset du draft + cache nettoyé après succès.
+    // Le prochain cycle de travail repart d'une feuille blanche.
     if (result.commitResult || result.pushResult) {
+      clearDraft(project.id);
+
+      // Notify the AI session that code was pushed to GitHub
       const commitHash = result.commitHash || "";
       const remoteUrl = result.remoteUrl || "";
       const notification = `✅ Code successfully pushed to GitHub.
@@ -262,6 +267,16 @@ All changes from this commit are now live on the remote repository. Do not sugge
   }
 });
 
+// Signature des fichiers modifiés d'un aperçu (path + statut, triée).
+// Sert de clé de cache : tant qu'elle ne change pas, on réutilise le message
+// nettoyé déjà généré pour ce draft (pas de rappel LLM à chaque ouverture).
+function buildCommitSignature(files: Array<{ path: string; status: string }>): string {
+  return files
+    .map((f) => `${f.status} ${f.path}`)
+    .sort()
+    .join("\n");
+}
+
 // POST git commit-push preview (get changes + commit model info)
 // Pass ?ai=true to also generate an AI commit message on demand
 router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) => {
@@ -275,8 +290,36 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     // Gather commit model info (shown in UI) without calling the AI yet
     const commitModelInfo = await getCommitModelInfo();
 
-    // Only generate AI message when explicitly requested
+    // ── Commit draft incrémental : nettoyage LLM du draft à l'ouverture ──
+    // Quand un modèle de commit existe, on nettoie le draft accumulé pendant
+    // le travail (intentions LLM + fichiers modifiés capturés automatiquement)
+    // pour pré-remplir la modale avec un message conventionnel propre.
+    // Le cache {projectId}-clean.json est réutilisé tant que la signature des
+    // fichiers modifiés n'a pas changé (pas de rappel LLM à chaque ouverture).
     let aiMessage: { subject: string; body: string } | null = null;
+    if (commitModelInfo.source !== "none") {
+      try {
+        const signature = buildCommitSignature(preview.status.files);
+        const cached = getCleanedCommit(project.id);
+        if (cached && cached.signature === signature) {
+          console.log("[commit-push] Using cached cleaned commit message (signature unchanged)");
+          aiMessage = { subject: cached.subject, body: cached.body };
+        } else {
+          const draft = getDraft(project.id);
+          const diff = await getGitDiff(project.cwd);
+          console.log(`[commit-push] Draft (${draft.length} chars) + diff (${diff.length} chars), cleaning...`);
+          const msg = await generateCleanCommitMessage(project.id, draft, diff);
+          if (msg) {
+            saveCleanedCommit(project.id, signature, msg.subject, msg.body);
+            aiMessage = msg;
+          }
+        }
+      } catch (err: any) {
+        console.error("[commit-push] Clean commit generation failed:", err?.message || err);
+      }
+    }
+
+    // On-demand generation (?ai=true) — overrides the draft-cleaned message
     if (req.query.ai === "true") {
       try {
         const diff = await getGitDiff(project.cwd);

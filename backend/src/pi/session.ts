@@ -21,6 +21,8 @@ import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
+import { createCommitDraftTool } from "./commit-draft-tool.js";
+import { appendDraft } from "./commit-draft.js";
 import { librarianTools } from "./librarian-tools.js";
 import { getProject } from "../projects/manager.js";
 
@@ -298,7 +300,7 @@ export async function createPiSession(
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
-      customTools: [...createDesignTools(projectId), ...librarianTools],
+      customTools: [...createDesignTools(projectId), ...librarianTools, createCommitDraftTool(projectId)],
     });
 
     // Inject project context into system prompt
@@ -348,6 +350,26 @@ export async function createPiSession(
         // NOTE: ne PAS mettre isStreaming = true ici (BUG-08).
         // Le streaming global est géré uniquement par agent_start/agent_end.
         // tool_execution_end marque la fin d'un outil, pas du stream global.
+
+        // ── Commit draft incrémental : capture auto des fichiers modifiés ──
+        // Après chaque édition/écriture, on accumule le fichier dans le draft
+        // pour construire le message de commit (source : les outils du LLM).
+        // bash est ignoré pour l'instant : les fichiers touchés via bash ne sont
+        // pas déductibles de façon fiable ici (ils le seront via le diff git).
+        // NB : l'événement tool_execution_end n'expose pas les args — on les lit
+        // depuis l'entrée activeToolCalls enregistrée au tool_execution_start.
+        if (event.toolName === "edit" || event.toolName === "write") {
+          const file =
+            typeof existing?.args?.file === "string"
+              ? existing.args.file
+              : typeof existing?.args?.path === "string"
+                ? existing.args.path
+                : null;
+          if (file) {
+            appendDraft(projectId, `[auto] ${event.toolName}: ${file}`);
+          }
+        }
+
         emitSessionUpdate(projectId);
       } else if (event.type === "turn_end") {
         // Record usage for statistics
@@ -1300,6 +1322,7 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - Test your changes mentally — think about edge cases and error paths
 - If a change affects multiple files, list all affected files before starting
 - Keep commits atomic — one logical change per commit when possible
+- Après chaque modification logique de fichiers, appelle le tool log_commit_note avec un résumé concis (1 ligne) de ce que tu as modifié et pourquoi. Cela construit incrémentalement le message de commit.
 
 ## Code exploration: prefer graph tools over grep/find/ls
 When the project has been indexed by the knowledge graph (cbm_* tools are visible):
@@ -1824,6 +1847,164 @@ export async function generateAiCommitMessage(
       }
     } finally {
       concurrencyManager.releaseLLMSlot(`${projectId}::commit`);
+    }
+    return commitResult;
+  } catch (error: any) {
+    console.error("[commit] === completeSimple FAILED ===", error?.message || error);
+    return null;
+  }
+}
+
+// ── Commit draft incrémental : nettoyage LLM du draft ───────────────
+// Prompt spécifique : on donne au modèle le draft de travail accumulé
+// (intention réelle du LLM) ET le diff git courant, pour produire un
+// message conventionnel propre (fusion des entrées du même fichier,
+// suppression des fichiers absents du diff, structure conventional commits).
+const CLEAN_COMMIT_INSTRUCTIONS = `You clean up an incremental work draft into a conventional commit message.
+
+You receive:
+1. A work draft accumulated during the coding session (lines prefixed with timestamps and [intent]/[auto] tags) — this reflects the real intent.
+2. The current git diff.
+
+Rules:
+- Merge entries about the same file into a single coherent point
+- Remove entries for files that are absent from the git diff
+- Structure the result as a conventional commit message
+- First line: type(scope): short description (max 72 chars)
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Body: 2-4 bullet points explaining WHAT changed and WHY
+- Describe the INTENT of the change, not just list file names
+- Use verb infinitive ("add", "fix", "refactor") not gerundive ("adding", "fixing")
+- No markdown, no code blocks, plain text only
+- Return ONLY a JSON object with keys "subject" and "body" (e.g. {"subject":"feat: ...","body":"- ..."})`;
+
+/**
+ * Parse la réponse JSON {"subject","body"} du LLM.
+ * Tolère les code fences markdown autour du JSON, et retombe sur
+ * "première ligne = subject, reste = body" si le JSON est invalide.
+ */
+function parseCleanCommitJson(text: string): { subject: string; body: string } | null {
+  const cleaned = text.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+  try {
+    const obj = JSON.parse(cleaned);
+    if (obj && typeof obj.subject === "string" && obj.subject.trim()) {
+      return {
+        subject: obj.subject.trim(),
+        body: typeof obj.body === "string" ? obj.body.trim() : "",
+      };
+    }
+  } catch {}
+  // Fallback : première ligne non vide = subject, reste = body
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  return { subject: lines[0].slice(0, 72), body: lines.slice(1).join("\n") };
+}
+
+/**
+ * Nettoie le draft de travail incrémental en message de commit conventionnel.
+ *
+ * Même résolution de modèle que generateAiCommitMessage (commit model →
+ * registry → session model), mais le prompt intègre à la fois le draft
+ * (intention réelle du LLM) et le diff git courant pour vérifier la cohérence
+ * (fusion des entrées du même fichier, suppression des fichiers absents).
+ *
+ * Returns { subject, body } or null if no model is available or the call fails.
+ */
+export async function generateCleanCommitMessage(
+  projectId: string,
+  draft: string,
+  diff: string
+): Promise<{ subject: string; body: string } | null> {
+  console.log(`[commit] === Starting clean commit message generation (draft) ===`);
+
+  const library = loadModelLibrary();
+
+  let model: any = null;
+
+  // Ensure registry is loaded
+  await reloadModelRegistry();
+
+  // 1. Use the commit model (or default) from the library
+  const commitModel = getCommitModel(library);
+  if (commitModel) {
+    model = sharedModelRegistry!.find(commitModel.providerId, commitModel.modelId);
+  }
+
+  // 2. Fallback: use the session model (if available)
+  if (!model?.id) {
+    const state = sessionsByProject.get(projectId);
+    if (state?.session?.model) {
+      model = state.session.model;
+    }
+  }
+
+  // 3. Last resort: first available model from the registry
+  if (!model?.id) {
+    const availableModels = sharedModelRegistry!.getAvailable();
+    if (availableModels.length > 0) {
+      model = availableModels[0];
+    }
+  }
+
+  // 4. Absolute last resort: scan all library models
+  if (!model?.id) {
+    for (const m of library.models) {
+      model = sharedModelRegistry!.find(m.providerId, m.modelId);
+      if (model) break;
+    }
+  }
+
+  if (!model?.id) {
+    console.warn("[commit] === No model available at all ===");
+    return null;
+  }
+
+  console.log(`[commit] === Using model: ${model.provider}/${model.modelId || model.id} ===`);
+
+  const context = {
+    systemPrompt: CLEAN_COMMIT_INSTRUCTIONS,
+    messages: [
+      {
+        role: "user" as const,
+        content: `Work draft (real intent):\n\n${draft.slice(0, 6000) || "(empty)"}\n\n---\n\nCurrent git diff:\n\n${diff.slice(0, 8000)}`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+
+    // Acquire LLM slot for the provider call
+    await concurrencyManager.acquireLLMSlot(`${projectId}::commit-clean`, "commit-clean");
+
+    let commitResult: { subject: string; body: string } | null = null;
+    try {
+      const response = await sharedModelRuntime!.completeSimple(model, context, {
+        temperature: 0.2,
+        maxTokens: 400,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      const text = response.content
+        ?.filter((c: any) => c.type === "text")
+        ?.map((c: any) => c.text || "")
+        ?.join("\n")
+        ?.trim() || "";
+
+      if (!text) {
+        console.warn("[commit] Empty response from model");
+        commitResult = null;
+      } else {
+        commitResult = parseCleanCommitJson(text);
+      }
+    } finally {
+      concurrencyManager.releaseLLMSlot(`${projectId}::commit-clean`);
     }
     return commitResult;
   } catch (error: any) {

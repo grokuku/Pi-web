@@ -70,9 +70,15 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       }
       const data: Preview = await res.json();
       setPreview(data);
-      // Always start with the heuristic message
-      setSubject(data.proposedMessage.subject);
-      setBody(data.proposedMessage.body);
+      // Utilise le draft nettoyé par le LLM (aiMessage) quand il est présent,
+      // sinon la proposition heuristique (cas sans modèle de commit configuré).
+      if (data.aiMessage?.subject) {
+        setSubject(data.aiMessage.subject);
+        setBody(data.aiMessage.body);
+      } else {
+        setSubject(data.proposedMessage.subject);
+        setBody(data.proposedMessage.body);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
