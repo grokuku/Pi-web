@@ -465,14 +465,20 @@ export async function createPiSession(
 
     // Applique le mode actif persisté sur disque (survit au redémarrage / upgrade
     // du conteneur). La session doit déjà exister dans sessionsByProject pour que
-    // applyModeToSession puisse la retrouver. Si pm.activeMode === "code", on laisse
-    // le défaut (state.activeMode initialisé à "code") — aucune écriture nécessaire.
+    // applyModeToSession puisse la retrouver.
+    //
+    // BUG mode-sync : on applique TOUJOURS le mode persisté — y compris "code".
+    // Avant ce fix, quand pm.activeMode === "code" on ne faisait RIEN : la session
+    // SDK fraîche gardait alors ses outils par défaut, qui incluent TOUS les tools
+    // d'extension (dont `delegate` de harness-orchestrator). Le backend tournait
+    // donc « en réalité » en ROUTING (delegate actif) alors que state.activeMode
+    // restait "code" → l'UI affichait CODE. En appliquant le mode persisté (code OU
+    // harness), les outils, le state et la bannière de prompt sont toujours alignés.
     try {
       const library = loadModelLibrary();
       const pm = getProjectModeConfig(library, projectId);
-      if (pm.activeMode === "harness") {
-        await applyModeToSession("harness", projectId);
-      }
+      const persistedMode: AgentMode = pm.activeMode === "harness" ? "harness" : "code";
+      await applyModeToSession(persistedMode, projectId);
     } catch (e: any) {
       console.error(`[PiSession] Failed to apply persisted activeMode for ${projectId}:`, e?.message || e);
     }
@@ -1009,7 +1015,10 @@ export function getSessionInfo(projectId?: string) {
     // On n'inclut volontairement pas les messages complets ici : le payload
     // `connected`/`session_update` serait trop lourd (risque de blocage sur
     // JSON.stringify). Le frontend récupère l'historique via pi_history.
-    activeMode: state.activeMode || "code",
+    // BUG mode-sync : on expose le mode EFFECTIF (dérivé des outils réellement
+    // appliqués à la session SDK), pas le flag in-memory qui peut être resté
+    // "code" alors que la session route déjà (desync legacy).
+    activeMode: getEffectiveActiveMode(state.projectId),
     contextUsage: (state.session as any).getContextUsage?.() || null,
     lastRoute: state.lastRoute ?? null,
   };
@@ -1557,10 +1566,57 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   emitSessionUpdate(projectId);
 }
 
-/** Get the current active mode for a project */
-export function getActiveMode(projectId: string): AgentMode {
+/**
+ * Mode EFFECTIF d'une session — source de vérité = les outils RÉELLEMENT
+ * appliqués à la session SDK, pas le flag in-memory `state.activeMode` qui peut
+ * être désynchronisé (session créée avant la persistance du mode, reprise d'une
+ * session legacy, migration, etc.).
+ *
+ * Le tool `delegate` est enregistré par l'extension harness-orchestrator et n'est
+ * actif que lorsque la session est configurée en mode ROUTING (en mode CODE,
+ * applyModeToSession l'exclut via HARNESS_EXCLUDE). Sa présence dans les outils
+ * actifs est donc la signature fiable que le routage est réellement actif.
+ */
+export function getEffectiveActiveMode(projectId: string): AgentMode {
   const state = sessionsByProject.get(projectId);
-  return state?.activeMode || "code";
+  if (!state?.session) return state?.activeMode || "code";
+  try {
+    const activeTools = state.session.getActiveToolNames?.() ?? [];
+    if (activeTools.includes("delegate")) return "harness";
+  } catch {}
+  return state.activeMode || "code";
+}
+
+/**
+ * Réconcilie le flag in-memory `state.activeMode` (et la persistance disque) avec
+ * le mode EFFECTIF dérivé des outils de la session, puis renvoie ce mode.
+ *
+ * Utilisé par GET /mode (source de vérité du frontend) : quand une session legacy
+ * tourne en ROUTING (delegate actif) avec un flag resté à "code", cette réconciliation
+ * met à jour le flag ET persiste le mode sur disque → l'UI affiche ROUTING et le mode
+ * survit au restart. N'écrit sur disque que si la valeur persistée diffère (idempotent).
+ */
+export function reconcileActiveMode(projectId: string): AgentMode {
+  const effective = getEffectiveActiveMode(projectId);
+  const state = sessionsByProject.get(projectId);
+  if (state && state.activeMode !== effective) {
+    state.activeMode = effective;
+  }
+  try {
+    const library = loadModelLibrary();
+    const persisted = getProjectModeConfig(library, projectId).activeMode || "code";
+    if (persisted !== effective) {
+      setProjectActiveMode(projectId, effective);
+    }
+  } catch (e: any) {
+    console.warn(`[mode] Failed to persist reconciled activeMode for ${projectId}:`, e?.message || e);
+  }
+  return effective;
+}
+
+/** Get the current active mode for a project (réconcilié avec l'état réel de la session) */
+export function getActiveMode(projectId: string): AgentMode {
+  return reconcileActiveMode(projectId);
 }
 
 /** Enable or disable firecrawl web search tools for a project session */

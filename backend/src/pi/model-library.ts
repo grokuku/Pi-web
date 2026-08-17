@@ -269,8 +269,14 @@ function migrateProjectMode(pm: any): ProjectModeConfig {
       },
       routing: normalizeRoutingConfig(pm?.harness?.routing ?? migrateRoutingConfig(pm)),
     },
-    // Rétro-compatibilité : les anciens fichiers n'ont pas le champ activeMode → défaut "code".
-    activeMode: (pm?.activeMode === "harness" ? "harness" : "code"),
+    // Rétro-compatibilité : les anciens fichiers n'ont pas le champ activeMode.
+    // On dérive le défaut de harness.enabled : un projet existant avec le routing
+    // activé (harness.enabled=true) migre vers "harness" pour préserver le routing.
+    // Si le champ existe déjà, on le conserve (validé "harness" | "code", sinon fallback).
+    activeMode:
+      pm?.activeMode === "harness" || pm?.activeMode === "code"
+        ? pm.activeMode
+        : (pm?.harness?.enabled === true ? "harness" : "code"),
   };
 }
 
