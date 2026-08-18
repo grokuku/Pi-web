@@ -144,6 +144,7 @@ function App() {
   };
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [zoomLevel, setZoomLevel] = useState(() => {
     const saved = localStorage.getItem("pi-web-zoom");
@@ -415,12 +416,29 @@ function App() {
   const loadProjects = useCallback(async () => {
     try {
       const res = await fetch("/api/projects");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        const msg = errBody && errBody.error ? errBody.error : `HTTP ${res.status}`;
+        console.error("Failed to load projects:", res.status, msg);
+        setProjects([]);
+        setProjectsError(msg);
+        return;
+      }
       const data = await res.json();
+      if (!Array.isArray(data)) {
+        console.error("Failed to load projects: response is not an array", data);
+        setProjects([]);
+        setProjectsError("Unexpected server response");
+        return;
+      }
       setProjects(data);
+      setProjectsError(null);
       // No auto-activation — welcome page is shown on load/refresh
       // User picks a project from the welcome page or sidebar
     } catch (e) {
       console.error("Failed to load projects:", e);
+      setProjects([]);
+      setProjectsError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -927,6 +945,7 @@ function App() {
               <div className="flex-1 overflow-auto">
                 <WelcomeView
                   projects={projects}
+                  loadError={projectsError}
                   onSelectProject={handleSelectProject}
                   onAddProject={handleAddProject}
                 />

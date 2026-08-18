@@ -231,6 +231,7 @@ export const fr = {
     upToDate: "À jour",
     checkForUpdates: "Vérifier les mises à jour",
     failedToLoad: "Échec du chargement du statut",
+    failedToLoadProjects: "Échec du chargement des projets",
     extensions: "EXTENSIONS",
     projects: "PROJETS",
     noProject: "Aucun projet pour l'instant.",

@@ -230,6 +230,7 @@ export const en = {
     upToDate: "Up to date",
     checkForUpdates: "Check for updates",
     failedToLoad: "Failed to load status",
+    failedToLoadProjects: "Failed to load projects",
     extensions: "EXTENSIONS",
     projects: "PROJECTS",
     noProject: "No projects yet.",

@@ -42,11 +42,12 @@ function formatUptime(seconds: number): string {
 
 interface Props {
   projects: Project[];
+  loadError?: string | null;
   onSelectProject: (project: Project) => void;
   onAddProject: () => void;
 }
 
-export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) {
+export function WelcomeView({ projects, loadError, onSelectProject, onAddProject }: Props) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<StatusInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,6 +153,13 @@ export function WelcomeView({ projects, onSelectProject, onAddProject }: Props) 
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Error loading projects */}
+        {loadError && (
+          <div className="border border-hacker-error/30 bg-hacker-error/5 rounded p-2 text-xs text-hacker-error flex items-center gap-2">
+            <AlertTriangle size={12} /> {t('welcome.failedToLoadProjects')}: {loadError}
           </div>
         )}
 

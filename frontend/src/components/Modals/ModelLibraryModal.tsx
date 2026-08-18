@@ -34,14 +34,18 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
   const loadLibrary = useCallback(async () => {
     try {
       const res = await fetch("/api/model-library");
-      setLibrary(await res.json());
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setLibrary(data && typeof data === "object" && !Array.isArray(data) ? data : null);
     } catch (e: any) { setError(e.message); }
   }, []);
 
   const loadProviders = useCallback(async () => {
     try {
       const res = await fetch("/api/providers");
-      setProviders(await res.json());
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setProviders(Array.isArray(data) ? data : []);
     } catch (e: any) { setError(e.message); }
   }, []);
 

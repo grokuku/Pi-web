@@ -33,7 +33,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     try {
       const res = await fetch("/api/model-library");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setLibrary(await res.json());
+      const data = await res.json();
+      setLibrary(data && typeof data === "object" && !Array.isArray(data) ? data : null);
     } catch (e) { console.error("[ModelQuickSwitch] Failed to load model library:", e); }
   }, []);
 
@@ -41,7 +42,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
     try {
       const res = await fetch("/api/providers");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setProviders(await res.json());
+      const data = await res.json();
+      setProviders(Array.isArray(data) ? data : []);
     } catch (e) { console.error("[ModelQuickSwitch] Failed to load providers:", e); }
   }, []);
 
