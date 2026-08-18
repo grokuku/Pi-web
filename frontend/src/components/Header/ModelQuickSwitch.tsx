@@ -233,12 +233,13 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </span>
                 </div>
 
-                {/* Modèle : uniquement en mode code. En ROUTING, le modèle est défini par le routage. */}
-                {mode === "harness" ? (
-                  <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim italic border-b border-hacker-border/30">
-                    Orchestrateur : {getShortModelName(model)} — les fonctions utilisent les modèles du routage (⚙ ci-dessous)
+                {/* Modèle : affiché pour tous les modes (code ET harness/orchestrateur). */}
+                {mode === "harness" && (
+                  <div className="px-3 py-1.5 text-[11px] text-hacker-text-dim border-b border-hacker-border/30">
+                    Orchestrateur — les fonctions utilisent les modèles du routage (⚙ ci-dessous)
                   </div>
-                ) : library && library.models.length > 0 ? (
+                )}
+                {library && library.models.length > 0 ? (
                   <div className="max-h-[300px] overflow-y-auto">
                     {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;

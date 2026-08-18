@@ -214,6 +214,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **Sanitization librarian :** `sanitizeContent()` supprime emails, clés API, chemins personnels et téléphones avant archivage.
 - **SSRF :** `validateHttpUrl()` bloque link-local/loopback/privé, sauf autorisation explicite pour Ollama/openai-compatible auto-hébergés.
 - **Auth refondue :** `apiAuth` (jeton valide → localhost → navigateur same-origin/origin autorisée) remplace l'ancienne comparaison Origin/Host. `ALLOWED_ORIGINS`/`WS_ALLOWED_ORIGINS` sont rétablis à `*` volontairement ; le WebSocket est protégé par Authentik en frontal (voir BUG-50).
+- **Téléchargement de dossiers réactivé (2026-08-18) :** `GET /api/files/download` accepte désormais les dossiers. L'endpoint parcourt récursivement chaque sélection, revalide **chaque entrée** avec `isPathAllowed()` (deny-list + realpath + confinement aux racines), ignore les dotfiles (cohérent avec l'UI) et exclut les symlinks dangereux (hors racine, deny-listés, boucles via `realpath` visités). Le tout est servi en `.tar.gz` à la volée (`tar -czf - -h -C <parent> -T -`, `-T -` pour éviter ARG_MAX, `-h` pour déréférencer les symlinks autorisés). Déduplication par chemin relatif pour éviter les doublons (ex: bouton « select all »). Fichiers uniques : streaming direct inchangé.
 
 ## 🟡 Bugs mineurs / améliorations
 

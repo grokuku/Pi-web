@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { readdirSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync, createReadStream, copyFileSync, unlinkSync } from "fs";
+import { readdirSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync, createReadStream, copyFileSync, unlinkSync, realpathSync } from "fs";
 import path from "path";
 import { isPathAllowed, getAllowedRoots } from "../utils/path-security.js";
 
@@ -9,6 +9,19 @@ interface FileEntry {
   name: string;
   type: "dir" | "file";
   size: number; // bytes, 0 for dirs
+}
+
+/**
+ * Retourne le parent commun le plus proche d'une liste de chemins absolus.
+ * Utilisé pour construire une archive dont les membres restent sous la racine
+ * commune (aucun `..` dans les noms d'archive).
+ */
+function commonParentOf(absolutePaths: string[]): string {
+  const parts = absolutePaths.map((p) => p.split(path.sep).filter(Boolean));
+  const minLen = Math.min(...parts.map((p) => p.length));
+  let i = 0;
+  while (i < minLen && parts.every((p) => p[i] === parts[0][i])) i++;
+  return path.join(path.sep, ...parts[0].slice(0, i));
 }
 
 // GET /api/files/browse?path=/projects
@@ -238,27 +251,73 @@ router.get("/download", (req: Request, res: Response) => {
       return;
     }
 
-    // Répertoire ou plusieurs éléments : le téléchargement de répertoire est
-    // désactivé (sécurité) car `tar -czf - .` inclurait les fichiers sensibles
-    // deny-listés (.env, .git, credentials.enc, ...). On n'autorise que des
-    // fichiers, qui ont déjà été validés un par un par isPathAllowed().
-    if (resolvedPaths.some((rp) => statSync(rp).isDirectory())) {
-      return res.status(400).json({
-        error: "Directory download is disabled for security. Select files instead.",
-      });
+    // Répertoire(s) ou plusieurs éléments : on construit une archive tar.gz à
+    // la volée. Chaque entrée rencontrée (fichier ou sous-dossier) est
+    // revalidée par isPathAllowed() (deny-list + realpath + confinement aux
+    // racines autorisées), et les fichiers cachés (dotfiles) sont ignorés pour
+    // rester cohérents avec le navigateur de fichiers. Aucun fichier sensible
+    // (.git, .env*, credentials.enc, clés SSH, ...) ne peut donc être embarqué.
+    const commonParent = commonParentOf(resolvedPaths);
+    const files: { abs: string; rel: string }[] = [];
+    const visitedDirs = new Set<string>(); // realpaths visités (anti-boucle symlink)
+
+    const collectFiles = (targetPath: string): void => {
+      if (!isPathAllowed(targetPath)) return;
+      const stat = statSync(targetPath);
+      if (!stat.isDirectory()) {
+        // Le chemin relatif est toujours calculé par rapport au commonParent
+        // (celui utilisé par tar), ce qui garantit une déduplication correcte
+        // même pour deux fichiers de même nom dans des dossiers différents.
+        files.push({ abs: targetPath, rel: path.relative(commonParent, targetPath) });
+        return;
+      }
+      // Détection des boucles de liens symboliques via le chemin réel.
+      let real: string;
+      try { real = realpathSync(targetPath); } catch { return; }
+      if (visitedDirs.has(real)) return;
+      visitedDirs.add(real);
+
+      let dirents;
+      try { dirents = readdirSync(targetPath, { withFileTypes: true }); } catch { return; }
+      for (const d of dirents) {
+        if (d.name.startsWith(".")) continue; // fichiers cachés : masqués dans l'UI
+        if (d.name.includes("\n")) continue;  // noms impossibles à passer à tar -T
+        const abs = path.join(targetPath, d.name);
+        try { collectFiles(abs); } catch { /* entrée inaccessible : ignorée */ }
+      }
+    };
+
+    for (const rp of resolvedPaths) {
+      try { collectFiles(rp); } catch { /* chemin inaccessible : ignoré */ }
     }
 
-    // Plusieurs fichiers — archive tar.gz construite depuis un parent commun,
-    // en passant uniquement les fichiers explicitement validés.
-    const firstPath = resolvedPaths[0];
-    const basename = resolvedPaths.length === 1 ? path.basename(firstPath) : "download";
+    // Déduplication par chemin relatif dans l'archive : le même dossier peut
+    // apparaître plusieurs fois si l'utilisateur sélectionne un dossier ET ses
+    // fichiers enfants (ex: bouton « select all »).
+    const unique = new Map<string, string>();
+    for (const f of files) {
+      if (!unique.has(f.rel)) unique.set(f.rel, f.abs);
+    }
+    const entries = [...unique.entries()]
+      .map(([rel, abs]) => ({ abs, rel }))
+      .sort((a, b) => a.rel.localeCompare(b.rel));
+
+    if (entries.length === 0) {
+      return res.status(400).json({ error: "No downloadable files found in the selected paths." });
+    }
+
+    const basename = resolvedPaths.length === 1 ? path.basename(resolvedPaths[0]) : "download";
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Disposition", `attachment; filename="${basename}.tar.gz"`);
 
     import("child_process").then(({ spawn }) => {
-      const commonParent = path.dirname(firstPath);
-      const relNames = resolvedPaths.map(rp => path.relative(commonParent, rp));
-      const child = spawn("tar", ["-czf", "-", "-C", commonParent, ...relNames], { cwd: commonParent });
+      const relNames = entries.map((f) => f.rel);
+      // `-T -` évite les limites ARG_MAX sur les gros dossiers ; `-h` archive le
+      // contenu des liens symboliques (validés par isPathAllowed) au lieu du lien.
+      const child = spawn("tar", ["-czf", "-", "-h", "-C", commonParent, "-T", "-"], { cwd: commonParent });
+      child.stdin.on("error", () => {}); // EPIPE si tar ferme stdin prématurément
+      child.stdin.write(relNames.join("\n") + "\n");
+      child.stdin.end();
       child.stdout.pipe(res);
       child.stderr.on("data", (d: Buffer) => console.error("[tar]", d.toString()));
       child.on("error", (e: Error) => { if (!res.headersSent) res.status(500).json({ error: e.message }); });
