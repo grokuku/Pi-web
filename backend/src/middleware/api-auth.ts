@@ -1,6 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { validateToken, isAgentEnabled } from "../routes/agent-keys.js";
-import { getAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
+import { getAllowedOrigins, isAllOriginsAllowed, isAllowedOrigin } from "../utils/origins.js";
 
 /**
  * Middleware d'authentification globale de l'API.
@@ -71,6 +71,15 @@ function isLocalhost(req: Request): boolean {
  *   client non-navigateur).
  */
 function isBrowserRequest(req: Request): boolean {
+  // Mode allow-all (`*`) : permissivité assumée par l'admin (ex. serveur
+  // interne/privé). L'API est ouverte, toute requête est considérée navigateur,
+  // sans exiger Sec-Fetch-Site — comportement « allow-all historique ».
+  // La protection Sec-Fetch-Site reste active pour les listes d'origines
+  // explicites (pas de `*`), où le comportement strict est conservé.
+  if (isAllOriginsAllowed(ALLOWED_ORIGINS)) {
+    return true;
+  }
+
   const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
   const hasFetchSite = typeof fetchSite === "string" && fetchSite.trim().length > 0;
   const origin = req.headers.origin as string | undefined;
