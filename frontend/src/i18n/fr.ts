@@ -211,6 +211,19 @@ export const fr = {
     on: "ACTIF",
     off: "INACTIF",
   },
+  // ── Activité en cours (StatusBar) ──
+  activity: {
+    inProgress: "En cours…",
+    thinking: "En réflexion…",
+    tool: "Exécute un outil…",
+    generating: "Génère la réponse…",
+    routingPrefix: "Routage : ",
+    planning: "Planification",
+    execute: "Exécution",
+    review: "Revue",
+    integrate: "Intégration",
+    tooltip: "L'agent traite votre demande (mode ROUTING)",
+  },
   fileAnalyzer: {
     title: "Analyse de fichier",
     analyze: "Analyser",

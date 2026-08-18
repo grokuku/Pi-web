@@ -1,4 +1,4 @@
-import type { Project } from "../../types";
+import type { Project, Activity } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 
@@ -10,6 +10,7 @@ interface Props {
   session: any;
   connected: boolean;
   activeMode?: string;
+  activity?: Activity | null;
   onOpenUsage?: () => void;
 }
 
@@ -21,11 +22,28 @@ export function StatusBar({
   session,
   connected,
   activeMode = "code",
+  activity = null,
   onOpenUsage,
 }: Props) {
   const { t } = useTranslation();
   // Show zero stats when a session exists but stats haven't been populated yet
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
+
+  // ── Libellé d'activité dynamique ──
+  // Affiche CE QUE l'agent fait (fonction de routage, réflexion, outil, réponse)
+  // au lieu d'un « chargement » générique.
+  const routingFn = activity && activity.type === "routing" ? activity.routingFunction : undefined;
+  const routingLabel = routingFn ? t(`activity.${routingFn}`) : undefined;
+  const activityLabel =
+    !activity
+      ? t('activity.inProgress')
+      : activity.type === "routing"
+        ? `${t('activity.routingPrefix')}${routingLabel ?? t('activity.inProgress')}`
+        : activity.type === "thinking"
+          ? t('activity.thinking')
+          : activity.type === "tool"
+            ? t('activity.tool')
+            : t('activity.generating');
 
   return (
     <div className="h-8 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[11px] shrink-0">
@@ -88,8 +106,8 @@ export function StatusBar({
       {/* Streaming */}
       {isStreaming && !streamingStalled && (
         <>
-          <span className="text-hacker-accent flex items-center gap-1">
-            <span className="pulse-dot w-1.5 h-1.5" /> {t('common.loading').toLowerCase()}
+          <span className="text-hacker-accent flex items-center gap-1" title={t('activity.tooltip')}>
+            <span className="pulse-dot w-1.5 h-1.5" /> {activityLabel}
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>

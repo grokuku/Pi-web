@@ -211,6 +211,19 @@ export const en = {
     on: "ON",
     off: "OFF",
   },
+  // ── Current activity (StatusBar) ──
+  activity: {
+    inProgress: "In progress…",
+    thinking: "Thinking…",
+    tool: "Running a tool…",
+    generating: "Generating response…",
+    routingPrefix: "Routing: ",
+    planning: "Planning",
+    execute: "Executing",
+    review: "Reviewing",
+    integrate: "Integrating",
+    tooltip: "The agent is processing your request (ROUTING mode)",
+  },
   fileAnalyzer: {
     title: "File Analysis",
     analyze: "Analyze",

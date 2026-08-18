@@ -18,7 +18,7 @@ import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
 import { X } from "lucide-react";
-import type { Project, PanelId } from "./types";
+import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation } from "./i18n";
 
 // ── Error boundary to prevent white/dark screen of death ──
@@ -47,6 +47,7 @@ interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
   stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
+  activity: Activity | null;  // activité en cours (StatusBar), dérivée des pi_event
   lastEventAt: number;  // timestamp of last pi_event received (0 = never)
 }
 
@@ -174,6 +175,7 @@ function App() {
   const streamingStalled = activeProject ? (stallMap[activeProject.id] ?? false) : false;
   const session = activeSessionState?.session ?? null;
   const stats = activeSessionState?.stats ?? null;
+  const activeActivity = activeSessionState?.activity ?? null;
 
   // Modals
   const [showAddProject, setShowAddProject] = useState(false);
@@ -240,7 +242,7 @@ function App() {
   const getProjectSession = useCallback((projectId: string): ProjectSessionState => {
     let state = projectSessionsRef.current.get(projectId);
     if (!state) {
-      state = { isStreaming: false, session: null, stats: null, lastEventAt: 0 };
+      state = { isStreaming: false, session: null, stats: null, activity: null, lastEventAt: 0 };
       projectSessionsRef.current.set(projectId, state);
     }
     return state;
@@ -253,6 +255,7 @@ function App() {
       const prevIsStreaming = state.isStreaming;
       const prevSession = state.session;
       const prevStats = state.stats;
+      const prevActivity = state.activity;
       Object.assign(state, update);
 
       // Projets en arrière-plan : le sidebar doit refléter leur état.
@@ -266,7 +269,8 @@ function App() {
       const streamingChanged = update.isStreaming !== undefined && update.isStreaming !== prevIsStreaming;
       const sessionChanged = update.session !== undefined && update.session !== prevSession;
       const statsChanged = update.stats !== undefined && update.stats !== prevStats;
-      if (streamingChanged || sessionChanged || statsChanged) {
+      const activityChanged = update.activity !== undefined && update.activity !== prevActivity;
+      if (streamingChanged || sessionChanged || statsChanged || activityChanged) {
         rerender();
       }
     },
@@ -467,7 +471,35 @@ function App() {
           // terminés). agent_end n'est pas la fin réelle — le SDK poursuit après,
           // donc on ne coupe PAS isStreaming sur agent_end (désync pendant
           // compaction/retry).
-          updateProjectSession(projectId, { isStreaming: false });
+          updateProjectSession(projectId, { isStreaming: false, activity: null });
+          break;
+        }
+        case "tool_execution_start": {
+          // Le tool `delegate` (harness-orchestrator) porte la fonction de routage
+          // sélectionnée (planning/execute/review/integrate) dans args.function.
+          // → l'indicateur d'activité affiche la fonction en cours.
+          const fn = typeof evt.args?.function === "string" ? evt.args.function : undefined;
+          if (evt.toolName === "delegate") {
+            updateProjectSession(projectId, { activity: { type: "routing", routingFunction: fn } });
+          } else {
+            updateProjectSession(projectId, { activity: { type: "tool", toolName: typeof evt.toolName === "string" ? evt.toolName : undefined } });
+          }
+          break;
+        }
+        case "tool_execution_end": {
+          // Fin d'un outil → retour au libellé par défaut ; le prochain event
+          // (thinking / text / nouvel outil) surchargera l'activité.
+          updateProjectSession(projectId, { activity: null });
+          break;
+        }
+        case "message_update": {
+          const d = evt.assistantMessageEvent;
+          if (!d) break;
+          if (d.type === "thinking_delta") {
+            updateProjectSession(projectId, { activity: { type: "thinking" } });
+          } else if (d.type === "text_delta") {
+            updateProjectSession(projectId, { activity: { type: "generating" } });
+          }
           break;
         }
         case "heartbeat": {
@@ -958,6 +990,7 @@ function App() {
                 session={null}
                 connected={connected}
                 activeMode={activeMode}
+                activity={null}
               />
             </>
           ) : (
@@ -994,6 +1027,7 @@ function App() {
                 session={session}
                 connected={connected}
                 activeMode={activeMode}
+                activity={activeActivity}
                 onOpenUsage={() => setShowUsageStats(true)}
               />
             </>

@@ -41,6 +41,18 @@ export interface PiEvent {
   [key: string]: any;
 }
 
+// ── Activité en cours (StatusBar) ─────────────────────
+// Décrit CE QUE l'agent fait pendant un run (dérivé des événements pi_event).
+// - routing : une fonction de routage tourne (planning/execute/review/integrate)
+// - thinking : le LLM réfléchit (thinking_delta)
+// - tool     : un outil est exécuté (tool_execution_start hors delegate)
+// - generating : le LLM produit la réponse visible (text_delta)
+export type Activity =
+  | { type: "routing"; routingFunction?: RoutingFunction }
+  | { type: "thinking" }
+  | { type: "tool"; toolName?: string }
+  | { type: "generating" };
+
 export interface Attachment {
   id: string;
   name: string;
