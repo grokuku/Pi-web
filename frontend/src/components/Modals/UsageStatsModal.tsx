@@ -56,10 +56,10 @@ const COLORS = {
   output: "#60a5fa", // blue
 };
 
-const CHART_TYPES: { type: ChartType; icon: typeof BarChart2; label: string }[] = [
-  { type: "bar", icon: BarChart2, label: "Barres" },
-  { type: "line", icon: TrendingUp, label: "Ligne" },
-  { type: "pie", icon: PieIcon, label: "Camembert" },
+const CHART_TYPES: { type: ChartType; icon: typeof BarChart2 }[] = [
+  { type: "bar", icon: BarChart2 },
+  { type: "line", icon: TrendingUp },
+  { type: "pie", icon: PieIcon },
 ];
 
 function formatTokens(n: number): string {
@@ -88,7 +88,7 @@ function getGroupByForPeriod(period: Period, groupBy: GroupBy): GroupBy {
 
 // ── Chart data builders ──────────────────────────────
 
-function buildBarOrLineData(buckets: UsageBucket[], chartType: ChartType) {
+function buildBarOrLineData(buckets: UsageBucket[], chartType: ChartType, t: (k: string) => string) {
   const labels = buckets.map((b) => b.label);
   const totals = buckets.map((b) => b.inputTokens + b.outputTokens);
 
@@ -96,8 +96,8 @@ function buildBarOrLineData(buckets: UsageBucket[], chartType: ChartType) {
     return {
       labels,
       datasets: [
-        { label: "Input", data: buckets.map((b) => b.inputTokens), backgroundColor: COLORS.input, stack: "tokens" },
-        { label: "Output", data: buckets.map((b) => b.outputTokens), backgroundColor: COLORS.output, stack: "tokens" },
+        { label: t('usage.input'), data: buckets.map((b) => b.inputTokens), backgroundColor: COLORS.input, stack: "tokens" },
+        { label: t('usage.output'), data: buckets.map((b) => b.outputTokens), backgroundColor: COLORS.output, stack: "tokens" },
       ],
     };
   }
@@ -106,7 +106,7 @@ function buildBarOrLineData(buckets: UsageBucket[], chartType: ChartType) {
     labels,
     datasets: [
       {
-        label: "Total tokens",
+        label: t('usage.totalTokens'),
         data: totals,
         borderColor: COLORS.input,
         backgroundColor: "rgba(74, 222, 128, 0.15)",
@@ -209,7 +209,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
 
   const chartData = useMemo(() => {
     if (!hasData) return null;
-    return chartType === "pie" ? buildPieData(bars) : buildBarOrLineData(bars, chartType);
+    return chartType === "pie" ? buildPieData(bars) : buildBarOrLineData(bars, chartType, t);
   }, [bars, chartType, hasData]);
 
   return (
@@ -233,7 +233,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-hacker-border/50">
           {/* Period */}
           <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide flex items-center gap-1">
-            <Calendar size={10} /> Période
+            <Calendar size={10} /> {t('usage.period')}
           </span>
           {(["today", "week", "month", "all"] as Period[]).map((p) => (
             <button
@@ -245,7 +245,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
                   : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
               }`}
             >
-              {p === "today" ? "Aujourd'hui" : p === "week" ? "Semaine" : p === "month" ? "Mois" : "Tout"}
+              {p === "today" ? t('usage.today') : p === "week" ? t('usage.thisWeek') : p === "month" ? t('usage.thisMonth') : t('usage.all')}
             </button>
           ))}
 
@@ -253,7 +253,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
 
           {/* Grouping */}
           <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide flex items-center gap-1">
-            <Hash size={10} /> Groupe
+            <Hash size={10} /> {t('usage.group')}
           </span>
           {(["hour", "day", "model"] as GroupBy[]).map((g) => {
             const disabled = g === "hour" && period !== "today";
@@ -279,8 +279,8 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
           <span className="text-hacker-border/30 mx-1">│</span>
 
           {/* Chart type */}
-          <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide">Type</span>
-          {CHART_TYPES.map(({ type, icon: Icon, label }) => (
+          <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide">{t('usage.chartType')}</span>
+          {CHART_TYPES.map(({ type, icon: Icon }) => (
             <button
               key={type}
               onClick={() => setChartType(type)}
@@ -291,7 +291,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
               }`}
             >
               <Icon size={10} />
-              {label}
+              {type === "bar" ? t('usage.chartBar') : type === "line" ? t('usage.chartLine') : t('usage.chartPie')}
             </button>
           ))}
         </div>
@@ -301,16 +301,16 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
           {loading ? (
             <div className="flex items-center justify-center py-12 text-hacker-text-dim text-sm">
               <BarChart3 className="animate-pulse mr-2" size={14} />
-              Chargement...
+              {t('common.loading')}
             </div>
           ) : !data ? (
             <div className="flex items-center justify-center py-12 text-hacker-text-dim text-sm">
-              Erreur de chargement
+              {t('usage.loadError')}
             </div>
           ) : !hasData ? (
             <div className="flex items-center justify-center py-12 text-hacker-text-dim text-sm">
               <Brain size={14} className="mr-2" />
-              Aucune donnée pour cette période
+              {t('usage.noDataForPeriod')}
             </div>
           ) : (
             <>
@@ -324,13 +324,13 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
               {/* Totals */}
               <div className="flex flex-wrap gap-4 mt-4 pt-2 border-t border-hacker-border/50 text-xs">
                 <span className="text-hacker-text-dim">
-                  Total input: <span className="text-hacker-accent">{formatTokens(data.totalInput)}</span>
+                  {t('usage.totalInput')}: <span className="text-hacker-accent">{formatTokens(data.totalInput)}</span>
                 </span>
                 <span className="text-hacker-text-dim">
-                  Total output: <span className="text-hacker-accent">{formatTokens(data.totalOutput)}</span>
+                  {t('usage.totalOutput')}: <span className="text-hacker-accent">{formatTokens(data.totalOutput)}</span>
                 </span>
                 <span className="text-hacker-text-dim">
-                  Total: <span className="text-hacker-accent font-bold">{formatTokens(data.totalTokens)}</span>
+                  {t('usage.totalLabel')} <span className="text-hacker-accent font-bold">{formatTokens(data.totalTokens)}</span>
                 </span>
               </div>
 

@@ -13,6 +13,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import type { ToolCallInfo } from "../../types";
+import { useTranslation } from "../../i18n";
 
 // ── Tool icon mapping ──────────────────────────────────
 interface ToolIcon { component: React.ComponentType<any>; color: string }
@@ -149,6 +150,7 @@ const ToolBadge = memo(function ToolBadge({ tool, onClick }: {
 
 // ── Tool timeline item ─────────────────────────────────
 const TimelineItem = memo(function TimelineItem({ tool, onClose }: { tool: ToolCallInfo; onClose?: () => void }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -226,7 +228,8 @@ const TimelineItem = memo(function TimelineItem({ tool, onClose }: { tool: ToolC
           <button
             onClick={(e) => { e.stopPropagation(); onClose(); }}
             className="ml-1 text-hacker-text-dim hover:text-hacker-warn transition-colors"
-            title="Collapse tool"
+            title={t('chat.collapseTool')}
+            aria-label={t('chat.collapseTool')}
           >
             ✕
           </button>

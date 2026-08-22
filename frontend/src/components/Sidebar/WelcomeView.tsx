@@ -80,12 +80,10 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
   };
 
   const issues = status?.extensions.filter(e => !e.installed) ?? [];
-  // Dynamic columns for projects: 2 if ≤6, 3 if >6
-  const projCols = projects.length > 6 ? 3 : 2;
 
   return (
-    <div className="h-full flex flex-col items-center justify-center p-6 overflow-auto">
-      <div className="max-w-2xl w-full space-y-4">
+    <div className="h-full flex flex-col items-center justify-center p-4 md:p-6 overflow-auto">
+      <div className="w-full max-w-2xl space-y-4 px-3 md:px-0">
 
         {/* Logo + Title */}
         <div className="text-center space-y-1.5">
@@ -227,10 +225,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
               </button>
             </div>
           ) : (
-            <div
-              className="grid gap-1.5"
-              style={{ gridTemplateColumns: `repeat(${projCols}, minmax(0, 1fr))` }}
-            >
+            <div className="grid gap-1.5 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
               {projects.map(project => (
                 <button
                   key={project.id}

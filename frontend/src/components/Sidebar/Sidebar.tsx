@@ -9,6 +9,7 @@ import { GitPanel } from "./GitPanel";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import type { Project } from "../../types";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   projects: Project[];
@@ -48,6 +49,7 @@ export function Sidebar({
   const [cbmInstalled, setCbmInstalled] = useState(false);
   const [cbmUpdateAvailable, setCbmUpdateAvailable] = useState(false);
   const [cbmUpdating, setCbmUpdating] = useState(false);
+  const { t } = useTranslation();
 
   // Check for updates on mount
   useEffect(() => {
@@ -203,11 +205,12 @@ export function Sidebar({
       {/* ── Projects ── */}
       <div className="p-2 pb-0">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-hacker-accent text-[10px] tracking-widest">PROJECTS</span>
+          <span className="text-hacker-accent text-[10px] tracking-widest">{t('sidebar.projects')}</span>
           <button
             onClick={onAddProject}
             className="text-hacker-text-dim hover:text-hacker-accent text-[10px] leading-none"
-            title="Add project"
+            title={t('addProject.title')}
+            aria-label={t('addProject.title')}
           >
             <Plus size={10} />
           </button>
@@ -243,7 +246,7 @@ export function Sidebar({
                   onDragOver={(e) => handleDragOver(e, idx)}
                   onDragEnd={handleDragEnd}
                   className="px-1 py-1 cursor-grab active:cursor-grabbing text-hacker-text-dim/0 group-hover:text-hacker-text-dim/60 hover:!text-hacker-text-dim shrink-0"
-                  title="Drag to reorder"
+                  title={t('sidebar.dragToReorder')}
                 >
                   <GripVertical size={10} />
                 </div>
@@ -258,13 +261,13 @@ export function Sidebar({
                   }`}>
                   <span className="truncate flex-1">{p.name}</span>
                   {isThisStreaming && !streamingStalled && (
-                    <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title="Streaming" />
+                    <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title={t('sidebar.streaming')} />
                   )}
                   {isThisStreaming && streamingStalled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn shrink-0" title="Streaming stalled" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn shrink-0" title={t('sidebar.streamingStalled')} />
                   )}
                   {hasSession && !isThisStreaming && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title="Session active" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title={t('sidebar.sessionActive')} />
                   )}
                 </button>
 
@@ -272,7 +275,8 @@ export function Sidebar({
                 <button
                   onClick={(e) => { e.stopPropagation(); setProjectToDelete(p); }}
                   className="px-1 py-1 text-hacker-text-dim/0 group-hover:text-hacker-error/70 hover:!text-hacker-error transition-colors"
-                  title="Delete project"
+                  title={t('sidebar.deleteProject')}
+                  aria-label={t('sidebar.deleteProject')}
                 >
                   <Trash2 size={10} />
                 </button>
@@ -286,7 +290,7 @@ export function Sidebar({
       <div
         onMouseDown={handleResizeMouseDown}
         className="h-1 cursor-row-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors border-b border-hacker-border-bright"
-        title="Resize project list"
+        title={t('sidebar.resizeProjectList')}
       />
 
       {/* ── Git panel ── */}
@@ -296,15 +300,15 @@ export function Sidebar({
 
       {/* ── Commands ── */}
       <div className="p-2 mt-auto border-t border-hacker-border-bright">
-        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">COMMANDS</div>
+        <div className="text-hacker-accent text-[10px] tracking-widest mb-1.5">{t('sidebar.commands')}</div>
         <div className="flex flex-wrap gap-1">
           {[
-            { cmd: "/new", tip: "New session" },
-            { cmd: "/compact", tip: "Compact context" },
-            { cmd: "/clear", tip: "Clear screen" },
-            { cmd: "/review", tip: "Toggle REVIEW mode" },
-            { cmd: "/quit", tip: "Return to home" },
-            { cmd: "/help", tip: "Show help" },
+            { cmd: "/new", tip: t('sidebar.commandTips.newSession') },
+            { cmd: "/compact", tip: t('sidebar.commandTips.compactContext') },
+            { cmd: "/clear", tip: t('sidebar.commandTips.clearScreen') },
+            { cmd: "/review", tip: t('sidebar.commandTips.reviewMode') },
+            { cmd: "/quit", tip: t('sidebar.commandTips.returnToHome') },
+            { cmd: "/help", tip: t('sidebar.commandTips.showHelp') },
           ].map(({ cmd, tip }) => (
             <button
               key={cmd}
@@ -328,25 +332,25 @@ export function Sidebar({
           <span className="flex items-center gap-1">
             pi-agent
             {updateAvailable && !restartPending && (
-              <span className="text-hacker-warn font-bold text-[9px]" title={`Update available: ${piAgentLatest}`}>
-                {piAgentLatest ? `→${piAgentLatest}` : "new!"}
+              <span className="text-hacker-warn font-bold text-[9px]" title={t('welcome.updateAvailable', piAgentLatest)}>
+                {piAgentLatest ? `→${piAgentLatest}` : t('sidebar.updateBadge')}
               </span>
             )}
           </span>
           {restartPending ? (
             <span className="text-hacker-warn flex items-center gap-1">
               <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" />
-              Restarting…
+              {t('sidebar.restarting')}
             </span>
           ) : updateAvailable ? (
             <button
               onClick={handleUpdate}
               disabled={updating}
               className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
-              title="Update pi-agent"
+              title={t('sidebar.updatePiAgent')}
             >
               <ArrowUpCircle size={10} />
-              {updating ? "..." : "Update"}
+              {updating ? "..." : t('sidebar.update')}
             </button>
           ) : (
             <span className="text-hacker-text-dim/50">v{piAgentVersion}</span>
@@ -360,10 +364,10 @@ export function Sidebar({
                 onClick={handleCbmUpdate}
                 disabled={cbmUpdating}
                 className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
-                title="Update codebase-memory-mcp"
+                title={t('sidebar.updateCbm')}
               >
                 <ArrowUpCircle size={10} />
-                {cbmUpdating ? "..." : "Update"}
+                {cbmUpdating ? "..." : t('sidebar.update')}
               </button>
             ) : (
               <span className="text-hacker-text-dim/50">{cbmVersion ? `v${cbmVersion}` : "..."}</span>

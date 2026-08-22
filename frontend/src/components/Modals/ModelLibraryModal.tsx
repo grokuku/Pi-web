@@ -62,7 +62,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
       });
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Failed"); }
       setLibrary(await res.json());
-      setStatus("✓ Models added");
+      setStatus(t('modelLibrary.modelsAdded'));
       onModelApplied?.();
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
@@ -101,7 +101,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
   if (!library) {
     return (
       <ModalDialog id="model-library-loading" onClose={onClose}>
-        <span className="text-hacker-accent animate-pulse">Loading...</span>
+        <span className="text-hacker-accent animate-pulse">{t('modelLibrary.loading')}</span>
       </ModalDialog>
     );
   }
@@ -111,23 +111,23 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
       <div className="max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
-          <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> MODEL LIBRARY</span>
+          <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> {t('modelLibrary.title')}</span>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
         </div>
 
         {/* Status/Error */}
         {status && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 bg-hacker-accent/5 mb-2">{status}</div>}
-        {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">ERROR: {error}</div>}
+        {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{t('modelLibrary.errorPrefix')}{error}</div>}
 
         {/* Tabs */}
         <div className="flex gap-1 mb-3 border-b border-hacker-border pb-1">
           <button onClick={() => setActiveTab("providers")}
             className={`px-3 py-1.5 text-xs border-b-2 transition-colors ${activeTab === "providers" ? "border-hacker-accent text-hacker-accent" : "border-transparent text-hacker-text-dim hover:text-hacker-text"}`}>
-            🏢 PROVIDERS
+            🏢 {t('modelLibrary.providers')}
           </button>
           <button onClick={() => setActiveTab("models")}
             className={`px-3 py-1.5 text-xs border-b-2 transition-colors ${activeTab === "models" ? "border-hacker-accent text-hacker-accent" : "border-transparent text-hacker-text-dim hover:text-hacker-text"}`}>
-            🤖 MODELS
+            🤖 {t('modelLibrary.models')}
           </button>
         </div>
 
@@ -184,7 +184,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
         const refreshRes = await fetch("/api/providers");
         setProviders(await refreshRes.json());
       } else {
-        setError(data.error || "Connection failed");
+        setError(data.error || t('modelLibrary.connectionFailed'));
       }
     } catch (e: any) { setError(e.message); }
   };
@@ -206,11 +206,11 @@ export function ProvidersTab({ providers, setProviders, setError }: {
                 p.connectionStatus === "error" ? "border-hacker-error/50 text-hacker-error" :
                 "border-hacker-border text-hacker-text-dim"
               }`}>
-                {p.connectionStatus === "ok" ? "✓ CONNECTED" : p.connectionStatus === "error" ? "✗ ERROR" : "? UNTESTED"}
+                {p.connectionStatus === "ok" ? t('modelLibrary.connected') : p.connectionStatus === "error" ? t('modelLibrary.error') : t('modelLibrary.untested')}
               </span>
               <button onClick={() => handleTest(p.id)}
                 className="btn-hacker text-[0.6875rem] px-2 py-0.5 flex items-center gap-1">
-                <TestTube2 size={10} /> TEST
+                <TestTube2 size={10} /> {t('modelLibrary.test')}
               </button>
               <button onClick={() => setEditing(p)}
                 className="text-hacker-text-dim hover:text-hacker-accent"><Edit2 size={11} /></button>
@@ -224,7 +224,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
 
       {providers.length === 0 && (
         <div className="text-center text-hacker-text-dim text-xs border border-hacker-border p-6">
-          No providers configured. Add one to get started.
+          {t('modelLibrary.noProvidersAdd')}
         </div>
       )}
 
@@ -265,7 +265,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
       ) : (
         <button onClick={() => setShowAdd(true)}
           className="mt-2 btn-hacker w-full text-xs py-2 flex items-center justify-center gap-1.5">
-          <Plus size={12} /> ADD PROVIDER
+          <Plus size={12} /> {t('modelLibrary.addProvider')}
         </button>
       )}
     </div>
@@ -308,12 +308,12 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
   return (
     <div className="border border-hacker-accent/30 bg-hacker-surface/80 p-3 mt-2">
       <div className="text-hacker-accent text-[0.6875rem] tracking-widest mb-2">
-        {isEdit ? "EDIT" : "ADD"} PROVIDER
+        {isEdit ? t('modelLibrary.editProvider') : t('modelLibrary.addProvider')}
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-2">
         <div>
-          <label className="text-hacker-accent text-[0.6875rem] block mb-1">TYPE</label>
+          <label className="text-hacker-accent text-[0.6875rem] block mb-1">{t('modelLibrary.type')}</label>
           <select value={type} onChange={e => handleTypeChange(e.target.value as ProviderType)}
             className="select-hacker w-full text-xs" disabled={isEdit}>
             {Object.entries(PROVIDER_PRESETS).map(([k, v]) => (
@@ -322,15 +322,15 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
           </select>
         </div>
         <div>
-          <label className="text-hacker-accent text-[0.6875rem] block mb-1">NAME</label>
+          <label className="text-hacker-accent text-[0.6875rem] block mb-1">{t('modelLibrary.name')}</label>
           <input value={name} onChange={e => setName(e.target.value)}
-            className="input-hacker w-full text-xs" placeholder="My Provider" />
+            className="input-hacker w-full text-xs" placeholder={t('modelLibrary.myProvider')} />
         </div>
       </div>
 
       <div className="mb-2">
         <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
-          <Wifi size={10} /> BASE URL
+          <Wifi size={10} /> {t('modelLibrary.baseUrl')}
         </label>
         <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
           className="input-hacker w-full text-xs" placeholder={PROVIDER_PRESETS[type].defaultBaseUrl} />
@@ -339,7 +339,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
       {PROVIDER_PRESETS[type].requiresApiKey && (
         <div className="mb-2">
           <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
-            <Key size={10} /> API KEY
+            <Key size={10} /> {t('modelLibrary.apiKey')}
           </label>
           <div className="flex gap-1">
             <input value={apiKey} onChange={e => setApiKey(e.target.value)}
@@ -355,9 +355,9 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
       <div className="flex gap-2">
         <button onClick={handleSave} className="btn-hacker flex-1 text-xs flex items-center justify-center gap-1">
-          <Check size={12} /> {isEdit ? "SAVE" : "ADD"}
+          <Check size={12} /> {isEdit ? t('modelLibrary.save') : t('modelLibrary.add')}
         </button>
-        <button onClick={onCancel} className="btn-hacker text-xs px-4">CANCEL</button>
+        <button onClick={onCancel} className="btn-hacker text-xs px-4">{t('modelLibrary.cancel')}</button>
       </div>
     </div>
   );
@@ -535,7 +535,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
       // Refresh the library state so the configured panel shows updated values
       if (updatedExisting > 0) await refreshLibrary();
 
-      setStatus(`✓ Scanned ${providers.length} provider(s), found ${newDiscovered.length} model(s)${updatedExisting > 0 ? `, updated ${updatedExisting} existing` : ''}`);
+      setStatus(t('modelLibrary.scanned', providers.length, newDiscovered.length, updatedExisting));
     } catch (e: any) { setError(e.message); }
     finally { setScanning(false); }
   };
@@ -601,7 +601,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           type="text"
           value={modelFilter}
           onChange={e => setModelFilter(e.target.value)}
-          placeholder="Filter models by name..."
+          placeholder={t('modelLibrary.filterModels')}
           className="flex-1 bg-hacker-bg border border-hacker-border px-2 py-1 text-[0.6875rem] text-hacker-text-bright focus:outline-none focus:border-hacker-accent"
         />
         {modelFilter && (
@@ -626,7 +626,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           {/* Available provider filter (above list) */}
           {providers.length > 1 && (
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
-              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">filter:</span>
+              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">{t('modelLibrary.filter')}:</span>
               {providers.map(p => {
                 const checked = providerFilterAvailable.has(p.id);
                 const count = allDiscovered.filter(dm => (dm as any)._providerId === p.id && !configuredCompositeIds.has(compKey(p.id, dm.id))).length;
@@ -675,9 +675,9 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                     {dm.size ? <span className="text-[0.6875rem] text-hacker-text-dim shrink-0">{formatSize(dm.size)}</span> : null}
                     {/* Capability badges */}
                     <span className="flex items-center gap-1 shrink-0">
-                      {((dm as any).vision ?? inferVision(dm.id)) && <span className="text-[0.6875rem]" title="Vision">👁️</span>}
-                      {((dm as any).reasoning ?? inferReasoning(dm.id)) && <span className="text-[0.6875rem]" title="Reasoning">🧠</span>}
-                      <span className="text-[0.6875rem] text-hacker-text-dim/70" title="Context window">{fmtCtx((dm as any).contextWindow || inferContextWindow(dm.id))}</span>
+                      {((dm as any).vision ?? inferVision(dm.id)) && <span className="text-[0.6875rem]" title={t('modelLibrary.vision')}>👁️</span>}
+                      {((dm as any).reasoning ?? inferReasoning(dm.id)) && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
+                      <span className="text-[0.6875rem] text-hacker-text-dim/70" title={t('modelLibrary.contextWindow')}>{fmtCtx((dm as any).contextWindow || inferContextWindow(dm.id))}</span>
                     </span>
                   </button>
                 );
@@ -709,7 +709,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           {/* Selected provider filter (above list) */}
           {providers.length > 1 && (
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-2 py-1 border-b border-hacker-border/30 bg-hacker-bg/30">
-              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">filter:</span>
+              <span className="text-[0.6875rem] text-hacker-text-dim mr-1">{t('modelLibrary.filter')}:</span>
               {providers.map(p => {
                 const checked = providerFilterSelected.has(p.id);
                 const count = library.models.filter(m => m.providerId === p.id).length;
@@ -758,9 +758,9 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                       <span className="text-[0.6875rem] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
                       {/* Capability badges */}
                       <span className="flex items-center gap-1 shrink-0">
-                        {m.vision && <span className="text-[0.6875rem]" title="Vision">👁️</span>}
-                        {m.reasoning && <span className="text-[0.6875rem]" title="Reasoning">🧠</span>}
-                        <span className="text-[0.6875rem] text-hacker-text-dim/70" title="Context window">{fmtCtx(m.contextWindow)}</span>
+                        {m.vision && <span className="text-[0.6875rem]" title={t('modelLibrary.vision')}>👁️</span>}
+                        {m.reasoning && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
+                        <span className="text-[0.6875rem] text-hacker-text-dim/70" title={t('modelLibrary.contextWindow')}>{fmtCtx(m.contextWindow)}</span>
                         <Edit2 size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -777,7 +777,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                     </button>
                     {editingModelId === m.id && (
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-hacker-surface border-b border-hacker-border/50 text-[0.6875rem]">
-                        <label className="text-hacker-text-dim whitespace-nowrap">Ctx:</label>
+                        <label className="text-hacker-text-dim whitespace-nowrap">{t('modelLibrary.ctx')}</label>
                         <input
                           type="number"
                           value={editCtx}
@@ -785,7 +785,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                           placeholder={String(m.contextWindow || 0)}
                           className="w-24 bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
                         />
-                        <label className="text-hacker-text-dim whitespace-nowrap">Max out:</label>
+                        <label className="text-hacker-text-dim whitespace-nowrap">{t('modelLibrary.maxOut')}</label>
                         <input
                           type="number"
                           value={editMaxTokens}
@@ -806,11 +806,11 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                             setEditingModelId(null);
                           }}
                           className="px-2 py-0.5 bg-hacker-accent/20 border border-hacker-accent/50 text-hacker-accent rounded hover:bg-hacker-accent/30"
-                        >Save</button>
+                        >{t('modelLibrary.saveInline')}</button>
                         <button
                           onClick={() => setEditingModelId(null)}
                           className="px-2 py-0.5 text-hacker-text-dim hover:text-hacker-text"
-                        >Cancel</button>
+                        >{t('modelLibrary.cancelInline')}</button>
                       </div>
                     )}
                   </div>
@@ -824,7 +824,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
       {/* Set default hint */}
       {library.models.length > 0 && (
         <div className="text-hacker-text-dim text-[0.6875rem] text-center">
-          ★ = default model · 👁️ vision · 🧠 reasoning · ✎ edit context/max tokens
+          {t('modelLibrary.hint')}
         </div>
       )}
     </div>

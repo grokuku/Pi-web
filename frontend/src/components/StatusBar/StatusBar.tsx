@@ -68,10 +68,23 @@ export function StatusBar({
           )}
         </>
       ) : (
-        <span className="text-hacker-text-dim">No project</span>
+        <span className="text-hacker-text-dim">{t('statusBar.noProject')}</span>
       )}
 
       <div className="flex-1" />
+
+      {/* État connexion WS (Lot B) : la prop connected était reçue mais jamais
+          affichée. Pastille discrète « Hors ligne » uniquement en cas de perte
+          de connexion ; rien n'est affiché quand tout est nominal. */}
+      {!connected && (
+        <>
+          <span className="text-hacker-warn flex items-center gap-1" title={t('header.offline')}>
+            <span className="w-1.5 h-1.5 rounded-full bg-hacker-error animate-pulse" />
+            {t('header.offline')}
+          </span>
+          <span className="text-hacker-border-bright">│</span>
+        </>
+      )}
 
       {/* Model */}
       {session?.model?.name && (
@@ -115,7 +128,7 @@ export function StatusBar({
       {isStreaming && streamingStalled && (
         <>
           <span className="text-hacker-warn flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn" /> stalled
+            <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn" /> {t('activity.stalled')}
           </span>
           <span className="text-hacker-border-bright">│</span>
         </>
@@ -125,8 +138,8 @@ export function StatusBar({
       {displayStats && (
         <>
           {/* Current context: last prompt size */}
-          <span className="text-hacker-text-dim" title={`Context: ${displayStats.tokens.toLocaleString()} tokens\nTotal: ${displayStats.totalTokens.toLocaleString()} tokens`}>
-            ctx {(displayStats.tokens / 1000).toFixed(1)}K
+          <span className="text-hacker-text-dim" title={t('statusBar.contextTooltip', displayStats.tokens.toLocaleString(), displayStats.totalTokens.toLocaleString())}>
+            {t('statusBar.ctx', (displayStats.tokens / 1000).toFixed(1))}
           </span>
           <span className="text-hacker-border-bright">│</span>
           <div className="flex items-center gap-1.5">
@@ -146,14 +159,14 @@ export function StatusBar({
               {displayStats.contextPercent}%
             </span>
             {session?.model?.contextWindow && (
-              <span className="text-hacker-text-dim" title="Model context window">
+              <span className="text-hacker-text-dim" title={t('statusBar.contextWindow')}>
                 /{session.model.contextWindow >= 1000000 ? `${(session.model.contextWindow / 1000000).toFixed(0)}M` : `${(session.model.contextWindow / 1000).toFixed(0)}K`}
               </span>
             )}
           </div>
           <span className="text-hacker-border-bright">│</span>
           {onOpenUsage && (
-            <button onClick={onOpenUsage} className="text-hacker-text-dim hover:text-hacker-accent flex items-center gap-0.5" title="Token usage stats">
+            <button onClick={onOpenUsage} className="text-hacker-text-dim hover:text-hacker-accent flex items-center gap-0.5" title={t('usage.title')} aria-label={t('usage.title')}>
               📊
             </button>
           )}

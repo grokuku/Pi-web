@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { X, RefreshCw, FolderOpen, Code, FileText, Image, Settings, AlertTriangle } from "lucide-react";
+import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   onClose: () => void;
@@ -94,6 +96,22 @@ function StatCard({ icon, value, label, color }: { icon: React.ReactNode; value:
 // ── Main modal ─────────────────────────────────────────
 
 export function CbmStatsModal({ onClose }: Props) {
+  const { t } = useTranslation();
+  // Lot B : harmonisation Échap — cet overlay plein écran (non basé sur
+  // ModalDialog) ne gérait pas la touche Échap. Il s'enregistre désormais dans
+  // la pile centralisée et se ferme comme les autres modaux, uniquement s'il
+  // est au sommet de la pile.
+  const overlayToken = useOverlayStack();
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isTopOverlay(overlayToken.current)) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, overlayToken]);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<{ name: string; cwd: string }[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
@@ -139,7 +157,7 @@ export function CbmStatsModal({ onClose }: Props) {
         })
       );
       const valid = results.filter(Boolean);
-      if (valid.length === 0) throw new Error("Aucun projet accessible");
+      if (valid.length === 0) throw new Error(t('cbmStats.noAccessible'));
 
       // Merge
       const merged: CodeStats = {
@@ -228,14 +246,14 @@ export function CbmStatsModal({ onClose }: Props) {
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-hacker-border-bright bg-hacker-surface shrink-0">
         <div className="flex items-center gap-2">
           <Code size={16} className="text-hacker-accent" />
-          <span className="text-hacker-accent text-xs font-bold tracking-widest">CODE STATS</span>
+          <span className="text-hacker-accent text-xs font-bold tracking-widest">{t('cbmStats.title')}</span>
           {stats && (
             <span className="text-hacker-text-dim text-[10px] ml-2">
               {(stats.scanTimeMs / 1000).toFixed(1)}s
             </span>
           )}
         </div>
-        <button onClick={() => loadStats(selectedPaths)} disabled={loading} className="text-hacker-text-dim hover:text-hacker-accent p-1" title="Refresh">
+        <button onClick={() => loadStats(selectedPaths)} disabled={loading} className="text-hacker-text-dim hover:text-hacker-accent p-1" title={t('cbmStats.refresh')}>
           <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
@@ -244,7 +262,7 @@ export function CbmStatsModal({ onClose }: Props) {
         {error ? (
           <div className="text-hacker-error text-sm text-center py-12">
             <AlertTriangle size={32} className="mx-auto mb-3 opacity-60" />
-            <p className="font-bold mb-1">Erreur</p>
+            <p className="font-bold mb-1">{t('cbmStats.error')}</p>
             <p className="text-xs text-hacker-text-dim">{error}</p>
           </div>
         ) : (
@@ -259,7 +277,7 @@ export function CbmStatsModal({ onClose }: Props) {
                   selectedPaths.length === projects.length
                     ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
                     : "border-hacker-border text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border-bright"}`}
-              >📋 Tout</button>
+              >📋 {t('cbmStats.selectAll')}</button>
               {projects.map(p => {
                 const isSelected = selectedPaths.includes(p.cwd);
                 const idx = projects.indexOf(p);
@@ -295,57 +313,57 @@ export function CbmStatsModal({ onClose }: Props) {
               })}
               {selectedPaths.length > 0 && selectedPaths.length < projects.length && (
                 <div className="w-full text-[10px] text-hacker-text-dim mt-1">
-                  {selectedPaths.length}/{projects.length} projet{selectedPaths.length > 1 ? "s" : ""} sélectionné{selectedPaths.length > 1 ? "s" : ""}
+                  {t('cbmStats.selectedCount', selectedPaths.length, projects.length)}
                   {" · "}
                   <button onClick={() => setSelectedPaths(projects.map(p => p.cwd))}
                     className="text-hacker-accent hover:underline"
-                  >Tout sélectionner</button>
+                  >{t('cbmStats.selectAllBtn')}</button>
                 </div>
               )}
             </div>
 
             {loading ? (
               <div className="text-center py-12">
-                <div className="animate-pulse text-hacker-text-dim text-xs mb-2">Analyse en cours...</div>
-                <div className="text-hacker-text-dim/60 text-[10px]">Scan des fichiers du projet...</div>
+                <div className="animate-pulse text-hacker-text-dim text-xs mb-2">{t('cbmStats.analyzing')}</div>
+                <div className="text-hacker-text-dim/60 text-[10px]">{t('cbmStats.scanning')}</div>
               </div>
             ) : stats ? (
               <div className="space-y-4">
                 {/* Stats cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalCodeFiles)} label="Fichiers code" color="#00d4aa" />
-                  <StatCard icon={<Code size={14} />} value={formatNum(stats.totalCodeLines)} label="Lignes de code" color="#f7df1e" />
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalLines)} label="Lignes total" color="#6a4afc" />
-                  <StatCard icon={<Image size={14} />} value={formatBytes(stats.totalSize)} label="Taille projet" color="#fc5c7d" />
+                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalCodeFiles)} label={t('cbmStats.codeFiles')} color="#00d4aa" />
+                  <StatCard icon={<Code size={14} />} value={formatNum(stats.totalCodeLines)} label={t('cbmStats.codeLines')} color="#f7df1e" />
+                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalLines)} label={t('cbmStats.totalLines')} color="#6a4afc" />
+                  <StatCard icon={<Image size={14} />} value={formatBytes(stats.totalSize)} label={t('cbmStats.size')} color="#fc5c7d" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalBlank)} label="Lignes vides" color="#555" />
-                  <StatCard icon={<Settings size={14} />} value={`${catCount("config")}`} label="Config" color="#3178c6" />
+                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalBlank)} label={t('cbmStats.blankLines')} color="#555" />
+                  <StatCard icon={<Settings size={14} />} value={`${catCount("config")}`} label={t('cbmStats.config')} color="#3178c6" />
                 </div>
 
                 {/* Languages + Top files */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="bg-hacker-surface/40 border border-hacker-border rounded-lg p-3">
-                    <div className="text-hacker-text-dim text-[10px] uppercase tracking-wider font-bold mb-3">Langages</div>
+                    <div className="text-hacker-text-dim text-[10px] uppercase tracking-wider font-bold mb-3">{t('cbmStats.languages')}</div>
                     <BarChart
                       data={stats.langStats.map(l => ({
-                        label: `${l.lang} (${l.files} fichiers)`,
+                        label: t('cbmStats.filesCount', l.lang, l.files),
                         value: l.codeLines,
                         color: LANG_COLORS[l.lang] || "#666",
                       }))}
-                      maxLabel="lignes"
+                      maxLabel={t('cbmStats.lines')}
                     />
                   </div>
                   <div className="bg-hacker-surface/40 border border-hacker-border rounded-lg p-3">
-                    <div className="text-hacker-text-dim text-[10px] uppercase tracking-wider font-bold mb-3">Top fichiers</div>
+                    <div className="text-hacker-text-dim text-[10px] uppercase tracking-wider font-bold mb-3">{t('cbmStats.topFiles')}</div>
                     <BarChart
                       data={stats.topFiles.map(f => ({
                         label: f.name,
                         value: f.lines,
                         color: LANG_COLORS[f.lang] || "var(--hacker-accent)",
                       }))}
-                      maxLabel="lignes"
+                      maxLabel={t('cbmStats.lines')}
                     />
                   </div>
                 </div>
@@ -359,12 +377,12 @@ export function CbmStatsModal({ onClose }: Props) {
                         : "text-hacker-text-dim hover:text-hacker-text"}`}
                     >
                       {cat === "code" && "💻 "}{cat === "asset" && "🖼 "}{cat === "config" && "⚙ "}{cat === "all" && "📋 "}
-                      {cat === "all" ? "Tout" : cat.charAt(0).toUpperCase() + cat.slice(1)}
+                      {cat === "all" ? t('cbmStats.catAll') : cat === "code" ? t('cbmStats.catCode') : cat === "asset" ? t('cbmStats.catAsset') : t('cbmStats.catConfig')}
                       <span className="ml-1 text-hacker-text-dim/60">({cat === "all" ? stats.files.length : catCount(cat)})</span>
                     </button>
                   ))}
                   <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                    placeholder="Rechercher…"
+                    placeholder={t('cbmStats.search')}
                     className="ml-auto bg-hacker-bg border border-hacker-border text-hacker-text text-xs px-2 py-1 rounded w-32 focus:border-hacker-accent outline-none"
                   />
                 </div>
@@ -376,16 +394,16 @@ export function CbmStatsModal({ onClose }: Props) {
                       <thead className="sticky top-0 bg-hacker-surface z-10">
                         <tr className="text-hacker-text-dim text-[10px] uppercase tracking-wider">
                           <th className="text-left p-2 cursor-pointer hover:text-hacker-text" onClick={() => handleSort("name")}>
-                            Fichier {sortCol === "name" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
+                            {t('cbmStats.colFile')} {sortCol === "name" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
                           </th>
                           <th className="text-left p-2 cursor-pointer hover:text-hacker-text" onClick={() => handleSort("ext")}>
-                            Type {sortCol === "ext" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
+                            {t('cbmStats.colType')} {sortCol === "ext" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
                           </th>
                           <th className="text-right p-2 cursor-pointer hover:text-hacker-text w-16" onClick={() => handleSort("lines")}>
-                            Lignes {sortCol === "lines" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
+                            {t('cbmStats.colLines')} {sortCol === "lines" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
                           </th>
                           <th className="text-right p-2 cursor-pointer hover:text-hacker-text w-16" onClick={() => handleSort("size")}>
-                            Taille {sortCol === "size" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
+                            {t('cbmStats.colSize')} {sortCol === "size" && <span className="text-hacker-accent">{sortDir === -1 ? "▼" : "▲"}</span>}
                           </th>
                         </tr>
                       </thead>
@@ -406,7 +424,7 @@ export function CbmStatsModal({ onClose }: Props) {
                         ))}
                         {sortedFiles.length > 500 && (
                           <tr><td colSpan={4} className="p-3 text-center text-hacker-text-dim text-[10px]">
-                            {sortedFiles.length - 500} fichiers supplémentaires (filtrer pour affiner)
+                            {t('cbmStats.moreFiles', sortedFiles.length - 500)}
                           </td></tr>
                         )}
                       </tbody>

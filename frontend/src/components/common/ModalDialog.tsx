@@ -1,4 +1,7 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useTranslation } from "../../i18n";
+import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 // ── Persisted modal geometry (localStorage) ──
 interface ModalGeometry {
@@ -97,10 +100,21 @@ interface Props {
   children: ReactNode;
   /** Optional className for the inner box */
   className?: string;
+  /** Libellé accessible de la modale (aria-label) — clé i18n fournie par l'appelant */
+  ariaLabel?: string;
+  /** id de l'élément titre pour aria-labelledby (si la modale affiche un titre) */
+  ariaLabelledById?: string;
 }
 
-export function ModalDialog({ id, onClose, children, className = "" }: Props) {
+export function ModalDialog({ id, onClose, children, className = "", ariaLabel, ariaLabelledById }: Props) {
+  const { t } = useTranslation();
+  // Sur mobile (<768px) la modale est recentrée au centre de l'écran (pas de drag persistant).
+  const isMobile = useIsMobile();
   const boxRef = useRef<HTMLDivElement>(null);
+  // Lot B : enregistrement du modal dans la pile centralisée des overlays.
+  // Le handler Échap global de App.tsx consulte cette pile pour ne PAS envoyer
+  // pi_abort tant qu'un modal/visionneuse est ouvert (priorité au modal).
+  const overlayToken = useOverlayStack();
   const savedRaw = loadGeometry(id);
   const def = DEFAULTS[id] || { w: 1320, h: 800 };
 
@@ -150,18 +164,26 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
   };
 
   // ── Escape key to close ──
+  // Lot B : seul le modal AU SOMMET de la pile d'overlays réagit à Échap — une
+  // pression ferme un seul modal (le plus récent) au lieu de toute la cascade
+  // de modaux imbriqués d'un coup.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && isTopOverlay(overlayToken.current)) {
+        e.preventDefault();
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, overlayToken]);
 
   // ── Drag ──
-  const handleMouseDownDrag = (e: React.MouseEvent) => {
+  const handlePointerDownDrag = (e: React.PointerEvent) => {
+    // En mobile la modal est recentrée en dur (left/top 50% + translate(-50%,-50%)) :
+    // le drag y est inutile, casse le défilement tactile (preventDefault) et corrompt
+    // la géométrie persistée. On désactive donc le drag sur mobile (le resize reste actif).
+    if (isMobile) return;
     // Only start drag on non-interactive elements
     if ((e.target as HTMLElement).closest("button, input, select, textarea, a, [role='button']")) return;
     // Don't drag if near edge (resize zone)
@@ -172,13 +194,15 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       if (getEdge(mx, my, size.w, size.h)) return;
     }
     e.preventDefault();
+    // Capture du pointeur (tactile/souris) pour suivre le drag hors de la zone
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     dragState.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
     setIsDragging(true);
   };
 
   useEffect(() => {
     if (!isDragging) return;
-    const handleMove = (e: MouseEvent) => {
+    const handleMove = (e: PointerEvent) => {
       if (!dragState.current) return;
       const dx = e.clientX - dragState.current.startX;
       const dy = e.clientY - dragState.current.startY;
@@ -193,22 +217,24 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       dragState.current = null;
       forceSaveGeometry();
     };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-    return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+    return () => { window.removeEventListener("pointermove", handleMove); window.removeEventListener("pointerup", handleUp); window.removeEventListener("pointercancel", handleUp); };
   }, [isDragging]);
 
   // ── Resize ──
-  const handleMouseDownResize = (e: React.MouseEvent, edge: Edge) => {
+  const handlePointerDownResize = (e: React.PointerEvent, edge: Edge) => {
     e.preventDefault();
     e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     resizeState.current = { edge, startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y, origW: size.w, origH: size.h };
     setIsResizing(true);
   };
 
   useEffect(() => {
     if (!isResizing) return;
-    const handleMove = (e: MouseEvent) => {
+    const handleMove = (e: PointerEvent) => {
       if (!resizeState.current) return;
       const s = resizeState.current;
       const dx = e.clientX - s.startX;
@@ -233,9 +259,10 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       resizeState.current = null;
       forceSaveGeometry();
     };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-    return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+    return () => { window.removeEventListener("pointermove", handleMove); window.removeEventListener("pointerup", handleUp); window.removeEventListener("pointercancel", handleUp); };
   }, [isResizing]);
 
   // ── Render resize handles ──
@@ -253,26 +280,30 @@ export function ModalDialog({ id, onClose, children, className = "" }: Props) {
       ...(isCorner ? { width: EDGE * 2, height: EDGE * 2 } : {}),
       cursor: EDGE_CURSORS[edge],
     };
-    return <div key={edge} style={style} onMouseDown={e => handleMouseDownResize(e, edge)} />;
+    return <div key={edge} data-resize-handle style={style} onPointerDown={e => handlePointerDownResize(e, edge)} />;
   });
 
   return (
     <div className="modal-overlay">
       <div
         ref={boxRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabel ?? t('common.dialog')}
+        aria-labelledby={ariaLabelledById || undefined}
         className={`modal-box ${isDragging ? "dragging" : ""} ${isResizing ? "resizing" : ""} ${className}`}
         style={{
           position: "absolute",
-          left: pos.x,
-          top: pos.y,
+          // Sur mobile (<768px) : recentrage au centre de l'écran, indépendant de la position persistée.
+          left: isMobile ? "50%" : pos.x,
+          top: isMobile ? "50%" : pos.y,
+          transform: isMobile ? "translate(-50%, -50%)" : undefined,
           width: size.w,
           height: size.h,
-          maxWidth: "none",
-          maxHeight: "none",
           cursor: isDragging ? "grabbing" : hoverEdge ? EDGE_CURSORS[hoverEdge] : "default",
           userSelect: "none",
         }}
-        onMouseDown={handleMouseDownDrag}
+        onPointerDown={handlePointerDownDrag}
         onMouseMove={e => {
           if (isDragging || isResizing) return;
           const rect = boxRef.current?.getBoundingClientRect();

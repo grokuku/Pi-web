@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "../../i18n";
 
+// Les labels affichables sont i18nisés via le namespace accentColors.* (clé = id)
 const ACCENT_PRESETS = [
-  { id: "green", label: "Vert", dark: "#00ff41", light: "#16a34a" },
-  { id: "purple", label: "Violet", dark: "#c084fc", light: "#8b5cf6" },
-  { id: "orange", label: "Orange", dark: "#fb923c", light: "#ea580c" },
-  { id: "cyan", label: "Cyan", dark: "#22d3ee", light: "#0891b2" },
-  { id: "rose", label: "Rose", dark: "#f472b6", light: "#db2777" },
+  { id: "green", dark: "#00ff41", light: "#166534" },
+  { id: "purple", dark: "#c084fc", light: "#8b5cf6" },
+  { id: "orange", dark: "#fb923c", light: "#ea580c" },
+  { id: "cyan", dark: "#22d3ee", light: "#0891b2" },
+  { id: "rose", dark: "#f472b6", light: "#db2777" },
 ];
 
 interface AccentPickerProps {
@@ -17,6 +19,7 @@ interface AccentPickerProps {
 }
 
 export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanlinesToggle }: AccentPickerProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -38,7 +41,8 @@ export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanl
       <button
         onClick={() => setOpen(!open)}
         className="btn-hacker text-xs px-1.5 py-0.5 flex items-center gap-1"
-        title="Accent color"
+        title={t('header.accentColor')}
+        aria-label={t('header.accentColor')}
       >
         <span
           className="inline-block w-2.5 h-2.5 rounded-full border border-hacker-border-bright"
@@ -74,7 +78,8 @@ export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanl
                   onClick={() => { onAccentChange(p.id); }}
                   className="w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
                   style={{ backgroundColor: color }}
-                  title={p.label}
+                  title={t(`accentColors.${p.id}`)}
+                  aria-label={t(`accentColors.${p.id}`)}
                 >
                   {isActive && (
                     <span className="text-white text-[8px] font-bold drop-shadow-sm">✓</span>

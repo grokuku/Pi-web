@@ -5,6 +5,29 @@ type WsMessage = {
   [key: string]: any;
 };
 
+// ── File d'attente des messages (Lot B — robustesse temps réel) ─────────────
+// Taille maximale de la file : au-delà, les nouveaux messages sont REFUSÉS et
+// signalés (évènement interne "_ws_queue_full") au lieu d'être perdus en silence.
+const QUEUE_MAX = 50;
+
+// Liste blanche EXPLICITE des types mis en file pendant une déconnexion.
+// Seules les actions utilisateur pertinentes y figurent :
+//  - pi_prompt            : prompt tapé pendant une micro-coupure ;
+//  - pi_steer             : direction envoyée pendant un streaming ;
+//  - design_send_to_chat  : envoi d'une maquette vers le chat (équivalent prompt).
+// Sont volontairement EXCLUS de la file (envoyés uniquement socket ouverte) :
+//  - pi_abort : inutile hors connexion et dangereux à rejouer — provoquerait un
+//    « abort fantôme » tuant une génération légitime après reconnexion ;
+//  - ping / keepalive : messages de santé de la connexion, sans sens différé ;
+//  - messages techniques (pi_start, pi_history_request, mode_switch,
+//    terminal_*) : déjà renvoyés ou resynchronisés par la logique existante
+//    à la reconnexion (_ws_reconnect / payload "connected").
+const QUEUEABLE_TYPES: ReadonlySet<string> = new Set([
+  "pi_prompt",
+  "pi_steer",
+  "design_send_to_chat",
+]);
+
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -15,6 +38,52 @@ export function useWebSocket() {
   const isDestroyedRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const hasConnectedBeforeRef = useRef(false);  // persiste entre les reconnexions
+
+  // ── File d'attente ──────────────────────────────────────────────────────────
+  // Les messages de la liste blanche envoyés hors connexion sont stockés ici puis
+  // rejoués dans l'ordre à la prochaine ouverture effective du WebSocket.
+  const queueRef = useRef<WsMessage[]>([]);
+  const [queueSize, setQueueSize] = useState(0);
+
+  // Notifie les listeners locaux (même mécanisme que ws.onmessage). Utilisé pour
+  // les évènements internes du hook, ex. "_ws_queue_full" (file pleine).
+  const notifyListeners = useCallback((type: string, msg: any) => {
+    const listeners = listenersRef.current.get(type);
+    if (listeners) {
+      listeners.forEach((cb) => cb(msg));
+    }
+    const wildcard = listenersRef.current.get("*");
+    if (wildcard) {
+      wildcard.forEach((cb) => cb(msg));
+    }
+  }, []);
+
+  // Rejoue la file dans l'ordre d'arrivée. Appelé à CHAQUE ouverture effective
+  // du WebSocket (onopen), première connexion comme reconnexions.
+  const flushQueue = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (queueRef.current.length === 0) return;
+    const remaining: WsMessage[] = [];
+    const msgs = queueRef.current;
+    for (let i = 0; i < msgs.length; i++) {
+      try {
+        ws.send(JSON.stringify(msgs[i]));
+      } catch (e) {
+        // Socket rompue en cours de rejeu : conserver TOUT le reste depuis
+        // l'index en échec (message en échec + tous ceux qui suivent) pour la
+        // prochaine reconnexion, au lieu de perdre les messages suivants.
+        remaining.push(...msgs.slice(i));
+        console.error("[WS] Rejeu de la file interrompu :", e);
+        break;
+      }
+    }
+    queueRef.current = remaining;
+    setQueueSize(remaining.length);
+    if (remaining.length === 0) {
+      console.log("[WS] File d'attente vidée après reconnexion");
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (isDestroyedRef.current) return;
@@ -52,25 +121,18 @@ export function useWebSocket() {
       reconnectAttemptsRef.current = 0;
       // Notifier les listeners de reconnexion (pas la première connexion)
       if (hasConnectedBeforeRef.current) {
-        const reconnectListeners = listenersRef.current.get("_ws_reconnect");
-        if (reconnectListeners) {
-          reconnectListeners.forEach((cb) => cb({ type: "_ws_reconnect" }));
-        }
+        notifyListeners("_ws_reconnect", { type: "_ws_reconnect" });
       }
       hasConnectedBeforeRef.current = true;
+      // Rejouer les messages mis en file pendant la déconnexion (APRÈS la
+      // notification _ws_reconnect pour laisser la resync UI passer d'abord).
+      flushQueue();
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        const listeners = listenersRef.current.get(msg.type);
-        if (listeners) {
-          listeners.forEach((cb) => cb(msg));
-        }
-        const wildcard = listenersRef.current.get("*");
-        if (wildcard) {
-          wildcard.forEach((cb) => cb(msg));
-        }
+        notifyListeners(msg.type, msg);
       } catch (e) {
         console.error("[WS] Parse error:", e);
       }
@@ -90,7 +152,7 @@ export function useWebSocket() {
     ws.onerror = () => {
       // onclose will handle reconnection
     };
-  }, []);
+  }, [notifyListeners, flushQueue]);
 
   useEffect(() => {
     isDestroyedRef.current = false;
@@ -110,11 +172,38 @@ export function useWebSocket() {
     };
   }, [connect]);
 
-  const send = useCallback((msg: WsMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+  // Envoie un message. Retourne :
+  //  - true  : envoyé immédiatement (socket ouverte) ;
+  //  - false : mis en file (hors connexion, type autorisé) OU refusé
+  //            (type non fileable ou file pleine).
+  const send = useCallback((msg: WsMessage): boolean => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(msg));
+        return true;
+      } catch (e) {
+        // Échec malgré readyState OPEN (socket déjà rompue) : retomber sur la
+        // mise en file ci-dessous si le type y est éligible.
+        console.error("[WS] Échec d'envoi sur socket ouverte :", e);
+      }
     }
-  }, []);
+    // Hors connexion : mise en file UNIQUEMENT pour la liste blanche.
+    if (!QUEUEABLE_TYPES.has(msg.type)) {
+      // pi_abort, ping/keepalive, messages techniques : refus volontaire,
+      // sans mise en file (voir commentaire de QUEUEABLE_TYPES).
+      return false;
+    }
+    if (queueRef.current.length >= QUEUE_MAX) {
+      // File pleine : signaler l'échec explicitement au lieu de dropper.
+      console.error(`[WS] File d'attente pleine (${QUEUE_MAX}) — message « ${msg.type} » refusé`);
+      notifyListeners("_ws_queue_full", { type: "_ws_queue_full" });
+      return false;
+    }
+    queueRef.current.push(msg);
+    setQueueSize(queueRef.current.length);
+    return false;
+  }, [notifyListeners]);
 
   const on = useCallback(
     (type: string, callback: (msg: any) => void) => {
@@ -129,5 +218,6 @@ export function useWebSocket() {
     []
   );
 
-  return { connected, send, on };
+  // pending : état « messages en attente d'envoi » pour l'UI (indicateur discret).
+  return { connected, send, on, queueSize, pending: queueSize > 0 };
 }

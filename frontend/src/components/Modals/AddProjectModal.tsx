@@ -59,15 +59,15 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
     if (step === 1) {
       // Validate Step 1
       if (!name.trim()) {
-        setError("Project name is required");
+        setError(t('addProject.errNameRequired'));
         return;
       }
       if (storage === "ssh" && !sshRemotePath) {
-        setError("Remote working directory is required");
+        setError(t('addProject.errRemoteWorkingDirRequired'));
         return;
       }
       if (storage === "smb" && !smbMount) {
-        setError("Mount point is required");
+        setError(t('addProject.errMountPointRequired'));
         return;
       }
       setError("");
@@ -96,7 +96,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
       const hiddenRes = await fetch(`/api/files/browse?path=${encodeURIComponent(cwd)}&showHidden=true`);
       // We can't easily detect .git via the API (we filter dotfiles), so check if directory is non-empty
       if (entries.length > 0) {
-        return `The directory "${cwd}" is not empty. Cloning a repository here may cause conflicts.`;
+        return t('addProject.conflictWarning', cwd);
       }
     } catch {
       // Can't verify, let it pass
@@ -110,7 +110,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
     setWarning("");
 
     if (versioning === "git" && !gitRemote.trim()) {
-      setError("Git remote URL is required");
+      setError(t('addProject.errGitRemoteRequired'));
       return;
     }
 
@@ -167,7 +167,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to create project");
+        throw new Error(data.error || t('addProject.createFailed'));
       }
 
       const project = await res.json();
@@ -186,16 +186,21 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
     remoteLower.includes("gitlab.com") || remoteLower.includes("gitlab.") ? "gitlab" :
     gitProvider;
 
+  const providerLabel =
+    detectedProvider === "github" ? t('addProject.github') :
+    detectedProvider === "gitlab" ? t('addProject.gitlab') :
+    t('addProject.other');
+
   return (
     <ModalDialog id="add-project" onClose={onClose}>
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <span className="text-hacker-accent font-bold text-sm tracking-wider">
-              + NEW PROJECT
+              {t('addProject.newProject')}
             </span>
             <span className="text-hacker-text-dim text-[10px]">
-              Step {step}/2
+              {t('addProject.step', step, 2)}
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
@@ -225,7 +230,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             {/* Project name */}
             <div>
               <label className="text-hacker-text-dim text-xs block mb-1">
-                Project Name
+                {t('addProject.name')}
               </label>
               <input
                 type="text"
@@ -240,7 +245,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             {/* Storage type */}
             <div>
               <label className="text-hacker-text-dim text-xs block mb-1.5">
-                Storage
+                {t('addProject.storage')}
               </label>
               <div className="flex gap-2">
                 {(["local", "ssh", "smb"] as StorageType[]).map((s) => (
@@ -256,7 +261,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                     {s === "local" && <FolderOpen size={14} />}
                     {s === "ssh" && "🔗"}
                     {s === "smb" && "💾"}
-                    <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : "SMB/NAS"}</span>
+                    <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : t('addProject.smbNas')}</span>
                   </button>
                 ))}
               </div>
@@ -266,8 +271,8 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             {storage === "local" && (
               <div>
                 <label className="text-hacker-text-dim text-xs block mb-1.5">
-                  Parent Directory
-                  <span className="text-hacker-text-dim/50 ml-1">(optional — defaults to /projects)</span>
+                  {t('addProject.parentDirectory')}
+                  <span className="text-hacker-text-dim/50 ml-1">{t('addProject.parentDirectoryHint')}</span>
                 </label>
                 <FileBrowser
                   initialPath={cwd || "/projects"}
@@ -276,17 +281,17 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   selectedPath={cwd}
                 />
                 <div className="text-hacker-accent text-[10px] mt-1">
-                  Will create: {cwd || "/projects"}/{name || "(name)"}
+                  {t('addProject.willCreate', cwd || "/projects", name || t('addProject.namePlaceholder'))}
                 </div>
               </div>
             )}
 
             {storage === "ssh" && (
               <div className="space-y-2 border border-hacker-border p-3">
-                <div className="text-hacker-info text-[10px] mb-1">SSH CONFIGURATION</div>
+                <div className="text-hacker-info text-[10px] mb-1">{t('addProject.sshConfiguration')}</div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-hacker-text-dim text-[10px] block">Host</label>
+                    <label className="text-hacker-text-dim text-[10px] block">{t('addProject.host')}</label>
                     <input
                       type="text"
                       value={sshHost}
@@ -296,7 +301,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                     />
                   </div>
                   <div>
-                    <label className="text-hacker-text-dim text-[10px] block">Port</label>
+                    <label className="text-hacker-text-dim text-[10px] block">{t('addProject.port')}</label>
                     <input
                       type="text"
                       value={sshPort}
@@ -307,7 +312,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   </div>
                 </div>
                 <div>
-                  <label className="text-hacker-text-dim text-[10px] block">Username</label>
+                  <label className="text-hacker-text-dim text-[10px] block">{t('addProject.username')}</label>
                   <input
                     type="text"
                     value={sshUser}
@@ -318,7 +323,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 </div>
                 <div>
                   <label className="text-hacker-text-dim text-[10px] block">
-                    SSH Key Path (optional)
+                    {t('addProject.sshKeyPath')}
                   </label>
                   <input
                     type="text"
@@ -330,7 +335,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 </div>
                 <div>
                   <label className="text-hacker-text-dim text-[10px] block">
-                    Remote Working Directory
+                    {t('addProject.remoteWorkingDirectory')}
                   </label>
                   <input
                     type="text"
@@ -345,9 +350,9 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
 
             {storage === "smb" && (
               <div className="space-y-2 border border-hacker-border p-3">
-                <div className="text-hacker-info text-[10px] mb-1">SMB / NAS CONFIGURATION</div>
+                <div className="text-hacker-info text-[10px] mb-1">{t('addProject.smbNasConfiguration')}</div>
                 <div>
-                  <label className="text-hacker-text-dim text-[10px] block">Share Path</label>
+                  <label className="text-hacker-text-dim text-[10px] block">{t('addProject.sharePath')}</label>
                   <input
                     type="text"
                     value={smbShare}
@@ -357,7 +362,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                   />
                 </div>
                 <div>
-                  <label className="text-hacker-text-dim text-[10px] block">Mount Point</label>
+                  <label className="text-hacker-text-dim text-[10px] block">{t('addProject.mountPoint')}</label>
                   <input
                     type="text"
                     value={smbMount}
@@ -368,7 +373,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-hacker-text-dim text-[10px] block">Username</label>
+                    <label className="text-hacker-text-dim text-[10px] block">{t('addProject.username')}</label>
                     <input
                       type="text"
                       value={smbUser}
@@ -377,7 +382,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                     />
                   </div>
                   <div>
-                    <label className="text-hacker-text-dim text-[10px] block">Password</label>
+                    <label className="text-hacker-text-dim text-[10px] block">{t('addProject.password')}</label>
                     <input
                       type="password"
                       value={smbPass}
@@ -397,7 +402,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             {/* Versioning type */}
             <div>
               <label className="text-hacker-text-dim text-xs block mb-1.5">
-                Versioning
+                {t('addProject.versioning')}
               </label>
               <div className="flex gap-2">
                 {(["standalone", "git"] as VersioningType[]).map((v) => (
@@ -418,19 +423,19 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
               </div>
               <p className="text-hacker-text-dim text-[10px] mt-1">
                 {versioning === "git"
-                  ? "Pi will manage pull/push/sync for this project."
-                  : "No Git integration. Files are managed manually."}
+                  ? t('addProject.gitDescription')
+                  : t('addProject.standaloneDescription')}
               </p>
             </div>
 
             {/* Git configuration */}
             {versioning === "git" && (
               <div className="space-y-3 border border-hacker-border p-3">
-                <div className="text-hacker-info text-[10px] mb-1">GIT CONFIGURATION</div>
+                <div className="text-hacker-info text-[10px] mb-1">{t('addProject.gitConfiguration')}</div>
 
                 {/* Provider */}
                 <div>
-                  <label className="text-hacker-text-dim text-[10px] block mb-1">Provider</label>
+                  <label className="text-hacker-text-dim text-[10px] block mb-1">{t('addProject.gitProvider')}</label>
                   <div className="flex gap-1">
                     {(["github", "gitlab", "other"] as GitProvider[]).map((p) => (
                       <button
@@ -442,7 +447,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                             : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
                         }`}
                       >
-                        {p === "github" ? "🐙 GitHub" : p === "gitlab" ? "🦊 GitLab" : "📦 Other"}
+                        {p === "github" ? "🐙 " + t('addProject.github') : p === "gitlab" ? "🦊 " + t('addProject.gitlab') : "📦 " + t('addProject.other')}
                       </button>
                     ))}
                   </div>
@@ -451,7 +456,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 {/* Remote URL */}
                 <div>
                   <label className="text-hacker-text-dim text-[10px] block mb-1">
-                    Remote URL
+                    {t('addProject.remote')}
                   </label>
                   <input
                     type="text"
@@ -465,7 +470,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 {/* Branch */}
                 <div>
                   <label className="text-hacker-text-dim text-[10px] block mb-1">
-                    Default Branch
+                    {t('addProject.defaultBranch')}
                   </label>
                   <input
                     type="text"
@@ -480,15 +485,15 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
 
             {/* Summary */}
             <div className="border border-hacker-border p-3 bg-hacker-bg/30 text-[10px]">
-              <div className="text-hacker-text-dim mb-1">SUMMARY</div>
+              <div className="text-hacker-text-dim mb-1">{t('addProject.summary')}</div>
               <div className="text-hacker-text-bright space-y-0.5">
-                <div>Name: <span className="text-hacker-accent">{name || "(none)"}</span></div>
-                <div>Storage: <span className="text-hacker-accent">
-                  {storage === "local" ? "📁 Local" : storage === "ssh" ? "🔗 SSH" : "💾 SMB"}
+                <div>{t('addProject.name')}: <span className="text-hacker-accent">{name || t('common.none')}</span></div>
+                <div>{t('addProject.storage')}: <span className="text-hacker-accent">
+                  {storage === "local" ? "📁 " + t('addProject.local') : storage === "ssh" ? "🔗 " + t('addProject.ssh') : "💾 " + t('addProject.smbNas')}
                 </span></div>
-                <div>Path: <span className="text-hacker-accent truncate block">{effectiveCwd || "(none)"}</span></div>
-                <div>Versioning: <span className="text-hacker-accent">
-                  {versioning === "git" ? `${detectedProvider} · ${gitBranch || "main"}` : t('addProject.standalone')}
+                <div>{t('addProject.pathLabel')}: <span className="text-hacker-accent truncate block">{effectiveCwd || t('common.none')}</span></div>
+                <div>{t('addProject.versioning')}: <span className="text-hacker-accent">
+                  {versioning === "git" ? `${providerLabel} · ${gitBranch || "main"}` : t('addProject.standalone')}
                 </span></div>
               </div>
             </div>
@@ -505,13 +510,13 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 className="btn-hacker text-xs flex items-center gap-1"
               >
                 <ArrowLeft size={12} />
-                BACK
+                {t('addProject.back')}
               </button>
             )}
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="btn-hacker text-xs">
-              CANCEL
+              {t('addProject.cancel')}
             </button>
             {step === 1 ? (
               <button
@@ -519,7 +524,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 onClick={handleNext}
                 className="btn-hacker text-xs flex items-center gap-1"
               >
-                NEXT
+                {t('addProject.next')}
                 <ArrowRight size={12} />
               </button>
             ) : (
@@ -529,7 +534,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 className="btn-hacker text-xs"
                 disabled={loading}
               >
-                {loading ? t('common.loading').toUpperCase() + '...' : t('addProject.create')}
+                {loading ? t('common.loading').toUpperCase() : t('addProject.create')}
               </button>
             )}
           </div>

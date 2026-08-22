@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useIsMobile } from "./hooks/useMediaQuery";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { ChatView } from "./components/Chat/ChatView";
@@ -19,7 +20,8 @@ import { Window } from "./components/common/Window";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
 import { X } from "lucide-react";
 import type { Project, PanelId, Activity } from "./types";
-import { I18nProvider, useTranslation } from "./i18n";
+import { I18nProvider, useTranslation, getT } from "./i18n";
+import { hasOpenOverlay } from "./hooks/useOverlayStack";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -27,13 +29,14 @@ class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean;
   static getDerivedStateFromError(e: Error) { return { hasError: true, error: e.message }; }
   render() {
     if (this.state.hasError) {
+      const t = getT();
       return (
         <div className="h-screen w-screen bg-hacker-bg text-hacker-accent flex flex-col items-center justify-center gap-4 p-8 font-mono text-sm">
           <div className="text-4xl">⚠</div>
-          <div className="text-hacker-accent font-bold">RENDER ERROR</div>
+          <div className="text-hacker-accent font-bold">{t('error.renderError')}</div>
           <pre className="text-hacker-error text-xs max-w-[37.5rem] overflow-auto whitespace-pre-wrap">{this.state.error}</pre>
           <button onClick={() => this.setState({hasError: false, error: ""})} className="btn-hacker">
-            RETRY
+            {t('error.retry')}
           </button>
         </div>
       );
@@ -53,7 +56,8 @@ interface ProjectSessionState {
 
 function App() {
   const { t } = useTranslation();
-  const { connected, send, on } = useWebSocket();
+  // queueSize : messages en attente dans la file WS (Lot B) — exposé à ChatView
+  const { connected, send, on, queueSize } = useWebSocket();
   const isGecko = typeof navigator !== 'undefined' && /Gecko\//.test(navigator.userAgent);
 
   // ── State ──
@@ -134,10 +138,10 @@ function App() {
     return (
       <button
         onClick={() => togglePanel(id)}
-        className={`text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+        className={`hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
           isOn ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10" : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
         }`}
-        title={`${isOn ? 'Hide' : 'Show'} ${label}`}
+        title={`${isOn ? t('header.hidePanel', label) : t('header.showPanel', label)}`}
       >
         {isOn ? `[${label}]` : label}
       </button>
@@ -362,13 +366,18 @@ function App() {
       const alt = e.altKey;
 
       if (e.key === "Escape" && !mod && !shift && !alt) {
+        // ── Priorité au modal (Lot B) ──────────────────────────────
+        // Si un overlay/modal/visionneuse est ouvert (pile centralisée
+        // alimentée par useOverlayStack : ModalDialog, Graph3D/CbmStats,
+        // visionneuse de ChatView), Échap ne fait que le FERMER — chaque
+        // overlay gère sa propre fermeture, le plus récent d'abord.
+        // Sinon, Échap interrompt le streaming (comportement historique).
+        if (hasOpenOverlay()) return;
         if (isStreaming && activeProject) {
           e.preventDefault();
           send({ type: "pi_abort", projectId: activeProject.id });
         }
-        if (showSettings) { e.preventDefault(); setShowSettings(false); }
-        else if (showAddProject) { e.preventDefault(); setShowAddProject(false); }
-                return;
+        return;
       }
 
       if (mod && e.key === "l") {
@@ -380,7 +389,7 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [isStreaming, send, showSettings, showAddProject, activeProject]);
+  }, [isStreaming, send, activeProject]);
 
   // ── Streaming watchdog + stall detector ──
   // Every 15s, check all projects:
@@ -620,6 +629,8 @@ function App() {
 
   // ── Project selection ──
   const handleSelectProject = (project: Project) => {
+    // Ferme le drawer sur mobile même si le projet est déjà actif (le tap doit fermer le drawer).
+    if (isMobile) setSidebarOpen(false);
     if (activeProject?.id === project.id) return;
     activateProject(project);
   };
@@ -692,7 +703,7 @@ function App() {
       await loadProjects();
     } catch (e: any) {
       console.error("Failed to delete project:", e.message);
-      alert("Failed to delete project: " + e.message);
+      alert(t('error.deleteProject', e.message));
     }
   };
 
@@ -701,6 +712,17 @@ function App() {
     setActiveProject(null);
     localStorage.removeItem("pi-web-active-project");
   }, []);
+
+  // ── Sidebar drawer (mobile) ──
+  // Sur mobile la sidebar devient un drawer coulissant ; le state sidebarOpen
+  // pilote son ouverture/fermeture. isMobile = true sous md:768px.
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const toggleSidebar = () => setSidebarOpen((o) => !o);
+  // Ferme le drawer si on repasse en desktop (>=768px) pour rester in-flow.
+  useEffect(() => {
+    if (!isMobile) setSidebarOpen(false);
+  }, [isMobile]);
 
   const handleProjectCreated = async (project: Project) => {
     await loadProjects();
@@ -793,7 +815,7 @@ function App() {
       <div className={`h-screen flex flex-col ${scanlines ? "scanlines" : ""}`}>
         {/* Close button for standalone mode */}
         <div className="flex items-center justify-between px-3 h-10 bg-hacker-surface border-b border-hacker-border">
-          <span className="text-hacker-accent text-xs font-bold tracking-widest">PI-WEB STANDALONE - {standalonePanel.toUpperCase()}</span>
+          <span className="text-hacker-accent text-xs font-bold tracking-widest">{t('header.standaloneTitle', standalonePanel.toUpperCase())}</span>
           <button
             onClick={() => {
               // Notify main window to restore the panel
@@ -804,9 +826,9 @@ function App() {
               window.close();
             }}
             className="btn-hacker text-xs px-2 py-1"
-            title="Close and restore to main window"
+            title={t('header.closeRestore')}
           >
-            Close ✕
+            {t('header.closeStandalone')}
           </button>
         </div>
         <div className="flex-1 overflow-hidden">
@@ -822,6 +844,8 @@ function App() {
                   session={session}
                   projectId={activeProject?.id || ""}
                   activeMode={activeMode}
+                  connected={connected}
+                  pendingMessages={queueSize}
                 />
               </div>
             </div>
@@ -852,9 +876,18 @@ function App() {
       {!isGecko && <div className="matrix-bg" />}
 
       {/* ── HEADER ── */}
-      <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0">
+      <header className="h-10 header-glow bg-hacker-surface flex items-center px-3 gap-2 z-10 shrink-0 overflow-x-auto">
+        {/* Hamburger (mobile) — ouvre/ferme le drawer sidebar */}
+        <button
+          onClick={toggleSidebar}
+          className="btn-hacker text-xs px-2 py-1 md:hidden"
+          title={t(sidebarOpen ? 'header.closeSidebar' : 'header.openSidebar')}
+          aria-label={t(sidebarOpen ? 'header.closeSidebar' : 'header.openSidebar')}
+        >
+          ☰
+        </button>
         {/* Logo + connection */}
-        <div onClick={handleQuit} title="Return to home" className="cursor-pointer hover:opacity-70 transition-opacity">
+        <div onClick={handleQuit} title={t('header.returnToHome')} className="cursor-pointer hover:opacity-70 transition-opacity">
           <PiLogo className="text-hacker-accent w-6 h-6" />
         </div>
         <span
@@ -863,7 +896,7 @@ function App() {
         >
           {connected ? "●" : "○"}
         </span>
-        <span className="text-[10px] text-hacker-text-dim">
+        <span className="text-[10px] text-hacker-text-dim hidden md:inline">
           {connected ? t('header.connected') : t('header.offline')}
         </span>
 
@@ -872,74 +905,86 @@ function App() {
         {/* Background streaming count */}
         {backgroundStreamingProjects.length > 0 && (
           <>
-            <span className="text-xs text-hacker-warn"><PiLogo className="w-3.5 h-3.5 inline" />{backgroundStreamingProjects.length} bg</span>
-            <div className="w-px h-4 bg-hacker-border-right" />
+            <span className="text-xs text-hacker-warn hidden md:inline"><PiLogo className="w-3.5 h-3.5 inline" />{backgroundStreamingProjects.length} bg</span>
+            <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
           </>
         )}
 
         <div className="flex-1" />
 
         {/* Mode chips — Modèle par défaut / ROUTING */}
-        <ModelQuickSwitch
-          activeMode={activeMode}
-          activeProjectId={activeProject?.id}
-          modelChangeVersion={modelChangeVersion}
-          session={activeProject ? getProjectSession(activeProject.id).session : undefined}
-          onModeSwitch={(mode) => {
-            if (activeProject) {
-              send({ type: "mode_switch", projectId: activeProject.id, mode });
-            }
-          }}
-          onModelApplied={handleModelApplied}
-        />
+        <div className="hidden md:block">
+          <ModelQuickSwitch
+            activeMode={activeMode}
+            activeProjectId={activeProject?.id}
+            modelChangeVersion={modelChangeVersion}
+            session={activeProject ? getProjectSession(activeProject.id).session : undefined}
+            onModeSwitch={(mode) => {
+              if (activeProject) {
+                send({ type: "mode_switch", projectId: activeProject.id, mode });
+              }
+            }}
+            onModelApplied={handleModelApplied}
+          />
+        </div>
 
-        <div className="w-px h-4 bg-hacker-border-right" />
+        <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
         {/* Panel Switches (ON/OFF) */}
         {renderPanelSwitch("pi", "PI")}
         {renderPanelSwitch("terminal", "TERM")}
         {renderPanelSwitch("files", "FILES")}
 
-
-        <div className="w-px h-4 bg-hacker-border-right" />
+        <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
         {/* Graph 3D button */}
         <button
           onClick={() => setShowGraph3D(true)}
-          className="text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
-          title="Open 3D codebase graph"
+          className="hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          title={t('header.graph3d')}
+          aria-label={t('header.graph3d')}
         >
           📊
         </button>
         {/* CBM stats button */}
         <button
           onClick={() => setShowCbmStats(true)}
-          className="text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
-          title="CBM usage statistics"
+          className="hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          title={t('header.cbmStats')}
+          aria-label={t('header.cbmStats')}
         >
           📈
         </button>
 
-        <div className="w-px h-4 bg-hacker-border-right" />
+        <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
         {/* Zoom buttons */}
-        <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1" title="Zoom out">−</button>
-        <span className="text-xs text-hacker-text-dim min-w-[28px] text-center">{Math.round(zoomLevel * 100)}%</span>
-        <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1" title="Zoom in">+</button>
+        <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1 hidden md:inline-flex" title={t('common.zoomOut')} aria-label={t('common.zoomOut')}>−</button>
+        <span className="text-xs text-hacker-text-dim min-w-[28px] text-center hidden md:inline">{Math.round(zoomLevel * 100)}%</span>
+        <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1 hidden md:inline-flex" title={t('common.zoomIn')} aria-label={t('common.zoomIn')}>+</button>
 
-        <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1">
+        <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1" title={t('header.toggleTheme')} aria-label={t('header.toggleTheme')}>
           {theme === "dark" ? "☀" : "☾"}
         </button>
-        <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
-        <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title={`${t('header.settings')} (Ctrl+L)`}>
+        <div className="hidden md:block">
+          <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
+        </div>
+        <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title={`${t('header.settings')} (Ctrl+L)`} aria-label={`${t('header.settings')} (Ctrl+L)`}>
           ⚙
         </button>
       </header>
 
       {/* ── MAIN BODY ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar with tabs + project list */}
-        <div style={{ width: sidebarWidth }} className="shrink-0 relative">
+        {/* Overlay mobile — ferme le drawer au clic extérieur */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-40 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />
+        )}
+        {/* Sidebar with tabs + project list — drawer coulissant sur mobile, in-flow sur desktop */}
+        <div
+          style={{ width: isMobile ? 256 : sidebarWidth }}
+          className={`fixed z-50 top-10 bottom-0 left-0 transition-transform md:relative md:translate-x-0 md:z-auto md:shrink-0 md:top-auto md:bottom-auto md:left-auto overflow-y-auto ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+        >
           <Sidebar
             projects={projects}
             activeProject={activeProject}
@@ -964,8 +1009,8 @@ function App() {
           {/* Resize handle */}
           <div
             onMouseDown={startResizeSidebar}
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors"
-            title="Resize sidebar"
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors hidden md:block"
+            title={t('header.resizeSidebar')}
           />
         </div>
 
@@ -1002,7 +1047,7 @@ function App() {
                 sizes={layoutCfg.sizes}
                 panelContent={{
                   pi: (
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} streamingStalled={streamingStalled} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} streamingStalled={streamingStalled} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} />
                   ),
                   terminal: (
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
@@ -1038,7 +1083,7 @@ function App() {
       {/* FLOATING PANELS (Windows) */}
       {panels.pi?.visible && panels.pi?.floating && (
         <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
-          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} onQuit={handleQuit} />
+          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} />
         </Window>
       )}
       {panels.terminal?.visible && panels.terminal?.floating && (

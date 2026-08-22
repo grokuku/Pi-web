@@ -59,7 +59,7 @@ import {
 } from "./terminal/pty.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { isCwdAllowed, isPathAllowed } from "./utils/path-security.js";
-import { getAllowedOrigins, parseAllowedOrigins, isAllowedOrigin, isAllOriginsAllowed } from "./utils/origins.js";
+import { resolveEffectiveAllowedOrigins, isOriginEffectivelyAllowed, isAllowedOrigin } from "./utils/origins.js";
 import { credentialStore } from "./projects/credential-store.js";
 import { cbmStdioCall } from "./pi/cbm-stdio.js";
 
@@ -73,16 +73,14 @@ const PORT = 3000;
 // ─── Express App ───────────────────────────────────────
 const app = express();
 
-// CORS: ALLOWED_ORIGINS env var (comma-separated origins). `*` = allow-all.
-// Sans valeur configurée, on refuse tout (deny all).
-const corsOrigins: string[] = getAllowedOrigins();
-const corsAllowAll = isAllOriginsAllowed(corsOrigins);
+// CORS dynamique : la liste effective des origines autorisées (variables
+// d'environnement + réglage UI « Sécurité », cf. utils/origins.ts) est résolue
+// À CHAQUE REQUÊTE afin que les changements s'appliquent à chaud, sans restart.
+// `*` (ou aucune source configurée) = allow-all ; origine non autorisée ou
+// absente → aucun en-tête CORS émis (le navigateur bloque la réponse).
 app.use(cors({
-  origin: corsAllowAll ? "*" : (corsOrigins.length > 0 ? corsOrigins : false),
+  origin: (origin, cb) => cb(null, isOriginEffectivelyAllowed(origin)),
 }));
-if (!corsAllowAll && corsOrigins.length === 0) {
-  console.warn("[CORS] WARNING: No ALLOWED_ORIGINS/PUBLIC_BASE_URL set. CORS is disabled (deny all).");
-}
 app.use(express.json({ limit: "50mb" }));
 
 // ── Serve frontend static files FIRST (before CBM proxy) ──
@@ -458,33 +456,16 @@ if (existsSync(frontendDist)) {
 const httpServer = createServer(app);
 
 // ── WebSocket Server ──────────────────────────────────
-// WS_ALLOWED_ORIGINS env var (comma-separated origins). `*` = allow-all.
-// Si WS_ALLOWED_ORIGINS est absent, on retombe sur ALLOWED_ORIGINS/PUBLIC_BASE_URL.
-// Sans valeur configurée, on refuse les connexions sans jeton/hors localhost.
-const wsAllowedOrigins: string[] = (() => {
-  const raw = process.env.WS_ALLOWED_ORIGINS;
-  if (raw && raw.trim() !== "") {
-    return parseAllowedOrigins(raw, "WS_ALLOWED_ORIGINS");
-  }
-  return getAllowedOrigins();
-})();
-const wsAllowAll = isAllOriginsAllowed(wsAllowedOrigins);
-if (!wsAllowAll && wsAllowedOrigins.length === 0) {
-  console.warn("[WS] WARNING: No WS_ALLOWED_ORIGINS set. WebSocket connections require a valid token (or localhost).");
-}
-
-/**
- * Valide l'Origin d'une connexion WebSocket.
- *
- * En mode `*` (allow-all), on accepte toute origine, y compris l'absence
- * d'en-tête Origin : l'origine n'est alors volontairement pas une barrière.
- * En mode liste explicite, seules les origines configurées sont acceptées.
- * On ne compare jamais l'Origin au Host (contrôlable par le client).
- */
-function validateOrigin(origin: string | undefined): boolean {
-  if (wsAllowAll) return true;
-  return isAllowedOrigin(origin, wsAllowedOrigins);
-}
+// L'authentification WS est durcie (correctif sécurité) : la simple
+// correspondance du header Origin n'est JAMAIS suffisante (forgeable par un
+// client non-navigateur). Ordre d'acceptation :
+//   1) jeton valide (même validation que l'API REST, api-auth.ts) ;
+//   2) connexion locale (extensions, proxy Vite en dev) ;
+//   3) requête navigateur authentique : TOUS les critères requis — header
+//      Origin présent ET autorisé par la liste effective (env + réglage UI,
+//      résolue à chaque handshake pour le hot-reload) ET Sec-Fetch-Site:
+//      same-origin ET Sec-Fetch-Mode: websocket (signature navigateur) ;
+//   4) sinon → refus 401.
 
 /** Extrait un jeton d'authentification d'une requête WebSocket. */
 function extractWsToken(req: any): string | null {
@@ -518,13 +499,24 @@ const wss = new WebSocketServer({
       return;
     }
 
-    // 3) Navigateur avec une Origin explicitement autorisée.
-    if (validateOrigin(origin)) {
+    // 3) Requête navigateur authentique : TOUS les critères sont requis.
+    //    La correspondance d'Origin seule ne suffit jamais (forgeable) : les
+    //    en-têtes Sec-Fetch-* doivent également signer une requête navigateur.
+    const fetchSite = (info.req.headers["sec-fetch-site"] as string | undefined)?.trim().toLowerCase();
+    const fetchMode = (info.req.headers["sec-fetch-mode"] as string | undefined)?.trim().toLowerCase();
+    const effective = resolveEffectiveAllowedOrigins();
+    if (
+      !!origin &&
+      isAllowedOrigin(origin, effective.origins) &&
+      fetchSite === "same-origin" &&
+      fetchMode === "websocket"
+    ) {
       callback(true);
       return;
     }
 
-    console.log(`[WS] Rejected connection (origin: ${origin || "none"})`);
+    // 4) Tout le reste → refus.
+    console.log(`[WS] Rejected connection (origin: ${origin || "none"}, ip: ${info.req.socket.remoteAddress})`);
     callback(false, 401, "Unauthorized");
     return;
   },
@@ -909,9 +901,11 @@ httpServer.listen(PORT, async () => {
   // Démarrer le cron du libraire
   startLibrarianCron(() => getAllProjects().map(p => p.cwd));
 
-  const originSummary = wsAllowAll
+  // Résumé informatif au démarrage (la liste réelle est résolue à chaque check).
+  const effective = resolveEffectiveAllowedOrigins();
+  const originSummary = effective.allowAll
     ? "all origins (allow-all)"
-    : `${wsAllowedOrigins.length} allowed origin(s)`;
+    : `${effective.origins.length} allowed origin(s)`;
   console.log(`
   ╔══════════════════════════════════════════╗
   ║  ⚡ PI-WEB  ███▓▓▒▒░░  v${piWebVersion}  ░░▒▒▓▓███  ║

@@ -14,6 +14,12 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
 import { getTavilyConfig, setTavilyConfig } from "../tavily.js";
+import {
+  getUiAllowedOrigins,
+  saveUiAllowedOrigins,
+  resolveEffectiveAllowedOrigins,
+  validateOriginInput,
+} from "../utils/origins.js";
 
 const router = Router();
 
@@ -215,6 +221,68 @@ router.post("/tavily", (req: Request, res: Response) => {
     if (apiKey === undefined) return res.status(400).json({ error: "Missing apiKey" });
     setTavilyConfig({ apiKey });
     res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── Origines autorisées (réglage UI « Sécurité ») ──
+// La liste effective = union des variables d'environnement (ALLOWED_ORIGINS /
+// WS_ALLOWED_ORIGINS / PUBLIC_BASE_URL) et de la config UI persistée dans
+// .data/allowed-origins.json. Si aucune source ne définit quoi que ce soit →
+// `*` (comportement historique). Prend effet immédiatement, sans restart
+// (cache UI invalidé à l'écriture, cf. utils/origins.ts).
+
+// Limite défensive : la liste des origines est petite par nature.
+const MAX_ALLOWED_ORIGINS = 64;
+
+function serializeAllowedOrigins() {
+  const effective = resolveEffectiveAllowedOrigins();
+  return {
+    // Valeur éditable (config UI seule).
+    origins: getUiAllowedOrigins(),
+    // Valeur effectivement appliquée aux checks HTTP et WS.
+    effectiveOrigins: effective.origins,
+    allowAll: effective.allowAll,
+    sources: effective.sources,
+  };
+}
+
+router.get("/allowed-origins", (_req: Request, res: Response) => {
+  try {
+    res.json(serializeAllowedOrigins());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put("/allowed-origins", (req: Request, res: Response) => {
+  try {
+    const { origins } = req.body ?? {};
+    if (!Array.isArray(origins)) {
+      return res.status(400).json({ error: "invalid_origin_list" });
+    }
+    if (origins.length > MAX_ALLOWED_ORIGINS) {
+      return res.status(400).json({ error: "too_many_origins", max: MAX_ALLOWED_ORIGINS });
+    }
+
+    // Validation stricte : protocole + host (+ port), pas de chemin, pas de
+    // wildcard partielle (`*` seul accepté), normalisation minuscules + dédup.
+    // Rien n'est écrit si une seule entrée est invalide : l'UI affiche les
+    // entrées fautives via un message localisé (codes machine ici).
+    const invalid: { index: number; origin: string }[] = [];
+    const validated: string[] = [];
+    origins.forEach((raw: unknown, index: number) => {
+      const normalized = validateOriginInput(raw);
+      if (normalized === null) invalid.push({ index, origin: String(raw) });
+      else validated.push(normalized);
+    });
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: "invalid_origin_list", details: invalid });
+    }
+
+    saveUiAllowedOrigins(validated);
+    res.json(serializeAllowedOrigins());
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

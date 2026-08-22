@@ -1,11 +1,29 @@
 import { X, ExternalLink, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   onClose: () => void;
 }
 
 export function Graph3DModal({ onClose }: Props) {
+  const { t } = useTranslation();
+  // Lot B : harmonisation Échap — cet overlay plein écran (non basé sur
+  // ModalDialog) ne gérait pas la touche Échap. Il s'enregistre désormais dans
+  // la pile centralisée et se ferme comme les autres modaux, uniquement s'il
+  // est au sommet de la pile.
+  const overlayToken = useOverlayStack();
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isTopOverlay(overlayToken.current)) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, overlayToken]);
   const [loading, setLoading] = useState(true);
   const [available, setAvailable] = useState<boolean | null>(null);
 
@@ -28,11 +46,11 @@ export function Graph3DModal({ onClose }: Props) {
       <div className="flex items-center justify-between px-3 py-2 border-b border-hacker-border-bright bg-hacker-surface shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-hacker-accent text-xs font-bold tracking-widest">
-            📊 CODEBASE GRAPH 3D
+            📊 {t('graph3d.title')}
           </span>
           {available === false && (
             <span className="text-hacker-warn text-[10px]">
-              — Server not running. Start a Pi session to index the project.
+              {t('graph3d.serverNotRunning')}
             </span>
           )}
         </div>
@@ -42,7 +60,7 @@ export function Graph3DModal({ onClose }: Props) {
             target="_blank"
             rel="noopener noreferrer"
             className="text-hacker-text-dim hover:text-hacker-accent p-1"
-            title="Open in new tab (direct)"
+            title={t('graph3d.openNewTab')}
           >
             <ExternalLink size={14} />
           </a>
@@ -54,14 +72,14 @@ export function Graph3DModal({ onClose }: Props) {
               if (iframe) iframe.src = "/cbm-ui/";
             }}
             className="text-hacker-text-dim hover:text-hacker-accent p-1"
-            title="Reload"
+            title={t('graph3d.reload')}
           >
             <RefreshCw size={14} />
           </button>
           <button
             onClick={onClose}
             className="text-hacker-text-dim hover:text-hacker-error p-1"
-            title="Close"
+            title={t('graph3d.close')}
           >
             <X size={16} />
           </button>
@@ -73,20 +91,16 @@ export function Graph3DModal({ onClose }: Props) {
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-hacker-text-dim text-xs">
-              <div className="animate-pulse">Loading 3D graph...</div>
+              <div className="animate-pulse">{t('graph3d.loading')}</div>
             </div>
           </div>
         )}
         {available === false ? (
           <div className="absolute inset-0 flex items-center justify-center p-8">
             <div className="text-center space-y-3 max-w-md">
-              <div className="text-hacker-warn text-sm font-bold">⚠ Graph server not available</div>
-              <div className="text-hacker-text-dim text-xs">
-                The codebase-memory-mcp binary needs to be running to display the 3D graph.
-                <br /><br />
-                It starts automatically when you open a Pi chat session.
-                <br /><br />
-                If the binary is not installed yet, it will be downloaded on first session start (~15 MB).
+              <div className="text-hacker-warn text-sm font-bold">{t('graph3d.notAvailable')}</div>
+              <div className="text-hacker-text-dim text-xs whitespace-pre-line">
+                {t('graph3d.notAvailableDesc')}
               </div>
               <button
                 onClick={() => {
@@ -97,7 +111,7 @@ export function Graph3DModal({ onClose }: Props) {
                 }}
                 className="btn-hacker text-xs px-3 py-1.5"
               >
-                Retry
+                {t('graph3d.retry')}
               </button>
             </div>
           </div>
@@ -107,7 +121,7 @@ export function Graph3DModal({ onClose }: Props) {
             src="/cbm-ui/"
             className="w-full h-full border-0"
             onLoad={() => setLoading(false)}
-            title="Codebase 3D Graph"
+            title={t('graph3d.iframeTitle')}
           />
         )}
       </div>

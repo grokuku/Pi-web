@@ -1,6 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { validateToken, isAgentEnabled } from "../routes/agent-keys.js";
-import { getAllowedOrigins, isAllOriginsAllowed, isAllowedOrigin } from "../utils/origins.js";
+import { resolveEffectiveAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
 
 /**
  * Middleware d'authentification globale de l'API.
@@ -24,8 +24,9 @@ import { getAllowedOrigins, isAllOriginsAllowed, isAllowedOrigin } from "../util
  * jeton. Avec `*`, l'origine n'est volontairement pas une barrière.
  */
 
-// Origines autorisées figées au démarrage (`*` = allow-all).
-const ALLOWED_ORIGINS = getAllowedOrigins();
+// La liste des origines autorisées est résolue À CHAQUE REQUÊTE (et non plus
+// figée au démarrage) : les changements via les variables d'environnement ou le
+// réglage UI « Sécurité » (cf. utils/origins.ts) s'appliquent immédiatement.
 
 // Endpoints publics (aucune authentification requise).
 // NB: le middleware est monté sur /api, donc req.path est relatif au montage
@@ -71,12 +72,15 @@ function isLocalhost(req: Request): boolean {
  *   client non-navigateur).
  */
 function isBrowserRequest(req: Request): boolean {
+  // Liste effective résolue à chaque requête (env + réglage UI, hot-reload).
+  const effective = resolveEffectiveAllowedOrigins();
+
   // Mode allow-all (`*`) : permissivité assumée par l'admin (ex. serveur
   // interne/privé). L'API est ouverte, toute requête est considérée navigateur,
   // sans exiger Sec-Fetch-Site — comportement « allow-all historique ».
   // La protection Sec-Fetch-Site reste active pour les listes d'origines
   // explicites (pas de `*`), où le comportement strict est conservé.
-  if (isAllOriginsAllowed(ALLOWED_ORIGINS)) {
+  if (effective.allowAll) {
     return true;
   }
 
@@ -88,7 +92,7 @@ function isBrowserRequest(req: Request): boolean {
     return hasFetchSite && fetchSite!.toLowerCase() === "same-origin";
   }
 
-  return !!origin && isAllowedOrigin(origin, ALLOWED_ORIGINS) && hasFetchSite;
+  return !!origin && isAllowedOrigin(origin, effective.origins) && hasFetchSite;
 }
 
 export function apiAuth(req: Request, res: Response, next: NextFunction): void {

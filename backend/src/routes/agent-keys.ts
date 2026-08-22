@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
+import { resolveEffectiveAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -23,12 +23,13 @@ const router = Router();
 // This prevents unauthenticated external access to key management while allowing
 // the web UI to work without additional configuration.
 // If you lose your only key, delete agent-keys.json and restart to re-bootstrap.
-const ADMIN_ALLOWED_ORIGINS = getAllowedOrigins();
 
 function isSameOrigin(req: Request): boolean {
   // On ne compare plus jamais Origin à Host (tous deux contrôlables par le
   // client). La provenance navigateur est détectée par Sec-Fetch-Site, puis
-  // l'Origin est comparée à ALLOWED_ORIGINS/PUBLIC_BASE_URL (`*` = allow-all).
+  // l'Origin est comparée à la liste effective des origines autorisées (env +
+  // réglage UI « Sécurité », `*` = allow-all), résolue à chaque requête pour
+  // que les changements s'appliquent à chaud.
   const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
   const hasFetchSite = typeof fetchSite === "string" && fetchSite.trim().length > 0;
   const origin = req.headers.origin as string | undefined;
@@ -38,7 +39,7 @@ function isSameOrigin(req: Request): boolean {
     return hasFetchSite && fetchSite!.toLowerCase() === "same-origin";
   }
 
-  return !!origin && isAllowedOrigin(origin, ADMIN_ALLOWED_ORIGINS) && hasFetchSite;
+  return !!origin && isAllowedOrigin(origin, resolveEffectiveAllowedOrigins().origins) && hasFetchSite;
 }
 
 function adminAuth(req: Request, res: Response, next: NextFunction): void {

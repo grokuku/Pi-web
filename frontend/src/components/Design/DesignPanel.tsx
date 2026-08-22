@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { DesignCanvas } from "./DesignCanvas";
 import { Toolbar } from "./Toolbar";
 import { ExportModal } from "./ExportModal";
+import { useTranslation } from "../../i18n";
 
 interface DesignPanelProps {
   projectId?: string;
@@ -25,6 +26,7 @@ interface DesignPage {
 }
 
 export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps) {
+  const { t } = useTranslation();
   const [designs, setDesigns] = useState<DesignListItem[]>([]);
   const [currentDesign, setCurrentDesign] = useState<{
     id: string;
@@ -85,7 +87,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
     setError(null);
     try {
       const res = await fetch(`/api/design/import-project/${projectId}`, { method: "POST" });
-      if (!res.ok) throw new Error("Import failed");
+      if (!res.ok) throw new Error(t('design.importFailed'));
       const data = await res.json();
 
       // Créer un nouveau design avec le résultat
@@ -98,7 +100,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
           pages: [{ id: crypto.randomUUID(), name: "Main", html: data.html, css: data.css }],
         }),
       });
-      if (!createRes.ok) throw new Error("Failed to create design");
+      if (!createRes.ok) throw new Error(t('design.createFailed'));
       const newDesign = await createRes.json();
 
       setCurrentDesign({
@@ -130,7 +132,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
     const url = projectId ? `/api/design/project/${projectId}` : `/api/design`;
     fetch(url)
       .then((r) => {
-        if (!r.ok) throw new Error("Impossible de charger les designs");
+        if (!r.ok) throw new Error(t('design.loadListFailed'));
         return r.json();
       })
       .then((data: DesignListItem[]) => {
@@ -151,7 +153,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
       setError(null);
       try {
         const res = await fetch(`/api/design/${id}`);
-        if (!res.ok) throw new Error("Failed to load design");
+        if (!res.ok) throw new Error(t('design.loadFailed'));
         const data = await res.json();
         // Le backend stocke le contenu dans `pages[]` et non dans des champs top-level html/css.
         const firstPage = Array.isArray(data.pages) && data.pages.length > 0 ? data.pages[0] : null;
@@ -198,7 +200,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
           ],
         }),
       });
-      if (!res.ok) throw new Error("Failed to save");
+      if (!res.ok) throw new Error(t('design.saveFailed'));
       setIsDirty(false);
       setHtmlContent(html);
       setCssContent(css);
@@ -279,7 +281,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
   // ── Render ──
   // ── Create a new design ──
   const handleNewDesign = useCallback(async () => {
-    const name = prompt("Nom du design:");
+    const name = prompt(t('design.namePrompt'));
     if (!name || !name.trim()) return;
     setLoading(true);
     setError(null);
@@ -292,7 +294,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
           ...(projectId ? { projectId } : {}),
         }),
       });
-      if (!res.ok) throw new Error("Échec de la création");
+      if (!res.ok) throw new Error(t('design.createFailed'));
       const data = await res.json();
       // Le backend renvoie un objet Design avec `pages[]`.
       const firstPage = Array.isArray(data.pages) && data.pages.length > 0 ? data.pages[0] : null;
@@ -327,7 +329,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
         <div className="text-center">
           <p className="mb-3">{error}</p>
           <button onClick={() => setError(null)} className="text-xs border border-hacker-border px-3 py-1 rounded hover:bg-hacker-accent/10">
-            Réessayer
+            {t('design.retry')}
           </button>
         </div>
       </div>
@@ -337,7 +339,7 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
   if (loading && !currentDesign) {
     return (
       <div className="h-full flex items-center justify-center text-hacker-text-dim text-sm font-mono">
-        Loading...
+        {t('design.loading')}
       </div>
     );
   }
@@ -348,13 +350,13 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
       <div className="h-full flex flex-col">
         <div className="flex items-center justify-between px-3 h-10 border-b border-hacker-accent/20 bg-hacker-surface shrink-0">
           <span className="text-xs font-bold text-hacker-accent tracking-wider">
-            DESIGN PROJECTS
+            {t('design.title')}
           </span>
         </div>
         <div className="flex-1 overflow-auto p-4 space-y-2">
           {designs.length === 0 && !loading && (
             <div className="text-hacker-muted text-sm text-center mt-8 mb-4">
-              Aucun design pour le moment.
+              {t('design.empty')}
             </div>
           )}
           {designs.map((d) => (
@@ -373,13 +375,13 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
             onClick={handleNewDesign}
             className="w-full text-center px-3 py-2 border border-dashed border-hacker-accent/40 text-hacker-accent text-sm rounded hover:bg-hacker-accent/10 transition-colors"
           >
-            + Nouveau design
+            {t('design.new')}
           </button>
           <button
             onClick={handleImportProject}
             className="w-full text-center px-3 py-2 border border-dashed border-hacker-accent/40 text-hacker-accent text-sm rounded hover:bg-hacker-accent/10 transition-colors"
           >
-            📥 Importer depuis le projet
+            {t('design.import')}
           </button>
         </div>
       </div>

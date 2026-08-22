@@ -8,6 +8,7 @@ import { ModalDialog } from "../common/ModalDialog";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { useTranslation } from "../../i18n";
+import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 
@@ -71,7 +72,9 @@ function getFileExtensionIcon(category: Attachment["category"], fileName: string
 }
 
 interface Props {
-  send: (msg: any) => void;
+  // Lot B : retourne true si le message a été envoyé, false s'il a été mis en
+  // file d'attente (hors connexion) ou refusé — voir hooks/useWebSocket.ts.
+  send: (msg: any) => boolean;
   on: (type: string, cb: (msg: any) => void) => () => void;
   activeProject: Project | null;
   isStreaming: boolean;
@@ -79,6 +82,10 @@ interface Props {
   session: any;
   projectId: string;
   activeMode?: string;
+  // Lot B : état connexion WS + taille de la file d'attente d'envoi,
+  // pour la bannière « connexion perdue » en haut des messages.
+  connected: boolean;
+  pendingMessages: number;
   onQuit?: () => void;
 }
 
@@ -183,7 +190,27 @@ function applyPiEvent(
   return { messages: msgs, assistantId: asstId };
 }
 
-export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, onQuit }: Props) {
+// ── Bannière « connexion perdue » (Lot B — visibilité déconnexion WS) ──────
+// Discrète et persistante : affichée en haut de la zone de messages tant que
+// le WebSocket est déconnecté (reconnexion automatique en arrière-plan).
+// Style calqué sur la bannière d'erreur existante mais en ton warning/info.
+// Mentionne le nombre de messages en attente dans la file d'envoi le cas échéant.
+const WsOfflineBanner = memo(function WsOfflineBanner({ pendingMessages }: { pendingMessages: number }) {
+  const { t } = useTranslation();
+  return (
+    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-1.5 mb-2 text-xs text-hacker-warn bg-hacker-bg/95 backdrop-blur-sm border border-hacker-warn/30 rounded-sm">
+      <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn animate-pulse shrink-0" />
+      <span className="truncate">
+        {t('chat.wsOffline')}
+        {pendingMessages > 0 && (
+          <span className="text-hacker-text-dim"> · {t('chat.wsPendingMessages', pendingMessages)}</span>
+        )}
+      </span>
+    </div>
+  );
+});
+
+export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, connected, pendingMessages, onQuit }: Props) {
   const { t } = useTranslation();
 
   // ── State ──
@@ -342,11 +369,32 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         }).catch(()=>{});
         return;
       }
-      if (e.key === "Escape") { setViewerFile(null); return; }
+      // Lot B : la visionneuse ne réagit à Échap que si elle est au sommet de
+      // la pile d'overlays (voir hooks/useOverlayStack.ts) — sinon un autre
+      // modal plus récent doit être fermé en priorité.
+      if (e.key === "Escape") {
+        if (isTopOverlay(viewerTokenRef.current)) setViewerFile(null);
+        return;
+      }
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
+
+  // ── Lot B : la visionneuse de pièces jointes est un overlay à part entière ──
+  // Elle s'enregistre dans la pile centralisée pendant son ouverture : le
+  // handler global de App.tsx consulte cette pile pour ne PAS envoyer pi_abort
+  // tant qu'elle est affichée (priorité au modal).
+  const viewerTokenRef = useRef<symbol | null>(null);
+  useEffect(() => {
+    if (!viewerFile) return;
+    const token = pushOverlay();
+    viewerTokenRef.current = token;
+    return () => {
+      popOverlay(token);
+      if (viewerTokenRef.current === token) viewerTokenRef.current = null;
+    };
+  }, [viewerFile]);
 
   // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
   /** Instant scroll (for streaming — ResizeObserver-compatible) */
@@ -486,7 +534,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   useEffect(() => {
     const unsub = on("error", (msg: any) => {
       if (msg.projectId && msg.projectId !== projectId) return;
-      const text = typeof msg.error === "string" ? msg.error : "Erreur serveur";
+      const text = typeof msg.error === "string" ? msg.error : t('chat.serverError');
       setError(text);
       setMessages(prev => [...prev, {
         id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: "user", content: `❌ ${text}`,
@@ -494,9 +542,19 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       }]);
     });
     return () => unsub();
-  }, [on, projectId]);
+  }, [on, projectId, t]);
+
+  // ── Lot B : signalement visible quand la file d'attente WS est pleine ──
+  // Le hook useWebSocket refuse les messages au-delà de QUEUE_MAX au lieu de
+  // les dropper en silence et émet l'évènement interne "_ws_queue_full".
+  useEffect(() => {
+    const unsub = on("_ws_queue_full", () => setError(t("chat.wsQueueFull")));
+    return () => unsub();
+  }, [on, t]);
 
   // ── Stable onAbort callback to avoid breaking ChatInputArea's memo ──
+  // pi_abort n'est JAMAIS mis en file (voir QUEUEABLE_TYPES dans useWebSocket) :
+  // hors connexion il est simplement ignoré, évitant un abort fantôme.
   const onAbort = useCallback(() => {
     send({ type: "pi_abort", projectId });
   }, [send, projectId]);
@@ -504,9 +562,9 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   // ── Send ──
   const handleSend = useCallback((text: string, attachments: Attachment[]) => {
     const uploadErrors = attachments.filter(a => a.uploadStatus === "error");
-    if (uploadErrors.length > 0) { setError(`Upload failed: ${uploadErrors.map(a => a.name).join(", ")}`); return; }
+    if (uploadErrors.length > 0) { setError(t('upload.failedWith', uploadErrors.map(a => a.name).join(", "))); return; }
     const uploading = attachments.filter(a => a.uploadStatus === "uploading");
-    if (uploading.length > 0) { setError(`Waiting for ${uploading.length} file(s)...`); return; }
+    if (uploading.length > 0) { setError(t('upload.waiting', uploading.length)); return; }
 
     const done = attachments.filter(a => a.attachmentId && a.uploadStatus === "done");
     const imageAttachments = done.filter(a => a.category === "image").map(a => ({ attachmentId: a.attachmentId!, name: a.name, mimeType: a.mimeType }));
@@ -546,7 +604,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       pinnedToBottomRef.current = true;
       scrollToBottomInstant();
     });
-  }, [send, projectId, activeMode, isStreaming]);
+  }, [send, projectId, activeMode, isStreaming, t]);
 
   // ── Commande /new confirmée : envoi réel de la commande ──
   const handleConfirmNewChat = useCallback(() => {
@@ -559,7 +617,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   }, [send, projectId, scrollToBottomInstant]);
 
   if (!activeProject) {
-    return <div className="h-full flex items-center justify-center text-hacker-text-dim"><div className="text-center"><div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-16 h-16" /></div><p className="text-lg mb-2">PI CODING AGENT</p><p className="text-sm">Select or create a project to begin...</p></div></div>;
+    return <div className="h-full flex items-center justify-center text-hacker-text-dim"><div className="text-center"><div className="text-hacker-accent mb-4 glitch"><PiLogo className="w-16 h-16" /></div><p className="text-lg mb-2">{t('chat.emptyTitle')}</p><p className="text-sm">{t('chat.emptySubtitle')}</p></div></div>;
   }
 
 
@@ -607,7 +665,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       )}
       {hasContent ? (
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
-          {error && <div className="text-hacker-error text-xs border border-hacker-error/30 p-2 mb-2">{error}</div>}
+          {/* Bannière WS déconnecté (Lot B) — sticky : reste visible pendant le scroll */}
+          {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
           {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
           {/* Messages */}
@@ -619,6 +678,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           {showScrollBtn && (
             <div className="sticky bottom-4 flex justify-end z-20">
               <button onClick={() => { scrollToBottomSmooth(); pinnedToBottomRef.current=true; setShowScrollBtn(false); setUnreadCount(0); }}
+                title={t('chat.scrollToBottom')}
+                aria-label={t('chat.scrollToBottom')}
                 className="scroll-to-bottom-btn flex items-center gap-2 px-3 py-1.5 rounded-full border border-hacker-accent/30 bg-hacker-surface/95 backdrop-blur-sm text-hacker-accent text-xs font-medium shadow-lg shadow-hacker-accent/5 hover:bg-hacker-accent/10 hover:border-hacker-accent/50 transition-all animate-fade-in-up">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
                 {unreadCount > 0 && <span className="bg-hacker-accent/20 text-hacker-accent text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none min-w-[18px] text-center">{unreadCount}</span>}
@@ -627,16 +688,32 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           )}
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="text-hacker-accent mb-4 flex justify-center"><PiLogo className="w-[25vmin] h-[25vmin]" /></div>
-            <p className="text-hacker-text-dim text-sm">Session active — type a message below to start</p>
-            <p className="text-hacker-text-dim text-xs mt-2">{activeProject?.git?.branch && `git:${activeProject.git.branch} · `}{session?.model?.name || "No model selected"}</p>
+        <div className="flex-1 flex flex-col">
+          {/* Bannière WS déconnecté (Lot B) — aussi visible sans messages */}
+          {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <div className="text-hacker-accent mb-4 flex justify-center"><PiLogo className="w-[25vmin] h-[25vmin]" /></div>
+              <p className="text-hacker-text-dim text-sm">{t('chat.sessionActive')}</p>
+              <p className="text-hacker-text-dim text-xs mt-2">{activeProject?.git?.branch && `git:${activeProject.git.branch} · `}{session?.model?.name || t('chat.noModelSelected')}</p>
+            </div>
           </div>
         </div>
       )}
 
 
+
+      {/* Bannière d'erreur — rendue hors du conditionnel hasContent pour rester
+          visible même sans messages (échec d'upload, trop de fichiers, etc.) */}
+      {error && (
+        <div className="shrink-0 mx-4 mb-2 text-hacker-error text-xs border border-hacker-error/30 p-2 pr-1.5 flex items-start gap-2">
+          {/* break-words : évite le débordement horizontal sur les longs messages d'erreur */}
+          <span className="break-words min-w-0 flex-1">{error}</span>
+          <button onClick={() => setError("")} className="shrink-0 hover:text-hacker-text-bright transition-colors" title={t('viewer.close')} aria-label={t('viewer.close')}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       <ChatInputArea
         onSend={handleSend}
@@ -659,11 +736,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         <ModalDialog id="file-viewer" onClose={() => setViewerFile(null)}>
           <div className="flex flex-col h-full">
             <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
-              <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || "Attachment"}</span>
-              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0"><X size={16} /></button>
+              <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || t('viewer.attachment')}</span>
+              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-auto p-4">
-              {viewerFile.type === "image" ? <img src={viewerFile.src} alt={viewerFile.name||"Image"} className="max-w-full max-h-full object-contain mx-auto" /> : <pre className="text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>}
+              {viewerFile.type === "image" ? <img src={viewerFile.src} alt={viewerFile.name||t('viewer.image')} className="max-w-full max-h-full object-contain mx-auto" /> : <pre className="text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>}
             </div>
           </div>
         </ModalDialog>
@@ -685,6 +762,7 @@ interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:T
 const MAX_VISIBLE_GROUPS = 200;
 
 const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
+  const { t } = useTranslation();
   const groups: DisplayMessage[][] = [];
   for (const msg of messages) {
     if (msg.role === "user" || groups.length === 0 || groups[groups.length - 1][0].role === "user") groups.push([msg]);
@@ -695,7 +773,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
   const visibleGroups = groups.length > MAX_VISIBLE_GROUPS ? groups.slice(-MAX_VISIBLE_GROUPS) : groups;
   const hiddenCount = groups.length - visibleGroups.length;
   return <>
-    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">↑ {hiddenCount} earlier message{hiddenCount>1?"s":""} — scroll up for full history</div>}
+    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">{t('chat.historyHint', hiddenCount)}</div>}
     {visibleGroups.map((group) => {
       const first = group[0];
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
@@ -706,6 +784,7 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
 
 // ── User Bubble (unchanged) ──
 const UserBubble = memo(function UserBubble({ message, onFileClick }: { message: DisplayMessage; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
+  const { t } = useTranslation();
   if (message.customType === "pi_command") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-left whitespace-pre-wrap font-mono">{message.content}</div></div>;
   if (message.customType === "git_notification") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-center whitespace-pre-wrap">{message.content}</div></div>;
   return (
@@ -713,9 +792,9 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
-        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={12} /></a></div>; })}</div>}
-        {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="image") onFileClick({type:"image",src:fu,name:ref.name}); else if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={10} /></a></div>; })}</div>}
-        {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title="Download"><Download size={10} /></a></div>)}</div>}
+        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={12} /></a></div>; })}</div>}
+        {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="image") onFileClick({type:"image",src:fu,name:ref.name}); else if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>}
+        {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>)}</div>}
         {message.usage && <span className="text-[9px] text-hacker-text-dim shrink-0">{message.usage.input + message.usage.output}t</span>}
       </div>
     </div>
@@ -725,35 +804,6 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
 // ── Assistant Group (redesigned) ──
 // Renders each message in chronological order: thinking → tools → content, per message.
 // ── Tool descriptions (short) ───────────────────────────────
-const TOOL_DESC: Record<string, string> = {
-  read: "Lit un fichier",
-  write: "Écrit un fichier",
-  edit: "Modifie un fichier",
-  bash: "Exécute",
-  grep: "Cherche dans le code",
-  glob: "Trouve des fichiers",
-  find: "Trouve des fichiers",
-  ls: "Liste les fichiers",
-  webfetch: "Récupère une URL",
-  websearch: "Recherche web",
-  todowrite: "Met à jour la todo",
-  analyze_file: "Analyse un fichier",
-  git_status: "État git",
-  git_log: "Log git",
-  git_diff: "Diff git",
-  git_commit: "Commit",
-  git_push: "Push",
-  git_pull: "Pull",
-  firecrawl_scrape: "Scrape",
-  firecrawl_map: "Mappe un site",
-  firecrawl_search: "Recherche",
-  firecrawl_crawl: "Crawl",
-  memory_store: "Mémorise",
-  memory_search: "Cherche en mémoire",
-  memory_list: "Liste mémoire",
-  memory_delete: "Oublie",
-};
-
 const TOOL_BASE_NAME: Record<string, string> = {
   "analyze_file": "analyze",
   "git_status": "git",
@@ -818,9 +868,14 @@ function argsPreview(tc: ToolCallInfo): string | null {
 }
 
 const toolName = (tc: ToolCallInfo) => shortName(tc.name || tc.id || "tool");
-const toolDescription = (tc: ToolCallInfo): string => TOOL_DESC[tc.name] || "Outil";
 
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
+  const { t } = useTranslation();
+  const toolDescription = (tc: ToolCallInfo): string => {
+    const key = `tools.${tc.name}`;
+    const desc = t(key);
+    return desc === key ? t('tools.fallback') : desc;
+  };
   let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
     if (msg.usage) totalUsage = totalUsage ? {input:totalUsage.input+msg.usage.input,output:totalUsage.output+msg.usage.output,cost:{total:totalUsage.cost.total+msg.usage.cost.total}} : msg.usage;
@@ -833,9 +888,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
       <div className={`max-w-[95%] bg-hacker-surface border rounded-r-lg rounded-bl-lg overflow-hidden ${isStreaming ? "border-hacker-accent/50 shadow-[0_0_8px_rgba(var(--accent-rgb),0.15)]" : "border-hacker-border"}`}>
         {/* Header */}
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-hacker-border/50 bg-hacker-bg/30">
-          <span className="text-[0.625rem] text-hacker-accent font-bold tracking-wider">{isStreaming?"⚡ STREAMING":"🤖 RESPONSE"}</span>
-          {messages[0]?.timestamp && <span className="text-[0.625rem] text-hacker-text-dim">{formatTime(messages[0].timestamp)}</span>}
-          {totalUsage && <span className="text-[0.625rem] text-hacker-text-dim">{totalUsage.input+totalUsage.output} tok</span>}
+          <span className="text-[0.6875rem] text-hacker-accent font-bold tracking-wider">{isStreaming ? t('chat.streaming') : t('chat.response')}</span>
+          {messages[0]?.timestamp && <span className="text-[0.6875rem] text-hacker-text-dim">{formatTime(messages[0].timestamp)}</span>}
+          {totalUsage && <span className="text-[0.6875rem] text-hacker-text-dim">{totalUsage.input+totalUsage.output} tok</span>}
           <div className="flex-1" />
           {isStreaming && <span className="w-2 h-2 rounded-full bg-hacker-accent animate-pulse" />}
         </div>
@@ -859,7 +914,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                 <div className="px-3 py-2">
                   <div className="flex items-start gap-2 text-xs border border-red-500/40 bg-red-500/10 text-red-400 rounded px-2 py-1.5">
                     <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span className="whitespace-pre-wrap">{msg.errorMessage || "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider."}</span>
+                    <span className="whitespace-pre-wrap">{msg.errorMessage || t('chat.llmError')}</span>
                   </div>
                 </div>
               )}
@@ -876,18 +931,18 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                   {msg.toolCalls.map((tc) => {
                     const preview = argsPreview(tc);
                     return (
-                      <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.625rem] font-mono leading-tight ${
+                      <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight ${
                         tc.isStreaming ? "text-hacker-accent animate-pulse"
                         : tc.isError ? "text-red-400"
-                        : "text-hacker-text-dim/70"
+                        : "text-hacker-text-dim"
                       }`}>
-                        <span className="opacity-70">{tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}</span>
+                        <span>{tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}</span>
                         <span className="font-bold">{toolName(tc)}</span>
-                        <span className="text-hacker-text-dim/40">—</span>
-                        <span className="text-hacker-text-dim/70">{toolDescription(tc)}</span>
+                        <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+                        <span className="text-hacker-text-dim">{toolDescription(tc)}</span>
                         {preview && (
                           <>
-                            <span className="text-hacker-text-dim/40">·</span>
+                            <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
                             <span className="text-hacker-text-bright/80 truncate max-w-[260px]" title={preview}>{preview}</span>
                           </>
                         )}
@@ -901,7 +956,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
               {(showContent || showThinkingPlaceholder) && (
                 <div className="px-3 py-2 prose-hacker">
                   {showContent ? <MemoizedReactMarkdown>{msg.content}</MemoizedReactMarkdown> : null}
-                  {showThinkingPlaceholder && <span className="text-hacker-text-dim italic text-sm">Thinking…</span>}
+                  {showThinkingPlaceholder && <span className="text-hacker-text-dim italic text-sm">{t('chat.thinking')}</span>}
                   {msg._streaming && showContent && <span className="cursor-blink" />}
                 </div>
               )}
@@ -925,24 +980,24 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
 
 
   const processFile = useCallback(async (file: File) => {
-    if (attachments.length >= 10) { setError("Maximum 10 files per message"); return; }
+    if (attachments.length >= 10) { setError(t('upload.maxFiles')); return; }
     const category = categorizeFile(file.type||"application/octet-stream", file.name);
-    if (file.size > 100*1024*1024) { setError(`File too large: ${formatFileSize(file.size)}`); return; }
+    if (file.size > 100*1024*1024) { setError(t('upload.tooLarge', formatFileSize(file.size))); return; }
     const uid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const localPreview = category==="image" ? URL.createObjectURL(file) : undefined;
     setAttachments(prev => [...prev, { id:uid, name:file.name, mimeType:file.type||"application/octet-stream", size:file.size, category, data:"", preview:localPreview, uploadStatus:"uploading" }]);
     try {
       const fd = new FormData(); fd.append("files", file); fd.append("projectId", projectId);
       const r = await fetch("/api/attachments/upload", { method:"POST", body:fd });
-      if (!r.ok) { const ed = await r.json().catch(()=>({error:"Upload failed"})); throw new Error(ed.error||`Upload failed: ${r.status}`); }
+      if (!r.ok) { const ed = await r.json().catch(()=>({error:t('upload.failed')})); throw new Error(ed.error||t('upload.failedWith', r.status)); }
       const data = await r.json(); const uploaded = data.attachments?.[0];
-      if (!uploaded) throw new Error("No attachment data returned");
+      if (!uploaded) throw new Error(t('upload.noData'));
       setAttachments(prev => prev.map(a => a.id===uid ? {...a, attachmentId:uploaded.id, uploadStatus:"done", preview:a.preview||URL.createObjectURL(file)} : a));
     } catch (err: any) {
       setAttachments(prev => prev.map(a => a.id===uid ? {...a, uploadStatus:"error", uploadError:err.message} : a));
-      setError(`Upload failed: ${err.message}`);
+      setError(t('upload.failedWith', err.message));
     }
-  }, [attachments.length, setError, projectId]);
+  }, [attachments.length, setError, projectId, t]);
 
   const handleSendClick = useCallback(() => {
     const txt = input.trim();
@@ -961,9 +1016,9 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
 
   return (
     <div className="border-t border-hacker-border-bright bg-hacker-surface p-3" onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setIsDragOver(true)}} onDragLeave={()=>setIsDragOver(false)} onPaste={handlePaste}>
-      {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">DROP FILES HERE</div></div>}
-      {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1"><X size={12}/></button></div>)}</div>}
-      <div className="text-hacker-text-dim text-[0.625rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{isStreaming&&!streamingStalled&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> stalled</span>}</span></div>
+      {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">{t('chat.dropFiles')}</div></div>}
+      {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1" title={t('chat.removeAttachment')} aria-label={t('chat.removeAttachment')}><X size={12}/></button></div>)}</div>}
+      <div className="text-hacker-text-dim text-[0.6875rem] mb-1 flex justify-between"><span>{t('chat.keyboardHints')}</span><span className="flex items-center gap-2">{gitBranch&&<span>git:{gitBranch}</span>}{isStreaming&&!streamingStalled&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> {t('activity.stalled')}</span>}</span></div>
       <div className="flex gap-2">
         <textarea
           ref={inputRef}
@@ -997,8 +1052,8 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
           style={{ minHeight: '3rem', maxHeight: '10rem' }}
         />
         <div className="flex flex-col gap-1">
-          <button onClick={handleSendClick} className="btn-hacker flex-1 px-4" disabled={!input.trim()&&attachments.length===0}>{isStreaming ? t('chat.steer', '⇥ Steer') : t('chat.send')}</button>
-          <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('common.add')}><Paperclip size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">ABORT</button>}</div>
+          <button onClick={handleSendClick} className="btn-hacker flex-1 px-4" disabled={!input.trim()&&attachments.length===0}>{isStreaming ? t('chat.steer') : t('chat.send')}</button>
+          <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('chat.attachFiles')} aria-label={t('chat.attachFiles')}><Paperclip size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">{t('chat.abort')}</button>}</div>
         </div>
       </div>
       <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,application/json,application/xml,application/javascript,application/x-shellscript,.js,.ts,.tsx,.jsx,.py,.rb,.rs,.go,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.sh,.bash,.sql,.yaml,.yml,.toml,.ini,.cfg,.env,.md,.txt,.log,.css,.scss,.less,.html,.svg" onChange={handleFileSelect} className="hidden"/>

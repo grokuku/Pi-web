@@ -214,6 +214,8 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **Sanitization librarian :** `sanitizeContent()` supprime emails, clés API, chemins personnels et téléphones avant archivage.
 - **SSRF :** `validateHttpUrl()` bloque link-local/loopback/privé, sauf autorisation explicite pour Ollama/openai-compatible auto-hébergés.
 - **Auth refondue :** `apiAuth` (jeton valide → localhost → navigateur same-origin/origin autorisée) remplace l'ancienne comparaison Origin/Host. `ALLOWED_ORIGINS`/`WS_ALLOWED_ORIGINS` sont rétablis à `*` volontairement ; le WebSocket est protégé par Authentik en frontal (voir BUG-50).
+- **Durcissement WebSocket — Origin seul jamais suffisant (2026-08-22) :** `verifyClient` (backend/src/index.ts) n'accepte plus une connexion sur la seule correspondance du header Origin (forgeable par un client non-navigateur). Ordre d'acceptation : 1) jeton valide (`?token=` ou `Bearer`, même validation que l'API REST) ; 2) connexion locale (127.0.0.1/::1) ; 3) navigateur authentique = **tous** les critères requis — Origin présent ET autorisé par la liste effective ET `Sec-Fetch-Site: same-origin` ET `Sec-Fetch-Mode: websocket` ; 4) sinon 401. Validé par tests d'intégration (Origin autorisée seule → 401, jeton valide → accepté, signature navigateur complète → accepté).
+- **Origines autorisées dynamiques + config UI (2026-08-22) :** nouveau module partagé `backend/src/utils/origins.ts` — la liste EFFECTIVE est l'union des variables d'environnement (`ALLOWED_ORIGINS` / `WS_ALLOWED_ORIGINS` / `PUBLIC_BASE_URL`) et d'un réglage UI persisté dans `.data/allowed-origins.json`. Résolue **à chaque requête/handshake** (cache invalidé à l'écriture) : les changements prennent effet à chaud, sans restart, pour CORS, `apiAuth`, l'adminAuth des agent-keys et le WS. Endpoints `GET/PUT /api/settings/allowed-origins` (protégés par apiAuth) avec validation stricte des origines (scheme://host[:port], pas de chemin/query/userinfo, wildcards partielles refusées, seul `*` explicite accepté, normalisation minuscules + dédup, max 64). UI : nouvel onglet Settings → Sécurité (état chargement/succès/erreur, valeur effective + source affichées, i18n fr/en parité 1:1). Aucune source configurée → `*` (comportement historique conservé).
 - **Téléchargement de dossiers réactivé (2026-08-18) :** `GET /api/files/download` accepte désormais les dossiers. L'endpoint parcourt récursivement chaque sélection, revalide **chaque entrée** avec `isPathAllowed()` (deny-list + realpath + confinement aux racines), ignore les dotfiles (cohérent avec l'UI) et exclut les symlinks dangereux (hors racine, deny-listés, boucles via `realpath` visités). Le tout est servi en `.tar.gz` à la volée (`tar -czf - -h -C <parent> -T -`, `-T -` pour éviter ARG_MAX, `-h` pour déréférencer les symlinks autorisés). Déduplication par chemin relatif pour éviter les doublons (ex: bouton « select all »). Fichiers uniques : streaming direct inchangé.
 
 ## 🟡 Bugs mineurs / améliorations
@@ -517,10 +519,11 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | Usage | `/api/usage/*` | ✅ |
 | Pi | `/api/pi/*` | ✅ |
 | Agent | `/api/agent/*` (Bearer auth) | ✅ |
-| Agent Keys | `/api/agent-keys/*` (adminAuth) | ✅ |
+| Agent Keys | `/api/agent-keys/*` (adminAuth, origines effectives résolues à chaud) | ✅ |
 | Providers | `/api/providers/*` | ✅ |
 | Ollama | `/api/ollama/*` | ✅ |
 | Sessions | `/api/sessions/:id/*` | ✅ |
+| Settings | `/api/settings/*` dont `GET/PUT /allowed-origins` (apiAuth, hot-reload) | ✅ |
 | Health | `/api/health`, `/api/agent/health` | ✅ |
 | CBM | `/api/cbm/*` | ✅ |
 
@@ -531,7 +534,7 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 ```
 Frontend (React, TypeScript, Tailwind, Vite)
   ├── ChatView.tsx → WebSocket → pi_prompt / pi_event
-  ├── SettingsModal.tsx → onglets : Models, Analysis, Extensions, General, Layout, API Keys
+  ├── SettingsModal.tsx → onglets : Models, Analysis, Extensions, General, Security (origines autorisées), Layout, API Keys
   ├── ModelQuickSwitch.tsx → boutons CODE/PLAN/REVIEW + dropdowns
   ├── ThinkingBlock.tsx + ToolTimeline.tsx → streaming
   ├── UsageStatsModal.tsx → stats tokens
