@@ -35,7 +35,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Position « fixed » du dropdown porté — recalculée au clic, au scroll et au
   // resize tant que le menu est ouvert (pattern useAnchorPosition).
-  const pos = useAnchorPosition(() => (openMode ? buttonRefs.current[openMode] : null), !!openMode);
+  const pos = useAnchorPosition(() => (openMode ? buttonRefs.current[openMode] : null), !!openMode, 4, openMode ?? "none");
 
   const loadLibrary = useCallback(async () => {
     try {

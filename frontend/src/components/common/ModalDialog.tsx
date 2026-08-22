@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "../../i18n";
 import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useIsMobile } from "../../hooks/useMediaQuery";
@@ -283,7 +284,10 @@ export function ModalDialog({ id, onClose, children, className = "", ariaLabel, 
     return <div key={edge} data-resize-handle style={style} onPointerDown={e => handlePointerDownResize(e, edge)} />;
   });
 
-  return (
+  // Porté dans document.body via createPortal : permet à .modal-overlay (position:fixed)
+  // et .modal-box (position:absolute) de se positionner par rapport au viewport, quel que
+  // soit le conteneur parent (ex. sidebar/drawer à transform CSS qui créerait un containing block).
+  return createPortal((
     <div className="modal-overlay">
       <div
         ref={boxRef}
@@ -323,5 +327,5 @@ export function ModalDialog({ id, onClose, children, className = "", ariaLabel, 
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }

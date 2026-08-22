@@ -23,11 +23,15 @@ export interface AnchorPos {
  *   dans une ref pour ne pas ré-abonner inutilement.
  * @param open true quand le menu est ouvert.
  * @param offset espace vertical sous le bouton (px).
+ * @param targetKey identifie la CIBLE du popover (ex. le mode de bouton actif).
+ *   Quand elle change, la position est recalculée même si `open` reste vrai
+ *   (ex. bascule d'un mode à un autre sans fermer le menu).
  */
 export function useAnchorPosition(
   getAnchor: () => HTMLElement | null,
   open: boolean,
-  offset = 4
+  offset = 4,
+  targetKey?: string
 ): AnchorPos | null {
   const [pos, setPos] = useState<AnchorPos | null>(null);
   const getAnchorRef = useRef(getAnchor);
@@ -59,7 +63,7 @@ export function useAnchorPosition(
       window.removeEventListener("scroll", handle, true);
       window.removeEventListener("resize", handle);
     };
-  }, [open, compute]);
+  }, [open, compute, targetKey]);
 
   return pos;
 }
