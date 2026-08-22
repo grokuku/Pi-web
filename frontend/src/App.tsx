@@ -15,6 +15,7 @@ import { Graph3DModal } from "./components/Modals/Graph3DModal";
 import { CbmStatsModal } from "./components/Modals/CbmStatsModal";
 import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
+import { MobileHeaderMenu } from "./components/Header/MobileHeaderMenu";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
@@ -972,6 +973,22 @@ function App() {
         <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title={`${t('header.settings')} (Ctrl+L)`} aria-label={`${t('header.settings')} (Ctrl+L)`}>
           ⚙
         </button>
+
+        {/* Menu mobile « ⋯ » — panneaux + mode + config routage */}
+        <div className="md:hidden">
+          <MobileHeaderMenu
+            panels={panels}
+            onTogglePanel={togglePanel}
+            activeMode={activeMode}
+            onModeSwitch={(mode) => {
+              if (activeProject) {
+                send({ type: "mode_switch", projectId: activeProject.id, mode });
+              }
+            }}
+            activeProjectId={activeProject?.id}
+            onModelApplied={handleModelApplied}
+          />
+        </div>
       </header>
 
       {/* ── MAIN BODY ── */}

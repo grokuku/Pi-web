@@ -1,5 +1,6 @@
 import { ModalDialog } from "../common/ModalDialog";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Power, Star, Settings } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
@@ -27,7 +28,11 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [showRoutingConfig, setShowRoutingConfig] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  // Réf. des boutons par mode (pour calculer la position du dropdown porté)
+  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadLibrary = useCallback(async () => {
     try {
@@ -51,11 +56,16 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   // Reload when models change externally (e.g. from ModelLibraryModal)
   useEffect(() => { loadLibrary(); }, [modelChangeVersion, loadLibrary]);
 
-  // Close on click outside
+  // Close on click outside — vérifie à la fois le bouton (ref) et le dropdown
+  // porté dans <body> (pattern MobileHeaderMenu).
   useEffect(() => {
     if (!openMode) return;
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpenMode(null);
+      const target = e.target as Node;
+      const inside =
+        (ref.current && ref.current.contains(target)) ||
+        (dropdownRef.current && dropdownRef.current.contains(target));
+      if (!inside) setOpenMode(null);
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -138,6 +148,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const handleChipClick = (mode: AgentMode) => {
     if (openMode === mode) { setOpenMode(null); return; }
+    // Calcule la position fixed du dropdown porté depuis le bouton
+    const btn = buttonRefs.current[mode];
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
     setOpenMode(mode);
   };
 
@@ -178,6 +194,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
           <div key={mode} className="relative">
             {/* Main button — integrated ON/OFF */}
             <button
+              ref={(el) => { buttonRefs.current[mode] = el; }}
               className={`flex items-center border rounded transition-all ${
                 isVisuallyActive
                   ? `${cfg.activeBg} ${cfg.activeBorder} ${cfg.color}`
@@ -223,9 +240,15 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
               </div>
             </button>
 
-            {/* Dropdown — always shows model list regardless of enabled state */}
-            {isDropdownOpen && (
-              <div className="absolute top-full right-0 mt-1 w-[350px] bg-hacker-surface border border-hacker-border-bright shadow-lg z-50">
+            {/* Dropdown — porté dans <body> en position FIXED (calculée depuis
+                le bouton) pour éviter le clipping par le header (h-10 +
+                overflow-x-auto). z-index 60 au-dessus du drawer z-50 / overlay z-40. */}
+            {isDropdownOpen && pos && createPortal(
+              <div
+                ref={dropdownRef}
+                style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 60 }}
+                className="w-[350px] bg-hacker-surface border border-hacker-border-bright shadow-lg"
+              >
                 {/* Header */}
                 <div className="flex items-center justify-between px-3 py-1.5 bg-hacker-bg/50 border-b border-hacker-border/50">
                   <span className={`text-xs font-bold tracking-wider ${isEnabled ? cfg.color : "text-hacker-text-dim"}`}>
@@ -288,7 +311,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   </button>
                 )}
 
-              </div>
+              </div>,
+              document.body
             )}
           </div>
         );

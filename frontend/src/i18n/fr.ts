@@ -21,6 +21,12 @@ export const fr = {
     closeStandalone: "Fermer ✕",
     closeRestore: "Fermer et restaurer dans la fenêtre principale",
   },
+  mobileMenu: {
+    label: "Plus d'actions",
+    panels: "PANNEAUX",
+    mode: "MODE",
+    configRouting: "⚙ Configurer le routage",
+  },
   chat: {
     tools: "OUTILS",
     thinking: "Réflexion…",

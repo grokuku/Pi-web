@@ -21,6 +21,12 @@ export const en = {
     closeStandalone: "Close ✕",
     closeRestore: "Close and restore to main window",
   },
+  mobileMenu: {
+    label: "More actions",
+    panels: "PANELS",
+    mode: "MODE",
+    configRouting: "⚙ Configure routing",
+  },
   chat: {
     tools: "TOOLS",
     thinking: "Thinking…",
