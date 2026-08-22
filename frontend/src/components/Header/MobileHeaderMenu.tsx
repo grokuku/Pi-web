@@ -14,6 +14,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "../../i18n";
+import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
 import type { PanelId, AgentMode, ModelLibrary, ProviderConfig, ProjectModeConfig, RoutingConfig } from "../../types";
 
@@ -34,13 +35,15 @@ interface Props {
 export function MobileHeaderMenu({ panels, onTogglePanel, activeMode, onModeSwitch, activeProjectId, onModelApplied }: Props) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const [showRoutingConfig, setShowRoutingConfig] = useState(false);
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const ref = useRef<HTMLDivElement>(null);       // wrapper bouton (pour clic extérieur)
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Position « fixed » du dropdown porté — recalculée à l'ouverture, au scroll
+  // et au resize tant que le menu est ouvert (pattern useAnchorPosition).
+  const pos = useAnchorPosition(() => buttonRef.current, open);
 
   // Fermeture au clic extérieur (pattern ModelQuickSwitch). On vérifie à la
   // fois le wrapper du bouton ET le dropdown porté dans <body>.
@@ -91,10 +94,8 @@ export function MobileHeaderMenu({ panels, onTogglePanel, activeMode, onModeSwit
   const panelIds: PanelId[] = ["pi", "terminal", "files"];
 
   const toggle = () => {
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-    }
+    // La position du dropdown est calculée par useAnchorPosition à l'ouverture
+    // (et re-suivie au scroll/resize), depuis le bouton ⋯.
     setOpen((o) => !o);
   };
 

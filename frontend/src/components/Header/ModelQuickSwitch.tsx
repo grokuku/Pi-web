@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, Power, Star, Settings } from "lucide-react";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
+import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
@@ -28,11 +29,13 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const [library, setLibrary] = useState<ModelLibrary | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [showRoutingConfig, setShowRoutingConfig] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   // Réf. des boutons par mode (pour calculer la position du dropdown porté)
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Position « fixed » du dropdown porté — recalculée au clic, au scroll et au
+  // resize tant que le menu est ouvert (pattern useAnchorPosition).
+  const pos = useAnchorPosition(() => (openMode ? buttonRefs.current[openMode] : null), !!openMode);
 
   const loadLibrary = useCallback(async () => {
     try {
@@ -148,12 +151,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const handleChipClick = (mode: AgentMode) => {
     if (openMode === mode) { setOpenMode(null); return; }
-    // Calcule la position fixed du dropdown porté depuis le bouton
-    const btn = buttonRefs.current[mode];
-    if (btn) {
-      const rect = btn.getBoundingClientRect();
-      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-    }
+    // La position du dropdown est calculée par useAnchorPosition à l'ouverture
+    // (et re-suivie au scroll/resize), depuis le bouton du mode cliqué.
     setOpenMode(mode);
   };
 
