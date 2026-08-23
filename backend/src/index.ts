@@ -499,12 +499,22 @@ const wss = new WebSocketServer({
       return;
     }
 
-    // 3) Requête navigateur authentique : TOUS les critères sont requis.
+    // 3) Mode allow-all (`*`) : permissivité assumée par l'admin (ex. serveur
+    //    interne/privé). Cohérent avec isBrowserRequest() : on accepte sans
+    //    exiger Sec-Fetch-* (le proxy peut ne pas les transmettre). La
+    //    protection Sec-Fetch-* reste active pour les listes d'origines
+    //    explicites (pas de `*`), où le comportement strict est conservé.
+    const effective = resolveEffectiveAllowedOrigins();
+    if (effective.allowAll) {
+      callback(true);
+      return;
+    }
+
+    // 4) Requête navigateur authentique : TOUS les critères sont requis.
     //    La correspondance d'Origin seule ne suffit jamais (forgeable) : les
     //    en-têtes Sec-Fetch-* doivent également signer une requête navigateur.
     const fetchSite = (info.req.headers["sec-fetch-site"] as string | undefined)?.trim().toLowerCase();
     const fetchMode = (info.req.headers["sec-fetch-mode"] as string | undefined)?.trim().toLowerCase();
-    const effective = resolveEffectiveAllowedOrigins();
     if (
       !!origin &&
       isAllowedOrigin(origin, effective.origins) &&
@@ -515,7 +525,7 @@ const wss = new WebSocketServer({
       return;
     }
 
-    // 4) Tout le reste → refus.
+    // 5) Tout le reste → refus.
     console.log(`[WS] Rejected connection (origin: ${origin || "none"}, ip: ${info.req.socket.remoteAddress})`);
     callback(false, 401, "Unauthorized");
     return;
