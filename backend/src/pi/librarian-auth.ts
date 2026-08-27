@@ -73,6 +73,17 @@ export function validateKey(key: string): boolean {
   return keys.some(k => k.key === key);
 }
 
+/**
+ * Retrouve le NOM d'une clé API à partir de sa valeur (null si inconnue).
+ * Utilisé par la mémoire partagée pour tagger les écritures externes
+ * avec "external:<keyName>" (traçabilité de l'origine des entrées).
+ */
+export function findKeyName(key: string): string | null {
+  const keys = loadKeys();
+  const found = keys.find(k => k.key === key);
+  return found ? found.name : null;
+}
+
 // ── Localhost detection ──
 
 function isLocalhost(req: Request): boolean {

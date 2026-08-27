@@ -9,6 +9,10 @@ services:
       - /mnt/user/appdata-ssd/Pi-web/data/pi-projects:/projects
       - /mnt/user/appdata-ssd/Pi-web/data/pi-sessions:/sessions
       - /mnt/user/appdata-ssd/Pi-web/data/pi-appdata:/app/.data
+      # Mémoire persistante ~/.unipi : checkpoints de compaction (extension
+      # "compaction-checkpoint") + mémoires global/projet du memory-service.
+      # Sans volume, tout est perdu à chaque rebuild du conteneur.
+      - /mnt/user/appdata-ssd/Pi-web/data/pi-unipi:/root/.unipi
     environment:
       # `*` = autoriser toutes les origines (comportement allow-all historique).
       # Pour restreindre, remplacer par une liste explicite, ex.

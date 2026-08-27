@@ -29,5 +29,8 @@
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0"
   }
 }

@@ -404,8 +404,12 @@ export function getLibraryStatus(): { totalDocs: number; lastUpdated: string; la
   };
 }
 
-/** Nettoie le contenu pour retirer toute information personnelle avant archivage */
-function sanitizeContent(content: string): string {
+/**
+ * Nettoie le contenu pour retirer toute information personnelle avant archivage.
+ * Exporté également pour la mémoire partagée (shared-memory API) : tout
+ * contenu écrit par un agent externe est sanitizé avant stockage.
+ */
+export function sanitizeContent(content: string): string {
   let cleaned = content;
   // Emails
   cleaned = cleaned.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email removed]");

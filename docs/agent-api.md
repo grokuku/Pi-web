@@ -254,6 +254,21 @@ Query: ?path=/projects/my-app/src/App.tsx
 
 ---
 
+## Mémoire partagée
+
+Les agents peuvent lire/écrire la mémoire durable de Pi-Web (préférences, décisions, patterns) via l'API dédiée `/api/shared-memory` — auth Bearer agent ou X-API-Key librarian :
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  -X PUT -H "Content-Type: application/json" \
+  -d '{"title":"Build avec pnpm","content":"Installs monorepo = pnpm.","type":"decision"}' \
+  http://localhost:3005/api/shared-memory/memories
+```
+
+→ Spécification complète : **[shared-memory-api.md](shared-memory-api.md)** (endpoints, namespaces v1, tagging `external:<keyName>` des écritures externes).
+
+---
+
 ## Extension future (plan / review / harness)
 
 Dans une version ultérieure, l'endpoint chat acceptera un champ `mode` pour activer d'autres modes que `code` :

@@ -22,6 +22,8 @@ import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
 import { appendDraft } from "./commit-draft.js";
 import { librarianTools } from "./librarian-tools.js";
+import { memoryTools } from "./memory-tools.js";
+import { buildMemoryInjection } from "./memory-service.js";
 import { getProject } from "../projects/manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -298,7 +300,7 @@ export async function createPiSession(
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
-      customTools: [...createDesignTools(projectId), ...librarianTools, createCommitDraftTool(projectId)],
+      customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId)],
     });
 
     // Inject project context into system prompt
@@ -308,6 +310,20 @@ export async function createPiSession(
       (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
     }
 
+    // ── Injection mémoire (après PI_PROJECT_CONTEXT) ──
+    // Bloc reconstruit depuis le store disque à chaque création de session ;
+    // applyModeToSession/restoreCodeMode le préservent lors des rebuilds de prompt.
+    try {
+      const memoryContext = await buildMemoryContext(cwd);
+      if (memoryContext) {
+        (session as any)._baseSystemPrompt += memoryContext;
+        (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
+        console.log(`[PiSession] Memory context injected for project ${projectId}`);
+      }
+    } catch (e: any) {
+      // L'échec du store mémoire ne doit jamais empêcher la création de session.
+      console.warn(`[PiSession] Memory context injection skipped (${projectId}) : ${e?.message || e}`);
+    }
 
     // Wrap prompt() : réinjecte la bannière de mode avant chaque interaction LLM.
     // Le SDK reconstruit _baseSystemPrompt à chaque setActiveToolsByName, donc on
@@ -1134,6 +1150,45 @@ function getActiveToolNamesForBanner(session: any): string[] {
 }
 
 /**
+ * Construit le bloc d'injection mémoire (<!-- PI_MEMORY_CONTEXT -->) à partir
+ * du store disque (niveau global + niveau projet, voir memory-service.ts).
+ * Retourne une chaîne vide s'il n'y a aucune mémoire à injecter.
+ */
+async function buildMemoryContext(cwd: string): Promise<string> {
+  const body = await buildMemoryInjection(cwd);
+  if (!body) return "";
+  return `\n\n<!-- PI_MEMORY_CONTEXT -->\n${body}\n<!-- /PI_MEMORY_CONTEXT -->`;
+}
+
+/** Blocs de contexte injectés à préserver lors des rebuilds de prompt SDK. */
+interface PreservedContextBlocks {
+  projectContextBlock: string;
+  memoryContextBlock: string;
+}
+
+/**
+ * Extrait les blocs de contexte (projet + mémoire) d'un prompt avant un
+ * setActiveToolsByName (qui reconstruit _baseSystemPrompt et les efface).
+ */
+function extractPreservedContextBlocks(prompt: string | undefined | null): PreservedContextBlocks {
+  const src = prompt || "";
+  return {
+    projectContextBlock:
+      src.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "",
+    memoryContextBlock:
+      src.match(/<!-- PI_MEMORY_CONTEXT -->[\s\S]*?<!-- \/PI_MEMORY_CONTEXT -->/)?.[0] || "",
+  };
+}
+
+/** Réinjecte les blocs de contexte préservés en fin de prompt. */
+function appendPreservedContextBlocks(prompt: string, blocks: PreservedContextBlocks): string {
+  let out = prompt;
+  if (blocks.projectContextBlock) out += `\n\n${blocks.projectContextBlock}`;
+  if (blocks.memoryContextBlock) out += `\n\n${blocks.memoryContextBlock}`;
+  return out;
+}
+
+/**
  * Réinjecte une bannière de mode PROÉMINENTE en tête du prompt système.
  * Pourquoi : le SDK Pi reconstruit `_baseSystemPrompt` à chaque setActiveToolsByName
  * (agent-session.js), ce qui efface le marqueur de mode injecté par applyModeToSession.
@@ -1165,6 +1220,8 @@ function cleanPromptForModeChange(rawPrompt: string): string {
   prompt = prompt.replace(/\n*<!-- PI_IDENTITY -->[\s\S]*?<!-- \/PI_IDENTITY -->\n*/g, "\n");
   // Remove project context block
   prompt = prompt.replace(/\n*<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->\n*/g, "\n");
+  // Remove memory context block (réinjecté ensuite via appendPreservedContextBlocks)
+  prompt = prompt.replace(/\n*<!-- PI_MEMORY_CONTEXT -->[\s\S]*?<!-- \/PI_MEMORY_CONTEXT -->\n*/g, "\n");
   return prompt.trim() + "\n";
 }
 
@@ -1415,8 +1472,8 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Apply model + thinking level ──
   await applyModelAndThinking(model, projectId, DEFAULT_THINKING[mode] || "medium");
 
-  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
-  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
+  // Sauvegarder les contextes projet + mémoire avant setActiveToolsByName (qui rebuild le prompt)
+  const preservedBlocks = extractPreservedContextBlocks((session as any)._baseSystemPrompt);
 
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
@@ -1450,10 +1507,8 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     prompt += `\n${MODE_BLOCK_MARKER_START}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
   }
 
-  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
-  if (projectContextBlock) {
-    prompt += `\n\n${projectContextBlock}`;
-  }
+  // Réinjecter les contextes préservés (écrasés par setActiveToolsByName)
+  prompt = appendPreservedContextBlocks(prompt, preservedBlocks);
 
   (session as any)._baseSystemPrompt = prompt;
   (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
@@ -1522,8 +1577,8 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     }
   }
 
-  // Sauvegarder le contexte projet avant setActiveToolsByName (qui rebuild le prompt)
-  const projectContextBlock = (session as any)._baseSystemPrompt?.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "";
+  // Sauvegarder les contextes projet + mémoire avant setActiveToolsByName (qui rebuild le prompt)
+  const preservedBlocks = extractPreservedContextBlocks((session as any)._baseSystemPrompt);
 
   // Restore all tools (base + extension), hors tools d'orchestration (BUG-71)
   (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
@@ -1541,10 +1596,8 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   prompt = prompt.trim() + "\n";
   prompt += `\n${MODE_BLOCK_MARKER_START}CODE ${MODE_BLOCK_MARKER_END}\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}\n${MODE_BLOCK_MARKER_START.replace("\u003c!-- PI", "\u003c!-- /PI")}CODE ${MODE_BLOCK_MARKER_END}\n`;
 
-  // Réinjecter le contexte projet (écrasé par setActiveToolsByName)
-  if (projectContextBlock) {
-    prompt += `\n\n${projectContextBlock}`;
-  }
+  // Réinjecter les contextes préservés (écrasés par setActiveToolsByName)
+  prompt = appendPreservedContextBlocks(prompt, preservedBlocks);
 
   (session as any)._baseSystemPrompt = prompt;
   (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;

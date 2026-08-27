@@ -8,6 +8,7 @@ import {
 import { ModalDialog } from "../common/ModalDialog";
 import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
 import { loadPersistedLayout, savePersistedLayout } from "../Layout/LayoutRenderer";
+import { MemorySettingsTab } from "./MemorySettingsTab";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, LayoutType, PanelId } from "../../types";
 import { PANEL_LABELS } from "../../types";
 import { useTranslation } from "../../i18n";
@@ -49,7 +50,7 @@ const RESOURCE_LABELS: Record<ResourceType, string> = {
   themes: "Themes",
 };
 
-type TabId = "models" | "extensions" | "analysis" | "general" | "security" | "layout" | "api-keys" | "shortcuts";
+type TabId = "models" | "extensions" | "analysis" | "general" | "memory" | "security" | "layout" | "api-keys" | "shortcuts";
 
 // ── Props ──────────────────────────────────────────────
 
@@ -438,6 +439,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     { id: "analysis", icon: "🔬", label: t('settings.tabs.analysis') },
     { id: "extensions", icon: "📦", label: t('settings.tabs.extensions') },
     { id: "general", icon: "⚙", label: t('settings.tabs.general') },
+    { id: "memory", icon: <Brain size={14} />, label: t('settings.tabs.memory') },
     { id: "security", icon: <Shield size={14} />, label: t('settings.tabs.security') },
     { id: "shortcuts", icon: <Keyboard size={14} />, label: "Raccourcis" },
     { id: "layout", icon: "⊞", label: t('settings.tabs.layout') },
@@ -1202,6 +1204,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           {tab === "layout" && (
             <LayoutTab onLayoutChange={() => onLayoutChange?.()} />
           )}
+
+          {/* Memory Tab (Lot M3) — mémoires globale + projet actif */}
+          {tab === "memory" && <MemorySettingsTab activeProjectId={activeProjectId} />}
 
           {/* Security Tab */}
           {tab === "security" && <SecurityTab />}

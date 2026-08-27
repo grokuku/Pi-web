@@ -25,6 +25,8 @@ import agentKeysRouter, { validateToken } from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
 import designRouter from "./routes/design.js";
 import librarianRouter from "./routes/librarian.js";
+import sharedMemoryRouter from "./routes/shared-memory.js";
+import memoryRouter from "./routes/memory.js";
 import { startLibrarianCron } from "./pi/librarian-cron.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
@@ -137,6 +139,11 @@ app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);
 app.use("/api/design", designRouter);
 app.use("/api/librarian", librarianRouter);
+// Mémoire partagée externe (Lot M2) : auth dédiée dans le router
+// (localhost ∥ Bearer agent ∥ X-API-Key librarian).
+app.use("/api/shared-memory", sharedMemoryRouter);
+// Mémoire UI interne (Lot M3) : couverte par apiAuth globale (same-origin).
+app.use("/api/memory", memoryRouter);
 
 // ── CBM 3D Graph UI proxy ──────────────────────────────
 // The CBM UI is a Vite SPA that uses absolute paths (/assets/..., /rpc, ...).

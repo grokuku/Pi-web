@@ -444,11 +444,23 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 - **Tavily** (optionnel) : API search propre, 1000 recherches/mois gratuit
 - **Playwright / FlareSolverr** : pas nécessaires pour la doc technique (quasi toujours statique)
 
-### Mémoire partagée — À VENIR
+### Mémoire partagée — Lot M2 implémenté (2026-08)
+- **Implémenté (v1)** : namespace `public` uniquement — alias lecture/écriture du store global (`~/.unipi/memory/_global_/`). Tout autre namespace demandé → 501.
+- Router : `backend/src/routes/shared-memory.ts` (monté sur `/api/shared-memory`), auth dédiée localhost ∥ Bearer agent ∥ X-API-Key librarian.
+- Écritures externes sanitizées (`sanitizeContent`) et taggées côté serveur `external:<keyName>` ; type `summary` non créable/supprimable via l'API (403).
+- Persistance : volume Docker `pi-unipi:/root/.unipi` ajouté (sinon mémoires + checkpoints perdus au rebuild).
+- Doc : `docs/shared-memory-api.md`.
+- Reste à venir (lots futurs) :
 - Namespaces obligatoires : `public`, `agent:<id>`, `private`
 - Agent public (Openclaw) → voit `public` + `agent:openclaw`
 - Agent privé (Hermes) → voit `public` + `agent:hermes` + `private`
 - Même pattern que le libraire (REST API + API Key + stockage JSON)
+
+### Mémoire — Lot M3 implémenté (2026-08) : onglet « Mémoire » dans les Settings
+- **UI** : `frontend/src/components/Modals/MemorySettingsTab.tsx` — nouvel onglet 🧠 dans SettingsModal (`TabId` "memory"). Deux sections indépendantes : « Mémoire globale » (profil utilisateur) et « Mémoire du projet » (projet actif via la prop `activeProjectId`, déjà passée à SettingsModal). Liste (titre, badge de type, extrait, date), ajout / édition inline / suppression avec confirmation inline en deux temps ; feedback succès temporaire.
+- **Routes internes** : `backend/src/routes/memory.ts` monté sur `/api/memory` derrière l'apiAuth globale (same-origin, sans clé). Endpoints : `GET /global`, `GET /project?projectId=<id>` (ou `?cwd=` validé par isCwdAllowed — cwd résolu via getProject de projects/manager), `PUT /:scope` (upsert : content requis, cap 15 Ko, type summary refusé — validation alignée sur shared-memory), `DELETE /:scope/:id` (summary_protected propagé en 403).
+- **Renommage UI** : l'id étant le slug du titre, éditer une entrée en changeant son titre supprime d'abord l'ancienne entrée (404 tolérée) puis upsert la nouvelle — sinon doublon.
+- **i18n** : namespace `memory.*` ajouté fr/en, parité 1:1 vérifiée (560 clés de chaque côté).
 
 ### Futurs services possibles
 
