@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu,
+  X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu, Link2,
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation } from "../../i18n";
@@ -37,6 +37,30 @@ interface Preview {
   commitModelInfo?: CommitModelInfo;
 }
 
+interface LinkedRepo {
+  name: string;
+  projectId: string;
+  cwd?: string;
+  error?: string;
+  skipped?: boolean;
+  reason?: string;
+  preview?: Preview;
+  result?: {
+    commitHash?: string;
+    commitResult?: string;
+    commitMessage?: { subject: string; body: string };
+    pushResult?: { stdout: string; remote?: string } | string;
+  };
+}
+
+interface LinkedPreview {
+  linked: boolean;
+  projectId: string;
+  projectName: string;
+  repos: LinkedRepo[];
+  commitModelInfo?: CommitModelInfo;
+}
+
 interface Props {
   project: Project;
   onClose: () => void;
@@ -46,6 +70,7 @@ interface Props {
 export function CommitPushModal({ project, onClose, onDone }: Props) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [linkedData, setLinkedData] = useState<LinkedPreview | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState<"preview" | "push" | null>(null);
@@ -68,8 +93,14 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
         const data = await res.json();
         throw new Error(data.error || "Failed to generate preview");
       }
-      const data: Preview = await res.json();
-      setPreview(data);
+      const data = await res.json();
+      if (data.linked) {
+        // Projet LIÉ : vue par dépôt, pas de message commun.
+        setLinkedData(data);
+        return;
+      }
+      const previewData: Preview = data;
+      setPreview(previewData);
       // Utilise le draft nettoyé par le LLM (aiMessage) quand il est présent,
       // sinon la proposition heuristique (cas sans modèle de commit configuré).
       if (data.aiMessage?.subject) {
@@ -119,7 +150,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
 
   // ── Push ──
   const handlePush = async () => {
-    if (!subject.trim()) {
+    if (!linkedData && !subject.trim()) {
       setError("Subject is required");
       return;
     }
@@ -134,8 +165,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           body: body.trim() || undefined,
         }),
       });
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         if (data.code === "GIT_IDENTITY_REQUIRED") {
           setShowIdentityModal(true);
           return;
@@ -150,6 +181,13 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           return;
         }
         throw new Error(data.error || "Push failed");
+      }
+      if (data.linked) {
+        setLinkedData(data);
+        // Rester affiché pour montrer le résultat PAR dépôt (hash / erreurs).
+        setDone(true);
+        onDone();
+        return;
       }
       setDone(true);
       onDone();
@@ -206,6 +244,81 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           <div className="text-hacker-accent text-xs mb-3 border border-hacker-accent/30 p-3 flex items-center gap-2 bg-hacker-accent/5">
             <Check size={14} />
             Changes pushed successfully! Closing...
+          </div>
+        )}
+
+        {/* ── Vue projet LIÉ : un commit par dépôt ── */}
+        {linkedData && !done && (
+          <div className="space-y-3">
+            <div className="text-[11px] text-hacker-accent border border-hacker-accent/30 bg-hacker-accent/5 p-2 flex items-center gap-1.5">
+              <Link2 size={12} />
+              {t('commitPush.linkedTitle')} ({linkedData.projectName})
+            </div>
+            <div className="text-[10px] text-hacker-text-dim border border-hacker-border p-2">
+              {t('commitPush.linkedHint')}
+            </div>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {linkedData.repos.map((r) => {
+                const st = r.preview?.status;
+                const count = st ? st.staged.length + st.modified.length + st.created.length + st.deleted.length : 0;
+                return (
+                  <div key={r.projectId} className="border border-hacker-border bg-hacker-bg/30 p-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-hacker-accent text-xs font-bold flex items-center gap-1.5">
+                        <GitCommit size={12} />
+                        {r.name}
+                      </span>
+                      {r.error ? (
+                        <span className="text-hacker-error text-[10px]">⚠ {t('commitPush.linkedError')}</span>
+                      ) : r.skipped || (!r.preview && !r.error) ? (
+                        <span className="text-hacker-text-dim text-[10px]">{t('commitPush.linkedSkipped')}</span>
+                      ) : (
+                        <span className="text-hacker-text-dim text-[10px]">{count} change(s) · ahead {st?.ahead ?? 0}</span>
+                      )}
+                    </div>
+                    {r.error && <div className="text-hacker-error text-[10px] truncate">{r.error}</div>}
+                    {st && st.files.length > 0 && (
+                      <div className="max-h-[70px] overflow-y-auto">
+                        {st.files.slice(0, 6).map((f) => (
+                          <div key={f.path} className="flex gap-1 text-hacker-text-dim/70 truncate text-[9px]">
+                            <span className="text-hacker-accent w-4 shrink-0">{f.status}</span>
+                            <span className="truncate">{f.path}</span>
+                          </div>
+                        ))}
+                        {st.files.length > 6 && <div className="text-hacker-text-dim/50 text-[9px]">+{st.files.length - 6} more</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {!linkedData.repos.some((r) => r.preview || (!r.error && !r.skipped)) && (
+              <div className="text-hacker-text-dim text-[10px] border border-hacker-border p-2 text-center">
+                {t('commitPush.linkedNothing')}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Resultat par dépôt après push (vue lié) */}
+        {linkedData && done && (
+          <div className="space-y-2">
+            <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 flex items-center gap-1.5 bg-hacker-accent/5">
+              <Check size={13} />
+              {t('commitPush.linkedResult')}
+            </div>
+            {linkedData.repos.map((r) => (
+              <div key={r.projectId} className="text-[10px] border border-hacker-border p-2 flex items-center justify-between">
+                <span className="text-hacker-text-bright text-xs">{r.name}</span>
+                {r.result ? (
+                  <span className="text-hacker-accent font-mono">{r.result.commitHash || r.result.commitResult || "—"}</span>
+                ) : r.skipped ? (
+                  <span className="text-hacker-text-dim">{t('commitPush.linkedSkipped')}</span>
+                ) : (
+                  <span className="text-hacker-error truncate max-w-[60%]" title={r.error}>{r.error}</span>
+                )}
+              </div>
+            ))}
           </div>
         )}
 

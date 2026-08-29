@@ -572,6 +572,11 @@ export const en = {
     parentDirectory: "Parent Directory",
     parentDirectoryHint: "(optional — defaults to /projects)",
     willCreate: (dir: string, name: string) => `Will create: ${dir}/${name}`,
+    linked: "Linked",
+    linkedDescription: "Groups several local projects into a single workspace — the LLM works inside the sub-projects' folders, and each project keeps its own git (separate commit/push).",
+    linkedSelectHint: "Select at least 2 local projects to link",
+    linkedSelectedCount: (n: number) => `${n} project(s) selected — minimum 2`,
+    linkedNoCandidates: "No local projects available to link (create the sub-projects first).",
     namePlaceholder: "(name)",
     sshConfiguration: "SSH CONFIGURATION",
     host: "Host",
@@ -601,6 +606,13 @@ export const en = {
 
   // ── Commit & Push ──
   commitPush: {
+    linkedTitle: "Linked project — one commit per sub-repo",
+    linkedHint: "Commit messages will be generated separately by the AI for each repository on push.",
+    linkedSkipped: "no changes",
+    linkedError: "failed",
+    linkedPushAll: "Commit & Push all repositories",
+    linkedResult: "Result per repository",
+    linkedNothing: "No repository has changes to commit.",
     title: "Commit & Push",
     message: "Commit message",
     generate: "Generate AI",

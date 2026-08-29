@@ -46,13 +46,14 @@ router.get("/:id", (req: Request, res: Response) => {
 // POST create project
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { name, storage, cwd, ssh, smb, versioning, git } = req.body;
+    const { name, storage, cwd, ssh, smb, versioning, git, linkedProjectIds } = req.body;
     if (!name || !storage) {
       return res.status(400).json({ error: "name and storage are required" });
     }
     // Default cwd to /projects/{name} for local storage if not provided
     // For SMB: auto-generate mount point if not provided
-    let effectiveCwd = storage === "local" ? (cwd || `/projects/${name}`) : cwd;
+    // For linked: placeholder directory always at /projects/{name}
+    let effectiveCwd = storage === "local" || storage === "linked" ? (cwd || `/projects/${name}`) : cwd;
     if (storage === "smb" && smb?.share) {
       effectiveCwd = smb.mountPoint || `/mnt/smb/${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
       smb.mountPoint = effectiveCwd;
@@ -60,7 +61,7 @@ router.post("/", async (req: Request, res: Response) => {
     if (!effectiveCwd) {
       return res.status(400).json({ error: "cwd is required for non-local storage" });
     }
-    const project = await createProject(name, storage, effectiveCwd, versioning || "standalone", git, ssh, smb);
+    const project = await createProject(name, storage, effectiveCwd, versioning || "standalone", git, ssh, smb, linkedProjectIds);
 
     // Auto-mount SMB share if applicable
     if (project.storage === "smb" && project.smb?.share) {
@@ -206,6 +207,77 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
+
+    // ── Projet LIÉ : un commit + push PAR sous-projet (messages IA séparés) ──
+    if (project.storage === "linked") {
+      const subs = (project.linkedProjectIds || [])
+        .map((id) => getProject(id))
+        .filter((p): p is NonNullable<typeof p> => p?.storage === "local");
+      const commitModelInfo = await getCommitModelInfo();
+      const repos: Array<Record<string, unknown>> = [];
+      let anyCommitted = false;
+      for (const sub of subs) {
+        try {
+          const preview = await gitCommitPushPreview(sub.cwd);
+          const st = preview.status;
+          const hasChanges = st.files.length > 0;
+          if (!hasChanges && st.ahead === 0) {
+            repos.push({ name: sub.name, projectId: sub.id, skipped: true, reason: "clean" });
+            continue;
+          }
+          // Message IA séparaément par repo (choix utilisateur : jamais un message partagé)
+          let subject: string | undefined;
+          let body: string | undefined;
+          if (commitModelInfo.source !== "none") {
+            try {
+              const diff = await getGitDiff(sub.cwd);
+              const hasUntracked = st.created.length > 0;
+              // Cas particulier : uniquement des fichiers untracked → git diff est
+              // vide. Envoier un diff vide à l'IA produit des sujets aberrants
+              // ("There are no changes…"). Fallback : laisser le heuristique de
+              // gitCommitAndPush produire le message.
+              if (diff.trim() || !hasUntracked) {
+                const aiMsg = await generateAiCommitMessage(diff, project.id);
+                if (aiMsg) { subject = aiMsg.subject; body = aiMsg.body; }
+              }
+            } catch (err: any) {
+              console.error(`[commit-push:linked] AI generation failed for ${sub.name}:`, err?.message || err);
+            }
+          }
+          const result = await gitCommitAndPush(sub.cwd, subject, body);
+          await syncGitInfo(sub);
+          anyCommitted = true;
+          // gitCommitAndPush absorbe les échecs de push non-auth dans
+          // result.pushResult (ex: remote absent). Pour ne pas laisser un repo
+          // "poussé" en apparence alors que rien n'est parti, on marque l'échec.
+          if (typeof result.pushResult === "string" && result.pushResult.startsWith("Push failed")) {
+            repos.push({ name: sub.name, projectId: sub.id, result, error: result.pushResult });
+            console.error(`[commit-push:linked] ${sub.name}: ${result.pushResult}`);
+            continue;
+          }
+          repos.push({ name: sub.name, projectId: sub.id, result });
+          console.log(`[commit-push:linked] ${sub.name}: ${result.commitHash || "(no hash)"}`);
+        } catch (err: any) {
+          // Erreur ISOLÉE par repo : les autres sous-projets continuent.
+          console.error(`[commit-push:linked] ${sub.name} failed:`, err?.message || err);
+          repos.push({ name: sub.name, projectId: sub.id, error: err?.message || String(err) });
+        }
+      }
+      // Notification SEULE agrégée (hash par repo) + reset du draft global.
+      if (anyCommitted) {
+        clearDraft(project.id);
+        const repoLines = repos
+          .filter((r: any) => r.result)
+          .map((r: any) => `- ${r.name}: ${r.result?.commitHash || "(no hash)"} — ${r.result?.commitMessage?.subject || ""}`)
+          .join("\n");
+        const failed = repos.filter((r: any) => r.error);
+        const notification = `✅ Linked project committed &amp; pushed.
+${repoLines}${failed.length ? `\n⚠️ Failed repos: ${failed.map((r: any) => r.name).join(", ")}` : ""}`;
+        injectSessionNotification(project.id, notification, { linkedRepos: repos });
+      }
+      return res.json({ linked: true, repos });
+    }
+
     let { subject, body } = req.body || {};
 
     // If no custom message, try AI generation
@@ -285,6 +357,34 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
+
+    // ── Projet LIÉ : preview PAR sous-repo (pas de message commun) ──
+    if (project.storage === "linked") {
+      const subs = (project.linkedProjectIds || [])
+        .map((id) => getProject(id))
+        .filter((p): p is NonNullable<typeof p> => p?.storage === "local");
+      const repos: Array<Record<string, unknown>> = [];
+      for (const sub of subs) {
+        try {
+          const preview = await gitCommitPushPreview(sub.cwd);
+          repos.push({ projectId: sub.id, name: sub.name, cwd: sub.cwd, preview });
+        } catch (e: any) {
+          // Repo absent/mis en échec → signalé sans bloquer les autres.
+          repos.push({ projectId: sub.id, name: sub.name, cwd: sub.cwd, error: e?.message || String(e) });
+        }
+      }
+      const commitModelInfo = await getCommitModelInfo();
+      return res.json({
+        linked: true,
+        projectId: project.id,
+        projectName: project.name,
+        repos,
+        commitModelInfo,
+        // Indication UX : les messages de commit seront générés par l'IA
+        // séparaément pour chaque dépôt lors du push (jamais un message partagé).
+      });
+    }
+
     const preview = await gitCommitPushPreview(project.cwd);
 
     // Gather commit model info (shown in UI) without calling the AI yet

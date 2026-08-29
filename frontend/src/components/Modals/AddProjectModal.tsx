@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen, Link2 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
 import { useTranslation } from "../../i18n";
@@ -10,7 +10,7 @@ interface Props {
   onCreated: (project: Project) => void;
 }
 
-type StorageType = "local" | "ssh" | "smb";
+type StorageType = "local" | "ssh" | "smb" | "linked";
 type VersioningType = "git" | "standalone";
 type GitProvider = "github" | "gitlab" | "other";
 
@@ -37,6 +37,10 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
   const [smbUser, setSmbUser] = useState("");
   const [smbPass, setSmbPass] = useState("");
 
+  // Linked fields — sous-projets locaux à regrouper (min 2)
+  const [linkedProjectIds, setLinkedProjectIds] = useState<string[]>([]);
+  const [availableProjects, setAvailableProjects] = useState<Project[]>([]);
+
   // ── Step 2: Versioning ──
   const [versioning, setVersioning] = useState<VersioningType>("standalone");
   const [gitRemote, setGitRemote] = useState("");
@@ -53,6 +57,30 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
   // The project folder is created as a subfolder with the project name.
   const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : (cwd || "/projects") + (name ? `/${name}` : "").replace(/\/+/g, "/");
 
+  // Candidats au liage : projets LOCAUX existants (pas ssh/smb, pas liés — 1 niveau max)
+  const linkedCandidates = availableProjects.filter(
+    (p) => p.storage === "local" && p.cwd.startsWith("/projects/")
+  );
+
+  // Charger la liste des projets existants (candidats au liage)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/projects");
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableProjects(data.projects || []);
+        }
+      } catch { /* liste indisponible — candidats vides */ }
+    })();
+  }, []);
+
+  const toggleLinkedProject = (id: string) => {
+    setLinkedProjectIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
   // ── Handlers ──
 
   const handleNext = () => {
@@ -60,6 +88,15 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
       // Validate Step 1
       if (!name.trim()) {
         setError(t('addProject.errNameRequired'));
+        return;
+      }
+      if (storage === "linked" && linkedProjectIds.length < 2) {
+        setError(t('addProject.linkedSelectHint'));
+        return;
+      }
+      if (storage === "linked") {
+        // Pas de step versioning pour un lié — création directe (standalone)
+        handleSubmit();
         return;
       }
       if (storage === "ssh" && !sshRemotePath) {
@@ -126,8 +163,11 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
         name: name.trim(),
         storage,
         cwd: effectiveCwd,
-        versioning,
+        versioning: storage === "linked" ? "standalone" : versioning,
       };
+      if (storage === "linked") {
+        body.linkedProjectIds = linkedProjectIds;
+      }
 
       // Git config
       if (versioning === "git") {
@@ -247,8 +287,8 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
               <label className="text-hacker-text-dim text-xs block mb-1.5">
                 {t('addProject.storage')}
               </label>
-              <div className="flex gap-2">
-                {(["local", "ssh", "smb"] as StorageType[]).map((s) => (
+              <div className="grid grid-cols-4 gap-2">
+                {(["local", "ssh", "smb", "linked"] as StorageType[]).map((s) => (
                   <button
                     key={s}
                     onClick={() => setStorage(s)}
@@ -261,7 +301,8 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                     {s === "local" && <FolderOpen size={14} />}
                     {s === "ssh" && "🔗"}
                     {s === "smb" && "💾"}
-                    <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : t('addProject.smbNas')}</span>
+                    {s === "linked" && <Link2 size={14} />}
+                    <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : s === "smb" ? t('addProject.smbNas') : t('addProject.linked')}</span>
                   </button>
                 ))}
               </div>
@@ -395,6 +436,43 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             )}
           </div>
         )}
+
+            {/* Projet LIÉ : sélection des sous-projets à regrouper */}
+            {storage === "linked" && (
+              <div className="space-y-2 border border-hacker-border p-3">
+                <div className="text-hacker-info text-[10px] mb-1">{t('addProject.linkedDescription')}</div>
+                {linkedCandidates.length === 0 ? (
+                  <div className="text-hacker-warn text-[11px]">{t('addProject.linkedNoCandidates')}</div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-hacker-text-dim text-[10px]">{t('addProject.linkedSelectHint')}</label>
+                      <span className={`text-[10px] ${linkedProjectIds.length >= 2 ? "text-hacker-accent" : "text-hacker-warn"}`}>
+                        {t('addProject.linkedSelectedCount', linkedProjectIds.length)}
+                      </span>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {linkedCandidates.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => toggleLinkedProject(p.id)}
+                          className={`w-full flex items-center gap-2 px-2 py-1.5 border text-left text-xs transition-colors ${
+                            linkedProjectIds.includes(p.id)
+                              ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                              : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
+                          }`}
+                        >
+                          <span className="w-3 text-center">{linkedProjectIds.includes(p.id) ? "☑" : "☐"}</span>
+                          <FolderOpen size={12} className="shrink-0" />
+                          <span className="flex-1 truncate text-hacker-text-bright">{p.name}</span>
+                          <span className="text-[9px] text-hacker-text-dim font-mono">{p.cwd}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
         {/* ─── STEP 2: Versioning ─── */}
         {step === 2 && (

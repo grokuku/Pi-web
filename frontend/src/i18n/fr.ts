@@ -573,6 +573,11 @@ export const fr = {
     parentDirectory: "Dossier parent",
     parentDirectoryHint: "(optionnel — défaut : /projects)",
     willCreate: (dir: string, name: string) => `Créera : ${dir}/${name}`,
+    linked: "Lié",
+    linkedDescription: "Regroupe plusieurs projets locaux en un espace de travail unique — le LLM travaille dans les dossiers des sous-projets, et chaque projet garde son git (commit/push séparés).",
+    linkedSelectHint: "Sélectionnez au moins 2 projets locaux à lier",
+    linkedSelectedCount: (n: number) => `${n} projet(s) sélectionné(s) — minimum 2`,
+    linkedNoCandidates: "Aucun projet local disponible à lier (créez d'abord les sous-projets).",
     namePlaceholder: "(nom)",
     sshConfiguration: "CONFIGURATION SSH",
     host: "Hôte",
@@ -602,6 +607,13 @@ export const fr = {
 
   // ── Commit & Push ──
   commitPush: {
+    linkedTitle: "Projet lié — un commit par sous-projet",
+    linkedHint: "Les messages de commit seront générés séparément par l'IA pour chaque dépôt lors du push.",
+    linkedSkipped: "aucune modification",
+    linkedError: "échec",
+    linkedPushAll: "Commit & Push tous les dépôts",
+    linkedResult: "Résultat par dépôt",
+    linkedNothing: "Aucun dépôt n'a de modifications à committer.",
     title: "Commit & Push",
     message: "Message de commit",
     generate: "Générer IA",

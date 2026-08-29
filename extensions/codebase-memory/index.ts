@@ -35,6 +35,16 @@ import { execSync, spawn, type ChildProcess } from "child_process";
 import { homedir } from "os";
 import { dirname } from "path";
 
+/**
+ * Les projets LIÉS de Pi-Web (placeholder avec symlinks vers plusieurs dépôts)
+ * sont marqués par un fichier .pi-web-linked : on ne les indexe PAS (l'index
+ * suivrait les symlinks et mélangerait les dépôts — chaque sous-projet reste
+ * indexé individuellement quand on y ouvre une session).
+ */
+function isLinkedProject(cwd: string): boolean {
+  return !!cwd && existsSync(join(cwd, ".pi-web-linked"));
+}
+
 // ── Config ──────────────────────────────────────────────
 
 const BIN_PATH = join(homedir(), ".local", "bin", "codebase-memory-mcp");
@@ -562,6 +572,12 @@ async function discoverProjectName(cwd: string): Promise<void> {
 // ── Index ────────────────────────────────────────────────
 
 async function indexProject(cwd: string): Promise<void> {
+  // Projets LIÉS : jamais indexés (le placeholder n'est pas un dépôt, et
+  // l'indexation suivrait les symlinks en mélangeant les sous-projets).
+  if (isLinkedProject(cwd)) {
+    console.log(`[cbm] Indexing skipped for linked project: ${cwd}`);
+    return;
+  }
   status.indexing = true;
   console.log(`[cbm] Indexing project: ${cwd}`);
   try {
@@ -750,6 +766,10 @@ export default async function (pi: ExtensionAPI) {
     }
     (async () => {
       try {
+        if (isLinkedProject(ctx.cwd)) {
+          console.log(`[cbm] session_start: linked project, skipping CBM init for ${ctx.cwd}`);
+          return;
+        }
         if (!status.running) {
           await spawnServer();
         }
@@ -780,6 +800,10 @@ export default async function (pi: ExtensionAPI) {
     // Fire-and-forget: start/init in background, don't await
     (async () => {
       try {
+        if (isLinkedProject(ctx.cwd)) {
+          console.log(`[cbm] before_agent_start: linked project, skipping CBM init for ${ctx.cwd}`);
+          return;
+        }
         if (!status.running) {
           await spawnServer();
         }

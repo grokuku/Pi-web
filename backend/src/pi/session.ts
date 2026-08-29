@@ -306,7 +306,28 @@ export async function createPiSession(
 
     // Inject project context into system prompt
     if (options?.projectName) {
-      const projectContext = `\n\n<!-- PI_PROJECT_CONTEXT -->\nYou are working on project "${options.projectName}" (ID: ${projectId}).\nWorking directory: ${cwd}\n<!-- /PI_PROJECT_CONTEXT -->`;
+      let projectContext = `\n\n<!-- PI_PROJECT_CONTEXT -->\nYou are working on project "${options.projectName}" (ID: ${projectId}).\nWorking directory: ${cwd}\n`;
+      // Projet LIÉ : décrire la structure (chacun des sous-dossiers pointe vers
+      // un projet indépendant avec son PROPRE repo git). Le LLM doit savoir que
+      // `pi-web/` et `ai-helper/` ne partagent rien (ni git ni historique).
+      try {
+        const proj = getProject(projectId);
+        if (proj?.storage === "linked" && Array.isArray(proj.linkedProjectIds)) {
+          const subs = proj.linkedProjectIds
+            .map((id) => getProject(id))
+            .filter((p): p is NonNullable<typeof p> => !!p)
+            .map((p) => `- <${proj.cwd}>/${p.name}/ : sous-projet "${p.name}" (dépôt git indépendant, commiter/pousser séparément)`);
+          if (subs.length > 0) {
+            projectContext += `This is a LINKED (composite) project gathering ${subs.length} independent sub-projects:
+${subs.join("\n")}
+When editing, respect each sub-project's folder. Each sub-project has its OWN git repository — never cross-commit between them.
+`;
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[PiSession] Linked context skipped (${projectId}): ${e?.message || e}`);
+      }
+      projectContext += `<!-- /PI_PROJECT_CONTEXT -->`;
       (session as any)._baseSystemPrompt = (session as any)._baseSystemPrompt + projectContext;
       (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
     }

@@ -25,6 +25,7 @@ import {
   createProject,
   deleteProject,
 } from "../projects/manager.js";
+import type { Project } from "../projects/manager.js";
 import type { AgentMode } from "../pi/model-library.js";
 
 const router = Router();
@@ -97,7 +98,8 @@ function gitSnapshot(cwd: string): Set<string> {
 function fsSnapshot(cwd: string): Map<string, number> {
   const files = new Map<string, number>();
 
-  const walk = (dir: string, prefix: string) => {
+  const walk = (dir: string, prefix: string, depth: number = 0) => {
+    if (depth > 12) return; // garde-fou anti-boucle (symlinks circulaires)
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -113,8 +115,23 @@ function fsSnapshot(cwd: string): Map<string, number> {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       const full = path.join(dir, entry.name);
 
+      // Projets LIÉS : les symlinks vers les sous-projets doivent être SUIVIS
+      // (isDirectory()/isFile() valent false pour un symlink dans readdirSync).
+      if (entry.isSymbolicLink()) {
+        try {
+          if (statSync(full).isDirectory()) {
+            walk(full, rel, depth + 1);
+          } else {
+            files.set(rel, statSync(full).mtimeMs);
+          }
+        } catch {
+          // Symlink cassé (sous-projet supprimé) — ignoré.
+        }
+        continue;
+      }
+
       if (entry.isDirectory()) {
-        walk(full, rel);
+        walk(full, rel, depth + 1);
       } else if (entry.isFile()) {
         try {
           files.set(rel, statSync(full).mtimeMs);
@@ -209,6 +226,27 @@ function getChangedFiles(cwd: string, since?: string): Array<{ path: string; sta
   return getFsChangedFiles(cwd, since);
 }
 
+/**
+ * Fichiers modifiés pour un projet LIÉ : on agrège les changements PAR
+ * sous-projet (git quand c'est un repo, sinon fs), préfixés du nom du
+ * sous-projet pour que l'appelant sache où vit chaque fichier.
+ */
+export function getLinkedChangedFiles(
+  project: Project,
+  since?: string
+): Array<{ path: string; status: string }> {
+  const out: Array<{ path: string; status: string }> = [];
+  for (const id of project.linkedProjectIds || []) {
+    const sub = getProject(id);
+    if (!sub || sub.storage !== "local") continue;
+    const files = getChangedFiles(sub.cwd, since);
+    for (const f of files) {
+      out.push({ path: `${sub.name}/${f.path}`, status: f.status });
+    }
+  }
+  return out;
+}
+
 /** Collect messages from a session for the agent API response */
 function collectMessages(state: any): any[] {
   const session = state?.session;
@@ -291,10 +329,10 @@ router.get("/projects", (_req: Request, res: Response) => {
 
 router.post("/projects", async (req: Request, res: Response) => {
   try {
-    const { name, storage, cwd } = req.body;
+    const { name, storage, cwd, versioning, git, ssh, smb, linkedProjectIds } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
-    const effectiveCwd = cwd || `/projects/${name}`;
-    const project = await createProject(name, storage || "local", effectiveCwd);
+    const effectiveCwd = storage === "linked" ? (cwd || `/projects/${name}`) : (cwd || `/projects/${name}`);
+    const project = await createProject(name, storage || "local", effectiveCwd, versioning || "standalone", git, ssh, smb, linkedProjectIds);
     res.status(201).json({
       id: project.id,
       name: project.name,
@@ -628,7 +666,9 @@ router.get("/projects/:id/files/changed", (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid since date" });
     }
 
-    const files = getChangedFiles(project.cwd, sinceParam);
+    const files = project.storage === "linked"
+      ? getLinkedChangedFiles(project, sinceParam)
+      : getChangedFiles(project.cwd, sinceParam);
     res.json({ files });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

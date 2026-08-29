@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, symlinkSync } from "fs";
 import path from "path";
+import { join, relative } from "path";
 import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
 import { Mutex } from "../utils/mutex.js";
@@ -11,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
 const projectsMutex = new Mutex();
 
-export type StorageType = "local" | "ssh" | "smb";
+export type StorageType = "local" | "ssh" | "smb" | "linked";
 export type VersioningType = "git" | "standalone";
 export type GitProvider = "github" | "gitlab" | "other";
 
@@ -29,6 +30,9 @@ export interface Project {
   storage: StorageType;
   versioning: VersioningType;
   cwd: string;
+  // Projet LIÉ : ids des sous-projets regroupés (placeholder + symlinks).
+  // Seulement pour storage === "linked" ; sous-projets locaux uniquement.
+  linkedProjectIds?: string[];
   // SSH config
   ssh?: {
     host: string;
@@ -130,6 +134,63 @@ export function getProjectByName(name: string): Project | undefined {
   return loadProjects().find((p) => p.name === name);
 }
 
+/**
+ * Valide la création d'un projet LIÉ : minimum 2 sous-projets, tous locaux,
+ * existants, pas eux-mêmes des projets liés (1 niveau maximum).
+ */
+function validateLinkedProject(projects: Project[], name: string, linkedProjectIds?: string[]): void {
+  if (!Array.isArray(linkedProjectIds) || linkedProjectIds.length < 2) {
+    throw new Error("A linked project requires at least 2 existing local projects");
+  }
+  if (new Set(linkedProjectIds).size !== linkedProjectIds.length) {
+    throw new Error("Duplicate project in linked project list");
+  }
+  for (const id of linkedProjectIds) {
+    const sub = projects.find((p) => p.id === id);
+    if (!sub) {
+      throw new Error(`Linked project not found: ${id}`);
+    }
+    if (sub.storage === "linked") {
+      throw new Error(`Project "${sub.name}" is itself a linked project (nested linked projects are not supported)`);
+    }
+    if (sub.storage !== "local") {
+      throw new Error(`Project "${sub.name}" is a ${sub.storage} project — linked projects only support local sub-projects`);
+    }
+  }
+}
+
+/**
+ * Crée le placeholder du projet lié : un dossier contenant un symlink par
+ * sous-projet (niveau 1, liens RELATIFS pour survivre aux déplacements de
+ * volume). Le nom du symlink = nom du sous-projet (lisible pour le LLM).
+ * rm -rf sur ce dossier défait les symlinks sans toucher aux sous-projets
+ * (comportement POSIX confirmé par prototype).
+ */
+function createLinkedPlaceholder(cwd: string, projects: Project[], linkedProjectIds: string[]): void {
+  if (existsSync(cwd)) {
+    const entries = readdirSync(cwd);
+    if (entries.length > 0) {
+      throw new Error(`Linked project directory already exists and is not empty: ${cwd}`);
+    }
+  } else {
+    mkdirSync(cwd, { recursive: true });
+  }
+  for (const id of linkedProjectIds) {
+    const sub = projects.find((p) => p.id === id)!;
+    const linkPath = join(cwd, sub.name);
+    const target = relative(cwd, sub.cwd); // RELATIF — le placeholder suit si /projects est déplacé
+    symlinkSync(join(target, "/"), linkPath, "dir");
+    console.log(`[Projects] Linked placeholder: ${linkPath} -> ${target}/`);
+  }
+  // Fichier marqueur : (a) exclut le placeholder du CBM (l'indexation suivrait
+  // les symlinks et mélangerait 2 dépôts), (b) documente le groupe sur disque.
+  writeFileSync(
+    join(cwd, ".pi-web-linked"),
+    JSON.stringify({ linked: true, linkedProjectIds, createdAt: new Date().toISOString() }, null, 2),
+    "utf-8"
+  );
+}
+
 export async function createProject(
   name: string,
   storage: StorageType,
@@ -137,18 +198,22 @@ export async function createProject(
   versioning: VersioningType = "standalone",
   git?: Partial<GitInfo>,
   ssh?: Project["ssh"],
-  smb?: Project["smb"]
+  smb?: Project["smb"],
+  linkedProjectIds?: string[]
 ): Promise<Project> {
   return projectsMutex.run(() => {
     const projects = loadProjects();
 
-  if (!name || !storage || !cwd) {
+  if (!storage || !cwd) {
+    throw new Error("name, storage, and cwd are required");
+  }
+  if (!name) {
     throw new Error("name, storage, and cwd are required");
   }
   if (!/^[a-zA-Z0-9_\-. ]+$/.test(name)) {
     throw new Error("Project name can only contain letters, numbers, spaces, hyphens, underscores, and dots");
   }
-  if (!["local", "ssh", "smb"].includes(storage)) {
+  if (!["local", "ssh", "smb", "linked"].includes(storage)) {
     throw new Error(`Invalid storage type: ${storage}`);
   }
   if (!["git", "standalone"].includes(versioning)) {
@@ -166,6 +231,13 @@ export async function createProject(
   // puis lire des fichiers sensibles via les endpoints de fichiers.
   if (!isCwdAllowed(cwd)) {
     throw new Error("Working directory must be within an allowed root (/projects, /mnt/smb)");
+  }
+
+  // Projet LIÉ : un placeholder contenant des symlinks vers plusieurs projets
+  // locaux existants, pour travailler dessus comme un projet unique.
+  if (storage === "linked") {
+    validateLinkedProject(projects, name, linkedProjectIds);
+    createLinkedPlaceholder(cwd, projects, linkedProjectIds!);
   }
 
   // cwd is the full path (frontend already includes the project name as subfolder)
@@ -188,6 +260,7 @@ export async function createProject(
     storage,
     versioning,
     cwd,
+    linkedProjectIds: storage === "linked" ? linkedProjectIds : undefined,
     ssh,
     smb: smb ? { ...smb, password: smb.password ? encryptSmbPassword(smb.password) : undefined } : undefined,
     git: versioning === "git" ? {
@@ -245,6 +318,14 @@ export async function deleteProject(id: string, deleteFiles: boolean = false): P
 
     const cwd = project.cwd;
     const storage = project.storage;
+
+    // Sécurité : refuser la suppression d'un projet référencé par un projet
+    // LIÉ (sinon les symlinks du placeholder deviendraient des dangling links).
+    for (const other of projects) {
+      if (other.storage === "linked" && Array.isArray(other.linkedProjectIds) && other.linkedProjectIds.includes(id)) {
+        throw new Error(`Cannot delete: project is linked in "${other.name}" — remove it from that linked project first`);
+      }
+    }
 
     // Remove from projects list
     const filtered = projects.filter((p) => p.id !== id);
