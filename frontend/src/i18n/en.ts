@@ -99,6 +99,7 @@ export const en = {
     failed: "Upload failed",
     failedWith: (m: string) => `Upload failed: ${m}`,
     tooLarge: (s: string) => `File too large: ${s}`,
+    imageTooLarge: (s: string) => `Image too large (>20MB) for vision analysis: ${s}`,
     maxFiles: "Maximum 10 files per message",
     waiting: (n: number) => `Waiting for ${n} file(s)...`,
     noData: "No attachment data returned",

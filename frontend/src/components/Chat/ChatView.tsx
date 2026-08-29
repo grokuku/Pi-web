@@ -33,6 +33,21 @@ function getImageSrc(img: NonNullable<DisplayMessage["images"]>[number]): string
   return "";
 }
 
+// Convertit un Blob en base64 brut (sans préfixe `data:...;base64,`).
+// Utilisé pour envoyer l'image directement au modèle courant (vision dans le
+// contexte) au lieu de passer par une transcription via analyze_file.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1] || "");
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // ── File helpers (unchanged) ──
 const TEXT_MIME_TYPES = new Set([
   "text/plain", "text/csv", "text/markdown", "text/html", "text/css",
@@ -560,15 +575,25 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   }, [send, projectId]);
 
   // ── Send ──
-  const handleSend = useCallback((text: string, attachments: Attachment[]) => {
+  const handleSend = useCallback(async (text: string, attachments: Attachment[]) => {
     const uploadErrors = attachments.filter(a => a.uploadStatus === "error");
     if (uploadErrors.length > 0) { setError(t('upload.failedWith', uploadErrors.map(a => a.name).join(", "))); return; }
     const uploading = attachments.filter(a => a.uploadStatus === "uploading");
     if (uploading.length > 0) { setError(t('upload.waiting', uploading.length)); return; }
 
     const done = attachments.filter(a => a.attachmentId && a.uploadStatus === "done");
-    const imageAttachments = done.filter(a => a.category === "image").map(a => ({ attachmentId: a.attachmentId!, name: a.name, mimeType: a.mimeType }));
+    const imageAttachments = done.filter(a => a.category === "image").map(a => ({ attachmentId: a.attachmentId!, name: a.name, mimeType: a.mimeType, size: a.size }));
     const attachmentRefs = done.map(a => ({ id: a.attachmentId!, name: a.name, category: a.category, size: a.size }));
+
+    // BUG-4 : limite de taille avant conversion base64 (alignée sur le backend
+    // analyze, 20 MB). On refuse ici pour éviter d'envoyer une image trop grosse
+    // qui ferait échouer l'analyse vision ou saturerait le WebSocket.
+    const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+    const oversizedImages = imageAttachments.filter(a => a.size > MAX_IMAGE_SIZE);
+    if (oversizedImages.length > 0) {
+      setError(t('upload.imageTooLarge', oversizedImages.map(a => a.name).join(", ")));
+      return;
+    }
 
     let fullMessage = text;
     if (attachmentRefs.length > 0) {
@@ -593,10 +618,35 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const display = text || (attachmentRefs.length > 0 ? attachmentRefs.map(a => `📎 ${a.name}`).join(", ") : "");
       setMessages(prev => [...prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }]);
     }
+
+    // ── Vision dans le contexte (Feature) ──
+    // On récupère le contenu binaire (base64) de chaque image attachée pour
+    // l'envoyer directement au modèle courant via le paramètre `images` de
+    // pi_prompt. sendPrompt (backend) route alors l'image vers le modèle courant
+    // s'il supporte la vision (override vision=Oui compris), sinon il retombe sur
+    // le modèle vision séparé (transcription). Sans ce fetch, l'image n'était
+    // transmise que comme référence texte → le LLM appelait analyze_file qui
+    // transcrivait via le modèle vision (pas de vision dans le contexte).
+    let imagesData: { data: string; mimeType: string }[] = [];
+    if (imageAttachments.length > 0) {
+      for (const img of imageAttachments) {
+        try {
+          const resp = await fetch(`/api/attachments/${img.attachmentId}/file`);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const data = await blobToBase64(blob);
+            if (data) imagesData.push({ data, mimeType: img.mimeType });
+          }
+        } catch (e) {
+          console.error("[Chat] Échec de récupération de l'image pour le contexte:", e);
+        }
+      }
+    }
+
     // Pendant le streaming, envoyer comme steer au lieu de prompt
     // Le steer est injecté par le Pi SDK entre les appels d'outils
     const msgType = isStreaming ? "pi_steer" : "pi_prompt";
-    send({ type:msgType, projectId, message:fullMessage });
+    send({ type:msgType, projectId, message:fullMessage, images: imagesData.length > 0 ? imagesData : undefined });
     // Force-scroll to bottom after sending (instant — critical for streaming)
     // Uses direct scrollTop assignment which is synchronous with DOM layout,
     // unlike smooth scrolling which conflicts with ResizeObserver.

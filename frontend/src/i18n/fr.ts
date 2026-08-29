@@ -99,6 +99,7 @@ export const fr = {
     failed: "Échec de l'envoi",
     failedWith: (m: string) => `Échec de l'envoi : ${m}`,
     tooLarge: (s: string) => `Fichier trop volumineux : ${s}`,
+    imageTooLarge: (s: string) => `Image trop volumineuse (>20 Mo) pour l'analyse vision : ${s}`,
     maxFiles: "10 fichiers maximum par message",
     waiting: (n: number) => `En attente de ${n} fichier(s)...`,
     noData: "Aucune donnée de pièce jointe renvoyée",

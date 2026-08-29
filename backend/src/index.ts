@@ -489,6 +489,10 @@ function extractWsToken(req: any): string | null {
 
 const wss = new WebSocketServer({
   server: httpServer,
+  // BUG-5 : limite de taille de payload WS (25 MB) pour éviter la coupure de
+  // connexion sur les grosses images (base64) envoyées via pi_prompt/pi_steer.
+  // Les messages normaux (texte, JSON) sont très en dessous de cette limite.
+  maxPayload: 25 * 1024 * 1024,
   verifyClient: (info, callback) => {
     const origin = info.req.headers.origin as string | undefined;
 
@@ -795,10 +799,12 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
     case "pi_steer": {
       const pid = msg.projectId || projectId;
-      const { message } = msg;
+      const { message, images } = msg;
       if (!getValidatedProject(pid) || !message) return;
       try {
-        await steerPrompt(message, pid);
+        // BUG-6 : transmettre les images au steer pour ne pas les perdre
+        // pendant le streaming (le SDK supporte steer(text, images?)).
+        await steerPrompt(message, pid, images);
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }

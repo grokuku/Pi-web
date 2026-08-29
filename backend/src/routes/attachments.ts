@@ -15,6 +15,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import os from "os";
 import { loadModelLibrary } from "../pi/model-library.js";
+import { loadProviders } from "../pi/providers.js";
 
 // ─── Config ──────────────────────────────────────────────
 const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
@@ -84,42 +85,97 @@ export interface VisionModelInfo {
   baseUrl: string;
 }
 
-/** Get full model info for the vision model (API key, base URL, etc.) */
+/**
+ * Get full model info for the vision model (API key, base URL, etc.).
+ *
+ * Le visionModelId est stocké dans la model library (.data/model-library.json)
+ * au format makeModelId : `${providerId}__${modelId}` avec les caractères
+ * spéciaux (ex. le point de `kimi-k2.6`) remplacés par `_`. L'ancienne
+ * implémentation cherchait uniquement dans ~/.pi/agent/models.json en comparant
+ * `${providerId}__${m.id}` avec le m.id BRUT (contenant le point) → le matching
+ * échouait et renvoyait null (« No vision model configured »).
+ *
+ * Correctif : on cherche d'abord dans la model library (source de vérité, qui
+ * donne providerId + modelId), puis on récupère apiKey/baseUrl depuis la config
+ * provider (.data/providers.json). En fallback, on cherche dans models.json en
+ * normalisant la comparaison (même règle de remplacement que makeModelId).
+ */
 export function getVisionModelInfo(): VisionModelInfo | null {
   try {
     const library = loadModelLibrary();
     const visionModelId = library.visionModelId;
     if (!visionModelId) return null;
-    
-    // The model is stored in models.json providers
-    const modelsJsonPath = path.join(os.homedir(), ".pi", "agent", "models.json");
-    if (!existsSync(modelsJsonPath)) return null;
-    
-    const modelsData = JSON.parse(readFileSync(modelsJsonPath, "utf-8"));
-    const providers = modelsData.providers || {};
-    
-    // Find the provider that has this model
-    for (const [providerId, provider] of Object.entries(providers) as [string, any][]) {
-      const models = provider.models || [];
-      const model = models.find((m: any) => 
-        m.id === visionModelId || 
-        `${providerId}/${m.id}` === visionModelId ||
-        `${providerId}__${m.id}` === visionModelId
-      );
-      if (model) {
+
+    // 1) Source de vérité : la model library. On y trouve le RegisteredModel
+    //    (providerId + modelId), puis on résout apiKey/baseUrl via le provider.
+    const registered = library.models.find((m) => m.id === visionModelId);
+    if (registered) {
+      const provider = loadProviders().find((p) => p.id === registered.providerId);
+      if (provider) {
         return {
-          modelId: model.id,
-          providerId,
+          modelId: registered.modelId,
+          providerId: registered.providerId,
           apiKey: provider.apiKey || "",
           baseUrl: provider.baseUrl || "https://openrouter.ai/api/v1",
         };
       }
     }
-    
+
+    // 2) Fallback : chercher dans ~/.pi/agent/models.json (providers).
+    //    On normalise la comparaison comme makeModelId pour couvrir les formats
+    //    m.id / providerId/m.id / providerId__m.id (avec ou sans remplacement).
+    const modelsJsonPath = path.join(os.homedir(), ".pi", "agent", "models.json");
+    if (!existsSync(modelsJsonPath)) return null;
+
+    const modelsData = JSON.parse(readFileSync(modelsJsonPath, "utf-8"));
+    const providers = modelsData.providers || {};
+
+    const normalize = (s: string) => s.replace(/[^a-zA-Z0-9_\-:]/g, "_");
+
+    for (const [providerId, provider] of Object.entries(providers) as [string, any][]) {
+      const models = provider.models || [];
+      const model = models.find((m: any) =>
+        m.id === visionModelId ||
+        `${providerId}/${m.id}` === visionModelId ||
+        `${providerId}__${m.id}` === visionModelId ||
+        `${providerId}__${normalize(m.id)}` === visionModelId
+      );
+      if (model) {
+        return {
+          modelId: model.id,
+          // BUG-2 : normaliser le providerId comme makeModelId (même règle de
+          // remplacement des caractères spéciaux) pour rester cohérent avec le
+          // format attendu par le reste du code (model library).
+          providerId: normalize(providerId),
+          apiKey: provider.apiKey || "",
+          baseUrl: provider.baseUrl || "https://openrouter.ai/api/v1",
+        };
+      }
+    }
+
     return null;
-  } catch {
+  } catch (e: any) {
+    // BUG-3 : ne pas avaler l'erreur en silence — logguer pour le diagnostic.
+    console.warn("[attachments] getVisionModelInfo failed:", e?.message || e);
     return null;
   }
+}
+
+/**
+ * Sanitise un texte d'erreur avant de l'exposer (fuite d'apiKey / secrets).
+ * - Retire les en-têtes Authorization / jetons Bearer.
+ * - Limite la longueur à maxLen caractères.
+ */
+export function sanitizeErrorText(text: string, maxLen = 200): string {
+  if (!text) return "";
+  let safe = text;
+  // En-têtes Authorization (ex. "Authorization: Bearer sk-...")
+  safe = safe.replace(/(authorization\s*:\s*)[^\r\n,]+/gi, "$1[REDACTED]");
+  // Jetons Bearer isolés
+  safe = safe.replace(/(bearer\s+)[A-Za-z0-9._\-]+/gi, "$1[REDACTED]");
+  // Limite de longueur
+  if (safe.length > maxLen) safe = safe.slice(0, maxLen) + "…";
+  return safe;
 }
 
 /** Call a vision model to describe an image */
@@ -162,13 +218,16 @@ export async function describeImageWithVisionModel(
     
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Vision model API error: ${response.status} ${errorText}`);
+      // BUG-1 : ne pas exposer le corps de réponse brut (peut contenir des
+      // secrets / apiKey). On tronque et on retire les en-têtes Authorization.
+      throw new Error(`Vision model API error: ${response.status} ${sanitizeErrorText(errorText)}`);
     }
     
     const data = await response.json();
     return data.choices?.[0]?.message?.content || "[No description generated]";
   } catch (err: any) {
-    throw new Error(`Failed to describe image: ${err.message}`);
+    // BUG-1 : sanitise le message d'erreur avant de le propager (fuite apiKey).
+    throw new Error(`Failed to describe image: ${sanitizeErrorText(err?.message || String(err))}`);
   }
 }
 

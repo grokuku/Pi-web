@@ -17,7 +17,7 @@ import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route } from "./routing-types.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
-import { getVisionModelInfo, describeImageWithVisionModel } from "../routes/attachments.js";
+import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
 import { appendDraft } from "./commit-draft.js";
@@ -738,7 +738,9 @@ export async function sendPrompt(
             console.log(`[prompt] Image ${i + 1} décrite (${desc.length} chars)`);
           } catch (e: any) {
             console.error(`[prompt] Erreur vision modèle image ${i + 1}:`, e.message);
-            descriptions.push(`\n\n---\n**🖼️ Image ${i + 1}** (analyse échouée: ${e.message})\n---`);
+            // BUG-1 : ne pas injecter le message d'erreur brut (peut contenir une
+            // apiKey) dans le prompt — on le sanitise (tronqué, sans Authorization).
+            descriptions.push(`\n\n---\n**🖼️ Image ${i + 1}** (analyse échouée: ${sanitizeErrorText(e?.message || String(e))})\n---`);
           }
         }
         // Injecter les descriptions dans le message et ne pas passer les images au session.prompt
@@ -814,11 +816,23 @@ export async function sendPrompt(
   }
 }
 
-export async function steerPrompt(message: string, projectId: string): Promise<void> {
+export async function steerPrompt(
+  message: string,
+  projectId: string,
+  images?: { data: string; mimeType: string }[]
+): Promise<void> {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
+  // BUG-6 : le SDK supporte steer(text, images?) — on convertit les images au
+  // format ImageContent ({ type: "image", data, mimeType }) pour ne pas les
+  // perdre silencieusement pendant le streaming.
+  const imageContent = images?.map((img) => ({
+    type: "image" as const,
+    data: img.data,
+    mimeType: img.mimeType,
+  }));
   // Mode HARNESS (v3) : l'orchestrator délègue à une fonction de routage (tool delegate).
   // Un steer est injecté par le SDK après la délégation en cours — PAS de timeout
   // abortif ici, sinon on tue la fonction en cours (BUG-67). Les fonctions ont leur propre timeout.
@@ -828,8 +842,10 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
     // Le timeout 5 min est OK ici (l'agent n'est pas en délégation, il est idle).
     if (!isSessionStreaming(projectId)) {
       console.log("[steer] Harness: agent idle — steer perdu, on fait un prompt complet");
+      const options: any = {};
+      if (imageContent && imageContent.length > 0) options.images = imageContent;
       await withSessionTimeout(
-        state.session.prompt(message),
+        state.session.prompt(message, options),
         state.session,
         projectId,
         "steer(harness)",
@@ -837,11 +853,11 @@ export async function steerPrompt(message: string, projectId: string): Promise<v
       return;
     }
     console.log("[steer] Harness mode — no abort timeout (function in progress)");
-    await state.session.steer(message);
+    await state.session.steer(message, imageContent);
     return;
   }
   // Option A : pas de timeout global en mode code (cf. sendPrompt).
-  await state.session.steer(message);
+  await state.session.steer(message, imageContent);
 }
 
 export async function abortPi(projectId?: string): Promise<void> {
