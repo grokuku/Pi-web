@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
-import { resolveEffectiveAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
+import { isBrowserRequest } from "../middleware/api-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -15,32 +15,15 @@ const router = Router();
 // Agent key management routes need authentication.
 // Strategy:
 //   1. Bootstrap: if NO agent keys exist yet → allow POST / to create the first key
-//   2. Same-origin: requests from the web UI (browser) are allowed via
-//      Sec-Fetch-Site + an allowed Origin (explicit list, or `*` allow-all).
+//   2. Requêtes navigateur (web UI) : on réutilise isBrowserRequest() de
+//      api-auth.ts — même logique que le reste de l'API, qui respecte le mode
+//      allow-all (`*`) et la liste effective des origines (env + réglage UI).
 //      On ne compare jamais Origin à Host.
 //   3. External requests (curl, other websites, etc.) → require a valid Bearer token
 //
 // This prevents unauthenticated external access to key management while allowing
 // the web UI to work without additional configuration.
 // If you lose your only key, delete agent-keys.json and restart to re-bootstrap.
-
-function isSameOrigin(req: Request): boolean {
-  // On ne compare plus jamais Origin à Host (tous deux contrôlables par le
-  // client). La provenance navigateur est détectée par Sec-Fetch-Site, puis
-  // l'Origin est comparée à la liste effective des origines autorisées (env +
-  // réglage UI « Sécurité », `*` = allow-all), résolue à chaque requête pour
-  // que les changements s'appliquent à chaud.
-  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
-  const hasFetchSite = typeof fetchSite === "string" && fetchSite.trim().length > 0;
-  const origin = req.headers.origin as string | undefined;
-
-  // GET/HEAD same-origin sans Origin (comportement standard des navigateurs).
-  if ((req.method === "GET" || req.method === "HEAD") && !origin) {
-    return hasFetchSite && fetchSite!.toLowerCase() === "same-origin";
-  }
-
-  return !!origin && isAllowedOrigin(origin, resolveEffectiveAllowedOrigins().origins) && hasFetchSite;
-}
 
 function adminAuth(req: Request, res: Response, next: NextFunction): void {
   // Bootstrap: if no keys exist, allow POST / to create the first one
@@ -49,8 +32,10 @@ function adminAuth(req: Request, res: Response, next: NextFunction): void {
     return;
   }
 
-  // Same-origin requests from the web UI are allowed
-  if (isSameOrigin(req)) {
+  // Requêtes navigateur (same-origin / cross-origin autorisées) : on réutilise
+  // isBrowserRequest() de api-auth.ts, qui gère le mode allow-all (`*`) de façon
+  // cohérente avec le reste de l'API (sinon l'UI renverrait un 401 en mode `*`).
+  if (isBrowserRequest(req)) {
     next();
     return;
   }

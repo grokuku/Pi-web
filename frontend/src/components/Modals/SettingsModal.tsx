@@ -278,12 +278,18 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [concurrencySaved, setConcurrencySaved] = useState(false);
 
   // ── Webclaw config state ──
+  // Durcissement (lot XSS) : la clé n'est plus renvoyée par l'API. Le champ
+  // reste vide = la clé existante est conservée au save (keep-if-absent).
   const [webclawUrl, setWebclawUrl] = useState("");
   const [webclawApiKey, setWebclawApiKey] = useState("");
+  const [webclawHasApiKey, setWebclawHasApiKey] = useState(false);
+  const [webclawKeyPreview, setWebclawKeyPreview] = useState("");
   const [webclawSaved, setWebclawSaved] = useState(false);
 
   // ── Tavily config state ──
   const [tavilyApiKey, setTavilyApiKey] = useState("");
+  const [tavilyHasApiKey, setTavilyHasApiKey] = useState(false);
+  const [tavilyKeyPreview, setTavilyKeyPreview] = useState("");
   const [tavilySaved, setTavilySaved] = useState(false);
 
   // ── Librarian API keys state ──
@@ -299,7 +305,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       if (res.ok) {
         const data = await res.json();
         setWebclawUrl(data.url || "");
-        setWebclawApiKey(data.apiKey || "");
+        setWebclawApiKey("");  // clé jamais renvoyée : champ vide = inchangée
+        setWebclawHasApiKey(!!data.hasApiKey);
+        setWebclawKeyPreview(data.apiKeyPreview || "");
       }
     } catch {}
   }, []);
@@ -309,9 +317,16 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/webclaw", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: webclawUrl, apiKey: webclawApiKey }),
+        // apiKey omis si le champ est vide → le backend garde la clé existante
+        body: JSON.stringify({ url: webclawUrl, ...(webclawApiKey ? { apiKey: webclawApiKey } : {}) }),
       });
       if (res.ok) {
+        setWebclawApiKey("");
+        const data = await res.json().catch(() => null);
+        if (data) {
+          setWebclawHasApiKey(!!data.hasApiKey);
+          setWebclawKeyPreview(data.apiKeyPreview || "");
+        }
         setWebclawSaved(true);
         setTimeout(() => setWebclawSaved(false), 2000);
       }
@@ -325,7 +340,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/tavily");
       if (res.ok) {
         const data = await res.json();
-        setTavilyApiKey(data.apiKey || "");
+        setTavilyApiKey("");  // clé jamais renvoyée : champ vide = inchangée
+        setTavilyHasApiKey(!!data.hasApiKey);
+        setTavilyKeyPreview(data.apiKeyPreview || "");
       }
     } catch {}
   }, []);
@@ -335,9 +352,13 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/tavily", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: tavilyApiKey }),
+        // apiKey omis si le champ est vide → la clé existante est conservée
+        ...(tavilyApiKey ? { body: JSON.stringify({ apiKey: tavilyApiKey }) } : { body: JSON.stringify({}) }),
       });
       if (res.ok) {
+        setTavilyApiKey("");
+        setTavilyHasApiKey((prev) => prev || !!tavilyApiKey);
+        if (tavilyApiKey) setTavilyKeyPreview(`••••${tavilyApiKey.slice(-4)}`);
         setTavilySaved(true);
         setTimeout(() => setTavilySaved(false), 2000);
       }
@@ -784,7 +805,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       type="password"
                       value={webclawApiKey}
                       onChange={e => setWebclawApiKey(e.target.value)}
-                      placeholder="••••••••"
+                      placeholder={webclawHasApiKey ? webclawKeyPreview : "••••••••"}
                       className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
                     />
                   </div>
@@ -816,7 +837,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       type="password"
                       value={tavilyApiKey}
                       onChange={e => setTavilyApiKey(e.target.value)}
-                      placeholder="tvly-••••••••"
+                      placeholder={tavilyHasApiKey ? tavilyKeyPreview : "tvly-••••••••"}
                       className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-xs px-3 py-1.5 rounded focus:border-hacker-accent outline-none"
                     />
                   </div>

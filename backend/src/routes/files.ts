@@ -184,7 +184,12 @@ router.get("/read", (req: Request, res: Response) => {
         ext === ".png" ? "image/png" :
         ext === ".gif" ? "image/gif" :
         "image/jpeg";
+      // Durcissement XSS (lot sécurité) : un SVG navigué directement peut
+      // exécuter du JS sur l'origine. CSP:sandbox l'en empêche sans casser le
+      // rendu <img> utilisé par le preview du File Explorer.
       res.setHeader("Content-Type", mimeType);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "sandbox");
       res.setHeader("Content-Length", buffer.length);
       res.send(buffer);
       return;

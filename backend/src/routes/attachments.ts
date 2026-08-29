@@ -456,9 +456,27 @@ router.get("/:id/file", (req: Request, res: Response) => {
     return res.status(404).json({ error: "File not found on disk" });
   }
 
-  // Set Content-Disposition for downloads
-  res.setHeader("Content-Disposition", `inline; filename="${meta.name}"`);
+  // ── Durcissement XSS (lot sécurité) ──
+  // Les fichiers uploadés ne doivent jamais pouvoir s'exécuter sur l'origine
+  // de Pi-Web (un HTML/SVG avec <script> servit en inline = XSS stockée qui
+  // pourrait appeler l'API avec les droits same-origin).
+  // - nosniff + CSP:sandbox bloquent l'exécution de scripts même en navigation
+  //   directe (sandbox n'affecte NI l'affichage <img> NI le viewer PDF).
+  // - Les MIME exécutables sont forcés en "attachment" (téléchargement au lieu
+  //   d'ouverture navigateur). Le rendu <img> côté UI ignore le Disposition.
+  const dangerousInlineMimes = new Set([
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/xml",
+    "text/xml",
+  ]);
+  const disposition = dangerousInlineMimes.has(meta.mimeType.toLowerCase()) ? "attachment" : "inline";
+  // Échapper le filename pour éviter une injection dans le header
+  const safeName = meta.name.replace(/[\r\n"]/g, "");
+  res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
   res.setHeader("Content-Type", meta.mimeType);
+  res.setHeader("Content-Security-Policy", "sandbox");
 
   const stream = createReadStream(filePath);
   stream.pipe(res);

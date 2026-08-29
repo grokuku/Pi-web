@@ -172,8 +172,13 @@ async function isServerReady(): Promise<boolean> {
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    return res.ok;
+    // BUG-61 : en mode --ui, /rpc répond 403 pour tools/list — c'est le comportement
+    // normal du serveur, pas une absence. Toute réponse HTTP (même 403/405) prouve
+    // qu'un process écoute sur le port : on le réutilise au lieu de respawner
+    // (un 2e spawn échouerait avec "ui.unavailable port=9749 reason=in_use").
+    return true;
   } catch {
+    // Seul un échec réseau (ECONNREFUSED, timeout) signifie "serveur absent".
     return false;
   }
 }
@@ -186,7 +191,21 @@ async function waitForServer(maxAttempts = 30): Promise<boolean> {
   return false;
 }
 
-async function spawnServer(): Promise<void> {
+// Sérialise les appels concurrents à spawnServer (race entre session_start et
+// before_agent_start, ou entre deux sessions) : un seul spawn à la fois, les
+// appelants en attente partagent la même promesse.
+let spawnPromise: Promise<void> | null = null;
+
+function spawnServer(): Promise<void> {
+  if (!spawnPromise) {
+    spawnPromise = doSpawnServer().finally(() => {
+      spawnPromise = null;
+    });
+  }
+  return spawnPromise;
+}
+
+async function doSpawnServer(): Promise<void> {
   if (await isServerReady()) {
     status.running = true;
     return;

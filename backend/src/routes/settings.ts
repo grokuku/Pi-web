@@ -184,10 +184,20 @@ router.post("/models/reload", (_req: Request, res: Response) => {
 });
 
 // ── Webclaw config ──
+// Durcissement (lot XSS) : la clé n'est jamais renvoyée en clair au frontend.
+// Le POST garde la clé existante si `apiKey` est absent (modèle providers :).
+
+function toPublicWebclawConfig(config: { url: string; apiKey: string }) {
+  return {
+    url: config.url,
+    hasApiKey: !!config.apiKey,
+    apiKeyPreview: config.apiKey ? `••••${config.apiKey.slice(-4)}` : "",
+  };
+}
 
 router.get("/webclaw", (_req: Request, res: Response) => {
   try {
-    res.json(getWebclawConfig());
+    res.json(toPublicWebclawConfig(getWebclawConfig()));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -196,20 +206,26 @@ router.get("/webclaw", (_req: Request, res: Response) => {
 router.post("/webclaw", (req: Request, res: Response) => {
   try {
     const { url, apiKey } = req.body;
-    const config = setWebclawConfig({ url, apiKey });
-    res.json(config);
+    // apiKey absent → on garde la clé existante (seule l'URL est mise à jour)
+    const config = setWebclawConfig({ url, ...(apiKey !== undefined ? { apiKey } : {}) });
+    res.json(toPublicWebclawConfig(config));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
 });
 
 // ── Tavily config ──
+// Même contrat que Webclaw : clé jamais renvoyée en clair, POST keep-if-absent.
+// (L'ancien GET renvoyait les 8 premiers caractères et le frontend les
+// réenvoyait au POST — la clé tronquée remplaçait la vraie.)
 
 router.get("/tavily", (_req: Request, res: Response) => {
   try {
     const config = getTavilyConfig();
-    // Masquer partiellement la clé pour la sécurité
-    res.json({ apiKey: config.apiKey ? config.apiKey.substring(0, 8) + "..." : "" });
+    res.json({
+      hasApiKey: !!config.apiKey,
+      apiKeyPreview: config.apiKey ? `••••${config.apiKey.slice(-4)}` : "",
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -218,7 +234,7 @@ router.get("/tavily", (_req: Request, res: Response) => {
 router.post("/tavily", (req: Request, res: Response) => {
   try {
     const { apiKey } = req.body;
-    if (apiKey === undefined) return res.status(400).json({ error: "Missing apiKey" });
+    if (apiKey === undefined) return res.json({ ok: true, kept: true });
     setTavilyConfig({ apiKey });
     res.json({ ok: true });
   } catch (e: any) {

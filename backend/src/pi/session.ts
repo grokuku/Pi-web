@@ -12,6 +12,7 @@ import {
   getCommitModel,
   getModel,
   setProjectActiveMode,
+  resolveModelCapability,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route } from "./routing-types.js";
@@ -709,14 +710,18 @@ export async function sendPrompt(
 
     // Override manuel de la Model Library (Settings → Models → éditer un modèle) :
     // l'utilisateur peut forcer vision=oui/non quand l'inférence du nom échoue (ex. GLM5.3 flash).
-    // L'override PRIME sur la détection SDK (input image) et l'inférence.
+    // On utilise la capacité RÉSOLUE (resolveModelCapability) : l'override PRIME sur
+    // la détection SDK (input image) et l'inférence. Sans cela, un modèle avec
+    // visionOverride="yes" mais vision détecté à false (ex. GLM-5.3-flash) verrait
+    // son image omise par le SDK ("image omitted: model does not support images").
     try {
       const library = loadModelLibrary();
       const entry = library.models.find(
         (m) => m.providerId === currentModel?.provider && m.modelId === currentModel?.id
       );
-      if (entry?.visionOverride === "yes") supportsVision = true;
-      else if (entry?.visionOverride === "no") supportsVision = false;
+      if (entry) {
+        supportsVision = resolveModelCapability(entry, "vision");
+      }
     } catch { /* library indisponible → comportement de détection standard */ }
 
     if (!supportsVision) {
@@ -1418,7 +1423,7 @@ async function applyModelAndThinking(
               name: m.name || m.id,
               api: m.api || providerApi,
               reasoning: model.reasoning ?? m.reasoning ?? false,
-              input: m.input || (model.vision ? ["text", "image"] : ["text"]),
+              input: m.input || (resolveModelCapability(model, "vision") ? ["text", "image"] : ["text"]),
               contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
               maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
               cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1443,7 +1448,7 @@ async function applyModelAndThinking(
             name: piModel.name || model.name || model.modelId,
             api: providerApi,
             reasoning: model.reasoning ?? piModel.reasoning ?? false,
-            input: (piModel as any).input || (model.vision ? ["text", "image"] : ["text"]),
+            input: (piModel as any).input || (resolveModelCapability(model, "vision") ? ["text", "image"] : ["text"]),
             contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
             maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
             cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

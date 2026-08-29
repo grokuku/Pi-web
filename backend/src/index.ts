@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { createServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 import path from "path";
@@ -83,6 +84,45 @@ const app = express();
 app.use(cors({
   origin: (origin, cb) => cb(null, isOriginEffectivelyAllowed(origin)),
 }));
+
+// ── Durcissement sécurité (lot XSS) ──
+// Derrière Caddy (reverse proxy), il faut faire confiance au premier hop pour
+// retrouver l'IP réelle du client — sinon tout le trafic partagerait l'IP de
+// Caddy et le rate limiting serait global au lieu d'être par client.
+app.set("trust proxy", 1);
+
+// Headers de sécurité sur toutes les réponses :
+// - nosniff : empêche le navigateur de deviner le MIME (un upload HTML déguisé
+//   en .png ne serait plus interprété comme HTML).
+// - Referrer-Policy : évite de fuiter des URLs sensibles (ex: ?token= du WS)
+//   vers des sites tiers quand l'utilisateur suit un lien depuis l'app.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+
+// Rate limiting express (lot XSS) : protège contre le brute-force d'API keys
+// et le spam d'uploads. Express-rate-limit v7+ : `limit` remplace `max`.
+const makeLimiter = (limit: number, windowMs = 60_000) =>
+  rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,   // RateLimit-* (standard IETF)
+    legacyHeaders: false,
+    message: { error: "Too many requests, please slow down." },
+  });
+
+const apiLimiter = makeLimiter(600);        // global /api : 10 req/s — largement au-dessus de l'usage UI normal
+const uploadLimiter = makeLimiter(30);      // uploads : 30/min (upload massif limité côté serveur aussi)
+const sharedMemLimiter = makeLimiter(60);   // mémoire partagée : auth par clés, brute-force limité
+
+// Montés AVANT les routeurs (ordre nécessaire), l'IP vue étant l'IP réelle du
+// client grâce au trust proxy ci-dessus.
+app.use("/api", apiLimiter);
+app.use("/api/attachments/upload", uploadLimiter);
+app.use("/api/shared-memory", sharedMemLimiter);
+
 app.use(express.json({ limit: "50mb" }));
 
 // ── Serve frontend static files FIRST (before CBM proxy) ──

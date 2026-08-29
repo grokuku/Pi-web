@@ -71,7 +71,7 @@ function isLocalhost(req: Request): boolean {
  *   Sec-Fetch-Site: same-origin (limite documentée : en-tête forgeable par un
  *   client non-navigateur).
  */
-function isBrowserRequest(req: Request): boolean {
+export function isBrowserRequest(req: Request): boolean {
   // Liste effective résolue à chaque requête (env + réglage UI, hot-reload).
   const effective = resolveEffectiveAllowedOrigins();
 
