@@ -4,6 +4,7 @@ import os from "os";
 import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
+import { resolveModelCapability } from "./model-library.js";
 
 const MODELS_JSON_PATH = path.join(os.homedir(), ".pi", "agent", "models.json");
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -56,13 +57,21 @@ export async function writeModelsJson(
       piProvider.models = models.map((m) => {
         // Apply inference for any zero/empty/missing values
         const reasoning = m.reasoning ?? inferReasoning(m.modelId);
-        const vision = m.vision ?? inferVision(m.modelId);
         const contextWindow = m.contextWindow > 0 ? m.contextWindow : inferContextWindow(m.modelId);
+        // Capacités RÉSOLUES (vue > détection) : c'est ce champ "input" que le SDK
+        // charge depuis models.json — un champ "input": ["text"] pour un modèle
+        // avec visionOverride "yes" faisait échouer l'envoi d'images
+        // ("image omitted: model does not support images").
+        const vision = resolveModelCapability(m, "vision");
+        const audio = resolveModelCapability(m, "audio");
+        const input: ("text" | "image" | "audio")[] = ["text"];
+        if (vision) input.push("image");
+        if (audio) input.push("audio");
         return {
           id: m.modelId,
           name: `${m.name} (${provider.name})`,
           reasoning,
-          input: vision ? ["text", "image" as const] : ["text"],
+          input,
           contextWindow,
           maxTokens: m.maxTokens > 0 ? m.maxTokens : 16384,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -880,14 +880,15 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   <div className="border border-hacker-accent/40 bg-hacker-accent/5 p-2 mb-2 rounded">
                     <div className="text-[11px] text-hacker-accent mb-1">✓ New key created — copy it now (shown only once):</div>
                     <div className="flex items-center gap-2">
-                      <code className="text-hacker-text-bright text-xs bg-hacker-bg px-2 py-1 flex-1 truncate">
+                      <code className="text-hacker-text-bright text-xs bg-hacker-bg px-2 py-1 flex-1 truncate select-text">
                         {libCreatedKey}
                       </code>
                       <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(libCreatedKey);
-                          setLibKeyCopied(true);
-                          setTimeout(() => setLibKeyCopied(false), 2000);
+                        onClick={async () => {
+                          if (await copyToClipboard(libCreatedKey)) {
+                            setLibKeyCopied(true);
+                            setTimeout(() => setLibKeyCopied(false), 2000);
+                          }
                         }}
                         className="text-xs text-hacker-accent hover:text-hacker-text-bright shrink-0"
                       >
@@ -1688,6 +1689,31 @@ interface ApiKey {
   lastUsedAt: string | null;
 }
 
+/**
+ * Copie robuste vers le presse-papier. navigator.clipboard n'existe qu'en
+ * contexte sécurisé (https ou localhost) : l'accès LAN en http://10.10.0.5:…
+ * n'en a pas, on retombe sur execCommand via un textarea éphémère.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fallback ci-dessous */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
 function ApiKeysTab() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [newName, setNewName] = useState("");
@@ -1738,8 +1764,9 @@ function ApiKeysTab() {
     } catch (e: any) { setError(e.message); }
   };
 
-  const handleCopy = (token: string, id: string) => {
-    navigator.clipboard.writeText(token);
+  const handleCopy = async (token: string, id: string) => {
+    const ok = await copyToClipboard(token);
+    if (!ok) return;
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -1799,7 +1826,8 @@ function ApiKeysTab() {
               <div className="flex items-center gap-2">
                 {revealedTokens[k.id] ? (
                   <>
-                    <code className="text-hacker-text-bright text-xs bg-hacker-bg px-2 py-0.5 flex-1 truncate">
+                    {/* select-text : surcharge le user-select:none du .modal-inner pour permettre la sélection manuelle */}
+                    <code className="text-hacker-text-bright text-xs bg-hacker-bg px-2 py-0.5 flex-1 truncate select-text">
                       {revealedTokens[k.id]}
                     </code>
                     <button
@@ -1811,7 +1839,7 @@ function ApiKeysTab() {
                   </>
                 ) : (
                   <>
-                    <code className="text-hacker-text-dim text-xs bg-hacker-bg px-2 py-0.5 flex-1">
+                    <code className="text-hacker-text-dim text-xs bg-hacker-bg px-2 py-0.5 flex-1 select-text">
                       {k.tokenPreview}
                     </code>
                     <button

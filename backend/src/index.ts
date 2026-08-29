@@ -953,6 +953,19 @@ httpServer.listen(PORT, async () => {
   // Re-create temp files for any persisted credentials (needed by GIT_ASKPASS)
   credentialStore.ensureTempFiles();
 
+  // Régénérer models.json pour le SDK Pi avec les capacités RÉSOLUES
+  // (vision/audio overrides). Sans ça, au démarrage le SDK relit l'ancien
+  // models.json persisté — qui peut encore contenir input:["text"] pour un
+  // modèle avec visionOverride "yes" (→ "image omitted" au prochain prompt).
+  try {
+    const { writeModelsJson } = await import("./pi/sync-providers.js");
+    const { loadProviders: lp } = await import("./pi/providers.js");
+    const { loadModelLibrary: lml } = await import("./pi/model-library.js");
+    await writeModelsJson(lp(), lml());
+  } catch (e: any) {
+    console.warn("[startup] models.json regeneration failed:", e.message);
+  }
+
   // Auto-mount SMB projects
   try {
     const projects = getAllProjects();
