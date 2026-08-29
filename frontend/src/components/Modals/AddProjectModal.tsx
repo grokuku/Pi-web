@@ -57,9 +57,11 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
   // The project folder is created as a subfolder with the project name.
   const effectiveCwd = storage === "ssh" ? sshRemotePath : storage === "smb" ? smbMount : (cwd || "/projects") + (name ? `/${name}` : "").replace(/\/+/g, "/");
 
-  // Candidats au liage : projets LOCAUX existants (pas ssh/smb, pas liés — 1 niveau max)
+  // Candidats au liage : projets locaux OU SMB (le mount est un chemin local
+  // du container, /mnt/smb/… — les symlinks fonctionnent). Jamais de liés
+  // (1 niveau max) ni de ssh (fichiers absents de ce disque).
   const linkedCandidates = availableProjects.filter(
-    (p) => p.storage === "local" && p.cwd.startsWith("/projects/")
+    (p) => p.storage === "local" || p.storage === "smb"
   );
 
   // Charger la liste des projets existants (candidats au liage)
@@ -68,8 +70,9 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
       try {
         const res = await fetch("/api/projects");
         if (res.ok) {
+          // GET /api/projects renvoie un ARRAY direct (pas { projects: [...] }).
           const data = await res.json();
-          setAvailableProjects(data.projects || []);
+          setAvailableProjects(Array.isArray(data) ? data : (data.projects || []));
         }
       } catch { /* liste indisponible — candidats vides */ }
     })();

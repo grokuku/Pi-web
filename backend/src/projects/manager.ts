@@ -153,8 +153,8 @@ function validateLinkedProject(projects: Project[], name: string, linkedProjectI
     if (sub.storage === "linked") {
       throw new Error(`Project "${sub.name}" is itself a linked project (nested linked projects are not supported)`);
     }
-    if (sub.storage !== "local") {
-      throw new Error(`Project "${sub.name}" is a ${sub.storage} project — linked projects only support local sub-projects`);
+    if (sub.storage !== "local" && sub.storage !== "smb") {
+      throw new Error(`Project "${sub.name}" is a ${sub.storage} project — linked projects only support local and SMB (mounted) sub-projects`);
     }
   }
 }
