@@ -187,10 +187,33 @@ export interface RegisteredModel {
   name: string;                // display name
   isDefault: boolean;          // default model for modes without a specific model
   reasoning: boolean;
-  vision: boolean;             // supports image/vision input
+  vision: boolean;             // supports image/vision input (inféré — voir overrides)
+  audio?: boolean;             // supports audio input (inféré)
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
   thinkingLevel: string;       // off, minimal, low, medium, high
+
+  // Overrides manuels (UI) : prime sur la détection "auto"
+  visionOverride?: "auto" | "yes" | "no";
+  audioOverride?: "auto" | "yes" | "no";
+}
+
+/** Capacité résolue : override manuel d'abord, champ inféré sinon. */
+export function resolveModelCapability(
+  m: RegisteredModel,
+  cap: "vision" | "audio"
+): boolean {
+  if (cap === "vision") {
+    if (m.visionOverride === "yes") return true;
+    if (m.visionOverride === "no") return false;
+    return m.vision === true;
+  }
+  if (cap === "audio") {
+    if (m.audioOverride === "yes") return true;
+    if (m.audioOverride === "no") return false;
+    return m.audio === true;
+  }
+  return false;
 }
 
 export interface ModeConfig {

@@ -24,11 +24,36 @@ export interface RegisteredModel {
   // Model capabilities (auto-detected from provider, not user-editable)
   reasoning: boolean;
   vision: boolean;             // supports image input
+  audio?: boolean;             // supports audio input (optionnel — non inféré partout)
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
 
   // Thinking
   thinkingLevel: string;       // off, minimal, low, medium, high
+
+  // Overrides manuels des capacités (UI Model Library)
+  // "auto" = détection existante (provider + inférence) ; "yes"/"no" = forcé par l'utilisateur,
+  // et PRIME sur toute détection (fiable quand l'inférence par nom échoue, ex. GLM5)
+  visionOverride?: "auto" | "yes" | "no";
+  audioOverride?: "auto" | "yes" | "no";
+}
+
+/**
+ * Capacité RÉSOLUE d'un modèle : l'override manuel prime, sinon le champ inféré.
+ * Utilisé partout où on doit décider « ce modèle voit-il / entend-il ? ».
+ */
+export function resolveModelCapability(m: RegisteredModel, cap: "vision" | "audio"): boolean {
+  if (cap === "vision") {
+    if (m.visionOverride === "yes") return true;
+    if (m.visionOverride === "no") return false;
+    return m.vision === true;
+  }
+  if (cap === "audio") {
+    if (m.audioOverride === "yes") return true;
+    if (m.audioOverride === "no") return false;
+    return m.audio === true;
+  }
+  return false;
 }
 
 export type AgentMode = "code" | "harness";
@@ -242,10 +267,20 @@ function migrateModel(m: any): RegisteredModel {
     isDefault: m.isDefault || false,
     reasoning: m.reasoning ?? inferReasoning(m.modelId || m.name || "", m.family),
     vision: m.vision ?? inferVision(m.modelId || m.name || "", m.family),
+    audio: m.audio ?? inferAudio(m.modelId || m.name || "", m.family),
     contextWindow: m.contextWindow || inferContextWindow(m.modelId || m.name || "", m.family),
     maxTokens: m.maxTokens || 16384,
     thinkingLevel: m.thinkingLevel || "medium",
+    // Overrides manuels : "auto" par défaut pour rester sur l'inférence existante
+    visionOverride: m.visionOverride || "auto",
+    audioOverride: m.audioOverride || "auto",
   };
+}
+
+/** Inférence « prudente » des modèles audio (la plupart des LLM n'ont pas d'entrée audio). */
+export function inferAudio(modelId: string, family?: string): boolean {
+  const name = (family || modelId).toLowerCase();
+  return /whisper|tts|speech|audio|omni|gemini.*audio|qwen.*audio|qwen2[._-]?audio|qwen2[._-]?omni/i.test(name);
 }
 
 function migrateProjectMode(pm: any): ProjectModeConfig {

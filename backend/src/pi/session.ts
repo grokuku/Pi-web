@@ -705,8 +705,20 @@ export async function sendPrompt(
   if (imageAttachments && imageAttachments.length > 0) {
     // Vérifier si le modèle courant supporte la vision
     const currentModel = state.session?.model as any;
-    const supportsVision = currentModel?.input?.includes("image") || currentModel?.vision === true;
-    
+    let supportsVision = currentModel?.input?.includes("image") || currentModel?.vision === true;
+
+    // Override manuel de la Model Library (Settings → Models → éditer un modèle) :
+    // l'utilisateur peut forcer vision=oui/non quand l'inférence du nom échoue (ex. GLM5.3 flash).
+    // L'override PRIME sur la détection SDK (input image) et l'inférence.
+    try {
+      const library = loadModelLibrary();
+      const entry = library.models.find(
+        (m) => m.providerId === currentModel?.provider && m.modelId === currentModel?.id
+      );
+      if (entry?.visionOverride === "yes") supportsVision = true;
+      else if (entry?.visionOverride === "no") supportsVision = false;
+    } catch { /* library indisponible → comportement de détection standard */ }
+
     if (!supportsVision) {
       // Le modèle courant n'a pas la vision — utiliser le modèle vision configuré
       const visionModelInfo = getVisionModelInfo();

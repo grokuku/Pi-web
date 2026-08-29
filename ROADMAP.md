@@ -2,6 +2,16 @@
 
 ## 🔴 Bugs à corriger
 
+### Infra — Authentik forward_auth (2026-08-22)
+
+#### INFRA-01: NetworkError git ponctuelles + redirection login en pleine session — NON RÉSOLU (non bloquant)
+- **Symptômes :** NetworkError ponctuelles sur les fetchs silencieux du frontend (ex. `git/status`), le site continue de marcher, le WS tient. Authentik force un re-login toutes les 24h, mais l'erreur apparaît AUSSI pendant la journée alors que l'utilisateur est connecté.
+- **Mécanisme identifié :** le forward_auth d'Authentik répond par une redirection 302 vers `https://authentik.holaf.fr/application/o/authorize/` quand il juge la session invalide par intermittence. Cette redirection est **cross-origin** (pi.holaf.fr → authentik.holaf.fr) et sans header CORS → le navigateur bloque la lecture → NetworkError. Le WS, une fois établi (tunnel direct Caddy→Pi-Web), n'est pas concerné.
+- **Écarté par tests :** Pi-Web sain (WS direct 90s stable ; `git/status` 12ms, 30/30 OK) ; Caddy sans erreur (logs propres) ; latence Authentik excellente (20 requêtes ~50ms stables). Le 404 du curl est normal (headers X-Authentik-* manquants).
+- **Pistes restantes (à investiguer) :** durée de validité du token dans le provider Authentik (Advanced protocol settings → Access code validity / refresh) ; refresh silencieux qui échoue ; outpost qui référence une ancienne IP pour joindre l'API (Authentik a changé de machine/hôte — seule variable de l'incident).
+- **Workaround appliqué (non résolutif) :** headers CORS ajoutés sur `authentik.holaf.fr` (Caddy) pour les origines `pi.holaf.fr`, `sd.holaf.fr`, `aikore.holaf.fr` (matcher + reflet conditionnel `{http.request.header.Origin}`). L'erreur muette a temporairement disparu puis est revenue.
+- **Prochaine étape quand on s'y remet :** au moment exact d'une NetworkError → `docker logs --since 10m authentik-server | grep -iE "session|token|refresh|error|outpost|denied|invalid"` + `docker logs --since 10m caddypanel | grep -iE "error|abort|upstream|timeout|502|503"` + noter l'heure de l'erreur.
+
 ### Tolérés (phase de dev)
 
 #### BUG-36: Race condition potentielle dans le project manager (lectures non protégées)

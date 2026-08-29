@@ -385,10 +385,12 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
   const [selectedConfigured, setSelectedConfigured] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
-  // Inline edit state for model properties (contextWindow, maxTokens)
+  // Inline edit state for model properties (contextWindow, maxTokens, capability overrides)
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [editCtx, setEditCtx] = useState("");
   const [editMaxTokens, setEditMaxTokens] = useState("");
+  const [editVisionOverride, setEditVisionOverride] = useState<"auto" | "yes" | "no">("auto");
+  const [editAudioOverride, setEditAudioOverride] = useState<"auto" | "yes" | "no">("auto");
   // Provider filters: separate for Available and Selected columns
   const [providerFilterAvailable, setProviderFilterAvailable] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
   const [providerFilterSelected, setProviderFilterSelected] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
@@ -559,9 +561,13 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         // Use detected capabilities from the provider when available; fall back to heuristics
         reasoning: dm?.reasoning ?? inferReasoning(modelId),
         vision: dm?.vision ?? inferVision(modelId),
+        audio: (dm as any)?.audio ?? false,
         contextWindow: dm?.contextWindow || inferContextWindow(modelId),
         maxTokens: 16384,
         thinkingLevel: "medium",
+        // Overrides manuels : "auto" (détection) à l'ajout — modifiable dans l'édition inline
+        visionOverride: "auto",
+        audioOverride: "auto",
       });
     }
     await onAdd(models);
@@ -745,6 +751,9 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
               filteredConfigured.map(m => {
                 const isSelected = selectedConfigured.has(m.id);
                 const isDef = m.id === library.defaultModelId;
+                // Capacités résolues : override manuel d'abord, inférence sinon
+                const resolvedVision = m.visionOverride === "yes" ? true : m.visionOverride === "no" ? false : m.vision === true;
+                const resolvedAudio = m.audioOverride === "yes" ? true : m.audioOverride === "no" ? false : m.audio === true;
                 return (
                   <div key={m.id}>
                     <button onClick={() => toggleConfigured(m.id)}
@@ -756,9 +765,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
                       <span className="text-[0.6875rem] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
-                      {/* Capability badges */}
+                      {/* Capability badges (capacité résolue : override puis inférence) */}
                       <span className="flex items-center gap-1 shrink-0">
-                        {m.vision && <span className="text-[0.6875rem]" title={t('modelLibrary.vision')}>👁️</span>}
+                        {resolvedVision && <span className="text-[0.6875rem]" title={t('modelLibrary.vision')}>👁️</span>}
+                        {resolvedAudio && <span className="text-[0.6875rem]" title={t('modelLibrary.audio')}>🔊</span>}
                         {m.reasoning && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
                         <span className="text-[0.6875rem] text-hacker-text-dim/70" title={t('modelLibrary.contextWindow')}>{fmtCtx(m.contextWindow)}</span>
                         <Edit2 size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
@@ -770,13 +780,15 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                               setEditingModelId(m.id);
                               setEditCtx(String(m.contextWindow || ""));
                               setEditMaxTokens(String(m.maxTokens || ""));
+                              setEditVisionOverride(m.visionOverride || "auto");
+                              setEditAudioOverride(m.audioOverride || "auto");
                             }
                           }}
                         />
                       </span>
                     </button>
                     {editingModelId === m.id && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 bg-hacker-surface border-b border-hacker-border/50 text-[0.6875rem]">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-hacker-surface border-b border-hacker-border/50 text-[0.6875rem] flex-wrap">
                         <label className="text-hacker-text-dim whitespace-nowrap">{t('modelLibrary.ctx')}</label>
                         <input
                           type="number"
@@ -793,6 +805,27 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                           placeholder={String(m.maxTokens || 0)}
                           className="w-24 bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
                         />
+                        {/* Overrides de capacités : utile quand l'inférence par nom échoue (ex. GLM5.3 flash a la vision) */}
+                        <label className="text-hacker-text-dim whitespace-nowrap" title={t('modelLibrary.capabilitiesHelp')}>{t('modelLibrary.vision')}</label>
+                        <select
+                          value={editVisionOverride}
+                          onChange={(e) => setEditVisionOverride(e.target.value as "auto" | "yes" | "no")}
+                          className="bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
+                        >
+                          <option value="auto">{t('modelLibrary.overrideAuto')}</option>
+                          <option value="yes">{t('modelLibrary.overrideYes')}</option>
+                          <option value="no">{t('modelLibrary.overrideNo')}</option>
+                        </select>
+                        <label className="text-hacker-text-dim whitespace-nowrap" title={t('modelLibrary.capabilitiesHelp')}>{t('modelLibrary.audio')}</label>
+                        <select
+                          value={editAudioOverride}
+                          onChange={(e) => setEditAudioOverride(e.target.value as "auto" | "yes" | "no")}
+                          className="bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
+                        >
+                          <option value="auto">{t('modelLibrary.overrideAuto')}</option>
+                          <option value="yes">{t('modelLibrary.overrideYes')}</option>
+                          <option value="no">{t('modelLibrary.overrideNo')}</option>
+                        </select>
                         <button
                           onClick={async () => {
                             const updates: Partial<RegisteredModel> = {};
@@ -800,6 +833,8 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                             const max = parseInt(editMaxTokens, 10);
                             if (ctx && ctx > 0 && ctx !== m.contextWindow) updates.contextWindow = ctx;
                             if (max && max > 0 && max !== m.maxTokens) updates.maxTokens = max;
+                            if (editVisionOverride !== (m.visionOverride || "auto")) updates.visionOverride = editVisionOverride;
+                            if (editAudioOverride !== (m.audioOverride || "auto")) updates.audioOverride = editAudioOverride;
                             if (Object.keys(updates).length > 0) {
                               await onUpdate(m.id, updates);
                             }
