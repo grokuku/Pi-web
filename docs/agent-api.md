@@ -310,10 +310,16 @@ L'API du **Libraire** est la porte d'accès aux **recherches web** et à la bibl
 | `POST` | `/api/librarian/archive` | **Archiver ta découverte** (partagée avec tous) |
 | `GET` | `/api/librarian/status` | Santé / nombre de docs |
 
-Auth équivalente à l'agent : **Bearer suffit** (l'auth librariaire accepte localhost, et `X-API-Key: lib-…` sinon — avec un jeton agent, le Bearer franchit les deux couches).
+Auth : **⚠️ deux identifiants sont requis** depuis l'extérieur de localhost — les deux couches sont indépendantes :
+
+1. **Jeton agent** : `Authorization: Bearer <jeton>` — franchit l'auth globale `/api` ;
+2. **Clé libraire** : `X-API-Key: lib-…` — exigée par les routes du libraire elles-mêmes (le Bearer seul ne suffit PAS pour elles).
+
+Demande les deux à l'administrateur (l'UI Settings → API Keys gère les deux ; sinon `POST /api/librarian/keys` depuis localhost).
 
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -s -H "Authorization: Bearer $AGENT_TOKEN" -H "X-API-Key: $LIB_KEY" \
+  -H "Content-Type: application/json" \
   -X POST -d '{"query":"comment configurer WebSocket en Node"}' \
   $BASE/api/librarian/search
 ```
@@ -321,7 +327,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 Archiver une découverte (la met à disposition de tous les agents et du chat Pi-Web) :
 
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -s -H "Authorization: Bearer $AGENT_TOKEN" -H "X-API-Key: $LIB_KEY" -H "Content-Type: application/json" \
   -X POST -d '{
     "name": "express", "version": "routing",
     "sourceUrl": "https://expressjs.com/en/guide/routing.html",

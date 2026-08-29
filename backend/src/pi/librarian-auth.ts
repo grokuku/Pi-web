@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { type Request, type Response, type NextFunction } from "express";
+import { isBrowserRequest } from "../middleware/api-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", ".data");
@@ -119,11 +120,15 @@ export function librarianAuth(req: Request, res: Response, next: NextFunction): 
 
 /**
  * Admin-only middleware for key management routes.
- * Only localhost requests are allowed (no librarianAuth needed).
+ * Deux origines autorisées (même logique que adminAuth des agent-keys) :
+ * - localhost (interne Pi-Web, docker exec)
+ * - navigateur same-origin (l'UI Settings → API Keys est rendue par Pi-Web) :
+ *   sans ça, l'UI distante recevait 403 "only available from localhost" et
+ *   ne pouvait JAMAIS créer de clé libraire.
  */
 export function librarianAdminOnly(req: Request, res: Response, next: NextFunction): void {
-  if (!isLocalhost(req)) {
-    res.status(403).json({ error: "Key management is only available from localhost" });
+  if (!isLocalhost(req) && !isBrowserRequest(req)) {
+    res.status(403).json({ error: "Key management is only available from localhost or the web UI" });
     return;
   }
   next();

@@ -86,7 +86,7 @@ Base : `/api/librarian`
 | `POST` | `/archive` | + clé libraire | Archive un document (tes découvertes) |
 | `POST` | `/update` | + clé libraire | Déclenche le scanmanuel des deps des projets |
 
-La gestion des clés (`GET/POST/DELETE /api/librarian/keys`) est réservée à localhost — un agent externe ne peut ni créer, ni voir, ni révoquer les clés : ce n'est pas ton rôle, tu reçois ta clé toute prête.
+La gestion des clés (`GET/POST/DELETE /api/librarian/keys`) est réservée à localhost et à l'UI web Pi-Web (Settings → API Keys, section 📚 Librarian API Keys) — un agent externe ne peut ni créer, ni voir, ni révoquer les clés : ce n'est pas ton rôle, tu reçois ta clé toute prête.
 
 ---
 
@@ -198,7 +198,8 @@ Besoin d'une info technique (config d'outil, prix d'API, changement de version�
 
 ## Limites connues
 
-- **v1 namespaces mémoire** : le libraire n'a qu'une bibliothèque plate `tools/` commune — pas de namespace par agent (prochaine évolution : archivage par agent, cf. ROADMAP).
+- L'auth est à **deux couches indépendantes** : l'auth globale (`/api`, Bearer jeton agent) PUIS les routes libraires (X-API-Key) — un jeton agent seul ne franchit pas la deuxième ;
+- **Bibliothèque plate `tools/`** : pas de namespace par agent (prochaine évolution : archivage par agent, cf. ROADMAP) ;
 - **Pas de scraping en `/search`** : seule `POST /archive` est responsable du contenu persis (le champ `rawContent` que TU écris) — le `/search` web renvoie titre/snipet uniquement.
 - **Rate limit global** : 600 req/min/IP (partagé avec tout le reste de l'API ; en cas de 429, espace tes appels d'éventuelles boucles).
 - Les clés sont révocables à tout moment par l'utilisateur (DELETE localhost ou UI) : prévois un message d'erreur clair instructif si ton auth est retirée.
