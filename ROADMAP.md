@@ -366,6 +366,25 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | Quality Gates Pipeline (lint → build → review → test → security) | P4 |
 | Dark Factory (agents persistants, jobs async) | P6 |
 
+#### 🔍 Recherche sémantique du libraire / OpenViking (évalué 2026-08-29)
+
+**Décision : pas maintenant** — surdimensionné pour l'échelle actuelle (quelques
+dizaines de docs structurés, retrouvés par nom/version/keywords).
+
+- **Contexte :** OpenViking (Volcengine, AGPL-3) = « context database » pour
+  agents : filesystem virtuel `viking://`, unifie resource/memory/skill,
+  recherche vectorielle hiérarchique (L0 résumés → L1/L2 détails) + rerank,
+  `find()` (vectoriel pur) vs `search()` (analyse d'intention + expansion).
+  Docs archivées : `openviking-intro` (libraire).
+- **Alternative légère retenue si besoin de sémantique** (~100 lignes, zéro
+  dépendance) : embeddings maison des docs archivés via Ollama local
+  (ex. `nomic-embed-text`) + champ vector dans le store JSON/SQLite du
+  libraire + recherche cosinus dans `searchLocalDocs`.
+- **Seuils de revisite** (l'un de ces trois) : bibliothèque > ~300 docs
+  hétérogènes / besoin de recherche « par le sens » exprimé par les agents /
+  volonté d'unifier mémoire + ressources + compétences dans un seul store
+  (redésign profond d'architecture, projet à part entière).
+
 ---
 
 ## 🤝 Réflexion : Services Partagés (Architecture)
