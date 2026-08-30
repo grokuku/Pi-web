@@ -3,9 +3,12 @@
 export interface Project {
   id: string;
   name: string;
-  storage: "local" | "ssh" | "smb";
+  storage: "local" | "ssh" | "smb" | "linked";
   versioning: "git" | "standalone";
   cwd: string;
+  // Projet LIÉ (storage === "linked") : ids des sous-projets regroupés
+  // via un placeholder avec symlinks (1 niveau, locaux/SMB uniquement).
+  linkedProjectIds?: string[];
   ssh?: {
     host: string;
     port: number;

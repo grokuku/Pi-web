@@ -111,7 +111,7 @@ export function GitPanel({ project, onRefresh }: Props) {
     }
   };
 
-  if (!project.git?.remote) return null;
+  if (!project.git?.remote) return project.storage === "linked" ? <LinkedGitPanel project={project} onRefresh={onRefresh} /> : null;
 
   // ── notRepo state ──
   const isNotRepo = status && "notRepo" in status;
@@ -383,4 +383,180 @@ function formatTimeAgo(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// ── GitPanel pour projets LIÉS (placeholder multi-repos) ──
+// Un placeholder n'a pas de remote ; le panel montre l'état PAR sous-projet
+// (reçu via l'endpoint de preview linked) et ouvre le CommitPushModal,
+// qui fait un commit + push séparaément pour chaque dépôt.
+
+interface LinkedRepoView {
+  name: string;
+  projectId: string;
+  cwd?: string;
+  error?: string;
+  skipped?: boolean;
+  reason?: string;
+  preview?: {
+    status?: {
+      branch: string;
+      ahead: number;
+      behind: number;
+      isClean: boolean;
+      staged: Array<{ path: string; status: string }>;
+      modified: Array<{ path: string; status: string }>;
+      created: Array<{ path: string; status: string }>;
+      deleted: Array<{ path: string; status: string }>;
+      conflict: Array<{ path: string; status: string }>;
+      files: Array<{ path: string; status: string }>;
+    };
+  };
+}
+
+function LinkedGitPanel({ project, onRefresh }: { project: Project; onRefresh?: () => void }) {
+  const { t } = useTranslation();
+  const [repos, setRepos] = useState<LinkedRepoView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showPushModal, setShowPushModal] = useState(false);
+
+  const fetchPreview = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to analyze linked repos");
+      }
+      const data = await res.json();
+      setRepos(data.linked ? data.repos : []);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    fetchPreview();
+    const interval = setInterval(fetchPreview, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchPreview]);
+
+  const totalChanges = repos.reduce((sum, r) => {
+    const st = r.preview?.status;
+    return sum + (st ? st.staged.length + st.modified.length + st.created.length + st.deleted.length : 0);
+  }, 0);
+  const repoErrors = repos.filter((r) => r.error);
+  const cleanCount = repos.filter((r) => !r.error && (!r.preview || (r.preview.status ? (r.preview.status.files.length === 0) : false) && (r.preview.status?.ahead ?? 0) === 0)).length;
+
+  return (
+    <div className="p-2 border-b border-hacker-border">
+      <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-2 flex items-center gap-1">
+        <GitBranch size={12} />
+        GIT 🔗
+        <div className="flex-1" />
+        <button
+          onClick={() => { fetchPreview(); onRefresh?.(); }}
+          className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
+          title="Refresh linked repos status"
+        >
+          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {loading && repos.length === 0 && (
+        <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1">
+          <RefreshCw size={10} className="animate-spin" />
+          Analyzing sub-repositories...
+        </div>
+      )}
+
+      {error && (
+        <div className="text-hacker-error text-[0.75rem] mb-1.5 flex items-center gap-1">
+          <AlertTriangle size={10} />
+          {error}
+        </div>
+      )}
+
+      {repos.length > 0 && (
+        <div className="space-y-1.5">
+          {repos.map((r) => {
+            const st = r.preview?.status;
+            const count = st ? st.staged.length + st.modified.length + st.created.length + st.deleted.length : 0;
+            return (
+              <div key={r.projectId} className="border border-hacker-border bg-hacker-bg/30 px-2 py-1.5">
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-hacker-accent text-[0.75rem] font-bold truncate">{r.name}</span>
+                  {r.error ? (
+                    <span className="text-hacker-error text-[0.6875rem]">⚠ {t('commitPush.linkedError')}</span>
+                  ) : (r.preview === undefined) ? (
+                    <span className="text-hacker-warn text-[0.6875rem]">{t('commitPush.linkedError')}</span>
+                  ) : count > 0 ? (
+                    <span className="text-hacker-warn text-[0.6875rem]">{count} change(s)</span>
+                  ) : (st?.ahead ?? 0) > 0 ? (
+                    <span className="text-hacker-info text-[0.6875rem]">↑ {st?.ahead} to push</span>
+                  ) : (
+                    <Check size={10} className="text-hacker-accent" />
+                  )}
+                </div>
+                {st && st.files.length > 0 && (
+                  <div className="max-h-[50px] overflow-y-auto">
+                    {st.files.slice(0, 4).map((f) => (
+                      <div key={f.path} className="flex gap-1 text-hacker-text-dim/70 truncate text-[0.625rem]">
+                        <span className="text-hacker-accent w-4 shrink-0">{f.status}</span>
+                        <span className="truncate">{f.path}</span>
+                      </div>
+                    ))}
+                    {st.files.length > 4 && (
+                      <div className="text-hacker-text-dim/50 text-[0.625rem]">+{st.files.length - 4} more</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="text-hacker-text-dim text-[0.6875rem] flex items-center justify-between pt-0.5">
+            <span>{repos.length} sub-repos</span>
+            <span>{cleanCount} clean</span>
+          </div>
+
+          <div className="flex gap-1 pt-1">
+            <button
+              onClick={() => { fetchPreview(); onRefresh?.(); }}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[0.75rem] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
+              title="Refresh"
+            >
+              {loading ? <RefreshCw size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+              Refresh
+            </button>
+            <button
+              onClick={() => setShowPushModal(true)}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[0.75rem] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
+              title="Commit & push every sub-repository (AI messages per repo)"
+            >
+              {loading ? <RefreshCw size={10} className="animate-spin" /> : <ArrowUp size={10} />}
+              Push All
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showPushModal && (
+        <CommitPushModal
+          project={project}
+          onClose={() => setShowPushModal(false)}
+          onDone={() => {
+            fetchPreview();
+            onRefresh?.();
+            setTimeout(() => setShowPushModal(false), 1200);
+          }}
+        />
+      )}
+    </div>
+  );
 }
