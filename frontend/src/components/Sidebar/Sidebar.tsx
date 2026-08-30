@@ -294,7 +294,7 @@ export function Sidebar({
       />
 
       {/* ── Git panel ── */}
-      {activeProject && activeProject.git?.remote && (
+      {activeProject && (activeProject.git?.remote || activeProject.storage === "linked") && (
         <GitPanel project={activeProject} onRefresh={onRefreshGit} />
       )}
 

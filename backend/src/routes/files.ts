@@ -60,14 +60,18 @@ router.get("/browse", (req: Request, res: Response) => {
 
       try {
         const fullPath = path.join(resolved, d.name);
+        // statSync suit les liens symboliques : un symlink vers un dossier
+        // renvoie isDirectory()=true (contrairement à d.isDirectory() qui ne
+        // suit pas le lien). Les symlinks cassés lèvent une exception et sont
+        // ignorés proprement ici.
         const s = statSync(fullPath);
         entries.push({
           name: d.name,
-          type: d.isDirectory() ? "dir" : "file",
+          type: s.isDirectory() ? "dir" : "file",
           size: s.size,
         });
       } catch {
-        // Permission error, skip this entry
+        // Permission error or broken symlink, skip this entry
       }
     }
 
