@@ -1686,7 +1686,18 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
  */
 export function getEffectiveActiveMode(projectId: string): AgentMode {
   const state = sessionsByProject.get(projectId);
-  if (!state?.session) return state?.activeMode || "code";
+  // Pas de session active (ex: post-restart, sessions créées lazily) : la source
+  // de vérité est la CONFIG PERSISTÉE du projet — JAMAIS "code" par défaut,
+  // sinon reconcileActiveMode écrasait un mode harness persisté au simple
+  // affichage de l'UI (INFRA-02).
+  if (!state?.session) {
+    try {
+      const pm = getProjectModeConfig(loadModelLibrary(), projectId);
+      return (pm.activeMode as AgentMode) || "code";
+    } catch {
+      return "code";
+    }
+  }
   try {
     const activeTools = state.session.getActiveToolNames?.() ?? [];
     if (activeTools.includes("delegate")) return "harness";
@@ -1712,7 +1723,10 @@ export function reconcileActiveMode(projectId: string): AgentMode {
   try {
     const library = loadModelLibrary();
     const persisted = getProjectModeConfig(library, projectId).activeMode || "code";
-    if (persisted !== effective) {
+    // Écrire SUR DISQUE seulement quand une session existe : sans session, il
+    // n'y a rien à réconcilier — et écrire "code" (state par défaut absent)
+    // écrasait un mode harness persisté au simple chargement de l'UI (INFRA-02).
+    if (state && persisted !== effective) {
       setProjectActiveMode(projectId, effective);
     }
   } catch (e: any) {
