@@ -1,0 +1,11 @@
+{
+  "name": "web-screenshot",
+  "version": "1.0.0",
+  "description": "Headless web screenshot tool (web_screenshot) for Pi-Web",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "name": "web-screenshot",
+    "description": "Capture headless screenshots of web pages and HTML mockups"
+  }
+}

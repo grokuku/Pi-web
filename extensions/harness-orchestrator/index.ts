@@ -11,6 +11,33 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// ── Rappel ferme « HARNESS → déléguer » ───────────────
+// Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
+// directs (bash, edit, read…) — retirés de sa session en mode harness — puis
+// « attend qu'ils reviennent » et perd des turns au lieu de déléguer via
+// `delegate`. Deux rappels, tous deux limités au mode HARNESS :
+//  1. promptGuidelines du tool `delegate` : n'apparaissent que lorsque le tool
+//     est actif, c'est-à-dire uniquement en mode harness (backend/src/pi/session.ts
+//     exclut `delegate` des autres modes via HARNESS_EXCLUDE).
+//  2. Handler before_agent_start : injecte le bloc PI_HARNESS_ROLE en fin de
+//     system prompt à CHAQUE turn — même mécanisme que l'injection
+//     <!-- PI_PROJECT_CONTEXT --> de backend/src/pi/session.ts.
+const HARNESS_ROLE_MARKER_START = "<!-- PI_HARNESS_ROLE -->";
+const HARNESS_ROLE_MARKER_END = "<!-- /PI_HARNESS_ROLE -->";
+// Bloc nettoyé avant réinjection (idempotence si un turn précédent l'avait posé).
+// Les marqueurs ne contiennent aucun caractère spécial regex → concaténation directe.
+const HARNESS_ROLE_BLOCK_RE = new RegExp(
+  `\\n*${HARNESS_ROLE_MARKER_START}[\\s\\S]*?${HARNESS_ROLE_MARKER_END}\\n*`,
+  "g",
+);
+const HARNESS_ROLE_REMINDER = [
+  HARNESS_ROLE_MARKER_START,
+  "## ⚠️ HARNESS MODE — ROLE REMINDER (BINDING)",
+  "",
+  "You are in HARNESS mode (project lead): you DESIGN, you DELEGATE every execution task to sub-agents via the `delegate` tool (execute/planning/review/integrate), then you review results. Execution tools (bash, edit, read, write, grep) are NOT available to you — if a tool is 'not found', that is the signal to DELEGATE, never to wait or retry directly. Never code, edit files, or run commands yourself.",
+  HARNESS_ROLE_MARKER_END,
+].join("\n");
+
 // ── Fonctions de routage ──────────────────────────────
 
 interface FunctionDef {
@@ -240,6 +267,30 @@ const delegateParams = {
 export default function (pi: ExtensionAPI) {
   console.log("[harness-orchestrator] Extension loaded");
 
+  // ── Rappel FERME en fin de system prompt, à chaque turn, en mode HARNESS ──
+  // Même mécanisme que l'injection <!-- PI_PROJECT_CONTEXT --> de session.ts,
+  // côté extension : le handler reçoit le prompt assemblé du tour et peut le
+  // remplacer (override valable pour ce turn uniquement — pas d'accumulation dans
+  // _baseSystemPrompt). Le bloc est retiré/réinjecté à chaque fois (idempotent).
+  // GATE : détection du mode harness par la signature fiable (présence de
+  // `delegate` dans les outils ACTIFS — cf. getEffectiveActiveMode dans
+  // backend/src/pi/session.ts), avec fallback sur le marqueur de mode
+  // <!-- PI_MODE:HARNESS --> injecté par applyModeToSession. En mode code/YOLO,
+  // les tools d'exécution directs sont légitimes → RIEN n'est injecté.
+  pi.on("before_agent_start", (event, ctx) => {
+    try {
+      const prompt = event.systemPrompt || "";
+      const selectedTools: string[] = event.systemPromptOptions?.selectedTools ?? [];
+      const isHarnessMode =
+        selectedTools.includes("delegate") || prompt.includes("<!-- PI_MODE:HARNESS -->");
+      if (!isHarnessMode) return undefined;
+      const base = prompt.replace(HARNESS_ROLE_BLOCK_RE, "\n").trimEnd();
+      return { systemPrompt: `${base}\n\n${HARNESS_ROLE_REMINDER}\n` };
+    } catch {
+      return undefined; // en cas d'erreur, ne pas casser le tour de l'agent
+    }
+  });
+
   pi.registerTool({
     name: "delegate",
     label: "Delegate",
@@ -250,6 +301,9 @@ export default function (pi: ExtensionAPI) {
       "Ne code JAMAIS toi-même — délègue toujours.",
     promptSnippet: "Déléguer une tâche à une fonction de routage",
     promptGuidelines: [
+      // Rappel ferme (EN, harmonisé avec le bloc PI_HARNESS_ROLE). Ces guidelines
+      // n'apparaissent que quand delegate est actif, donc uniquement en mode harness.
+      "You are in HARNESS mode (project lead): you DESIGN, you DELEGATE every execution task to sub-agents via the `delegate` tool (execute/planning/review/integrate). Execution tools (bash, edit, read, write, grep) are NOT available to you — if a tool is 'not found', that is the signal to DELEGATE, never to wait or retry directly.",
       "Utilise delegate pour TOUTE tâche d'exécution (code, debug, review, tests, plan, doc).",
       "Pour une tâche simple → délègue directement à la fonction execute.",
       "Pour une tâche complexe → délègue d'abord à planning pour un plan, puis à execute.",
@@ -562,7 +616,7 @@ export default function (pi: ExtensionAPI) {
           if (tempUnsub) tempUnsub();
           try { (tempSession as any).dispose?.(); } catch {}
           try {
-            if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
+            if (typeof tempSessionFile === "string" && existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
           } catch {}
         }
       } catch (err: any) {
