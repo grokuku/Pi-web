@@ -494,9 +494,14 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
     // 1. Create/resume session
     const state = await createPiSession(project.cwd, project.id, { projectName: project.name });
 
-    // 2. Apply mode/model from library config (code mode)
+    // 2. Apply the project's PERSISTED mode (NEVER hardcode "code") :
+    // l'ancien code appliquait "code" en dur — et applyModeToSession persiste
+    // le mode appliqué → chaque prompt via l'agent API réécrivait le mode
+    // persisté du projet en "code", écrasant un mode harness actif (désync UI
+    // après restart : icône ROUTING allumée mais highlight sur "Modèle par défaut").
     const library = loadModelLibrary();
-    const desiredModel = getModeModel(library, project.id, "code");
+    const persistedAgentMode: AgentMode = getProjectModeConfig(library, project.id).activeMode === "harness" ? "harness" : "code";
+    const desiredModel = getModeModel(library, project.id, persistedAgentMode);
     if (desiredModel && state.session) {
       const currentModel = state.session.model;
       const needsUpdate = !currentModel ||
@@ -505,7 +510,7 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
 
       if (needsUpdate) {
         const { applyModeToSession } = await import("../pi/session.js");
-        await applyModeToSession("code", project.id);
+        await applyModeToSession(persistedAgentMode, project.id);
       }
     }
 
