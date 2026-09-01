@@ -515,6 +515,77 @@ router.delete("/:id", (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/attachments/:id/inject-to-chat
+ *
+ * ROUTE INTERNE (localhost-only via apiAuth — utilisée par les extensions Pi,
+ * ex. web-screenshot, qui appellent l'API en http://127.0.0.1:3000) :
+ * injecte dans le fil de chat de la session du projet un message portant
+ * l'attachment en miniature cliquable (attachmentRefs dans details).
+ *
+ * Body: { projectId?, cwd?, caption? }
+ *   - projectId (UUID) prioritaire ; sinon résolution par cwd (chemin exact du
+ *     projet — fiable depuis une extension, qui ne connaît pas l'UUID) ;
+ *     sinon fallback meta.projectId.
+ *   - cwd permet aussi de CORRIGER meta.projectId si l'extension avait écrit
+ *     le nom du répertoire au lieu de l'UUID (bug préexistant de l'upload
+ *     extension).
+ *
+ * Réponse: { success, injected, projectId }
+ *   - injected=false (ex. session inactive) → l'extension dégrade sans erreur.
+ */
+router.post("/:id/inject-to-chat", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!isValidAttachmentId(id)) {
+    return res.status(400).json({ error: "Invalid attachment id" });
+  }
+  const meta = readMeta(id);
+  if (!meta) {
+    return res.status(404).json({ error: "Attachment not found" });
+  }
+
+  const body = (req.body || {}) as { projectId?: string; cwd?: string; caption?: string };
+
+  // ── Résolution du projet cible ──
+  let projectId: string | undefined;
+  if (typeof body.projectId === "string" && isValidProjectId(body.projectId)) {
+    projectId = body.projectId;
+  } else if (typeof body.cwd === "string" && body.cwd.trim()) {
+    try {
+      const { getAllProjects } = await import("../projects/manager.js");
+      const project = getAllProjects().find((p) => p.cwd === body.cwd);
+      if (project) projectId = project.id;
+    } catch (e: any) {
+      console.warn(`[attachments] inject-to-chat: project lookup by cwd failed:`, e?.message || e);
+    }
+  }
+  if (!projectId && typeof meta.projectId === "string" && isValidProjectId(meta.projectId)) {
+    projectId = meta.projectId;
+  }
+  if (!projectId) {
+    return res.status(400).json({ error: "Cannot resolve project: provide projectId (UUID) or a cwd matching a project" });
+  }
+
+  // ── Correction éventuelle de meta.projectId (upload extension avec nom de
+  // répertoire au lieu d'UUID) — non bloquant en cas d'échec d'écriture. ──
+  if (meta.projectId !== projectId) {
+    try {
+      meta.projectId = projectId;
+      writeMeta(meta);
+    } catch (e: any) {
+      console.warn(`[attachments] inject-to-chat: could not fix meta.projectId for ${id}:`, e?.message || e);
+    }
+  }
+
+  // Import dynamique : session.ts importe déjà attachments.ts (getVisionModelInfo…)
+  // en statique → un import statique inverse créerait une dépendance circulaire.
+  const { injectAttachmentToChat } = await import("../pi/session.js");
+  const ref = { id: meta.id, name: meta.name, category: meta.category, size: meta.size };
+  const injected = await injectAttachmentToChat(projectId, [ref], body.caption);
+
+  res.json({ success: true, injected, projectId });
+});
+
+/**
  * POST /api/attachments/:id/analyze
  * Analyze a file and return extracted content.
  *

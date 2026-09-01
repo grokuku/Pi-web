@@ -214,6 +214,11 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
           timestamp: msg.timestamp || Date.now(),
           customType: (msg as any).customType,
           display: (msg as any).display,
+          // Miniatures injectées par le backend (ex. web_screenshot) — le
+          // backend place attachmentRefs dans details du CustomMessage.
+          attachmentRefs: Array.isArray((msg as any).details?.attachmentRefs)
+            ? (msg as any).details.attachmentRefs
+            : undefined,
         });
       }
     }

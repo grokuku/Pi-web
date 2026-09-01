@@ -495,7 +495,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         // BUG-18 fix: gérer les custom messages ici au lieu d'un listener séparé
         if (evt.type === "message_start" && evt.message?.role === "custom" && evt.message?.display) {
           const cm = evt.message;
-          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display }]);
+          // Miniatures injectées par le backend (ex. web_screenshot) — ref
+          // {id,name,category,size} dans details, rendues par UserBubble.
+          const injectedRefs = Array.isArray(cm.details?.attachmentRefs) ? cm.details.attachmentRefs : undefined;
+          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, attachmentRefs: injectedRefs }]);
           return;
         }
         // BUG-18 fix: gérer session_reloaded ici au lieu d'un listener séparé

@@ -1056,6 +1056,60 @@ export async function injectSessionNotification(
   }
 }
 
+/**
+ * Inject a message carrying attachment references (miniatures) into the
+ * session's chat UI — used by the web_screenshot extension to surface a
+ * captured PNG as a clickable thumbnail in the chat thread.
+ *
+ * Same mechanism as injectSessionNotification (sendCustomMessage,
+ * triggerTurn:false) : le message est ajouté à la session (persisté via une
+ * CustomMessageEntry), émis au frontend via message_start/message_end, et
+ * sera inclus au prochain turn LLM sans en déclencher un.
+ *
+ * Le champ `details` du CustomMessage est free-form : on y place
+ * `attachmentRefs` ([{ id, name, category, size }]). Le frontend
+ * (ChatView/UserBubble) rend chaque ref de catégorie "image" comme une
+ * miniature cliquable pointant vers /api/attachments/<id>/file (viewer
+ * plein écran). `details` n'est PAS envoyé au LLM (seul `content` l'est).
+ *
+ * NB customType "screenshot" (≠ "git_notification") : le UserBubble rend
+ * alors la bulle standard utilisateur avec les chips attachmentRefs, au
+ * lieu du bandeau centré texte seul des notifications git.
+ */
+export async function injectAttachmentToChat(
+  projectId: string,
+  attachmentRefs: { id: string; name: string; category: string; size: number }[],
+  caption?: string
+): Promise<boolean> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) {
+    console.warn(`[injectAttachment] No session for project ${projectId}`);
+    return false;
+  }
+  if (!Array.isArray(attachmentRefs) || attachmentRefs.length === 0) {
+    console.warn(`[injectAttachment] No attachmentRefs provided for ${projectId}`);
+    return false;
+  }
+
+  try {
+    const content = caption?.trim() || `📸 ${attachmentRefs.map(a => a.name).join(", ")}`;
+    await state.session.sendCustomMessage(
+      {
+        customType: "screenshot",
+        content,
+        display: true,
+        details: { attachmentRefs },
+      },
+      { triggerTurn: false }
+    );
+    console.log(`[injectAttachment] Injected ${attachmentRefs.length} attachment ref(s) for ${projectId}`);
+    return true;
+  } catch (e: any) {
+    console.error(`[injectAttachment] Failed for ${projectId}:`, e.message);
+    return false;
+  }
+}
+
 export function getSessionInfo(projectId?: string) {
   const state = projectId
     ? sessionsByProject.get(projectId)

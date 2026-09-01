@@ -23,7 +23,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execSync, spawn } from "child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { randomUUID } from "crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
 type JSONSchema = { type: string; [key: string]: unknown };
@@ -33,6 +34,97 @@ const DEFAULT_WIDTH = 1440;
 const DEFAULT_HEIGHT = 900;
 const DEFAULT_TIMEOUT_MS = 15000;
 const VIRTUAL_TIME_BUDGET_MS = 5000;
+
+// ─── Pi-Web attachments ─────────────────────────────────
+// Même répertoire que backend/src/routes/attachments.ts (ATTACHMENTS_DIR).
+// On le hardcode ici (identique) car l'extension ne peut pas importer le module
+// attachments sans créer un import circulaire. Le backend sert ensuite le fichier
+// via GET /api/attachments/:id/file avec Content-Type image/png (inline).
+const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
+const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
+
+/**
+ * Uploade un PNG comme attachment Pi-Web (même mécanique que /api/attachments/upload).
+ * Écrit le fichier dans ATTACHMENTS_DIR/<uuid>/ et le meta.json associé.
+ * Retourne l'id de l'attachment, ou null en cas d'échec (non bloquant).
+ */
+function uploadScreenshotAsAttachment(
+  pngPath: string,
+  projectId: string
+): { id: string; url: string } | null {
+  try {
+    const id = randomUUID();
+    const ts = Date.now();
+    const name = `screenshot-${ts}.png`;
+    const size = existsSync(pngPath) ? readFileSync(pngPath).length : 0;
+
+    const dir = path.join(ATTACHMENTS_DIR, id);
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(pngPath, path.join(dir, name));
+
+    const meta = {
+      id,
+      name,
+      originalName: name,
+      mimeType: "image/png",
+      size,
+      category: "image",
+      projectId,
+      uploadedAt: new Date().toISOString(),
+    };
+    writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2), "utf-8");
+
+    return { id, url: `${PI_WEB_URL}/api/attachments/${id}/file` };
+  } catch (e: any) {
+    console.error("[web-screenshot] Failed to upload attachment:", e?.message || e);
+    return null;
+  }
+}
+
+/**
+ * Injecte le screenshot dans le FIL DU CHAT comme miniature cliquable.
+ *
+ * Appelle la route INTERNE du backend (localhost → apiAuth bypass, pas de
+ * Bearer requis) POST /api/attachments/:id/inject-to-chat : elle ajoute à la
+ * session Pi du projet un message custom portant `details.attachmentRefs =
+ * [{ id, name, category: "image", size }]`. Le frontend (ChatView/UserBubble)
+ * rend cette ref comme une miniature cliquable → viewer plein écran.
+ *
+ * - `cwd` (chemin exact du projet) est la clé de résolution fiable : le ctx
+ *   de l'extension n'expose pas l'UUID du projet, et le basename du cwd n'en
+ *   est PAS un (le backend retrouve le projet par son cwd).
+ * - Échec silencieux : le tool retourne de toute façon l'image base64 au LLM.
+ */
+async function injectScreenshotToChat(
+  attachmentId: string,
+  cwd: string | undefined,
+  projectId: string,
+  caption: string
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `${PI_WEB_URL}/api/attachments/${encodeURIComponent(attachmentId)}/inject-to-chat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, cwd, caption }),
+      }
+    );
+    if (!res.ok) {
+      console.warn(`[web-screenshot] inject-to-chat failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json().catch(() => null);
+    if (data?.injected === false) {
+      console.warn("[web-screenshot] inject-to-chat: no active session for this project");
+    } else {
+      console.log(`[web-screenshot] Screenshot ${attachmentId} injected to chat`);
+    }
+  } catch (e: any) {
+    // Non bloquant : la miniature dans le fil est un plus, pas une nécessité.
+    console.warn("[web-screenshot] inject-to-chat error (ignored):", e?.message || e);
+  }
+}
 
 // ─── Détection du binaire Chromium ──────────────────────
 const CHROMIUM_CANDIDATES = [
@@ -203,7 +295,7 @@ export default function (pi: ExtensionAPI) {
       },
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      _ctx: unknown
+      ctx: any
     ) {
       const width = params.width ?? DEFAULT_WIDTH;
       const height = params.height ?? DEFAULT_HEIGHT;
@@ -269,12 +361,33 @@ export default function (pi: ExtensionAPI) {
         const base64 = buffer.toString("base64");
         const size = buffer.length;
 
+        // 4bis) Uploader le PNG comme attachment Pi-Web pour que l'UTILISATEUR
+        // puisse le voir dans son browser (URL cliquable) sans commande docker.
+        const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : "";
+        const projectId = cwd ? cwd.split("/").pop() || "" : "";
+        const attachment = uploadScreenshotAsAttachment(outPath, projectId);
+
+        // 4ter) Injecter la miniature dans le fil du chat (route interne,
+        // échec silencieux — le LLM a déjà l'image base64 dans le tool result).
+        if (attachment) {
+          const targetDesc = params.url || tempHtmlPath || params.htmlPath || "inline html";
+          await injectScreenshotToChat(
+            attachment.id,
+            cwd,
+            projectId,
+            `📸 Web screenshot ${width}×${height} — ${targetDesc}`
+          );
+        }
+
+        const text = attachment
+          ? `Screenshot ${width}x${height} (${size} bytes) — chemin: ${outPath}\n` +
+            `Attachment: ${attachment.id}\n` +
+            `Ouvrir dans le navigateur: ${attachment.url}`
+          : `Screenshot ${width}x${height} (${size} bytes) — chemin: ${outPath} (upload attachment échoué)`;
+
         return {
           content: [
-            {
-              type: "text" as const,
-              text: `Screenshot ${width}x${height} (${size} bytes) — chemin: ${outPath}`,
-            },
+            { type: "text" as const, text },
             { type: "image" as const, data: base64, mimeType: "image/png" },
           ],
           details: {},
