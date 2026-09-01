@@ -1091,11 +1091,23 @@ async function manualCompact(session: any, customInstructions?: string): Promise
   const sessionManager = session.sessionManager;
   const pathEntries = sessionManager.getBranch();
 
-  // Frontière après la dernière entrée de compaction (s'il y en a une).
+  // Frontière : début de la région résumable. Si une compaction existe déjà, on
+  // repart de son firstKeptEntryId (les messages gardés par la compaction
+  // précédente sont les "récents" à conserver), comme le fait prepareCompaction
+  // du SDK. Sinon, on part du début de la session.
+  //
+  // BUG : avant, on prenait `i + 1` (juste après l'entrée compaction). Or le
+  // firstKeptEntryId de la dernière compaction pointe vers une entrée PLUS
+  // ANCIENNE que l'entrée compaction elle-même. Quand il n'y a que 1-2 entrées
+  // après la compaction, la boucle "garder les N derniers messages" ne trouvait
+  // jamais assez de messages → firstKeptEntryId restait null → on rejetait
+  // "Nothing to compact (session too small)" alors que la session est pleine.
   let boundaryStart = 0;
   for (let i = pathEntries.length - 1; i >= 0; i--) {
     if (pathEntries[i].type === "compaction") {
-      boundaryStart = i + 1;
+      const fkId = pathEntries[i].firstKeptEntryId;
+      const fkIdx = fkId ? pathEntries.findIndex((e: any) => e.id === fkId) : -1;
+      boundaryStart = fkIdx >= 0 ? fkIdx : i + 1;
       break;
     }
   }
