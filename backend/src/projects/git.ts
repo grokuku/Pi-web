@@ -6,6 +6,7 @@ import type { Project } from "./manager.js";
 import { Mutex } from "../utils/mutex.js";
 import { updateProjectGit } from "./manager.js";
 import { credentialStore } from "./credential-store.js";
+import { sanitizeRemoteUrl } from "./remote-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -523,10 +524,7 @@ export async function restoreRemoteUrl(cwd: string): Promise<void> {
   try {
     const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
     // Strip credentials: https://user:pass@host → https://host
-    const cleanUrl = remoteUrl.replace(
-      /^(https?:\/\/)([^@]+@)?(.+)/,
-      (_, protocol, _creds, rest) => `${protocol}${rest}`
-    );
+    const cleanUrl = sanitizeRemoteUrl(remoteUrl);
     if (cleanUrl !== remoteUrl) {
       await git.raw(["remote", "set-url", "origin", cleanUrl]);
     }
@@ -843,6 +841,15 @@ export async function gitClone(
         "git clone"
       );
       console.log(`[git-clone] Clone succeeded!`);
+      // Sécurité : git clone persiste l'URL fournie (avec token) dans le
+      // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
+      // nettoyée pour ne jamais laisser le token sur disque.
+      try {
+        const clonedGit = simpleGit(cwd);
+        await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
+      } catch (e: any) {
+        console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
+      }
       return `Cloned ${remote} (${branch})`;
     } catch (error: any) {
       const msg = error.message || "";
@@ -863,6 +870,14 @@ export async function gitClone(
       GIT_NETWORK_TIMEOUT_MS, "git clone"
     );
     console.log(`[git-clone] Clone succeeded (no auth)!`);
+    // Sécurité : même sans auth, l'URL fournie peut contenir un token collé par
+    // l'utilisateur. On nettoie le remote persisté dans le .git/config.
+    try {
+      const clonedGit = simpleGit(cwd);
+      await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
+    } catch (e: any) {
+      console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
+    }
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
     const msg = error.message || "";
@@ -891,7 +906,8 @@ export async function gitInit(cwd: string, remote: string, branch: string = "mai
   const git: SimpleGit = simpleGit(cwd);
   try {
     await git.init();
-    await git.addRemote("origin", remote);
+    // Sécurité : ne jamais persister de credentials dans le remote.
+    await git.addRemote("origin", sanitizeRemoteUrl(remote));
     await git.checkoutLocalBranch(branch);
 
     // Fix gitInit : ne configurer l'upstream que si le dépôt a au moins un commit
@@ -968,4 +984,62 @@ export async function syncGitInfo(project: Project): Promise<Project> {
     });
   }
   return project;
+}
+
+/**
+ * Purge de sécurité au boot : retire tout credential embarqué des URLs de
+ * remote git, à la fois dans projects.json (remote stocké) et dans le
+ * .git/config de chaque dépôt. Log un warning par remote nettoyé.
+ *
+ * Couvre :
+ *  - les projets enregistrés (projects.json + .git/config de leur cwd) ;
+ *  - les dépôts git présents sous les racines de travail (/projects) même s'ils
+ *    ne sont pas enregistrés comme projets (ex: un clone fait hors Pi-Web).
+ */
+export async function purgeEmbeddedCredentialsFromRemotes(): Promise<void> {
+  const { getAllProjects } = await import("./manager.js");
+  const projects = getAllProjects();
+
+  const cleanOnDisk = async (cwd: string, label: string): Promise<void> => {
+    try {
+      const git = simpleGit(cwd);
+      const current = (await git.raw(["remote", "get-url", "origin"])).trim();
+      const clean = sanitizeRemoteUrl(current);
+      if (clean !== current) {
+        console.warn(`[git] SECURITY: stripped embedded credentials from ${label} remote (${cwd})`);
+        await git.raw(["remote", "set-url", "origin", clean]);
+      }
+    } catch {
+      // pas un dépôt git ou pas de remote origin — ignorer
+    }
+  };
+
+  // 1. Projets enregistrés
+  for (const project of projects) {
+    if (project.versioning !== "git" || !project.git?.remote) continue;
+    const clean = sanitizeRemoteUrl(project.git.remote);
+    if (clean !== project.git.remote) {
+      console.warn(`[git] SECURITY: stripped embedded credentials from stored remote of project "${project.name}" (${project.id})`);
+      await updateProjectGit(project.id, { remote: clean });
+    }
+    await cleanOnDisk(project.cwd, "project");
+  }
+
+  // 2. Dépôts sous /projects non enregistrés (ex: /projects/Talky)
+  try {
+    const roots = ["/projects", "/mnt/smb"];
+    for (const root of roots) {
+      if (!existsSync(root)) continue;
+      const entries = readdirSync(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const repoDir = path.join(root, entry.name);
+        if (existsSync(path.join(repoDir, ".git"))) {
+          await cleanOnDisk(repoDir, "unregistered");
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error(`[git] SECURITY purge: error scanning project roots: ${e?.message || e}`);
+  }
 }

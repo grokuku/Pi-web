@@ -67,7 +67,7 @@ import { credentialStore } from "./projects/credential-store.js";
 import { cbmStdioCall } from "./pi/cbm-stdio.js";
 
 import os from "os";
-import { syncGitInfo } from "./projects/git.js";
+import { syncGitInfo, purgeEmbeddedCredentialsFromRemotes } from "./projects/git.js";
 import { mountAllSmbProjects, unmountAllSmb } from "./projects/smb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -952,6 +952,14 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 httpServer.listen(PORT, async () => {
   // Re-create temp files for any persisted credentials (needed by GIT_ASKPASS)
   credentialStore.ensureTempFiles();
+
+  // Purge de sécurité : retirer tout credential embarqué des URLs de remote git
+  // (projects.json + .git/config), y compris les dépôts non enregistrés.
+  try {
+    await purgeEmbeddedCredentialsFromRemotes();
+  } catch (e: any) {
+    console.error("[startup] credential purge failed:", e?.message || e);
+  }
 
   // Régénérer models.json pour le SDK Pi avec les capacités RÉSOLUES
   // (vision/audio overrides). Sans ça, au démarrage le SDK relit l'ancien

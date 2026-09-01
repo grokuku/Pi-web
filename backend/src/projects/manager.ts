@@ -7,6 +7,7 @@ import { Mutex } from "../utils/mutex.js";
 import { isCwdAllowed } from "../utils/path-security.js";
 import { encryptSmbPassword } from "./smb.js";
 import { deleteAttachmentsForProject } from "../routes/attachments.js";
+import { sanitizeRemoteUrl } from "./remote-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
@@ -247,7 +248,7 @@ export async function createProject(
   }
   let gitProvider: GitProvider | undefined;
   if (git?.remote) {
-    const r = git.remote.toLowerCase();
+    const r = sanitizeRemoteUrl(git.remote).toLowerCase();
     if (r.includes("github.com")) gitProvider = "github";
     else if (r.includes("gitlab.com") || r.includes("gitlab.")) gitProvider = "gitlab";
     else gitProvider = git?.provider || "other";
@@ -264,7 +265,7 @@ export async function createProject(
     ssh,
     smb: smb ? { ...smb, password: smb.password ? encryptSmbPassword(smb.password) : undefined } : undefined,
     git: versioning === "git" ? {
-      remote: git?.remote || "",
+      remote: git?.remote ? sanitizeRemoteUrl(git.remote) : "",
       branch: git?.branch || "main",
       provider: gitProvider,
       autoSync: git?.autoSync ?? false,
@@ -302,6 +303,11 @@ export async function updateProject(
       createdAt: projects[index].createdAt,
       updatedAt: new Date().toISOString(),
     };
+
+    // Sécurité : ne jamais persister de credentials dans le remote stocké.
+    if (projects[index].git?.remote) {
+      projects[index].git.remote = sanitizeRemoteUrl(projects[index].git.remote);
+    }
 
     saveProjects(projects);
     return projects[index];
@@ -367,7 +373,7 @@ export async function updateProjectGit(
     projects[index].git = {
       ...projects[index].git,
       ...gitInfo,
-      remote: gitInfo.remote || projects[index].git?.remote || "",
+      remote: gitInfo.remote ? sanitizeRemoteUrl(gitInfo.remote) : projects[index].git?.remote || "",
       branch: gitInfo.branch || projects[index].git?.branch || "main",
       lastSync: gitInfo.lastSync !== undefined ? gitInfo.lastSync : projects[index].git?.lastSync || null,
     };
