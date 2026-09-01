@@ -1002,7 +1002,33 @@ export async function compactSession(
 ): Promise<any> {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) throw new Error("No active Pi session for this project");
-  const result = await state.session.compact(customInstructions);
+
+  // ── BUG FIX: compaction "session too small" pour les modèles à petit contexte ──
+  // Le SDK pi-coding-agent utilise des seuils ABSOLUS par défaut :
+  //   keepRecentTokens = 20000, reserveTokens = 16384.
+  // Pour un modèle 32K, keepRecentTokens (20K) dépasse le contexte utilisable
+  // (contextWindow - reserveTokens = 16K) : le SDK refuse donc toujours avec
+  // "Nothing to compact (session too small)" même quand le contexte est plein.
+  // On rend ces seuils RELATIFS à la fenêtre du modèle (avec planchers), via
+  // settingsManager.applyOverrides() (API publique du SDK, pas de patch node_modules).
+  const session = state.session as any;
+  const contextWindow = session.model?.contextWindow ?? 128000;
+  const DEFAULT_RESERVE = 16384;
+  const DEFAULT_KEEP_RECENT = 20000;
+  // Réserve de sortie : ~25% de la fenêtre (plancher 2K, plafond défaut SDK).
+  const reserveTokens = Math.max(2048, Math.min(DEFAULT_RESERVE, Math.floor(contextWindow * 0.25)));
+  // Tokens récents conservés : ~60% de la fenêtre (plancher 4K pour avoir de
+  // quoi faire un résumé, plafond défaut SDK pour ne pas changer les gros modèles).
+  const keepRecentTokens = Math.max(4096, Math.min(DEFAULT_KEEP_RECENT, Math.floor(contextWindow * 0.6)));
+  try {
+    session.settingsManager?.applyOverrides?.({
+      compaction: { reserveTokens, keepRecentTokens },
+    });
+  } catch (e: any) {
+    console.warn(`[compact] Failed to apply compaction overrides: ${e?.message || e}`);
+  }
+
+  const result = await session.compact(customInstructions);
   emitSessionUpdate(projectId);
   return result;
 }
