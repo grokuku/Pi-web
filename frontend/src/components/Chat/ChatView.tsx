@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy } from "lucide-react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -464,6 +464,22 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   // handler global de App.tsx consulte cette pile pour ne PAS envoyer pi_abort
   // tant qu'elle est affichée (priorité au modal).
   const viewerTokenRef = useRef<symbol | null>(null);
+  // ── Plein écran natif du viewer d'images ──
+  const viewerContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else viewerContainerRef.current?.requestFullscreen?.().catch(() => {});
+  }, []);
+  // Fermeture du viewer : sortir du fullscreen natif si encore actif.
+  useEffect(() => {
+    if (!viewerFile && document.fullscreenElement === viewerContainerRef.current) document.exitFullscreen().catch(() => {});
+  }, [viewerFile]);
   useEffect(() => {
     if (!viewerFile) return;
     const token = pushOverlay();
@@ -561,7 +577,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           // Miniatures injectées par le backend (ex. web_screenshot) — ref
           // {id,name,category,size} dans details, rendues par UserBubble.
           const injectedRefs = Array.isArray(cm.details?.attachmentRefs) ? cm.details.attachmentRefs : undefined;
-          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, attachmentRefs: injectedRefs }]);
+          // Les messages customType "screenshot" (injectés via inject-to-chat)
+          // sont système : rendus à gauche, pas en bulle utilisateur.
+          const injected = cm.customType === "screenshot" || undefined;
+          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, injected, attachmentRefs: injectedRefs }]);
           return;
         }
         // BUG-18 fix: gérer session_reloaded ici au lieu d'un listener séparé
@@ -850,9 +869,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
       {viewerFile && (
         <ModalDialog id="file-viewer" onClose={() => setViewerFile(null)}>
-          <div className="flex flex-col h-full">
+          <div ref={viewerContainerRef} className="flex flex-col h-full bg-hacker-surface">
             <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
               <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || t('viewer.attachment')}</span>
+              {viewerFile.type === "image" && (
+                <button onClick={toggleFullscreen} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')} aria-label={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')}>
+                  {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                </button>
+              )}
               <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-auto p-4">
@@ -898,9 +922,36 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
   </>;
 });
 
+// ── Vignettes d'attachments (partagé bulle user / messages système injectés) ──
+const AttachmentRefsRow = memo(function AttachmentRefsRow({ refs, onFileClick }: { refs: { id: string; name: string; category: string; size: number }[]; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
+  const { t } = useTranslation();
+  return <div className="flex flex-wrap gap-1.5 mt-2">{refs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>;
+});
+
+// ── Message système injecté (ex. screenshot web_screenshot) — rendu à GAUCHE ──
+const InjectedMessage = memo(function InjectedMessage({ message, onFileClick }: { message: DisplayMessage; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
+  return (
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[85%] border-l-2 border-hacker-accent bg-hacker-bg/20 rounded-r-lg px-3 py-2">
+        {message.timestamp ? <div className="text-[9px] text-hacker-text-dim mb-0.5">{formatTime(message.timestamp)}</div> : null}
+        {message.attachmentRefs && message.attachmentRefs.length > 0 && <AttachmentRefsRow refs={message.attachmentRefs} onFileClick={onFileClick} />}
+        {message.content && <div className="text-hacker-text-dim italic text-xs mt-1">{message.content}</div>}
+      </div>
+    </div>
+  );
+});
+
 // ── User Bubble (unchanged) ──
 const UserBubble = memo(function UserBubble({ message, onFileClick }: { message: DisplayMessage; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const { t } = useTranslation();
+  // BUG double miniature : quand on colle une image, le message est créé avec
+  // l'image à la fois dans `images` (rendue INLINE via getImageSrc) ET dans
+  // `attachmentRefs` (rendue en vignette par AttachmentRefsRow). On déduplique :
+  // on exclut des refs celles dont l'id correspond à une image déjà rendue inline.
+  // Les refs non représentées inline (pdf, audio, images sans inline) restent en vignettes.
+  const inlineImageIds = new Set((message.images || []).map(img => img.attachmentId).filter(Boolean));
+  const refsToShow = (message.attachmentRefs || []).filter(ref => !inlineImageIds.has(ref.id));
+  if (message.injected) return <InjectedMessage message={message} onFileClick={onFileClick} />;
   if (message.customType === "pi_command") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-left whitespace-pre-wrap font-mono">{message.content}</div></div>;
   if (message.customType === "git_notification") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-center whitespace-pre-wrap">{message.content}</div></div>;
   return (
@@ -909,7 +960,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
         {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={12} /></a></div>; })}</div>}
-        {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>}
+        {refsToShow.length > 0 && <AttachmentRefsRow refs={refsToShow} onFileClick={onFileClick} />}
         {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>)}</div>}
         {message.usage && <span className="text-[9px] text-hacker-text-dim shrink-0">{message.usage.input + message.usage.output}t</span>}
       </div>

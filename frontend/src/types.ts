@@ -110,6 +110,9 @@ export interface DisplayMessage {
   images?: { attachmentId?: string; data?: string; name: string; mimeType: string }[];
   // Text/code files attached to user message (legacy, kept for old messages)
   attachments?: { name: string; content: string; mimeType: string }[];
+  // Message injecté par le système (ex. web_screenshot via inject-to-chat) —
+  // rendu à gauche avec un style système distinct, pas en bulle utilisateur.
+  injected?: boolean;
   // Attachment references (uploaded file IDs)
   attachmentRefs?: { id: string; name: string; category: string; size: number }[];
 }

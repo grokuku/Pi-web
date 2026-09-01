@@ -55,6 +55,8 @@ export const en = {
     queueMessage: "Queue message (steer)...",
     steer: "⇥ Steer",
     scrollToBottom: "Scroll to bottom",
+    fullscreen: "Fullscreen",
+    exitFullscreen: "Exit fullscreen",
     attachFiles: "Attach files",
     removeAttachment: "Remove attachment",
     collapseTool: "Collapse tool",

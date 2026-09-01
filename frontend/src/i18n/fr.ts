@@ -55,6 +55,8 @@ export const fr = {
     queueMessage: "Message en attente (diriger)...",
     steer: "⇥ Diriger",
     scrollToBottom: "Défiler vers le bas",
+    fullscreen: "Plein écran",
+    exitFullscreen: "Quitter le plein écran",
     attachFiles: "Joindre des fichiers",
     removeAttachment: "Retirer la pièce jointe",
     collapseTool: "Réduire l'outil",
