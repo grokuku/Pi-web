@@ -1,4 +1,4 @@
-import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime, buildSessionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -648,7 +648,10 @@ export async function sendPrompt(
           return { command: "compact", result: "Nothing to compact (no messages yet)" };
         }
         try {
-          await session.compact(args || undefined);
+          // BUG compaction : passe par compactSessionInternal (overrides relatifs
+          // à la fenêtre du modèle + fallback manuel si le SDK refuse "session too
+          // small") au lieu d'appeler session.compact() directement.
+          await compactSessionInternal(session, args || undefined);
           emitSessionUpdate(projectId);
           return { command: "compact", result: "✓ Context compacted" };
         } catch (err: any) {
@@ -1002,17 +1005,30 @@ export async function compactSession(
 ): Promise<any> {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) throw new Error("No active Pi session for this project");
+  return compactSessionInternal(state.session, customInstructions);
+}
 
-  // ── BUG FIX: compaction "session too small" pour les modèles à petit contexte ──
-  // Le SDK pi-coding-agent utilise des seuils ABSOLUS par défaut :
-  //   keepRecentTokens = 20000, reserveTokens = 16384.
-  // Pour un modèle 32K, keepRecentTokens (20K) dépasse le contexte utilisable
-  // (contextWindow - reserveTokens = 16K) : le SDK refuse donc toujours avec
-  // "Nothing to compact (session too small)" même quand le contexte est plein.
-  // On rend ces seuils RELATIFS à la fenêtre du modèle (avec planchers), via
-  // settingsManager.applyOverrides() (API publique du SDK, pas de patch node_modules).
-  const session = state.session as any;
-  const contextWindow = session.model?.contextWindow ?? 128000;
+// ── Debug log helper for compaction ──────────────────────
+// Log discret conservé volontairement : il permet de diagnostiquer en production
+// pourquoi une compaction échoue (valeurs appliquées, présence de settingsManager,
+// bascule vers la compaction manuelle).
+function logCompactionDebug(...args: any[]) {
+  console.log("[compact-debug]", ...args);
+}
+
+/**
+ * Applique les overrides de compaction relatifs à la fenêtre du modèle puis
+ * tente session.compact(). Si le SDK refuse avec "Nothing to compact" (session
+ * estimée trop petite — notamment les sessions riches en images, estimées à
+ * ~1200 tokens/image quel que soit le poids réel du base64), on bascule sur une
+ * compaction manuelle mécanique.
+ */
+async function compactSessionInternal(
+  session: AgentSession,
+  customInstructions?: string
+): Promise<any> {
+  const s = session as any;
+  const contextWindow = s.model?.contextWindow ?? 128000;
   const DEFAULT_RESERVE = 16384;
   const DEFAULT_KEEP_RECENT = 20000;
   // Réserve de sortie : ~25% de la fenêtre (plancher 2K, plafond défaut SDK).
@@ -1020,17 +1036,156 @@ export async function compactSession(
   // Tokens récents conservés : ~60% de la fenêtre (plancher 4K pour avoir de
   // quoi faire un résumé, plafond défaut SDK pour ne pas changer les gros modèles).
   const keepRecentTokens = Math.max(4096, Math.min(DEFAULT_KEEP_RECENT, Math.floor(contextWindow * 0.6)));
+
+  logCompactionDebug(
+    `model=${s.model?.id || "?"} contextWindow=${contextWindow} ` +
+    `settingsManager=${!!s.settingsManager} applyOverrides=${typeof s.settingsManager?.applyOverrides} ` +
+    `reserveTokens=${reserveTokens} keepRecentTokens=${keepRecentTokens}`
+  );
+
   try {
-    session.settingsManager?.applyOverrides?.({
+    s.settingsManager?.applyOverrides?.({
       compaction: { reserveTokens, keepRecentTokens },
     });
   } catch (e: any) {
     console.warn(`[compact] Failed to apply compaction overrides: ${e?.message || e}`);
   }
 
-  const result = await session.compact(customInstructions);
-  emitSessionUpdate(projectId);
-  return result;
+  try {
+    const result = await s.compact(customInstructions);
+    return result;
+  } catch (err: any) {
+    const msg = err?.message || String(err || "Unknown error");
+    // Fallback : le SDK refuse de compacter quand le nombre de tokens ESTIMÉ de
+    // la session est sous keepRecentTokens (sessions riches en images, images
+    // estimées à ~1200 tokens chacune). On fait une compaction manuelle.
+    if (/Nothing to compact/.test(msg)) {
+      logCompactionDebug(`SDK refused to compact ("${msg}") — falling back to manual compaction`);
+      try {
+        return await manualCompact(s, customInstructions);
+      } catch (fallbackErr: any) {
+        const fmsg = fallbackErr?.message || String(fallbackErr || "Unknown error");
+        console.error(`[compact] Manual compaction failed: ${fmsg}`);
+        throw new Error(fmsg);
+      }
+    }
+    console.error(`[compact] Failed: ${msg}`);
+    throw err;
+  }
+}
+
+/**
+ * Compaction manuelle de secours.
+ *
+ * Le SDK pi-coding-agent est append-only : on ne peut pas supprimer des messages.
+ * La compaction native passe par sessionManager.appendCompaction(summary,
+ * firstKeptEntryId, tokensBefore) qui insère une entrée de résumé ; ensuite
+ * buildSessionContext() résout le contexte en remplaçant tout ce qui précède
+ * firstKeptEntryId par le résumé.
+ *
+ * Ici on garde le prompt système (dans agent.state, hors entrées) + les N
+ * derniers messages, et on résume mécaniquement le reste (compteurs + fichiers
+ * lus/modifiés + placeholder).
+ */
+async function manualCompact(session: any, customInstructions?: string): Promise<any> {
+  const sessionManager = session.sessionManager;
+  const pathEntries = sessionManager.getBranch();
+
+  // Frontière après la dernière entrée de compaction (s'il y en a une).
+  let boundaryStart = 0;
+  for (let i = pathEntries.length - 1; i >= 0; i--) {
+    if (pathEntries[i].type === "compaction") {
+      boundaryStart = i + 1;
+      break;
+    }
+  }
+
+  // Garder les N derniers messages visibles dans le contexte.
+  const KEEP_MESSAGES = 10;
+  const kept: any[] = [];
+  let firstKeptEntryId: string | null = null;
+  for (let i = pathEntries.length - 1; i >= boundaryStart; i--) {
+    const entry = pathEntries[i];
+    if (entry.type === "message" || entry.type === "custom_message") {
+      kept.unshift(entry);
+      if (kept.length >= KEEP_MESSAGES) {
+        firstKeptEntryId = entry.id;
+        break;
+      }
+    }
+  }
+  if (!firstKeptEntryId) {
+    throw new Error("Nothing to compact (session too small)");
+  }
+
+  // Messages qui seront résumés/écartés (tout ce qui précède firstKeptEntryId).
+  const summarized: any[] = [];
+  for (let i = boundaryStart; i < pathEntries.length; i++) {
+    if (pathEntries[i].id === firstKeptEntryId) break;
+    if (pathEntries[i].type === "message") {
+      summarized.push(pathEntries[i].message);
+    }
+  }
+
+  const summary = buildMechanicalSummary(summarized, customInstructions);
+
+  // Estimation des tokens avant (via estimateTokens exporté par le SDK).
+  const context = buildSessionContext(pathEntries);
+  const tokensBefore = context.messages.reduce((sum, m) => sum + estimateTokens(m), 0);
+
+  // Insère l'entrée de compaction (mécanisme append-only du SDK).
+  sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore);
+
+  // Reconstruit la liste de messages en mémoire de l'agent depuis le nouveau contexte.
+  const newContext = sessionManager.buildSessionContext();
+  session.agent.state.messages = newContext.messages;
+
+  logCompactionDebug(
+    `manual compaction done: kept=${kept.length} summarized=${summarized.length} ` +
+    `tokensBefore=${tokensBefore} firstKeptEntryId=${firstKeptEntryId}`
+  );
+
+  return {
+    summary,
+    firstKeptEntryId,
+    tokensBefore,
+    estimatedTokensAfter: newContext.messages.reduce((sum: number, m: any) => sum + estimateTokens(m), 0),
+    manual: true,
+  };
+}
+
+/** Résumé mécanique des messages écartés (compteurs + fichiers + placeholder). */
+function buildMechanicalSummary(messages: any[], customInstructions?: string): string {
+  let userCount = 0;
+  let assistantCount = 0;
+  let toolCount = 0;
+  const filesRead = new Set<string>();
+  const filesModified = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "user") {
+      userCount++;
+    } else if (m.role === "assistant") {
+      assistantCount++;
+      for (const block of m.content || []) {
+        if (block.type === "toolCall") {
+          toolCount++;
+          const args = block.arguments || {};
+          if (block.name === "read" && args.file) filesRead.add(args.file);
+          if (block.name === "edit" || block.name === "write") {
+            if (args.file) filesModified.add(args.file);
+            if (args.path) filesModified.add(args.path);
+          }
+        }
+      }
+    }
+  }
+  const lines = [
+    `[Compaction automatique] ${userCount} message(s) utilisateur, ${assistantCount} réponse(s) assistant, ${toolCount} appel(s) d'outil ont été résumés pour libérer du contexte.`,
+  ];
+  if (filesRead.size) lines.push(`Fichiers lus : ${[...filesRead].join(", ")}`);
+  if (filesModified.size) lines.push(`Fichiers modifiés : ${[...filesModified].join(", ")}`);
+  if (customInstructions) lines.push(`Instructions de résumé : ${customInstructions}`);
+  return lines.join("\n");
 }
 
 /**
