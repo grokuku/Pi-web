@@ -58,6 +58,9 @@ export const fr = {
     attachFiles: "Joindre des fichiers",
     removeAttachment: "Retirer la pièce jointe",
     collapseTool: "Réduire l'outil",
+    // ── Bouton « copier » sur les blocs de code markdown ──
+    copyCode: "Copier le code",
+    copied: "Copié ✓",
     keyboardHints: "📎 Fichiers · Esc annuler · Ctrl+L Paramètres · Ctrl+T réflexion · Shift+Tab réfl.±",
     // ── Lot B : robustesse temps réel (file WS + visibilité déconnexion) ──
     wsOffline: "Connexion perdue — reconnexion en cours…",

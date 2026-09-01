@@ -1,6 +1,7 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useRef, useEffect } from "react";
 import { ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { useTranslation } from "../../i18n";
+import { copyToClipboard } from "../../utils/clipboard";
 
 interface Props {
   thinking: string;
@@ -12,13 +13,21 @@ export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasContent = thinking.length > 0;
 
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(thinking).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
+  // Nettoyage du timer de feedback si le bloc est démonté
+  useEffect(() => () => { if (resetTimerRef.current) clearTimeout(resetTimerRef.current); }, []);
+
+  const handleCopy = useCallback(async () => {
+    // Helper robuste (navigator.clipboard + fallback execCommand) : nécessaire
+    // en http LAN non sécurisé où navigator.clipboard n'existe pas.
+    const ok = await copyToClipboard(thinking);
+    if (!ok) return;
+    setCopied(true);
+    // Feedback « Copié ✓ » pendant 2s puis retour à l'icône copier
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => setCopied(false), 2000);
   }, [thinking]);
 
   if (!hasContent) return null;

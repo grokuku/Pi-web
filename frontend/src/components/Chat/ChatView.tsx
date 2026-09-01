@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, memo, useDeferredValue } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, memo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -8,13 +8,76 @@ import { ModalDialog } from "../common/ModalDialog";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { useTranslation } from "../../i18n";
+import { copyToClipboard } from "../../utils/clipboard";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 
+// ── Bloc de code markdown avec bouton « copier » ──────────────────────────
+// Remplace le <pre> par défaut de react-markdown (blocs ``` → <pre><code>) :
+// enveloppe le <pre> dans un conteneur relative et ajoute un bouton overlay
+// top-right, visible au survol du bloc, qui copie le contenu TEXTUEL du code
+// (textContent du <pre>, pas le HTML) via le helper clipboard robuste
+// (fallback execCommand pour le http LAN non sécurisé).
+// - State « copied » local par bloc : un composant dédié évite les states
+//   dans le map des messages ; le state survit au re-render de streaming
+//   (même position dans l'arbre).
+// - Le <pre> garde son overflow-x (CSS .prose-hacker) : le bouton est posé
+//   sur le conteneur, il ne participe pas au scroll horizontal du code.
+const CodeBlockWithCopy = memo(function CodeBlockWithCopy({
+  node: _node, // hast node passé par react-markdown — ignoré, ne doit pas fuir vers le DOM
+  children,
+  ...rest
+}: ComponentPropsWithoutRef<"pre"> & { node?: unknown }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Nettoyage du timer de feedback si le bloc est démonté
+  useEffect(() => () => { if (resetTimerRef.current) clearTimeout(resetTimerRef.current); }, []);
+
+  const handleCopy = useCallback(async () => {
+    const text = preRef.current?.textContent ?? "";
+    if (!text) return;
+    const ok = await copyToClipboard(text);
+    if (!ok) return;
+    setCopied(true);
+    // Feedback « Copié ✓ » pendant 2s puis retour à l'icône copier
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  }, []);
+
+  return (
+    <div className="relative group/code">
+      <pre ref={preRef} {...rest}>{children}</pre>
+      <button
+        type="button"
+        onClick={handleCopy}
+        title={copied ? t('chat.copied') : t('chat.copyCode')}
+        aria-label={copied ? t('chat.copied') : t('chat.copyCode')}
+        className="absolute top-1.5 right-1.5 z-10 flex items-center justify-center rounded border border-hacker-border bg-hacker-bg/80 px-1.5 py-1 text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 transition-opacity duration-150 cursor-pointer"
+      >
+        {copied ? <span className="text-[10px] leading-none font-mono">{t('chat.copied')}</span> : <Copy size={12} />}
+      </button>
+    </div>
+  );
+});
+
 // ── Memoized ReactMarkdown ──
 const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        // Blocs ``` → <pre><code> : le <pre> est remplacé par CodeBlockWithCopy
+        // (conteneur relative + bouton « copier » en overlay).
+        pre: CodeBlockWithCopy,
+      }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
 });
 
 function formatTime(ts: number): string {
@@ -846,7 +909,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
         {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={12} /></a></div>; })}</div>}
-        {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="image") onFileClick({type:"image",src:fu,name:ref.name}); else if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>}
+        {message.attachmentRefs && message.attachmentRefs.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{message.attachmentRefs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>}
         {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>)}</div>}
         {message.usage && <span className="text-[9px] text-hacker-text-dim shrink-0">{message.usage.input + message.usage.output}t</span>}
       </div>

@@ -58,6 +58,9 @@ export const en = {
     attachFiles: "Attach files",
     removeAttachment: "Remove attachment",
     collapseTool: "Collapse tool",
+    // ── Bouton « copier » sur les blocs de code markdown ──
+    copyCode: "Copy code",
+    copied: "Copied ✓",
     keyboardHints: "📎 Files · Esc abort · Ctrl+L Settings · Ctrl+T think · Shift+Tab think±",
     // ── Lot B: real-time robustness (WS queue + offline visibility) ──
     wsOffline: "Connection lost — reconnecting…",
