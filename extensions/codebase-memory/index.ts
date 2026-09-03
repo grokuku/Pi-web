@@ -171,6 +171,25 @@ async function ensureBinary(): Promise<void> {
   }
 }
 
+// Flag module-level : UNE seule tentative d'auto-install depuis ensureStdioClient
+// (évite les boucles de re-téléchargement à chaque appel de tool cbm_* quand le
+// téléchargement échoue).
+let attemptedAutoInstall = false;
+
+// Sérialise les tentatives de téléchargement : session_start, before_agent_start
+// et ensureStdioClient peuvent appeler ensureBinary() quasi simultanément → un
+// seul téléchargement à la fois, les appelants en attente partagent la même
+// promesse (même pattern que spawnPromise plus bas).
+let downloadInFlight: Promise<void> | null = null;
+function ensureBinaryOnce(): Promise<void> {
+  if (!downloadInFlight) {
+    downloadInFlight = ensureBinary().finally(() => {
+      downloadInFlight = null;
+    });
+  }
+  return downloadInFlight;
+}
+
 async function isServerReady(): Promise<boolean> {
   try {
     const controller = new AbortController();
@@ -301,7 +320,27 @@ async function ensureStdioClient(): Promise<void> {
   stdioReadyPromise = (async () => {
     if (stdioChild && stdioReady) return;
     if (!existsSync(BIN_PATH)) {
-      throw new Error("codebase-memory-mcp binary not installed");
+      // Auto-réparation à l'appel : le binaire manque → UNE seule tentative de
+      // téléchargement (flag module-level attemptedAutoInstall contre les boucles
+      // et les téléchargements concurrents), puis re-check.
+      if (!attemptedAutoInstall) {
+        attemptedAutoInstall = true;
+        console.log("[cbm] binaire absent à l'appel d'un tool cbm_*, tentative de téléchargement...");
+        try {
+          await ensureBinaryOnce();
+        } catch (e: any) {
+          console.warn("[cbm] téléchargement automatique échoué :", e.message);
+        }
+      }
+      if (!existsSync(BIN_PATH)) {
+        // Erreur ACTIONNABLE pour le LLM : ne pas retenter les cbm_* cette session.
+        throw new Error(
+          "codebase-memory-mcp n'est pas installé et la tentative de téléchargement automatique a échoué. " +
+            "Les tools cbm_* sont INDISPONIBLES pour toute cette session — ne les réessayez PAS. " +
+            "Utilisez grep et la lecture directe des fichiers à la place."
+        );
+      }
+      console.log("[cbm] binaire téléchargé, poursuite du démarrage du client stdio");
     }
     stdioError = null;
     console.log("[cbm] Starting MCP client over stdio (full tool surface)");
@@ -760,12 +799,22 @@ export default async function (pi: ExtensionAPI) {
   // ── session_start: download, spawn, index (NON-BLOCKING) ──
   // Fire-and-forget so session creation is not delayed by CBM init.
   pi.on("session_start", (_event, ctx) => {
-    if (!status.running && !existsSync(BIN_PATH)) {
-      console.log("[cbm] session_start: binary not installed, skipping init (non-blocking)");
-      return;
-    }
     (async () => {
       try {
+        // Auto-réparation au boot : si le binaire manque, on tente de le
+        // télécharger (ensureBinary sait le faire) au lieu de skipper la session.
+        // Non-bloquant : en cas d'échec, cbm reste indisponible mais la session
+        // démarre normalement (comme avant).
+        if (!status.running && !existsSync(BIN_PATH)) {
+          console.log("[cbm] session_start: binaire absent, tentative de téléchargement...");
+          try {
+            await ensureBinaryOnce();
+          } catch (e: any) {
+            console.warn("[cbm] session_start: cbm indisponible cette session :", e.message);
+            return;
+          }
+          console.log("[cbm] session_start: binaire téléchargé, poursuite de l'init");
+        }
         if (isLinkedProject(ctx.cwd)) {
           console.log(`[cbm] session_start: linked project, skipping CBM init for ${ctx.cwd}`);
           return;
@@ -792,14 +841,23 @@ export default async function (pi: ExtensionAPI) {
   // NON-BLOCKING: fire-and-forget so the LLM can start immediately.
   // CBM init (download, spawn, index) can take minutes — we must not block the agent.
   pi.on("before_agent_start", (_event, ctx) => {
-    // Skip entirely if CBM is not installed and not running
-    if (!status.running && !existsSync(BIN_PATH)) {
-      console.log("[cbm] before_agent_start: binary not installed, skipping (non-blocking)");
-      return;
-    }
     // Fire-and-forget: start/init in background, don't await
     (async () => {
       try {
+        // Auto-réparation au boot : si le binaire manque, on tente de le
+        // télécharger (ensureBinary sait le faire) au lieu de skipper le turn.
+        // Non-bloquant : en cas d'échec, cbm reste indisponible mais l'agent
+        // démarre normalement (comme avant).
+        if (!status.running && !existsSync(BIN_PATH)) {
+          console.log("[cbm] before_agent_start: binaire absent, tentative de téléchargement...");
+          try {
+            await ensureBinaryOnce();
+          } catch (e: any) {
+            console.warn("[cbm] before_agent_start: cbm indisponible cette session :", e.message);
+            return;
+          }
+          console.log("[cbm] before_agent_start: binaire téléchargé, poursuite de l'init");
+        }
         if (isLinkedProject(ctx.cwd)) {
           console.log(`[cbm] before_agent_start: linked project, skipping CBM init for ${ctx.cwd}`);
           return;

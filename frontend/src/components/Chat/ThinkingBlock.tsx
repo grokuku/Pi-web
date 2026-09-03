@@ -7,17 +7,45 @@ interface Props {
   thinking: string;
   isStreaming?: boolean;
   defaultExpanded?: boolean;
+  // Lot C : vrai dès que la réponse (text_delta) a commencé à arriver → le
+  // bloc se replie automatiquement (info consommée), sauf override manuel.
+  textStarted?: boolean;
+  // Lot C : durée de réflexion figée (ms) — affichée dans l'en-tête replié.
+  thinkingDurationMs?: number;
 }
 
-export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming, defaultExpanded = true }: Props) {
+// Formate une durée en ms → "12s" / "1m 05s" (affichage en-tête replié).
+function formatDuration(ms: number): string {
+  const totalSecs = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming, defaultExpanded = true, textStarted = false, thinkingDurationMs }: Props) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
+  // Override manuel : une fois que l'utilisateur a toggle pendant ce stream,
+  // l'auto-repli ne s'applique plus (même pattern que ToolCallRow).
+  const [userToggled, setUserToggled] = useState(false);
   const [copied, setCopied] = useState(false);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasContent = thinking.length > 0;
 
+  // Auto-repli quand la réponse commence à arriver (info consommée) — sauf si
+  // l'utilisateur a manuellement toggle pendant ce stream (override prime).
+  useEffect(() => {
+    if (textStarted && isStreaming && !userToggled) setExpanded(false);
+  }, [textStarted, isStreaming, userToggled]);
+
   // Nettoyage du timer de feedback si le bloc est démonté
   useEffect(() => () => { if (resetTimerRef.current) clearTimeout(resetTimerRef.current); }, []);
+
+  const toggle = useCallback(() => {
+    setUserToggled(true);
+    setExpanded(v => !v);
+  }, []);
 
   const handleCopy = useCallback(async () => {
     // Helper robuste (navigator.clipboard + fallback execCommand) : nécessaire
@@ -36,11 +64,14 @@ export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming
     <div className="thinking-block mb-2">
       <div className="thinking-block-header">
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={toggle}
           className="thinking-toggle-btn"
         >
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           <span className="thinking-block-label">{t('thinkingBlock.thinking')}</span>
+          {!expanded && thinkingDurationMs !== undefined && (
+            <span className="thinking-block-duration">{t('chat.thoughtFor', formatDuration(thinkingDurationMs))}</span>
+          )}
         </button>
         <button onClick={handleCopy} className="thinking-copy-btn" title={t('thinkingBlock.copy')}>
           {copied ? <Check size={10} /> : <Copy size={10} />}

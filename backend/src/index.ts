@@ -586,10 +586,12 @@ const wss = new WebSocketServer({
 interface ExtendedWS extends WebSocket {
   isAlive: boolean;
   projectId?: string;  // Track which project this client is viewing
+  subscribedProjects: Set<string>;  // (sécurité #5) projets auxquels ce socket est abonné
 }
 
 wss.on("connection", (ws: ExtendedWS) => {
   ws.isAlive = true;
+  ws.subscribedProjects = new Set();
   let cleanedUp = false;
   console.log("WebSocket client connected");
 
@@ -599,8 +601,12 @@ wss.on("connection", (ws: ExtendedWS) => {
   });
 
   // ── Subscribe to Pi events (routed by projectId) ──
+  // (sécurité #5) Filtrage côté SERVEUR : un event n'est envoyé QUE si ce
+  // socket est abonné au projet concerné (Set<projectId> par socket). Le
+  // client s'abonne via {type:"subscribe", projectId} à l'ouverture et à
+  // chaque changement de projet actif.
   const unsub = subscribeToEvents((event, projectId) => {
-    if (ws.readyState === ws.OPEN) {
+    if (ws.readyState === ws.OPEN && ws.subscribedProjects.has(projectId)) {
       ws.send(JSON.stringify({ type: "pi_event", event, projectId }));
     }
   });
@@ -709,6 +715,21 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
   }
 
   switch (msg.type) {
+    // ── (sécurité #5) Abonnement par projet ──
+    // Le client s'abonne explicitement au(x) projet(s) dont il veut recevoir
+    // les events pi_event. Le serveur ne route un event QUE vers les sockets
+    // abonnés au projet concerné (Set<projectId> par socket).
+    case "subscribe": {
+      const pid = msg.projectId || projectId;
+      if (pid) ws.subscribedProjects.add(pid);
+      break;
+    }
+    case "unsubscribe": {
+      const pid = msg.projectId || projectId;
+      if (pid) ws.subscribedProjects.delete(pid);
+      break;
+    }
+
     // ── Pi Actions (now project-scoped) ──
     case "pi_start": {
       const pid = msg.projectId || projectId;

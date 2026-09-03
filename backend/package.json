@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.10",
-    "@earendil-works/pi-coding-agent": "^0.82.0",
+    "@earendil-works/pi-coding-agent": "0.84.4",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "express-rate-limit": "^7.5.1",

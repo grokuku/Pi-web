@@ -166,7 +166,9 @@ async function withSessionTimeout(
       try {
         await session.abort();
       } catch {}
-      emitToSubscribers({ type: "agent_end" } as any, projectId);
+      // (debug) reason:"timeout" : rend cet agent_end synthétisé par le timeout
+      // 5 min distinguable d'un vrai event agent_end émis par le SDK.
+      emitToSubscribers({ type: "agent_end", reason: "timeout" } as any, projectId);
       emitSessionUpdate(projectId);
       stopStreamingHeartbeat(projectId);
       reject(new Error(`[${label}] Session request timed out after ${SESSION_TIMEOUT_MS/1000}s`));
@@ -185,13 +187,72 @@ export function subscribeToEvents(callback: EventCallback): () => void {
   return () => { eventCallbacks.delete(callback); };
 }
 
-export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
+// ── (perf #4) Throttle des deltas de streaming ────────────────────────────
+// Les events message_update (text_delta / thinking_delta) sont bufferisés par
+// projet et flushés toutes les 40 ms. Les deltas consécutifs de même type sont
+// FUSIONNÉS (concat des strings delta) pour réduire drastiquement le nombre de
+// frames WS (1 event = 1 frame). Tout event NON-delta force un flush immédiat
+// du buffer AVANT son forward, préservant l'ordre. À la fin d'un run
+// (agent_settled, timeout, erreur), le flush est déclenché par ces events
+// non-delta, donc aucune perte.
+const DELTA_FLUSH_MS = 40;
+const deltaBuffers = new Map<string, { text: string; thinking: string; hasText: boolean; hasThinking: boolean }>();
+const deltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Un event est un « delta » à throttler s'il s'agit d'un message_update portant
+// un assistantMessageEvent de type text_delta ou thinking_delta.
+function isDeltaEvent(event: AgentSessionEvent): boolean {
+  if (event.type !== "message_update") return false;
+  const d = (event as any).assistantMessageEvent;
+  return !!d && (d.type === "text_delta" || d.type === "thinking_delta");
+}
+
+// Vide le buffer d'un projet en émettant les deltas fusionnés (même format que
+// celui attendu par applyPiEvent du frontend : message_update + assistantMessageEvent).
+function flushDeltaBuffer(projectId: string): void {
+  const buf = deltaBuffers.get(projectId);
+  if (!buf) return;
+  deltaBuffers.delete(projectId);
+  const timer = deltaTimers.get(projectId);
+  if (timer) { clearTimeout(timer); deltaTimers.delete(projectId); }
+  if (buf.hasText) {
+    rawEmitToSubscribers({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: buf.text } } as any, projectId);
+  }
+  if (buf.hasThinking) {
+    rawEmitToSubscribers({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: buf.thinking } } as any, projectId);
+  }
+}
+
+// Émission brute (sans throttle) vers tous les callbacks abonnés.
+function rawEmitToSubscribers(event: AgentSessionEvent, projectId: string) {
   for (const cb of eventCallbacks) {
     try { cb(event, projectId); } catch (e) { console.error("Event callback error:", e); }
   }
 }
 
+export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
+  // Deltas de texte/thinking : bufferisés puis flushés toutes les 40 ms.
+  if (isDeltaEvent(event)) {
+    const d = (event as any).assistantMessageEvent;
+    const buf = deltaBuffers.get(projectId) || { text: "", thinking: "", hasText: false, hasThinking: false };
+    if (d.type === "text_delta") { buf.text += d.delta; buf.hasText = true; }
+    else { buf.thinking += d.delta; buf.hasThinking = true; }
+    deltaBuffers.set(projectId, buf);
+    if (!deltaTimers.has(projectId)) {
+      const timer = setTimeout(() => flushDeltaBuffer(projectId), DELTA_FLUSH_MS);
+      timer.unref?.();
+      deltaTimers.set(projectId, timer);
+    }
+    return;
+  }
+  // Event non-delta : flush immédiat du buffer AVANT le forward (ordre préservé).
+  flushDeltaBuffer(projectId);
+  rawEmitToSubscribers(event, projectId);
+}
+
 function emitSessionUpdate(projectId: string) {
+  // (perf #4) flush du buffer avant l'event non-delta pour préserver l'ordre.
+  flushDeltaBuffer(projectId);
   const info = getSessionInfo(projectId);
   for (const cb of eventCallbacks) {
     try {
@@ -424,7 +485,11 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
               outputTokens: usage.output || 0,
               projectId,
             });
-          } catch {}
+          } catch (e: any) {
+            // (debug) une erreur de stats ne doit jamais casser le run, mais
+            // elle ne doit pas non plus passer totalement sous silence.
+            console.warn(`[PiSession] recordUsage failed for ${projectId}:`, e?.message || e);
+          }
         }
       } else if (event.type === "agent_start") {
         // BUG-72 : branche manquante — le flag backend n'était JAMAIS mis à true
@@ -1405,6 +1470,20 @@ export function getSessionMessages(projectId: string): any[] {
 const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 // Firecrawl tools removed — librarian_search replaces them.
 const FIRECRAWL_TOOLS: string[] = [];
+
+// ── Blocage plateforme ──
+// Le SDK Pi (>= 0.84.4) expose le tool "powershell" sans garde OS : l'heuristique
+// getExtensionToolNames le classe comme tool d'extension et l'active dans TOUS
+// les modes. Or il throw à l'exécution sur Linux ("only available on Windows"),
+// faisant perdre un tour à l'agent à chaque appel. On le bloque donc explicitement
+// sur toute plateforme non-Windows.
+const PLATFORM_BLOCKED_TOOLS: string[] =
+  process.platform === "win32" ? [] : ["powershell"];
+
+/** Retire les tools bloqués par plateforme d'une liste de noms de tools. */
+function filterPlatformTools(names: string[]): string[] {
+  return names.filter((name) => !PLATFORM_BLOCKED_TOOLS.includes(name));
+}
 // Harness orchestrator : aucun tool de base — uniquement delegate (via extension)
 // L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
 const HARNESS_TOOLS: string[] = [];
@@ -1420,7 +1499,9 @@ function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
     return allTools
       .map((t: any) => t.name)
       .filter((name: string) => !BASE_TOOLS.includes(name))
-      .filter((name: string) => !exclude.includes(name));
+      .filter((name: string) => !exclude.includes(name))
+      // Exclure les tools bloqués par plateforme (ex: powershell sur Linux)
+      .filter((name: string) => !PLATFORM_BLOCKED_TOOLS.includes(name));
   } catch { return []; }
 }
 
@@ -1781,10 +1862,10 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   if (mode === "harness") {
     // Harness orchestrator: read-only + delegate (l'extension l'enregistre)
     // Pas d'exclusion : l'orchestrator DOIT garder delegate (BUG-71).
-    (session as any).setActiveToolsByName(toolsForMode(session, HARNESS_TOOLS));
+    (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, HARNESS_TOOLS)));
   } else {
     // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
-    (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
+    (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
   }
 
   // ── Inject mode instructions into system prompt ──
@@ -1882,7 +1963,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   const preservedBlocks = extractPreservedContextBlocks((session as any)._baseSystemPrompt);
 
   // Restore all tools (base + extension), hors tools d'orchestration (BUG-71)
-  (session as any).setActiveToolsByName(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
+  (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
 
   // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
   let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");

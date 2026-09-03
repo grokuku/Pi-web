@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, memo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -12,6 +12,19 @@ import { copyToClipboard } from "../../utils/clipboard";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
+
+// ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
+// Retarde la propagation d'une valeur qui change très souvent (contenu
+// markdown du message en streaming) : le re-parse ReactMarkdown n'a lieu qu'au
+// plus toutes les `delay` ms. setTimeout + cleanup (pas de fuite de timer).
+function useThrottledValue<T>(value: T, delay = 45): T {
+  const [throttled, setThrottled] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setThrottled(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return throttled;
+}
 
 // ── Bloc de code markdown avec bouton « copier » ──────────────────────────
 // Remplace le <pre> par défaut de react-markdown (blocs ``` → <pre><code>) :
@@ -178,6 +191,9 @@ function applyPiEvent(
   prev: DisplayMessage[],
   evt: PiEvent,
   assistantId: string | null,
+  // Lot C : fonction de traduction (i18n) — nécessaire pour stocker un
+  // errorMessage localisé (ex. timeout) dans un processor par ailleurs pur.
+  t?: (key: string, ...args: any[]) => string,
 ): { messages: DisplayMessage[]; assistantId: string | null } {
   let msgs = prev;
   let asstId = assistantId;
@@ -201,13 +217,25 @@ function applyPiEvent(
     }
     case "message_update": {
       const d = evt.assistantMessageEvent;
-      if (d.type === "text_delta") updateLast(last => ({ ...last, content: last.content + d.delta }));
-      if (d.type === "thinking_delta") updateLast(last => ({ ...last, thinking: last.thinking + d.delta }));
+      if (d.type === "text_delta") updateLast(last => {
+        // Lot C : au premier text_delta, on fige la durée de réflexion (le
+        // thinking est consommé → le ThinkingBlock pourra se replier).
+        const thinkingDurationMs = last.thinkingStartedAt !== undefined && last.thinkingDurationMs === undefined
+          ? Date.now() - last.thinkingStartedAt
+          : last.thinkingDurationMs;
+        return { ...last, content: last.content + d.delta, thinkingDurationMs };
+      });
+      if (d.type === "thinking_delta") updateLast(last => ({
+        ...last,
+        thinking: last.thinking + d.delta,
+        // Lot C : horodate le début de la réflexion au premier thinking_delta.
+        thinkingStartedAt: last.thinkingStartedAt ?? Date.now(),
+      }));
       if (d.type === "toolcall_start") {
         const a = d.args?.arguments ?? d.args?.input ?? d.args ?? {};
         updateLast(last => {
           if (last.toolCalls.some(tc => tc.id === d.toolCallId)) return last;
-          return { ...last, toolCalls: [...last.toolCalls, { id: d.toolCallId, name: d.toolName, args: a, output: "", isError: false, isStreaming: true }] };
+          return { ...last, toolCalls: [...last.toolCalls, { id: d.toolCallId, name: d.toolName, args: a, output: "", isError: false, isStreaming: true, startedAt: Date.now() }] };
         });
       }
       if (d.type === "toolcall_delta") {
@@ -232,6 +260,22 @@ function applyPiEvent(
     case "tool_execution_end": {
       const rt = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
       updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: rt, isError: evt.isError, isStreaming: false } : tc) }));
+      break;
+    }
+    case "agent_end": {
+      // Lot C : agent_end synthétisé par le backend (session.ts) avec
+      // reason:"timeout" → le modèle n'a pas répondu depuis 5 min. On finalise
+      // le message en cours proprement (plus de spinner infini) avec une
+      // bannière d'erreur localisée.
+      if (evt.reason === "timeout") {
+        updateLast(last => ({
+          ...last,
+          _streaming: false,
+          stopReason: "error",
+          errorMessage: t ? t('chat.timeoutError') : 'chat.timeoutError',
+        }));
+        asstId = null;
+      }
       break;
     }
     case "message_end": {
@@ -266,6 +310,24 @@ function applyPiEvent(
   }
 
   return { messages: msgs, assistantId: asstId };
+}
+
+// ── (perf) Events de finalisation ─────────────────────────────────────
+// Seuls ces events déclenchent une écriture immédiate du store chatHistory
+// dans le handler pi_event : pendant le streaming (message_start, *_delta,
+// toolcall_*, tool_execution_*), on n'écrit plus le store à chaque chunk.
+// Les remplacements pi_history sont écrits par l'effet pi_history dédié.
+const FINALIZE_EVENT_TYPES = new Set<string>(["message_end", "session_reloaded"]);
+
+// ── (dédup) Append de message avec déduplication par id ──────────────
+// Même sémantique que useChatHistory.appendMessage (dédup par id) : si un
+// message du même id existe déjà, le tableau est renvoyé tel quel. Appliqué
+// aux appends LOCAUX (message user optimiste, custom/injected, erreurs) qui
+// ne dédupaient pas — évite les doublons entre la version optimiste et la
+// version backend du même message.
+function appendMessageDedup(prev: DisplayMessage[], msg: DisplayMessage): DisplayMessage[] {
+  if (prev.some(m => m.id === msg.id)) return prev;
+  return [...prev, msg];
 }
 
 // ── Bannière « connexion perdue » (Lot B — visibilité déconnexion WS) ──────
@@ -428,6 +490,26 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return () => unsub();
   }, [on, projectId]);
 
+  // ── (sécurité #5) Abonnement WS par projet ────────────────────────────
+  // Le serveur ne route les events pi_event QUE vers les sockets abonnés au
+  // projet concerné (Set<projectId> par socket). On s'abonne donc au projet
+  // actif : à l'ouverture (via la file d'attente si la socket n'est pas encore
+  // ouverte), à chaque changement de projet, et à chaque reconnexion
+  // (_ws_reconnect). On ne se désabonne PAS des projets précédents : le store
+  // chatHistory continue de recevoir les events des projets en arrière-plan
+  // (fix « stale UI after project switch »).
+  useEffect(() => {
+    if (!projectId) return;
+    send({ type: "subscribe", projectId });
+  }, [projectId, send]);
+
+  useEffect(() => {
+    const unsub = on("_ws_reconnect", () => {
+      if (projectId) send({ type: "subscribe", projectId });
+    });
+    return () => unsub();
+  }, [on, projectId, send]);
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -580,24 +662,40 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           // Les messages customType "screenshot" (injectés via inject-to-chat)
           // sont système : rendus à gauche, pas en bulle utilisateur.
           const injected = cm.customType === "screenshot" || undefined;
-          setMessages(prev => [...prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, injected, attachmentRefs: injectedRefs }]);
+          // (dédup) append avec déduplication par id (cf. appendMessageDedup)
+          setMessages(prev => appendMessageDedup(prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, injected, attachmentRefs: injectedRefs }));
           return;
         }
         // BUG-18 fix: gérer session_reloaded ici au lieu d'un listener séparé
         if (evt.type === "session_reloaded") {
-          setMessages(prev => prev.map(m => m._streaming ? { ...m, _streaming: false } : m));
+          // (perf) session_reloaded = event de finalisation : on dé-flag le
+          // streaming ET on synchronise le store immédiatement (une des seules
+          // écritures store restantes dans ce handler, cf. FINALIZE_EVENT_TYPES).
+          setMessages(prev => {
+            const next = prev.map(m => m._streaming ? { ...m, _streaming: false } : m);
+            chatHistory.saveMessagesFor(next, pid);
+            return next;
+          });
           currentAssistantIdRef.current = null;
+          // (cohérence) plus de streaming en cours → assistantId du store reset.
+          chatHistory.setAssistantIdFor(pid, null);
           return;
         }
 
         // Current project → update React state (visible in UI)
         setMessages(prev => {
-          const result = applyPiEvent(prev, evt, currentAssistantIdRef.current);
+          const result = applyPiEvent(prev, evt, currentAssistantIdRef.current, t);
           currentAssistantIdRef.current = result.assistantId;
-          // Sync store immediately so pi_history cannot overwrite streaming state.
-          // The debounced persistence is too slow (500ms) and creates a window
-          // where pi_history can corrupt the store with stale finalized data.
-          chatHistory.saveMessagesFor(result.messages, pid);
+          // (perf) Écriture store UNIQUEMENT sur les events de finalisation
+          // (message_end, session_reloaded ; les remplacements pi_history sont
+          // écrits par leur effet dédié). Pendant le streaming (message_start,
+          // *_delta, toolcall_*, tool_execution_*), plus aucune écriture store
+          // à chaque chunk : la persistance continue du projet actif reste
+          // assurée par le debounce 500ms, et le save sur message_end maintient
+          // la protection anti-pi_history périmé (message_end précède pi_history).
+          if (FINALIZE_EVENT_TYPES.has(evt.type)) {
+            chatHistory.saveMessagesFor(result.messages, pid);
+          }
           chatHistory.setAssistantIdFor(pid, result.assistantId);
           return result.messages;
         });
@@ -606,8 +704,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         // streaming progress while the user is on another project.
         const otherMsgs = chatHistory.getMessagesFor(pid);
         const otherAsstId = chatHistory.getAssistantIdFor(pid);
-        const result = applyPiEvent(otherMsgs, evt, otherAsstId);
-        chatHistory.saveMessagesFor(result.messages, pid);
+        const result = applyPiEvent(otherMsgs, evt, otherAsstId, t);
+        // (perf) même règle de finalisation pour les projets en arrière-plan.
+        if (FINALIZE_EVENT_TYPES.has(evt.type)) {
+          chatHistory.saveMessagesFor(result.messages, pid);
+        }
         chatHistory.setAssistantIdFor(pid, result.assistantId);
       }
     });
@@ -636,10 +737,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       if (msg.projectId && msg.projectId !== projectId) return;
       const text = typeof msg.error === "string" ? msg.error : t('chat.serverError');
       setError(text);
-      setMessages(prev => [...prev, {
+      // (dédup) append avec déduplication par id (cf. appendMessageDedup)
+      setMessages(prev => appendMessageDedup(prev, {
         id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: "user", content: `❌ ${text}`,
         thinking: "", toolCalls: [], timestamp: Date.now(), customType: "pi_command", display: true,
-      }]);
+      }));
     });
     return () => unsub();
   }, [on, projectId, t]);
@@ -701,7 +803,9 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     const isSlash = fullMessage.trim().startsWith("/");
     if (!isSlash) {
       const display = text || (attachmentRefs.length > 0 ? attachmentRefs.map(a => `📎 ${a.name}`).join(", ") : "");
-      setMessages(prev => [...prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }]);
+      // (dédup) append avec déduplication par id : évite le doublon message
+      // user optimiste / version backend (cf. appendMessageDedup)
+      setMessages(prev => appendMessageDedup(prev, { id:Date.now().toString(), role:"user", content:display, thinking:"", toolCalls:[], timestamp:Date.now(), images:imageAttachments.length>0?imageAttachments:undefined, attachmentRefs:attachmentRefs.length>0?attachmentRefs:undefined }));
     }
 
     // ── Vision dans le contexte (Feature) ──
@@ -897,17 +1001,40 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 }
 
 // ── Grouped Messages ──
-interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; }
+interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; thinkingDurationMs?:number; }
 
 const MAX_VISIBLE_GROUPS = 200;
 
 const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const { t } = useTranslation();
-  const groups: DisplayMessage[][] = [];
-  for (const msg of messages) {
-    if (msg.role === "user" || groups.length === 0 || groups[groups.length - 1][0].role === "user") groups.push([msg]);
-    else groups[groups.length - 1].push(msg);
-  }
+  // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
+  // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
+  // render → nouvelle identité pour chaque groupe → le memo(AssistantGroup)
+  // était inutile, tous les groupes assistant re-rendaient à chaque chunk.
+  // En plus, un groupe dont les messages sont exactement les mêmes objets
+  // (mêmes références) que le groupe au même index du rendu précédent RÉUTILISE
+  // ce dernier : les groupes inchangés gardent une identité stable d'une
+  // version de `messages` à l'autre → pendant le streaming, seul le groupe en
+  // cours (dernier message assistant) obtient une nouvelle référence et re-rend.
+  const prevGroupsRef = useRef<{ src: DisplayMessage[]; groups: DisplayMessage[][] }>({ src: [], groups: [] });
+  const groups = useMemo<DisplayMessage[][]>(() => {
+    const prev = prevGroupsRef.current;
+    // Mêmes références de messages → le cache est renvoyé tel quel (identité stable).
+    if (prev.src === messages) return prev.groups;
+    const next: DisplayMessage[][] = [];
+    for (const msg of messages) {
+      if (msg.role === "user" || next.length === 0 || next[next.length - 1][0].role === "user") next.push([msg]);
+      else next[next.length - 1].push(msg);
+    }
+    // Réutilisation d'identité : contenu identique (refs) → même tableau.
+    for (let i = 0; i < next.length; i++) {
+      const g = next[i];
+      const p = prev.groups[i];
+      if (p && p.length === g.length && g.every((m, j) => m === p[j])) next[i] = p;
+    }
+    prevGroupsRef.current = { src: messages, groups: next };
+    return next;
+  }, [messages]);
   // Only render the last MAX_VISIBLE_GROUPS groups to prevent extremely long chats from
   // creating unmanageable DOM trees (200 groups ≈ 400+ messages is a reasonable cap).
   const visibleGroups = groups.length > MAX_VISIBLE_GROUPS ? groups.slice(-MAX_VISIBLE_GROUPS) : groups;
@@ -1036,13 +1163,126 @@ function argsPreview(tc: ToolCallInfo): string | null {
 
 const toolName = (tc: ToolCallInfo) => shortName(tc.name || tc.id || "tool");
 
+// ── Chrono du tool call (perf) ────────────────────────────────────────
+// Composant isolé avec SON PROPRE setInterval de 1s : chaque tick ne
+// re-render QUE ce chrono, jamais le reste du chat (ToolCallRow est memoïsé
+// et ne dépend pas de cet état interne). Basé sur toolCall.startedAt.
+const ToolCallTimer = memo(function ToolCallTimer({ startedAt }: { startedAt?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = startedAt ? Math.max(0, now - startedAt) : 0;
+  const totalSecs = Math.floor(elapsed / 1000);
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return <span className="text-hacker-text-dim/60 tabular-nums">{m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
+});
+
+// Formate un nombre de caractères en taille lisible (ex. 1234 → "1.2k").
+function formatChars(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 1000000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1000000).toFixed(1)}M`;
+}
+
+// ── Ligne compacte d'un tool call + aperçu d'output dépliable ──────────
+// Memoïsé : ne re-rend que si toolCall / isStreaming / isLastActiveTool
+// changent. Le chrono vit dans ToolCallTimer (état interne) → le tick 1s ne
+// re-render jamais cette ligne ni le reste de la liste.
+// - Défaut déplié si l'outil est EN COURS et est le dernier actif du message ;
+//   replié sinon (outils terminés). Le toggle manuel de l'utilisateur prime.
+// - Aperçu type tail -f : les 8 DERNIÈRES lignes de l'output, auto-scroll bas.
+const ToolCallRow = memo(function ToolCallRow({ toolCall, isStreaming, isLastActiveTool }: {
+  toolCall: ToolCallInfo;
+  isStreaming: boolean;
+  isLastActiveTool: boolean;
+}) {
+  const { t } = useTranslation();
+  const preview = argsPreview(toolCall);
+  const hasOutput = !!toolCall.output && toolCall.output.trim().length > 0;
+  const running = toolCall.isStreaming;
+  // Défaut : déplié si en cours ET dernier actif du message (et output présent).
+  const defaultExpanded = running && isLastActiveTool && hasOutput;
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [userToggled, setUserToggled] = useState(false);
+  const isOpen = userToggled ? expanded : defaultExpanded;
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const toggle = useCallback(() => {
+    setUserToggled(true);
+    setExpanded(v => !v);
+  }, []);
+
+  // Dernières 8 lignes de l'output (les plus récentes).
+  const lastLines = useMemo(() => {
+    if (!hasOutput) return "";
+    const lines = toolCall.output.split("\n");
+    return lines.slice(-8).join("\n");
+  }, [toolCall.output, hasOutput]);
+
+  // Auto-scroll en bas à chaque update de l'output (comportement tail -f).
+  useEffect(() => {
+    if (isOpen && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+  }, [toolCall.output, isOpen]);
+
+  const descKey = `tools.${toolCall.name}`;
+  const desc = t(descKey);
+  const description = desc === descKey ? t('tools.fallback') : desc;
+
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={toggle}
+        title={hasOutput ? t('chat.collapseTool') : undefined}
+        className={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left ${
+          running ? "text-hacker-accent animate-pulse"
+          : toolCall.isError ? "text-red-400"
+          : "text-hacker-text-dim"
+        }`}
+      >
+        <span>{running ? "⏳" : toolCall.isError ? "❌" : "📝"}</span>
+        <span className="font-bold">{toolName(toolCall)}</span>
+        <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+        <span className="text-hacker-text-dim">{description}</span>
+        {preview && (
+          <>
+            <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
+            <span className="text-hacker-text-bright/80 truncate max-w-[260px]" title={preview}>{preview}</span>
+          </>
+        )}
+        {isStreaming && running && <ToolCallTimer startedAt={toolCall.startedAt} />}
+        {hasOutput && (isOpen ? <ChevronDown size={10} className="shrink-0" /> : <ChevronRight size={10} className="shrink-0" />)}
+      </button>
+
+      {isOpen && hasOutput && (
+        <div className="mt-1.5">
+          <div className="text-[0.625rem] text-hacker-text-dim/60 mb-0.5">
+            {t('chat.toolOutput')} · {t('chat.toolOutputChars', formatChars(toolCall.output.length))}
+          </div>
+          <pre ref={preRef} className="font-mono text-xs max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-hacker-border/40 rounded bg-hacker-bg/40 p-2 text-hacker-text-bright/90">
+            {lastLines}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ── Contenu markdown d'un message assistant (perf) ───────────────────────
+// Isolé pour pouvoir appeler useThrottledValue (hook) sans violer les règles
+// des hooks dans le map de messages. Le contenu du message EN STREAMING est
+// throttlé (re-parse markdown limité à ~45ms) ; les messages finis gardent
+// leur contenu direct. Le curseur cursor-blink reste rendu indépendamment.
+const AssistantContent = memo(function AssistantContent({ content, isStreaming }: { content: string; isStreaming: boolean }) {
+  const display = isStreaming ? useThrottledValue(content, 45) : content;
+  return <MemoizedReactMarkdown>{display}</MemoizedReactMarkdown>;
+});
+
 const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
   const { t } = useTranslation();
-  const toolDescription = (tc: ToolCallInfo): string => {
-    const key = `tools.${tc.name}`;
-    const desc = t(key);
-    return desc === key ? t('tools.fallback') : desc;
-  };
   let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
     if (msg.usage) totalUsage = totalUsage ? {input:totalUsage.input+msg.usage.input,output:totalUsage.output+msg.usage.output,cost:{total:totalUsage.cost.total+msg.usage.cost.total}} : msg.usage;
@@ -1088,41 +1328,42 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
               {/* Thinking */}
               {showThinking && (
                 <div className="px-3 py-2">
-                  <ThinkingBlock thinking={msg.thinking} defaultExpanded={thinkDefaultExpanded} isStreaming={!!msg._streaming} />
+                  <ThinkingBlock
+                    thinking={msg.thinking}
+                    defaultExpanded={thinkDefaultExpanded}
+                    isStreaming={!!msg._streaming}
+                    textStarted={!!msg.content}
+                    thinkingDurationMs={msg.thinkingDurationMs}
+                  />
                 </div>
               )}
 
-              {/* Tools — compact, single line, no separator after */}
-              {showTools && (
-                <div className={`px-3 flex items-center gap-x-3 gap-y-1 flex-wrap ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
-                  {msg.toolCalls.map((tc) => {
-                    const preview = argsPreview(tc);
-                    return (
-                      <span key={tc.id} className={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight ${
-                        tc.isStreaming ? "text-hacker-accent animate-pulse"
-                        : tc.isError ? "text-red-400"
-                        : "text-hacker-text-dim"
-                      }`}>
-                        <span>{tc.isStreaming ? "⏳" : tc.isError ? "❌" : "📝"}</span>
-                        <span className="font-bold">{toolName(tc)}</span>
-                        <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
-                        <span className="text-hacker-text-dim">{toolDescription(tc)}</span>
-                        {preview && (
-                          <>
-                            <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
-                            <span className="text-hacker-text-bright/80 truncate max-w-[260px]" title={preview}>{preview}</span>
-                          </>
-                        )}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Tools — ligne compacte + aperçu d'output dépliable (ToolCallRow) */}
+              {showTools && (() => {
+                // Dernier tool call EN COURS du message (celui qui streame) :
+                // c'est lui qui est « dernier actif » → aperçu déplié par défaut.
+                let lastActiveIdx = -1;
+                for (let i = 0; i < msg.toolCalls.length; i++) {
+                  if (msg.toolCalls[i].isStreaming) lastActiveIdx = i;
+                }
+                return (
+                  <div className={`px-3 flex flex-col gap-1.5 ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
+                    {msg.toolCalls.map((tc, idx) => (
+                      <ToolCallRow
+                        key={tc.id}
+                        toolCall={tc}
+                        isStreaming={isStreaming}
+                        isLastActiveTool={idx === lastActiveIdx}
+                      />
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Content */}
               {(showContent || showThinkingPlaceholder) && (
                 <div className="px-3 py-2 prose-hacker">
-                  {showContent ? <MemoizedReactMarkdown>{msg.content}</MemoizedReactMarkdown> : null}
+                  {showContent ? <AssistantContent content={msg.content} isStreaming={!!msg._streaming} /> : null}
                   {showThinkingPlaceholder && <span className="text-hacker-text-dim italic text-sm">{t('chat.thinking')}</span>}
                   {msg._streaming && showContent && <span className="cursor-blink" />}
                 </div>

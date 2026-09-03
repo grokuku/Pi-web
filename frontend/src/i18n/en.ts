@@ -36,6 +36,8 @@ export const en = {
     sessionActive: "Session active — type a message below to start",
     noModelSelected: "No model selected",
     llmError: "LLM error — empty response (the process stopped). Try again or check the model/provider.",
+    timeoutError: "Interrupted: no model response for 5 min",
+    thoughtFor: (dur: string) => `thought for ${dur}`,
     historyHint: (n: number) => `${n} earlier message${n > 1 ? "s" : ""} — scroll up for full history`,
     streaming: "⚡ STREAMING",
     response: "🤖 RESPONSE",
@@ -60,6 +62,9 @@ export const en = {
     attachFiles: "Attach files",
     removeAttachment: "Remove attachment",
     collapseTool: "Collapse tool",
+    // ── Tool call output preview (streaming) ──
+    toolOutput: "Tool output",
+    toolOutputChars: (chars: string) => `${chars} chars`,
     // ── Bouton « copier » sur les blocs de code markdown ──
     copyCode: "Copy code",
     copied: "Copied ✓",

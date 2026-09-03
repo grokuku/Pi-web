@@ -142,7 +142,8 @@ function mapRoleToFunction(role: string): string {
 
 /**
  * Collecte la réponse partielle d'une session d'expert (messages assistant déjà produits).
- * Utilisée pour récupérer le travail d'un expert interrompu par un abort (BUG-67).
+ * Utilisée pour récupérer le travail d'un expert interrompu par un abort (BUG-67)
+ * ou par un timeout (inactivité / global) — le travail partiel n'est pas perdu.
  */
 function collectExpertResponse(tempSession: any): string {
   try {
@@ -464,6 +465,19 @@ export default function (pi: ExtensionAPI) {
           const GLOBAL_MAX_TIMEOUT_MS = 1_800_000; // 30 min au total (safety net)
           const MAX_ATTEMPTS = 2;                  // 1 retry sur timeout d'inactivité
 
+          // Récupération partielle au timeout : les erreurs de timeout sont
+          // pré-formatées (préfixe "❌") avec un extrait du travail déjà produit
+          // par le sous-agent (collectExpertResponse, tronqué à ~2000 chars).
+          // Le catch externe renvoie ces messages tels quels à l'orchestrator —
+          // un timeout ne jette plus 100% de l'avancement du sous-agent.
+          const timeoutError = (cause: string, partial: string): Error => {
+            let text = `❌ ${requestedFunc.label} a échoué (${cause})`;
+            if (partial) {
+              text += ` — extrait de l'avancement du sous-agent :\n\n${partial.slice(0, 2000)}`;
+            }
+            return new Error(text);
+          };
+
           // Callback de reset du timer d'inactivité — connecté au subscribe ci-dessous
           let resetInactivityFn: (() => void) | null = null;
           // Subscription aux events de la session temp : chaque event prouve que la
@@ -555,6 +569,16 @@ export default function (pi: ExtensionAPI) {
                   throw new Error(`Délégation interrompue par l'utilisateur (abort de l'orchestrator). Travail récupéré (${partial.length} chars) :\n\n${partial.slice(0, 2000)}`);
                 }
               }
+              // Timeout global : l'abort de la session temp est déjà déclenché —
+              // on attend qu'il se termine (le dernier message assistant partiel
+              // atterrit dans l'historique) puis on le collecte avant de rejeter
+              // (pas de retry sur le timeout global).
+              if (msg.includes("timeout global")) {
+                try { await tempSession.waitForIdle(); } catch {}
+                const partial = collectExpertResponse(tempSession);
+                console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: timeout global — ${partial.length} chars récupérés`);
+                throw timeoutError("timeout global", partial);
+              }
               // Retry UNIQUEMENT sur timeout d'inactivité.
               // Pas de retry sur abort signal ni sur les erreurs modèle.
               if (msg.includes("inactivité") || msg.includes("inactivity") || msg.includes("Inactivity")) {
@@ -591,7 +615,13 @@ export default function (pi: ExtensionAPI) {
             }
           }
           if (!succeeded) {
-            throw new Error(`Fonction ${effectiveFunction} a timeouté après ${MAX_ATTEMPTS} attempts (inactivité > ${INACTIVITY_TIMEOUT_MS / 1000}s)`);
+            // Récupération partielle au timeout : attendre que l'abort de la
+            // session temp soit terminé (le dernier message assistant partiel
+            // atterrit dans l'historique) puis le collecter pour l'orchestrator.
+            try { await tempSession.waitForIdle(); } catch {}
+            const partial = collectExpertResponse(tempSession);
+            console.warn(`[harness-orchestrator] Fonction ${effectiveFunction} a timeouté définitivement — ${partial.length} chars récupérés`);
+            throw timeoutError("timeout d'inactivité", partial);
           }
 
           // Collecter la réponse
@@ -621,6 +651,17 @@ export default function (pi: ExtensionAPI) {
         }
       } catch (err: any) {
         console.error(`[harness-orchestrator] Erreur ${functionName}:`, err.message);
+        // Les erreurs de timeout sont déjà pré-formatées avec l'extrait du travail
+        // partiel récupéré (préfixe "❌") → renvoyées telles quelles à l'orchestrator.
+        if (typeof err?.message === "string" && err.message.startsWith("❌")) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: err.message,
+            }],
+            details: undefined,
+          };
+        }
         return {
           content: [{
             type: "text" as const,

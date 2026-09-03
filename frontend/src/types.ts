@@ -113,6 +113,11 @@ export interface DisplayMessage {
   // Message injecté par le système (ex. web_screenshot via inject-to-chat) —
   // rendu à gauche avec un style système distinct, pas en bulle utilisateur.
   injected?: boolean;
+  // Lot C : timing de la réflexion — sert à l'auto-repli du ThinkingBlock
+  // quand la réponse commence à arriver (info consommée) et à l'affichage
+  // de la durée de réflexion dans l'en-tête replié.
+  thinkingStartedAt?: number;
+  thinkingDurationMs?: number;
   // Attachment references (uploaded file IDs)
   attachmentRefs?: { id: string; name: string; category: string; size: number }[];
 }
@@ -125,6 +130,9 @@ export interface ToolCallInfo {
   isError: boolean;
   isStreaming: boolean;
   startTime?: number;
+  // Timestamp (ms) de début du tool call — sert au chrono de streaming
+  // (ToolCallTimer) et à l'aperçu d'output dépliable dans ChatView.
+  startedAt?: number;
 }
 
 // ── Providers ─────────────────────────────────────────

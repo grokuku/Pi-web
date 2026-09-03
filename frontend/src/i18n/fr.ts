@@ -36,6 +36,8 @@ export const fr = {
     sessionActive: "Session active — tapez un message ci-dessous pour commencer",
     noModelSelected: "Aucun modèle sélectionné",
     llmError: "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider.",
+    timeoutError: "Interrompu : le modèle n'a pas répondu depuis 5 min",
+    thoughtFor: (dur: string) => `a réfléchi ${dur}`,
     historyHint: (n: number) => `${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""} — faites défiler pour voir l'historique complet`,
     streaming: "⚡ STREAMING",
     response: "🤖 RÉPONSE",
@@ -60,6 +62,9 @@ export const fr = {
     attachFiles: "Joindre des fichiers",
     removeAttachment: "Retirer la pièce jointe",
     collapseTool: "Réduire l'outil",
+    // ── Aperçu d'output des tool calls (streaming) ──
+    toolOutput: "Sortie de l'outil",
+    toolOutputChars: (chars: string) => `${chars} caractères`,
     // ── Bouton « copier » sur les blocs de code markdown ──
     copyCode: "Copier le code",
     copied: "Copié ✓",

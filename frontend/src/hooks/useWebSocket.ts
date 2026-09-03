@@ -15,6 +15,9 @@ const QUEUE_MAX = 50;
 //  - pi_prompt            : prompt tapé pendant une micro-coupure ;
 //  - pi_steer             : direction envoyée pendant un streaming ;
 //  - design_send_to_chat  : envoi d'une maquette vers le chat (équivalent prompt).
+//  - subscribe            : (sécurité #5) abonnement par projet. Mis en file pour
+//    garantir qu'il est bien envoyé à l'ouverture de la connexion (première
+//    connexion comme reconnexions), AVANT que le chat ait besoin des events.
 // Sont volontairement EXCLUS de la file (envoyés uniquement socket ouverte) :
 //  - pi_abort : inutile hors connexion et dangereux à rejouer — provoquerait un
 //    « abort fantôme » tuant une génération légitime après reconnexion ;
@@ -26,6 +29,7 @@ const QUEUEABLE_TYPES: ReadonlySet<string> = new Set([
   "pi_prompt",
   "pi_steer",
   "design_send_to_chat",
+  "subscribe",
 ]);
 
 export function useWebSocket() {
