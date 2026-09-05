@@ -656,6 +656,12 @@ export const fr = {
     conflicted: "Fichiers en conflit",
   },
 
+  // ── Git : erreurs de fetch (blindage anti-HTML) ──
+  git: {
+    sessionExpired: "Session expirée — recharge la page pour te reconnecter",
+    serverError: (status: number) => `Erreur serveur (HTTP ${status})`,
+  },
+
   // ── Terminal ──
   terminal: {
     newTerminal: "Nouveau terminal",

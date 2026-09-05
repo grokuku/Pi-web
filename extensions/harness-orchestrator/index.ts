@@ -421,6 +421,9 @@ export default function (pi: ExtensionAPI) {
         // Déclaré ici (try externe) car `let` dans un bloc try n'est pas visible
         // dans le finally du même try (portées de bloc séparées en JS/TS).
         let tempUnsub: (() => void) | null = null;
+        // Timer de silence du sous-agent — déclaré ici (try externe) pour la même
+        // raison que tempUnsub : visible depuis le finally de cleanup.
+        let silenceTimer: ReturnType<typeof setInterval> | null = null;
 
         try {
           // Set le modèle — priorité au modèle conseillé par le routeur,
@@ -480,23 +483,99 @@ export default function (pi: ExtensionAPI) {
 
           // Callback de reset du timer d'inactivité — connecté au subscribe ci-dessous
           let resetInactivityFn: (() => void) | null = null;
+
+          // ── Streaming d'avancement du sous-agent (BUG-67) ───────────────────
+          // À chaque event du sous-agent, on émet un partialResult MULTI-LIGNES
+          // (aperçu tail -f côté UI), THROTTLÉ à 1 update / ~2s max :
+          //   ligne 1 : "sous-agent X · N events · dernière activité il y a Ys"
+          //   suivantes : les 8 derniers événements significatifs (tool calls,
+          //   réflexion) avec leur âge relatif.
+          const EMIT_THROTTLE_MS = 2_000;   // 1 update max toutes les ~2s
+          const SILENCE_AFTER_MS = 30_000;  // sous-agent muet si >30s sans event
+          const SILENCE_TICK_MS = 10_000;   // timer périodique de détection de silence
+          let eventCount = 0;               // nb total d'events reçus du sous-agent
+          let thinkingChars = 0;            // chars de réflexion accumulés (text_delta)
+          let lastEventAt = Date.now();     // horodatage du dernier event reçu
+          let lastEmitAt = 0;               // horodatage du dernier update émis
+          const recentEvents: { at: number; label: string }[] = []; // 8 derniers events
+
+          // Réduit un event à une ligne courte (ou null si non significatif).
+          // text_delta est agrégé via thinkingChars plutôt que ligne par ligne.
+          const formatEventLine = (event: any): string | null => {
+            if (event?.type === "tool_execution_start") {
+              const tool = event.toolName || "outil";
+              const args: any = event.args || {};
+              const target =
+                (typeof args.path === "string" && args.path) ||
+                (typeof args.filePath === "string" && args.filePath) ||
+                (typeof args.file_path === "string" && args.file_path) ||
+                (typeof args.command === "string" && args.command) ||
+                (typeof args.pattern === "string" && args.pattern) || "";
+              return `${tool} ${target}`.trim().slice(0, 80);
+            }
+            if (event?.type === "message_update" &&
+                event.assistantMessageEvent?.type === "text_delta") {
+              thinkingChars += (event.assistantMessageEvent.delta || "").length;
+              return null; // agrégé dans l'en-tête, pas de ligne dédiée
+            }
+            return null;
+          };
+
+          // Construit le texte multi-lignes affiché par l'aperçu tail -f de l'UI.
+          const buildProgressText = (): string => {
+            const silentFor = Math.round((Date.now() - lastEventAt) / 1000);
+            const lines: string[] = [];
+            let header = `sous-agent ${effectiveFunc.label} · ${eventCount} events` +
+              ` · dernière activité il y a ${silentFor}s`;
+            if (thinkingChars > 0) header += ` · ${thinkingChars} chars de réflexion`;
+            if (silentFor * 1000 > SILENCE_AFTER_MS) {
+              header += ` — aucune activité depuis ${silentFor}s, attente du modèle...`;
+            }
+            lines.push(header);
+            const now = Date.now();
+            for (const e of recentEvents) {
+              lines.push(`  il y a ${Math.round((now - e.at) / 1000)}s · ${e.label}`);
+            }
+            return lines.join("\n");
+          };
+
+          // Émet l'update (throttlé sauf si force=true).
+          const emitThrottled = (force = false) => {
+            const now = Date.now();
+            if (!force && now - lastEmitAt < EMIT_THROTTLE_MS) return;
+            lastEmitAt = now;
+            emitProgress(buildProgressText());
+          };
+
+          // Timer périodique : rend le silence visible — même sans nouvel event,
+          // l'update signale que le sous-agent est muet (vs "ça bosse").
+          silenceTimer = setInterval(() => {
+            if (Date.now() - lastEventAt > SILENCE_AFTER_MS) {
+              try { emitThrottled(true); } catch {}
+            }
+          }, SILENCE_TICK_MS);
+
           // Subscription aux events de la session temp : chaque event prouve que la
-          // fonction travaille → reset du timer. Les events sont AUSSI forwardés vers le
-          // frontend via onUpdate (tool_execution_update) pour montrer l'activité en temps
-          // réel (BUG-67 : plus de silence pendant une délégation).
+          // fonction travaille → reset du timer. Les events alimentent AUSSI le
+          // partialResult streamé vers le frontend (tool_execution_update).
           tempUnsub = tempSession.subscribe((event: any) => {
             if (resetInactivityFn) resetInactivityFn();
-            // Forward l'activité vers le frontend (tool_execution_update)
             try {
-              if (event?.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-                emitProgress(event.assistantMessageEvent.delta || "");
-              } else if (event?.type === "tool_execution_start") {
-                emitProgress(`\n⚙️ ${event.toolName || "outil"} → ${JSON.stringify(event.args || {}).slice(0, 120)}`);
-              } else if (event?.type === "tool_execution_end") {
-                emitProgress(`\n✅ ${event.toolName || "outil"} terminé`);
+              eventCount++;
+              lastEventAt = Date.now();
+              const line = formatEventLine(event);
+              if (line) {
+                recentEvents.push({ at: Date.now(), label: line });
+                if (recentEvents.length > 8) recentEvents.shift();
+                emitThrottled(true); // event significatif → update immédiat
+              } else {
+                emitThrottled(false);
               }
             } catch {}
           });
+
+          // Premier update immédiat pour que l'UI quitte l'état "silencieux".
+          emitProgress(`sous-agent ${effectiveFunc.label} lancé...`);
 
           /**
            * Exécute prompt() avec timeout d'inactivité + timeout global + abort signal.
@@ -643,6 +722,7 @@ export default function (pi: ExtensionAPI) {
           };
         } finally {
           // Cleanup session
+          if (silenceTimer) clearInterval(silenceTimer); // arrêter le timer de détection de silence
           if (tempUnsub) tempUnsub();
           try { (tempSession as any).dispose?.(); } catch {}
           try {

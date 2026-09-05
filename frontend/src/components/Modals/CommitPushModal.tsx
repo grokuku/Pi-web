@@ -3,7 +3,8 @@ import {
   X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu, Link2,
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
-import { useTranslation } from "../../i18n";
+import { useTranslation, type TFunction } from "../../i18n";
+import { parseJsonResponse } from "../../utils/api";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
 import { GitAuthModal } from "./GitAuthModal";
@@ -13,6 +14,16 @@ interface CommitModelInfo {
   modelId: string;
   source: "commit-mode" | "session" | "registry" | "none";
   thinkingLevel?: string;
+}
+
+// ── Libellés i18n pré-traduits pour parseJsonResponse ──
+// (le helper utils n'a pas accès au hook useTranslation : on lui passe des
+// libellés déjà résolus, cf. git.sessionExpired / git.serverError)
+function apiErrorLabels(t: TFunction) {
+  return {
+    sessionExpired: t("git.sessionExpired"),
+    serverError: (status: number) => t("git.serverError", status),
+  };
 }
 
 interface Preview {
@@ -89,11 +100,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, {
         method: "POST",
       });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to generate preview");
-      }
-      const data = await res.json();
+      // Blindage : erreur lisible si la réponse est du HTML (login SSO)
+      const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
       if (data.linked) {
         // Projet LIÉ : vue par dépôt, pas de message commun.
         setLinkedData(data);
@@ -115,7 +123,7 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
     } finally {
       setLoading(null);
     }
-  }, [project.id]);
+  }, [project.id, t]);
 
   useEffect(() => {
     fetchPreview();
@@ -129,11 +137,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview?ai=true`, {
         method: "POST",
       });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to generate AI message");
-      }
-      const data: Preview = await res.json();
+      // Blindage : erreur lisible si la réponse est du HTML (login SSO)
+      const data: Preview = await parseJsonResponse<Preview>(res, apiErrorLabels(t));
       setPreview(data);
       if (data.aiMessage?.subject) {
         setSubject(data.aiMessage.subject);
@@ -165,23 +170,10 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
           body: body.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        if (data.code === "GIT_IDENTITY_REQUIRED") {
-          setShowIdentityModal(true);
-          return;
-        }
-        if (data.code === "GIT_AUTH_REQUIRED") {
-          setShowAuthModal(true);
-          return;
-        }
-        if (data.code === "GIT_LOCKED") {
-          setLoading(null);
-          setError(data.error);
-          return;
-        }
-        throw new Error(data.error || "Push failed");
-      }
+      // Blindage : gère le HTML (login SSO) et les erreurs JSON { error }.
+      // Le corps JSON est attaché à err.data pour les codes structurés
+      // (GIT_IDENTITY_REQUIRED / GIT_AUTH_REQUIRED / GIT_LOCKED) ci-dessous.
+      const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
       if (data.linked) {
         setLinkedData(data);
         // Rester affiché pour montrer le résultat PAR dépôt (hash / erreurs).
@@ -192,6 +184,20 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
       setDone(true);
       onDone();
     } catch (err: any) {
+      // Erreurs structurées du backend (corps JSON attaché par parseJsonResponse)
+      const code = err?.data?.code;
+      if (code === "GIT_IDENTITY_REQUIRED") {
+        setShowIdentityModal(true);
+        return;
+      }
+      if (code === "GIT_AUTH_REQUIRED") {
+        setShowAuthModal(true);
+        return;
+      }
+      if (code === "GIT_LOCKED") {
+        setError(err?.data?.error || err.message);
+        return;
+      }
       setError(err.message);
     } finally {
       setLoading(null);

@@ -494,7 +494,14 @@ app.get("/api/sessions/:projectId/tools", (req, res) => {
 // ── SPA fallback: serve index.html for all unmatched routes ──
 // (frontend static assets are already served above, before the CBM proxy)
 if (existsSync(frontendDist)) {
-  app.get("*", (_req, res) => {
+  app.get("*", (req, res) => {
+    // Les routes /api non matchées doivent renvoyer du JSON (404) et NON
+    // index.html : sinon un fetch frontend qui attend du JSON recevrait du
+    // HTML et planterait sur le parse ("JSON.parse: unexpected character") —
+    // typiquement quand une session expirée fait répondre une page de login.
+    if (req.path.startsWith("/api")) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.sendFile(path.join(frontendDist, "index.html"));
   });
 }

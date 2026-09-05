@@ -28,7 +28,7 @@ fi
 # et les breaking changes d'abord (les nouveaux tools apparaissent sans garde-fou OS,
 # ex: powershell en 0.84)
 echo "[PI-WEB] Checking for pi-coding-agent updates..."
-npm install @earendil-works/pi-coding-agent@0.84.4 --no-audit --no-fund --save 2>&1 | tail -3 || true
+npm install @earendil-works/pi-coding-agent@0.85.1 --no-audit --no-fund --save 2>&1 | tail -3 || true
 
 # Read installed version for display
 PI_SDK_VERSION=$(node -p "try{require('@earendil-works/pi-coding-agent/package.json').version}catch(e){'unknown'}" 2>/dev/null)

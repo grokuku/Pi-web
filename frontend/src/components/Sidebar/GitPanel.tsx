@@ -3,7 +3,18 @@ import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, 
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
-import { useTranslation } from "../../i18n";
+import { useTranslation, type TFunction } from "../../i18n";
+import { parseJsonResponse } from "../../utils/api";
+
+// ── Libellés i18n pré-traduits pour parseJsonResponse ──
+// (le helper utils n'a pas accès au hook useTranslation : on lui passe des
+// libellés déjà résolus, cf. git.sessionExpired / git.serverError)
+function apiErrorLabels(t: TFunction) {
+  return {
+    sessionExpired: t("git.sessionExpired"),
+    serverError: (status: number) => t("git.serverError", status),
+  };
+}
 
 interface GitStatusFull {
   branch: string;
@@ -50,18 +61,16 @@ export function GitPanel({ project, onRefresh }: Props) {
     setError("");
     try {
       const res = await fetch(`/api/projects/${project.id}/git/status`);
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to get git status");
-      }
-      const data: GitStatus = await res.json();
+      // Blindage : parseJsonResponse lève une erreur lisible si la réponse
+      // est du HTML (page de login Authentik) au lieu du JSON attendu.
+      const data: GitStatus = await parseJsonResponse<GitStatus>(res, apiErrorLabels(t));
       setStatus(data);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [project.id, project.git?.remote]);
+  }, [project.id, project.git?.remote, t]);
 
   useEffect(() => {
     fetchStatus();
@@ -76,18 +85,10 @@ export function GitPanel({ project, onRefresh }: Props) {
     setCommitMessage(null);
     try {
       const res = await fetch(url, { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json();
-        // Auth required → show the credentials modal, remember what we were doing
-        if (data.code === "GIT_AUTH_REQUIRED") {
-          setPendingAuthAction({ url, action });
-          setShowAuthModal(true);
-          setActionLoading(null);
-          return;
-        }
-        throw new Error(data.error || `${action} failed`);
-      }
-      const data = await res.json();
+      // Blindage : gère le HTML (login SSO) et les erreurs JSON { error }.
+      // parseJsonResponse attache le corps JSON à err.data pour les codes
+      // structurés (ex. GIT_AUTH_REQUIRED) traités dans le catch ci-dessous.
+      const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
 
       if (action === "commit-push") {
         // commit-push returns a structured result
@@ -105,6 +106,13 @@ export function GitPanel({ project, onRefresh }: Props) {
 
       await fetchStatus();
     } catch (err: any) {
+      // Erreur structurée du backend (corps JSON attaché par parseJsonResponse) :
+      // Auth required → show the credentials modal, remember what we were doing
+      if (err?.data?.code === "GIT_AUTH_REQUIRED") {
+        setPendingAuthAction({ url, action });
+        setShowAuthModal(true);
+        return;
+      }
       setError(err.message);
     } finally {
       setActionLoading(null);
@@ -425,18 +433,15 @@ function LinkedGitPanel({ project, onRefresh }: { project: Project; onRefresh?: 
     setError("");
     try {
       const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to analyze linked repos");
-      }
-      const data = await res.json();
+      // Blindage : erreur lisible si la réponse est du HTML (login SSO)
+      const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
       setRepos(data.linked ? data.repos : []);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [project.id]);
+  }, [project.id, t]);
 
   useEffect(() => {
     fetchPreview();

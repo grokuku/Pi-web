@@ -655,6 +655,12 @@ export const en = {
     conflicted: "Conflicted files",
   },
 
+  // ── Git: fetch errors (anti-HTML guard) ──
+  git: {
+    sessionExpired: "Session expired — reload the page to sign in again",
+    serverError: (status: number) => `Server error (HTTP ${status})`,
+  },
+
   // ── Terminal ──
   terminal: {
     newTerminal: "New Terminal",
