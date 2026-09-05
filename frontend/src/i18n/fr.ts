@@ -392,11 +392,19 @@ export const fr = {
     streamingStalled: "Diffusion bloquée",
     sessionActive: "Session active",
     resizeProjectList: "Redimensionner la liste des projets",
-    restarting: "Redémarrage…",
+    // update/updateBadge : conservés (bouton cbm + fallback du badge pi-agent).
     update: "Mettre à jour",
     updateBadge: "nouveau !",
-    updatePiAgent: "Mettre à jour pi-agent",
     updateCbm: "Mettre à jour codebase-memory-mcp",
+    // Mise à jour à chaud du SDK pi-agent (modale UpdateAgentModal).
+    updateConfirmTitle: "Mettre à jour pi-agent ?",
+    updateConfirmBody: (latest: string, current: string) =>
+      `Version ${latest} disponible (installée : ${current}). ⚠️ Un audit préalable est recommandé : vérifier le changelog, les breaking changes et les nouveaux tools avant de monter. La mise à jour installe la dernière version, persiste le pin et redémarre Pi-Web.`,
+    updateAuditFirst: "Auditer d'abord (recommandé)",
+    updateNow: "Mettre à jour maintenant",
+    updatingTo: (v: string) => `Mise à jour vers ${v}... redémarrage en cours`,
+    updateSuccess: (v: string) => `Mise à jour vers ${v} réussie — redémarrage en cours, reconnexion automatique.`,
+    updateFailed: "Échec de la mise à jour",
   },
 
   // ── Design ──

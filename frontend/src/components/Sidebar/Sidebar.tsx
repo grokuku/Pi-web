@@ -8,6 +8,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { GitPanel } from "./GitPanel";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
+import { UpdateAgentModal } from "../Modals/UpdateAgentModal";
 import type { Project } from "../../types";
 import { useTranslation } from "../../i18n";
 
@@ -40,11 +41,11 @@ export function Sidebar({
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [updateAvailable, setUpdataAvailable] = useState(false);
-  const [updating, setUpdating] = useState(false);
   const [piWebVersion, setPiWebVersion] = useState("?");
   const [piAgentVersion, setPiAgentVersion] = useState("?");
   const [piAgentLatest, setPiAgentLatest] = useState("");
-  const [restartPending, setRestartPending] = useState(false);
+  const [piAgentCurrent, setPiAgentCurrent] = useState("");
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [cbmVersion, setCbmVersion] = useState<string | null>(null);
   const [cbmInstalled, setCbmInstalled] = useState(false);
   const [cbmUpdateAvailable, setCbmUpdateAvailable] = useState(false);
@@ -60,6 +61,7 @@ export function Sidebar({
     fetch("/api/settings/update-check").then(r => r.json()).then(data => {
       setUpdataAvailable(!!data.updateAvailable);
       if (data.latest) setPiAgentLatest(data.latest);
+      if (data.current) setPiAgentCurrent(data.current);
     }).catch(() => {});
     // Check CBM status
     fetch("/api/cbm/status").then(r => r.json()).then(data => {
@@ -83,40 +85,6 @@ export function Sidebar({
       });
   }, []);
 
-  const handleUpdate = useCallback(() => {
-    setUpdating(true);
-    setRestartPending(false);
-    fetch("/api/settings/update", { method: "POST" })
-      .then(r => r.json())
-      .then((data) => {
-        setUpdataAvailable(false);
-        setUpdating(false);
-        setRestartPending(true);
-        if (data.newVersion) setPiAgentVersion(data.newVersion);
-      })
-      .catch(() => {
-        setUpdataAvailable(false);
-        setUpdating(false);
-        setRestartPending(true);
-        setPiAgentVersion("restarting...");
-      });
-  }, []);
-
-  // Auto-reload page once the server comes back online after an update
-  useEffect(() => {
-    if (!restartPending) return;
-    const interval = setInterval(() => {
-      fetch("/api/settings/version", { method: "GET" })
-        .then(() => {
-          // Server is back online — reload page to pick up new Pi agent version
-          window.location.reload();
-        })
-        .catch(() => {
-          // Server still restarting, keep polling
-        });
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [restartPending]);
   const [projectListHeight, setProjectListHeight] = useState(() => {
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
@@ -329,28 +297,16 @@ export function Sidebar({
           <span className="text-hacker-text-dim/50">v{piWebVersion}</span>
         </div>
         <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim border-t border-hacker-border/30">
-          <span className="flex items-center gap-1">
-            pi-agent
-            {updateAvailable && !restartPending && (
-              <span className="text-hacker-warn font-bold text-[9px]" title={t('welcome.updateAvailable', piAgentLatest)}>
-                {piAgentLatest ? `→${piAgentLatest}` : t('sidebar.updateBadge')}
-              </span>
-            )}
-          </span>
-          {restartPending ? (
-            <span className="text-hacker-warn flex items-center gap-1">
-              <span className="pulse-dot w-1.5 h-1.5 bg-hacker-warn" />
-              {t('sidebar.restarting')}
-            </span>
-          ) : updateAvailable ? (
+          <span>pi-agent</span>
+          {updateAvailable ? (
+            /* Mise à jour à chaud : clic → modale de confirmation (audit préalable
+               recommandé). Le backend persiste le pin puis redémarre le container. */
             <button
-              onClick={handleUpdate}
-              disabled={updating}
-              className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
-              title={t('sidebar.updatePiAgent')}
+              onClick={() => setUpdateModalOpen(true)}
+              className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold cursor-pointer"
             >
               <ArrowUpCircle size={10} />
-              {updating ? "..." : t('sidebar.update')}
+              {piAgentLatest ? `→${piAgentLatest}` : t('sidebar.updateBadge')}
             </button>
           ) : (
             <span className="text-hacker-text-dim/50">v{piAgentVersion}</span>
@@ -388,6 +344,14 @@ export function Sidebar({
         open={confirmNewChat}
         onClose={() => setConfirmNewChat(false)}
         onConfirm={() => { setConfirmNewChat(false); onSendCommand("/new"); }}
+      />
+
+      {/* ── Mise à jour à chaud du SDK pi-agent ── */}
+      <UpdateAgentModal
+        open={updateModalOpen}
+        onClose={() => setUpdateModalOpen(false)}
+        latestVersion={piAgentLatest}
+        currentVersion={piAgentCurrent || piAgentVersion}
       />
     </aside>
   );

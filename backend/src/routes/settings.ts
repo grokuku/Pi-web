@@ -10,7 +10,7 @@ import {
   getSession,
 } from "../pi/session.js";
 import { execSync } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
 import { getTavilyConfig, setTavilyConfig } from "../tavily.js";
@@ -65,19 +65,67 @@ router.get("/update-check", async (_req: Request, res: Response) => {
   }
 });
 
-// Update pi-agent
-router.post("/update", async (_req: Request, res: Response) => {
+// ── Mise à jour à chaud du SDK pi-agent (option C) ──
+// Installe la dernière version, PERSISTE le pin (package.json --save-exact +
+// entrypoint.sh) puis redémarre le container via la restart policy. Un audit
+// préalable est recommandé (changelog, breaking changes, nouveaux tools) —
+// cf. modale UpdateAgentModal côté frontend.
+
+// Localise entrypoint.sh : chemin attendu BACKEND_DIR/../entrypoint.sh, sinon
+// remonte les répertoires parents à la recherche d'un entrypoint.sh.
+function findEntrypoint(): string | null {
+  const expected = join(BACKEND_DIR, "..", "entrypoint.sh");
+  if (existsSync(expected)) return expected;
+  let dir = BACKEND_DIR;
+  for (let i = 0; i < 6; i++) {
+    dir = join(dir, "..");
+    const candidate = join(dir, "entrypoint.sh");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+router.post("/update", (_req: Request, res: Response) => {
   try {
-    // Use npm install @latest to force update (npm update respects lockfile and may not upgrade)
-    execSync("npm install @earendil-works/pi-coding-agent@latest", { timeout: 120000, encoding: "utf-8", cwd: BACKEND_DIR });
-    const newVersion = getPiAgentVersion();
-    // Send response BEFORE exiting — client needs to know the update succeeded
-    res.json({ success: true, newVersion, message: "Update successful. Restarting to load new version…" });
-    // Node.js require() cache holds the OLD module — only a process restart loads the new version.
-    // Docker restart policy will bring the container back up.
+    const installed = getPiAgentVersion();
+    const latest = execSync("npm view @earendil-works/pi-coding-agent version", {
+      timeout: 15000,
+      encoding: "utf-8",
+    }).trim();
+
+    // Déjà à jour → pas de redémarrage inutile.
+    if (latest === installed) {
+      return res.json({ success: false, error: "already up to date" });
+    }
+
+    // 1) Installer la dernière version (--save-exact → pin EXACT, pas ^).
+    execSync(
+      "npm install @earendil-works/pi-coding-agent@latest --no-audit --no-fund --save-exact",
+      { cwd: BACKEND_DIR, stdio: "pipe" }
+    );
+
+    // 2) Persister le pin dans entrypoint.sh (regex générique, futur-proof).
+    const entrypointPath = findEntrypoint();
+    if (!entrypointPath) {
+      throw new Error("entrypoint.sh introuvable — pin non persisté");
+    }
+    const content = readFileSync(entrypointPath, "utf-8");
+    const updated = content.replace(
+      /pi-coding-agent@[0-9]+\.[0-9]+\.[0-9]+/g,
+      `pi-coding-agent@${latest}`
+    );
+    if (updated === content) {
+      throw new Error("aucune ligne npm install pi-coding-agent trouvée dans entrypoint.sh");
+    }
+    writeFileSync(entrypointPath, updated);
+
+    // 3) Relire la version réellement installée puis redémarrer.
+    const version = getPiAgentVersion();
+    res.json({ success: true, version });
     setTimeout(() => process.exit(0), 500);
   } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
+    // Échec (install ou persist) : pas d'exit → pas d'état incohérent.
+    res.json({ success: false, error: e.message });
   }
 });
 
