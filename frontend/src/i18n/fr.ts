@@ -228,6 +228,17 @@ export const fr = {
         wildcardHint: "\"*\" autorise toutes les origines (déconseillé sans reverse proxy).",
       },
     },
+    dockerhub: {
+      title: "Docker Hub",
+      username: "Nom d'utilisateur",
+      token: "Access Token",
+      tokenHint: "Authentifie les docker pull / compose pull exécutés dans le container — évite l'erreur « toomanyrequests » (rate limit des pulls anonymes). Créez un Access Token sur :",
+      connect: "CONNECTER",
+      connectedAs: (u: string) => `✓ Connecté en tant que ${u}`,
+      notConfigured: "Non configuré — les pulls sont limités au quota anonyme",
+      saved: "✓ CONNECTÉ",
+      error: "Échec de la connexion Docker Hub",
+    },
     layout: {
       title: "Disposition",
       description: "Configurez la disposition pour 2 et 3 panneaux actifs. Activez/désactivez les panneaux via les boutons de l'en-tête. Utilisez le menu déroulant de chaque panneau pour échanger les modules.",

@@ -228,6 +228,17 @@ export const en = {
         wildcardHint: "\"*\" allows every origin (discouraged without a reverse proxy).",
       },
     },
+    dockerhub: {
+      title: "Docker Hub",
+      username: "Username",
+      token: "Access Token",
+      tokenHint: "Authenticates docker pull / compose pull run inside the container — avoids the « toomanyrequests » error (anonymous pull rate limit). Create an Access Token at:",
+      connect: "CONNECT",
+      connectedAs: (u: string) => `✓ Connected as ${u}`,
+      notConfigured: "Not configured — pulls are limited to the anonymous quota",
+      saved: "✓ CONNECTED",
+      error: "Docker Hub connection failed",
+    },
     layout: {
       title: "Layout",
       description: "Configure the layout for 2 and 3 active panels. Switch panels ON/OFF via the header buttons. Use the dropdown in each panel's header to swap modules.",

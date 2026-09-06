@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
 import { getTavilyConfig, setTavilyConfig } from "../tavily.js";
+import { ensureDockerHubLogin, getDockerHubStatus } from "../pi/docker-auth.js";
 import {
   getUiAllowedOrigins,
   saveUiAllowedOrigins,
@@ -285,6 +286,49 @@ router.post("/tavily", (req: Request, res: Response) => {
     if (apiKey === undefined) return res.json({ ok: true, kept: true });
     setTavilyConfig({ apiKey });
     res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── Docker Hub ──
+// Authentification persistante pour les docker pull / compose pull exécutés
+// depuis le container (CLI docker + socket montés) : sans compte configuré,
+// les pulls anonymes sont soumis au rate limit Docker Hub
+// (« toomanyrequests: unauthenticated pull rate limit »).
+// Même contrat que Webclaw/Tavily : le token n'est JAMAIS renvoyé par l'API
+// ni loggué (cf. pi/docker-auth.ts).
+
+router.get("/dockerhub", (_req: Request, res: Response) => {
+  try {
+    res.json(getDockerHubStatus());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/dockerhub", (req: Request, res: Response) => {
+  try {
+    const { username, token } = req.body ?? {};
+    // Validation stricte : les deux champs sont requis. Pas de "keep-if-absent"
+    // ici : le token existant n'est pas lisible (base64 user:token décodé côté
+    // auth uniquement), on redemande donc systématiquement un token.
+    if (typeof username !== "string" || !username.trim()) {
+      return res.status(400).json({ error: "dockerhub_username_required" });
+    }
+    if (typeof token !== "string" || !token.trim()) {
+      return res.status(400).json({ error: "dockerhub_token_required" });
+    }
+    const result = ensureDockerHubLogin(username.trim(), token);
+    if (!result.ok) {
+      // Échec login (CLI absent/inutilisable + écriture config.json impossible)
+      // → 400 avec un message clair (details = sortie docker sans token).
+      return res.status(400).json({
+        error: "dockerhub_login_failed",
+        details: result.error || "unknown error",
+      });
+    }
+    res.json({ success: true, username: username.trim() });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
