@@ -8,6 +8,7 @@ import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
 import { PROVIDER_PRESETS } from "../../types";
 import { useTranslation } from "../../i18n";
+import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
@@ -51,17 +52,13 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
   useEffect(() => { loadLibrary(); loadProviders(); }, [loadLibrary, loadProviders]);
 
-  // ── Handlers ──
+  // ── Handlers (logique déléguée au module partagé model-library-api) ──
+  const labels = apiErrorLabels(t);
+
   const handleAddModels = async (models: Omit<RegisteredModel, "id">[]) => {
     setLoading(true); setError("");
     try {
-      const res = await fetch("/api/model-library/models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models }),
-      });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Failed"); }
-      setLibrary(await res.json());
+      setLibrary(await addModels(models, labels));
       setStatus(t('modelLibrary.modelsAdded'));
       onModelApplied?.();
     } catch (e: any) { setError(e.message); }
@@ -70,30 +67,20 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
 
   const handleUpdateModel = async (id: string, updates: Partial<RegisteredModel>) => {
     try {
-      const res = await fetch(`/api/model-library/models/${encodeURIComponent(id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Failed"); }
-      setLibrary(await res.json());
+      setLibrary(await updateModel(id, updates, labels));
       onModelApplied?.();
     } catch (e: any) { setError(e.message); }
   };
 
   const handleRemoveModel = async (id: string) => {
     try {
-      const res = await fetch(`/api/model-library/models/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Failed"); }
-      setLibrary(await res.json());
+      setLibrary(await removeModel(id, labels));
     } catch (e: any) { setError(e.message); }
   };
 
   const handleSetDefault = async (id: string) => {
     try {
-      const res = await fetch(`/api/model-library/models/${encodeURIComponent(id)}/default`, { method: "PUT" });
-      if (!res.ok) throw new Error("Failed");
-      setLibrary(await res.json());
+      setLibrary(await setDefaultModel(id, labels));
       onModelApplied?.();
     } catch (e: any) { setError(e.message); }
   };
