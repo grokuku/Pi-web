@@ -441,6 +441,8 @@ export default function (pi: ExtensionAPI) {
 
         // Modèle conseillé par le routeur (sinon fallback ctx.model plus bas).
         const routingModel = await resolveRoutingModel(ctx, routing?.modelId);
+        // [harness-debug] TEMPORAIRE — à retirer après diagnostic
+        console.log(`[harness-debug] routingModel résolu : ${routingModel ?? "(aucun)"}`);
 
         const tempSessionManager = SessionManager.create(cwd);
         const tempSessionFile = tempSessionManager.getSessionFile();
@@ -514,11 +516,26 @@ export default function (pi: ExtensionAPI) {
         try {
           // Set le modèle — priorité au modèle conseillé par le routeur,
           // puis héritage de la session principale.
+          // [harness-debug] TEMPORAIRE — à retirer après diagnostic
           if (routingModel) {
-            await tempSession.setModel(routingModel);
+            try {
+              await tempSession.setModel(routingModel);
+              console.log(`[harness-debug] setModel OK (routingModel) : ${routingModel}`);
+            } catch (e: any) {
+              console.log(`[harness-debug] setModel ERREUR (routingModel) : ${e?.message || e}`);
+              throw e;
+            }
           } else if (ctx.model) {
-            await tempSession.setModel(ctx.model);
+            try {
+              await tempSession.setModel(ctx.model);
+              console.log(`[harness-debug] setModel OK (ctx.model) : ${ctx.model}`);
+            } catch (e: any) {
+              console.log(`[harness-debug] setModel ERREUR (ctx.model) : ${e?.message || e}`);
+              throw e;
+            }
           }
+          // [harness-debug] TEMPORAIRE — à retirer après diagnostic
+          console.log(`[harness-debug] modèle actif de tempSession après setModel : ${(tempSession as any).model?.provider ?? "?"}/${(tempSession as any).model?.id ?? "aucun"}`);
 
           // Restreindre les outils de la fonction
           if (effectiveFunc.tools.length > 0) {
