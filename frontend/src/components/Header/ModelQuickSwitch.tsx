@@ -163,7 +163,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const getProviderName = (providerId: string): string => {
     const p = providers.find(p => p.id === providerId);
-    if (!p) return "";
+    // Jamais de label vide : si le provider est introuvable (liste pas encore
+    // chargée, provider orphelin…), on retombe sur l'identifiant brut plutôt
+    // que sur une chaîne vide (même convention que les autres modales).
+    if (!p) return providerId;
     const name = p.name || p.type || providerId;
     if (name.length <= 15) return name;
     return name.slice(0, 12) + "…";

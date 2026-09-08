@@ -418,6 +418,33 @@ export default function (pi: ExtensionAPI) {
         });
         const tempSession = result.session;
 
+        // ── FIX A : les sous-agents doivent connaître les providers custom ──
+        // La tempSession est créée avec un ModelRuntime par défaut qui ne connaît
+        // pas forcément les providers custom enregistrés dans le registry partagé
+        // (ex. llama.cpp local sans clé API). Sans ré-enregistrement, setModel(qwen)
+        // échoue avec « No API key » et l'orchestrateur retombe sur deepseek.
+        // On ré-enregistre donc chaque provider custom du registry partagé dans le
+        // modelRuntime de la tempSession. Un provider qui échoue ne bloque pas les
+        // autres (try/catch par provider).
+        const tempRuntime = tempSession.modelRuntime;
+        for (const pid of ctx.modelRegistry.getRegisteredProviderIds()) {
+          try {
+            const cfg = ctx.modelRegistry.getRegisteredProviderConfig(pid);
+            if (!cfg) {
+              console.log(`[harness-orchestrator] Provider custom ${pid} : config introuvable, ignoré`);
+              continue;
+            }
+            // Les providers sans clé (llama.cpp local, ollama…) doivent quand même
+            // passer checkAuth() dans setModel. On force une clé sentinelle "ollama"
+            // (même convention que la session principale) si aucune n'est fournie.
+            const effective = { ...cfg, apiKey: cfg.apiKey || "ollama" };
+            tempRuntime.registerProvider(pid, effective);
+            console.log(`[harness-orchestrator] Provider custom ré-enregistré dans la tempSession : ${pid}`);
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Échec ré-enregistrement provider custom ${pid} :`, e?.message || e);
+          }
+        }
+
         // Déclaré ici (try externe) car `let` dans un bloc try n'est pas visible
         // dans le finally du même try (portées de bloc séparées en JS/TS).
         let tempUnsub: (() => void) | null = null;
