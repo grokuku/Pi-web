@@ -151,6 +151,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   const handleChipClick = (mode: AgentMode) => {
     if (openMode === mode) { setOpenMode(null); return; }
+    // Re-fetch des providers à l'ouverture du dropdown : la liste n'est chargée
+    // qu'au mount du composant, donc sans ce refresh elle resterait obsolète
+    // après un renommage de provider (ex. « llamaCPP boulot (need VPN actif) »).
+    loadProviders();
     // La position du dropdown est calculée par useAnchorPosition à l'ouverture
     // (et re-suivie au scroll/resize), depuis le bouton du mode cliqué.
     setOpenMode(mode);
