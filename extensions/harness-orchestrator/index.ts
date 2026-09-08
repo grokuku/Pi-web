@@ -454,29 +454,53 @@ export default function (pi: ExtensionAPI) {
         const tempSession = result.session;
 
         // ── FIX A : les sous-agents doivent connaître les providers custom ──
-        // La tempSession est créée avec un ModelRuntime par défaut qui ne connaît
-        // pas forcément les providers custom enregistrés dans le registry partagé
-        // (ex. llama.cpp local sans clé API). Sans ré-enregistrement, setModel(qwen)
-        // échoue avec « No API key » et l'orchestrateur retombe sur deepseek.
-        // On ré-enregistre donc chaque provider custom du registry partagé dans le
-        // modelRuntime de la tempSession. Un provider qui échoue ne bloque pas les
+        // La tempSession est créée avec un ModelRuntime par défaut qui charge
+        // ~/.pi/agent/models.json : les providers custom y sont connus comme
+        // built-ins, MAIS getRegisteredProviderIds() ne liste que les providers
+        // enregistrés DYNAMIQUEMENT (extension / registre partagé) — il renvoie
+        // [] ici, ce qui rendait la boucle du fix 5f8ffd6 inopérante (0 provider
+        // ré-enregistré) et setModel(qwen3.8-flash-next) jetait
+        // « No API key for provider_x/qwen3.8-flash-next ».
+        // On itère donc les VRAIS providers connus du runtime de la tempSession
+        // via ModelRuntime.getProviders() (API SDK 0.85.1, inclut les built-ins
+        // de models.json) et on ré-enregistre chacun dans ce même runtime.
+        // Convention de clé = backend/src/pi/session.ts l.1811 : clé existante
+        // résolue via getAuth(), sinon sentinelle "ollama" — les serveurs locaux
+        // (llama.cpp, ollama…) ignorent la clé mais checkAuth() de setModel
+        // exige une clé configurée. Un provider qui échoue ne bloque pas les
         // autres (try/catch par provider).
         const tempRuntime = tempSession.modelRuntime;
-        for (const pid of ctx.modelRegistry.getRegisteredProviderIds()) {
+        const realProviders = tempRuntime.getProviders();
+        for (const provider of realProviders) {
+          const pid = provider.id;
           try {
-            const cfg = ctx.modelRegistry.getRegisteredProviderConfig(pid);
-            if (!cfg) {
-              console.log(`[harness-orchestrator] Provider custom ${pid} : config introuvable, ignoré`);
-              continue;
-            }
-            // Les providers sans clé (llama.cpp local, ollama…) doivent quand même
-            // passer checkAuth() dans setModel. On force une clé sentinelle "ollama"
-            // (même convention que la session principale) si aucune n'est fournie.
-            const effective = { ...cfg, apiKey: cfg.apiKey || "ollama" };
-            tempRuntime.registerProvider(pid, effective);
-            console.log(`[harness-orchestrator] Provider custom ré-enregistré dans la tempSession : ${pid}`);
+            // Clé existante résolue via getAuth sur un modèle du provider
+            // (undefined → sentinelle, exactement comme session.ts l.1811).
+            const providerModels = provider.getModels();
+            const existingAuth = providerModels[0]
+              ? await tempRuntime.getAuth(providerModels[0])
+              : undefined;
+            const existingApiKey: string | undefined = existingAuth?.auth?.apiKey;
+            const providerApi: any = (providerModels[0] as any)?.api || "openai-completions";
+            tempRuntime.registerProvider(pid, {
+              name: provider.name,
+              baseUrl: provider.baseUrl,
+              api: providerApi,
+              apiKey: existingApiKey || "ollama",
+              models: providerModels.map((m) => ({
+                id: m.id,
+                name: m.name || m.id,
+                api: m.api || providerApi,
+                reasoning: m.reasoning ?? false,
+                input: m.input || ["text"],
+                contextWindow: m.contextWindow ?? 128000,
+                maxTokens: m.maxTokens ?? 16384,
+                cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              })),
+            });
+            console.log(`[harness-orchestrator] Provider ré-enregistré dans la tempSession : ${pid} (clé ${existingApiKey ? "existante" : "sentinelle"})`);
           } catch (e: any) {
-            console.warn(`[harness-orchestrator] Échec ré-enregistrement provider custom ${pid} :`, e?.message || e);
+            console.warn(`[harness-orchestrator] Échec ré-enregistrement provider ${pid} :`, e?.message || e);
           }
         }
 
