@@ -25,6 +25,7 @@ import { appendDraft } from "./commit-draft.js";
 import { librarianTools } from "./librarian-tools.js";
 import { memoryTools } from "./memory-tools.js";
 import { buildMemoryInjection } from "./memory-service.js";
+import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject } from "../projects/manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1805,10 +1806,14 @@ async function applyModelAndThinking(
         }
 
         console.log(`[session] Re-registering provider ${model.providerId} with ${models.length} models (override: ${model.modelId})`);
+        // Sentinelle posée via le helper partagé (provider-auth.ts) — même
+        // convention que writeModelsJson et harness-orchestrator : sans clé
+        // (serveur local), "ollama" évite le « No API key for provider_x/... »
+        // du SDK au setModel.
         sharedModelRegistry!.registerProvider(model.providerId, {
           baseUrl: providerBaseUrl,
           api: providerApi,
-          apiKey: existingApiKey || "ollama",
+          apiKey: resolveProviderApiKey(existingApiKey),
           models,
         });
 

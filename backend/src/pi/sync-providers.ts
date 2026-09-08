@@ -5,6 +5,7 @@ import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
 import { resolveModelCapability } from "./model-library.js";
+import { resolveProviderApiKey } from "./provider-auth.js";
 
 const MODELS_JSON_PATH = path.join(os.homedir(), ".pi", "agent", "models.json");
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -41,7 +42,16 @@ export async function writeModelsJson(
     if (models.length === 0 && provider.type !== "ollama") continue; // Skip providers with no models (except Ollama for discovery)
 
     const preset = getProviderPreset(provider.type);
-    const apiKey = provider.apiKey || (provider.type === "ollama" ? "ollama" : undefined);
+    // BUG « No API key for provider_x/... » : la sentinelle n'était posée QUE pour
+    // type === "ollama". Un provider openai-compatible sans clé (cas llama.cpp
+    // server) était donc écrit dans models.json SANS champ apiKey → à chaque
+    // reload du registre (boot, delete provider, sync model-library…), le SDK
+    // échouait à composer le provider (« no authentication method configured »),
+    // le retirait du runtime, et le setModel du sendPrompt suivant throw
+    // « No API key for provider_x/model ». La sentinelle est désormais posée sur
+    // TOUS les types (helper partagé provider-auth.ts, même convention que
+    // session.ts et harness-orchestrator) : les serveurs locaux ignorent la clé.
+    const apiKey = resolveProviderApiKey(provider.apiKey);
     const apiType = API_TYPE_MAP[provider.type] || "openai-completions";
 
     const piProvider: any = {
