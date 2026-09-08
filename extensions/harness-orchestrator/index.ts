@@ -219,8 +219,29 @@ async function resolveRoutingDecision(
 }
 
 /**
+ * Sanitise un id de modèle comme le fait makeModelId() de
+ * backend/src/pi/model-library.ts (même regex).
+ *
+ * La bibliothèque Pi-Web stocke les ids composites sous forme SANITISÉE
+ * (ex. "qwen3.8-flash-next" → "qwen3_8-flash-next"), alors que le registry
+ * du SDK garde l'id d'origine (avec les points). On duplique ici la regex
+ * pour rester autonome (l'extension ne peut pas importer le backend) ;
+ * toute évolution de makeModelId doit être répercutée ici.
+ */
+function sanitizeModelId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_\-:]/g, "_");
+}
+
+/**
  * Résout un modelId "providerId__modelId" (format bibliothèque Pi-Web) vers
  * un modèle du registry exposé par le SDK de l'extension.
+ *
+ * Le modelId reçu est SANITISÉ (ex. "qwen3_8-flash-next") alors que le
+ * registry garde l'id d'origine (ex. "qwen3.8-flash-next"). On tente d'abord
+ * la résolution directe (ids sans caractères sanitisés), puis un matching
+ * tolérant : on itère les modèles du provider et on retourne celui dont l'id
+ * SANITISÉ correspond au modelPart. Si rien ne matche → null (le fallback
+ * ctx.model reste inchangé).
  */
 async function resolveRoutingModel(ctx: any, modelId: string | undefined): Promise<any | null> {
   if (!modelId) return null;
@@ -236,8 +257,22 @@ async function resolveRoutingModel(ctx: any, modelId: string | undefined): Promi
     await ctx.modelRegistry?.refresh?.();
   } catch {}
 
-  const model = ctx.modelRegistry?.find?.(providerId, modelPart);
-  return model ?? null;
+  // 1) Résolution directe (comportement actuel) — couvre les ids sans
+  //    caractères sanitisés (ex. "qwen3.8:27b" : les deux-points sont
+  //    CONSERVÉS par la regex, donc pas de sanitisation).
+  const direct = ctx.modelRegistry?.find?.(providerId, modelPart);
+  if (direct) return direct;
+
+  // 2) Matching tolérant : le modelPart est l'id SANITISÉ (ex.
+  //    "qwen3_8-flash-next"). On cherche dans le registry le modèle du
+  //    provider dont l'id, une fois sanitisé, correspond exactement.
+  const models = ctx.modelRegistry?.getAll?.() ?? [];
+  for (const m of models) {
+    if (m?.provider !== providerId) continue;
+    if (sanitizeModelId(m.id) === modelPart) return m;
+  }
+
+  return null;
 }
 
 // ── Tool parameter schema (plain JSON Schema) ──────────
