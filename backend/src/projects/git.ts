@@ -244,50 +244,54 @@ export async function getGitDiff(cwd: string): Promise<string> {
 export async function gitPull(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const git: SimpleGit = await gitWithAuth(cwd);
-    try {
-      const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull", git);
-      return result.summary.changes
-        ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
-        : "Already up to date";
-    } catch (error: any) {
-      const msg = error.message || "";
-      if (isAuthError(msg)) {
-        throw new GitAuthError(`Git pull authentication failed: ${msg}`);
-      }
-      throw new Error(`Git pull failed: ${msg}`);
-    } finally {
+    return withAskpassTempFile(cwd, async () => {
+      const git: SimpleGit = await gitWithAuth(cwd);
       try {
-        await restoreRemoteUrl(cwd);
-      } catch (e: any) {
-        console.error(`[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! cwd=${cwd}`, e.message);
+        const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull", git);
+        return result.summary.changes
+          ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
+          : "Already up to date";
+      } catch (error: any) {
+        const msg = error.message || "";
+        if (isAuthError(msg)) {
+          throw new GitAuthError(`Git pull authentication failed: ${msg}`);
+        }
+        throw new Error(`Git pull failed: ${msg}`);
+      } finally {
+        try {
+          await restoreRemoteUrl(cwd);
+        } catch (e: any) {
+          console.error(`[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! cwd=${cwd}`, e.message);
+        }
       }
-    }
+    });
   });
 }
 
 export async function gitPush(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const git: SimpleGit = await gitWithAuth(cwd);
-    try {
-      const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push", git);
-      return result.pushed
-        ? `Pushed ${result.pushed.length} ref(s)`
-        : "Nothing to push";
-    } catch (error: any) {
-      const msg = error.message || "";
-      if (isAuthError(msg)) {
-        throw new GitAuthError(`Git push authentication failed: ${msg}`);
-      }
-      throw new Error(`Git push failed: ${msg}`);
-    } finally {
+    return withAskpassTempFile(cwd, async () => {
+      const git: SimpleGit = await gitWithAuth(cwd);
       try {
-        await restoreRemoteUrl(cwd);
-      } catch (e: any) {
-        console.error(`[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! cwd=${cwd}`, e.message);
+        const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push", git);
+        return result.pushed
+          ? `Pushed ${result.pushed.length} ref(s)`
+          : "Nothing to push";
+      } catch (error: any) {
+        const msg = error.message || "";
+        if (isAuthError(msg)) {
+          throw new GitAuthError(`Git push authentication failed: ${msg}`);
+        }
+        throw new Error(`Git push failed: ${msg}`);
+      } finally {
+        try {
+          await restoreRemoteUrl(cwd);
+        } catch (e: any) {
+          console.error(`[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! cwd=${cwd}`, e.message);
+        }
       }
-    }
+    });
   });
 }
 
@@ -421,6 +425,20 @@ export async function getRemoteHost(cwd: string): Promise<string> {
     console.log(`[git] getRemoteHost: not a git repo (no .git), defaulting to github.com`);
     return "github.com";
   }
+}
+
+/**
+ * Exécute fn() avec un temp file GIT_ASKPASS transitoire si des credentials
+ * existent pour le host du dépôt. Le fichier est écrit avant l'opération et
+ * supprimé en finally (via credentialStore.withTempFile).
+ */
+async function withAskpassTempFile<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+  const host = await getRemoteHost(cwd);
+  if (host && credentialStore.has(host)) {
+    const creds = credentialStore.get(host)!;
+    return credentialStore.withTempFile(host, creds.username, creds.password, fn);
+  }
+  return fn();
 }
 
 /**
@@ -831,34 +849,38 @@ export async function gitClone(
   if (host && credentialStore.has(host)) {
     const creds = credentialStore.get(host)!;
     console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
-    const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
-    console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
-    try {
-      // Git 2.38+ may reject credentials in URLs — explicitly allow it
-      await withTimeout(
-        git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]),
-        GIT_NETWORK_TIMEOUT_MS,
-        "git clone"
-      );
-      console.log(`[git-clone] Clone succeeded!`);
-      // Sécurité : git clone persiste l'URL fournie (avec token) dans le
-      // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
-      // nettoyée pour ne jamais laisser le token sur disque.
+    // Temp file GIT_ASKPASS transitoire : vit pendant TOUTE la commande clone,
+    // supprimé en finally (même en cas d'erreur/timeout).
+    return credentialStore.withTempFile(host, creds.username, creds.password, async () => {
+      const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
+      console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
       try {
-        const clonedGit = simpleGit(cwd);
-        await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
-      } catch (e: any) {
-        console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
+        // Git 2.38+ may reject credentials in URLs — explicitly allow it
+        await withTimeout(
+          git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]),
+          GIT_NETWORK_TIMEOUT_MS,
+          "git clone"
+        );
+        console.log(`[git-clone] Clone succeeded!`);
+        // Sécurité : git clone persiste l'URL fournie (avec token) dans le
+        // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
+        // nettoyée pour ne jamais laisser le token sur disque.
+        try {
+          const clonedGit = simpleGit(cwd);
+          await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
+        } catch (e: any) {
+          console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
+        }
+        return `Cloned ${remote} (${branch})`;
+      } catch (error: any) {
+        const msg = error.message || "";
+        console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
+        if (isAuthError(msg)) {
+          throw new GitAuthError(`Git clone authentication failed: ${msg}`);
+        }
+        throw new Error(`Git clone failed: ${msg}`);
       }
-      return `Cloned ${remote} (${branch})`;
-    } catch (error: any) {
-      const msg = error.message || "";
-      console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
-      if (isAuthError(msg)) {
-        throw new GitAuthError(`Git clone authentication failed: ${msg}`);
-      }
-      throw new Error(`Git clone failed: ${msg}`);
-    }
+    });
   }
 
   // No credentials — try without auth

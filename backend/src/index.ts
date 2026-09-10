@@ -978,8 +978,8 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 // ─── Start Server ──────────────────────────────────────
 httpServer.listen(PORT, async () => {
-  // Re-create temp files for any persisted credentials (needed by GIT_ASKPASS)
-  credentialStore.ensureTempFiles();
+  // NOTE sécurité : plus aucun temp file résident au boot. Le plaintext n'existe
+  // que de façon transitoire pendant les opérations git (via withTempFile).
 
   // Purge de sécurité : retirer tout credential embarqué des URLs de remote git
   // (projects.json + .git/config), y compris les dépôts non enregistrés.

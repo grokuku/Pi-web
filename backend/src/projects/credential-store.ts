@@ -28,11 +28,18 @@ const KEY_LENGTH = 32; // 256 bits
  * An attacker with access to the secret key AND the encrypted file has container-level
  * access anyway, so the threat model is: protect against credential leaks via
  * backup files, git repo accidents, or casual file snooping.
+ *
+ * CHANGELOG (sécurité) : plaintext jamais résident — uniquement transitoire pendant
+ * les opérations git. Le temp file GIT_ASKPASS n'existe que via withTempFile() (écrit
+ * avant l'opération, unlink en finally), jamais au boot ni dans set().
  */
 class CredentialStore {
   private entries = new Map<string, { username: string; password: string }>();
   private tmpDir: string;
   private masterKey: Buffer | null = null;
+  // Compteur de références par hostname pour les temp files transitoires :
+  // évite qu'une opération git concurrente supprime le fichier d'une autre.
+  private tempFileRefs = new Map<string, number>();
 
   constructor() {
     this.tmpDir = path.join(os.tmpdir(), "pi-web-creds");
@@ -182,7 +189,8 @@ class CredentialStore {
    */
   set(hostname: string, username: string, password: string): void {
     this.entries.set(hostname, { username, password });
-    this.writeTempFile(hostname, username, password);
+    // NOTE sécurité : on n'écrit PAS de temp file ici. Le plaintext ne doit
+    // exister que de façon transitoire pendant les opérations git (withTempFile).
     this.persistToDisk();
     console.log(`[CredentialStore] Stored credentials for ${hostname} (persisted=${!!this.masterKey})`);
   }
@@ -263,12 +271,31 @@ class CredentialStore {
   }
 
   /**
-   * Ensure temp files exist for all entries (called after loading persisted credentials).
-   * This is needed because loaded credentials don't have temp files yet.
+   * Exécute fn() avec un temp file GIT_ASKPASS transitoire pour le hostname donné.
+   *
+   * Le fichier est écrit juste avant l'exécution et supprimé en finally (même en cas
+   * d'erreur/timeout). Un compteur de références par hostname garantit qu'une opération
+   * git concurrente ne supprime pas le fichier d'une autre : le unlink n'a lieu que
+   * lorsque la dernière référence est libérée.
    */
-  ensureTempFiles(): void {
-    for (const [hostname, creds] of this.entries) {
-      this.writeTempFile(hostname, creds.username, creds.password);
+  async withTempFile<T>(
+    hostname: string,
+    username: string,
+    password: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    this.writeTempFile(hostname, username, password);
+    this.tempFileRefs.set(hostname, (this.tempFileRefs.get(hostname) || 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      const remaining = (this.tempFileRefs.get(hostname) || 1) - 1;
+      if (remaining <= 0) {
+        this.tempFileRefs.delete(hostname);
+        this.cleanUp(hostname);
+      } else {
+        this.tempFileRefs.set(hostname, remaining);
+      }
     }
   }
 }
