@@ -3,9 +3,11 @@ import {
   Trash2,
   GripVertical,
   ArrowUpCircle,
+  Link2,
 } from "lucide-react";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { GitPanel } from "./GitPanel";
+import { LinkedProjectMenu } from "./LinkedProjectMenu";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { UpdateAgentModal } from "../Modals/UpdateAgentModal";
@@ -22,6 +24,8 @@ interface Props {
   projectSessions?: Map<string, { isStreaming: boolean; session: any; stats: any; lastEventAt: number }>;
   onSendCommand: (cmd: string) => void;
   onRefreshGit?: () => void;
+  // Rechargement de la liste des projets (après link/unlink d'un sous-projet).
+  onProjectsChanged: () => void | Promise<void>;
 }
 
 export function Sidebar({
@@ -34,12 +38,16 @@ export function Sidebar({
   projectSessions,
   onSendCommand,
   onRefreshGit,
+  onProjectsChanged,
 }: Props) {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [confirmNewChat, setConfirmNewChat] = useState(false);
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  // Drag & drop par ID de projet (et non par index) : les lignes affichées
+  // peuvent être un sous-ensemble réordonné de la liste complète (origines
+  // masquées/imbriquées), voir visibleRows.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [updateAvailable, setUpdataAvailable] = useState(false);
   const [piWebVersion, setPiWebVersion] = useState("?");
   const [piAgentVersion, setPiAgentVersion] = useState("?");
@@ -89,6 +97,26 @@ export function Sidebar({
     const saved = localStorage.getItem("pi-web-project-list-height");
     return saved ? parseInt(saved) : 180;
   });
+
+  // ── Placeholder lié : masquage des origines (option A) ──
+  // Les sous-projets regroupés dans un placeholder LIÉ sont masqués par défaut
+  // dans la liste ; le toggle du menu contextuel les ré-affiche. Persistance :
+  // clé "pi-web.hide-linked-origins" — la valeur est le flag de MASQUAGE
+  // (true/absent = masqué, "false" = affiché), en cohérence avec son nom.
+  const [showLinkedOrigins, setShowLinkedOrigins] = useState(
+    () => localStorage.getItem("pi-web.hide-linked-origins") === "false"
+  );
+  const toggleShowLinkedOrigins = useCallback(() => {
+    setShowLinkedOrigins((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("pi-web.hide-linked-origins", String(!next)); } catch {}
+      return next;
+    });
+  }, []);
+  // Menu contextuel du placeholder lié (projet + ligne ancre du menu porté).
+  const [linkedMenuProject, setLinkedMenuProject] = useState<Project | null>(null);
+  const linkedMenuAnchorRef = useRef<HTMLElement | null>(null);
+
   const projectListHeightRef = useRef(projectListHeight);
   projectListHeightRef.current = projectListHeight;
   const isResizingProjects = useRef(false);
@@ -96,9 +124,46 @@ export function Sidebar({
   const startHeight = useRef(0);
 
   // Sync localProjects when the prop changes (but not during drag)
-  if (dragIdx === null && localProjects !== projects) {
+  if (dragId === null && localProjects !== projects) {
     setLocalProjects(projects);
   }
+
+  // ── Lignes affichées (filtrage + imbrication des origines) ──
+  // Option A : les sous-projets regroupés dans un placeholder LIÉ (storage
+  // "linked") sont masqués par défaut ; le toggle du menu (showLinkedOrigins)
+  // les ré-affiche, rendus juste sous leur placeholder (indentés). Le drag &
+  // drop opère sur ces lignes puis handleDragEnd reconstruit l'ordre complet.
+  const visibleRows = useMemo(() => {
+    const originIds = new Set<string>();
+    for (const p of localProjects) {
+      if (p.storage === "linked" && Array.isArray(p.linkedProjectIds)) {
+        for (const id of p.linkedProjectIds) originIds.add(id);
+      }
+    }
+    const rows: { project: Project; isLinkedOrigin: boolean }[] = [];
+    // `rendered` protège des doublons si des données incohérentes plaçaient un
+    // même projet dans deux placeholders (le backend ne l'interdit pas).
+    const rendered = new Set<string>();
+    for (const p of localProjects) {
+      if (!showLinkedOrigins && originIds.has(p.id)) continue; // origine masquée
+      if (!rendered.has(p.id)) {
+        rows.push({ project: p, isLinkedOrigin: false });
+        rendered.add(p.id);
+      }
+      // Origines regroupées : rendues juste sous leur placeholder.
+      if (showLinkedOrigins && p.storage === "linked" && Array.isArray(p.linkedProjectIds)) {
+        for (const subId of p.linkedProjectIds) {
+          if (rendered.has(subId)) continue;
+          const sub = localProjects.find((x) => x.id === subId);
+          if (sub) {
+            rows.push({ project: sub, isLinkedOrigin: true });
+            rendered.add(subId);
+          }
+        }
+      }
+    }
+    return rows;
+  }, [localProjects, showLinkedOrigins]);
 
   const handleDeleteConfirm = (deleteFiles: boolean) => {
     if (projectToDelete) {
@@ -108,37 +173,50 @@ export function Sidebar({
   };
 
   // ── Drag and drop ──
-  const handleDragStart = (e: React.DragEvent, idx: number) => {
-    setDragIdx(idx);
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    setDragId(id);
     e.dataTransfer.effectAllowed = "move";
     // Set a transparent drag image so only the grip icon feedback is visible
     const el = e.currentTarget as HTMLElement;
     e.dataTransfer.setDragImage(el, 16, 8);
   };
 
-  const handleDragOver = (e: React.DragEvent, idx: number) => {
+  const handleDragOver = (e: React.DragEvent, id: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    if (dragIdx !== null && idx !== dragIdx) {
-      setDragOverIdx(idx);
+    if (dragId !== null && id !== dragId) {
+      setDragOverId(id);
     }
   };
 
   const handleDragEnd = () => {
-    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
-      const reordered = [...localProjects];
-      const [moved] = reordered.splice(dragIdx, 1);
-      reordered.splice(dragOverIdx, 0, moved);
-      setLocalProjects(reordered);
-      // Persist the new order
-      fetch("/api/projects/reorder", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectIds: reordered.map((p) => p.id) }),
-      }).catch((err) => console.error("Failed to persist project order:", err));
+    if (dragId !== null && dragOverId !== null && dragId !== dragOverId) {
+      const fromIdx = visibleRows.findIndex((r) => r.project.id === dragId);
+      const toIdx = visibleRows.findIndex((r) => r.project.id === dragOverId);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const newVisible = [...visibleRows];
+        const [moved] = newVisible.splice(fromIdx, 1);
+        newVisible.splice(toIdx, 0, moved);
+        // Reconstruction de l'ordre complet : les projets masqués (absents des
+        // lignes visibles, ex. origines cachées) conservent leur créneau, les
+        // projets visibles prennent leur nouvel ordre relatif. Le backend
+        // /reorder valide tous les ids, on lui renvoie donc la liste entière.
+        const visibleIds = new Set(visibleRows.map((r) => r.project.id));
+        let vi = 0;
+        const reordered = localProjects.map((p) =>
+          visibleIds.has(p.id) ? (newVisible[vi++]?.project ?? p) : p
+        );
+        setLocalProjects(reordered);
+        // Persist the new order
+        fetch("/api/projects/reorder", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectIds: reordered.map((p) => p.id) }),
+        }).catch((err) => console.error("Failed to persist project order:", err));
+      }
     }
-    setDragIdx(null);
-    setDragOverIdx(null);
+    setDragId(null);
+    setDragOverId(null);
   };
 
   // ── Project list vertical resize ──
@@ -185,7 +263,7 @@ export function Sidebar({
         </div>
 
         <div className="space-y-0.5 overflow-y-auto" style={{ maxHeight: projectListHeight }}>
-          {localProjects.map((p, idx) => {
+          {visibleRows.map(({ project: p, isLinkedOrigin }) => {
             const pState = projectSessions?.get(p.id);
             const isThisStreaming = pState?.isStreaming ?? false;
             const hasSession = !!pState?.session;
@@ -194,8 +272,8 @@ export function Sidebar({
               // déclenchait des faux positifs pendant thinking/tool calls longs.
               ? Date.now() - pState.lastEventAt > 60_000
               : false;
-            const isDragging = dragIdx === idx;
-            const isDragTarget = dragOverIdx === idx;
+            const isDragging = dragId === p.id;
+            const isDragTarget = dragOverId === p.id;
             return (
               <div
                 key={p.id}
@@ -210,8 +288,8 @@ export function Sidebar({
                 {/* Drag handle */}
                 <div
                   draggable
-                  onDragStart={(e) => handleDragStart(e, idx)}
-                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDragStart={(e) => handleDragStart(e, p.id)}
+                  onDragOver={(e) => handleDragOver(e, p.id)}
                   onDragEnd={handleDragEnd}
                   className="px-1 py-1 cursor-grab active:cursor-grabbing text-hacker-text-dim/0 group-hover:text-hacker-text-dim/60 hover:!text-hacker-text-dim shrink-0"
                   title={t('sidebar.dragToReorder')}
@@ -219,14 +297,40 @@ export function Sidebar({
                   <GripVertical size={10} />
                 </div>
 
-                {/* Project button */}
+                {/* Project button — sur un placeholder LIÉ, le clic (ou le clic
+                    droit) ouvre aussi le menu contextuel de gestion. */}
                 <button
-                  onClick={() => onSelectProject(p)}
+                  onClick={(e) => {
+                    onSelectProject(p);
+                    if (p.storage === "linked") {
+                      linkedMenuAnchorRef.current = e.currentTarget;
+                      setLinkedMenuProject(p);
+                    }
+                  }}
+                  onContextMenu={(e) => {
+                    if (p.storage === "linked") {
+                      e.preventDefault();
+                      onSelectProject(p);
+                      linkedMenuAnchorRef.current = e.currentTarget;
+                      setLinkedMenuProject(p);
+                    }
+                  }}
+                  title={p.storage === "linked" ? t('sidebar.linkedMenu.menuHint') : undefined}
                   className={`flex-1 text-left px-1.5 py-1 flex items-center gap-1.5 ${
+                    isLinkedOrigin ? "pl-4" : ""
+                  } ${
                     activeProject?.id === p.id
                       ? "text-hacker-accent"
+                      : isLinkedOrigin
+                      ? "text-hacker-text-dim/70"
                       : "text-hacker-text-dim"
                   }`}>
+                  {isLinkedOrigin && (
+                    <span className="shrink-0 text-hacker-text-dim/50" aria-hidden>↳</span>
+                  )}
+                  {p.storage === "linked" && (
+                    <Link2 size={10} className="shrink-0 opacity-60" />
+                  )}
                   <span className="truncate flex-1">{p.name}</span>
                   {isThisStreaming && !streamingStalled && (
                     <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title={t('sidebar.streaming')} />
@@ -331,6 +435,20 @@ export function Sidebar({
           </div>
         )}
       </div>
+
+      {/* ── Menu contextuel du placeholder lié (lier/délier + toggle origines) ── */}
+      {linkedMenuProject && (
+        <LinkedProjectMenu
+          key={linkedMenuProject.id}
+          project={linkedMenuProject}
+          projects={projects}
+          anchor={linkedMenuAnchorRef.current}
+          onClose={() => setLinkedMenuProject(null)}
+          onProjectsChanged={onProjectsChanged}
+          showOrigins={showLinkedOrigins}
+          onToggleShowOrigins={toggleShowLinkedOrigins}
+        />
+      )}
 
       {/* ── Delete project modal ── */}
       <DeleteProjectModal

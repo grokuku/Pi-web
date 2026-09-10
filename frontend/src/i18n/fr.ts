@@ -399,6 +399,18 @@ export const fr = {
       showHelp: "Afficher l'aide",
     },
     dragToReorder: "Glisser pour réordonner",
+    // Menu contextuel du placeholder lié (projet storage "linked").
+    linkedMenu: {
+      menuHint: "Projet lié — cliquez pour gérer les sous-projets",
+      linkProject: "Lier un projet…",
+      pickTitle: (name: string) => `Lier un projet à « ${name} »`,
+      pickBack: "Retour",
+      unlinkSection: "Délier",
+      showOrigins: "Afficher les origines masquées",
+      showOriginsHint: "Les sous-projets regroupés dans ce projet sont masqués par défaut dans la liste",
+      linkError: (m: string) => `Échec de la liaison : ${m}`,
+      unlinkError: (m: string) => `Échec du déliage : ${m}`,
+    },
     streaming: "Diffusion en cours",
     streamingStalled: "Diffusion bloquée",
     sessionActive: "Session active",

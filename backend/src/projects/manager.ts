@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, symlinkSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, symlinkSync, lstatSync, unlinkSync } from "fs";
 import path from "path";
 import { join, relative } from "path";
 import { v4 as uuid } from "uuid";
@@ -278,6 +278,117 @@ export async function createProject(
   projects.push(project);
   saveProjects(projects);
   return project;
+  });
+}
+
+/**
+ * Reconstruit les symlinks du placeholder d'un projet LIÉ selon la liste
+ * fournie : crée les symlinks manquants et retire ceux des sous-projets qui
+ * ne sont plus liés. Met aussi à jour le marqueur `.pi-web-linked`.
+ * Helper partagé par l'ajout et le retrait de liens (cohérence disque/métadonnées).
+ */
+function syncPlaceholderLinks(cwd: string, projects: Project[], linkedProjectIds: string[]): void {
+  if (!existsSync(cwd)) {
+    mkdirSync(cwd, { recursive: true });
+  }
+  const idSet = new Set(linkedProjectIds);
+
+  // Retire les symlinks obsolètes (sous-projets retirés) sans toucher au marqueur.
+  for (const entry of readdirSync(cwd)) {
+    const entryPath = join(cwd, entry);
+    let isLink = false;
+    try {
+      isLink = lstatSync(entryPath).isSymbolicLink();
+    } catch {
+      continue; // entrée supprimée entre-temps
+    }
+    if (!isLink) continue;
+    // Un symlink correspond à un sous-projet : on le retire s'il n'est plus lié.
+    const sub = projects.find((p) => p.name === entry);
+    if (sub && !idSet.has(sub.id)) {
+      unlinkSync(entryPath);
+      console.log(`[Projects] Linked placeholder: removed ${entryPath}`);
+    }
+  }
+
+  // Crée les symlinks manquants pour les sous-projets liés.
+  for (const id of linkedProjectIds) {
+    const sub = projects.find((p) => p.id === id);
+    if (!sub) continue;
+    const linkPath = join(cwd, sub.name);
+    if (existsSync(linkPath)) continue; // déjà présent
+    const target = relative(cwd, sub.cwd); // RELATIF — le placeholder suit si /projects est déplacé
+    symlinkSync(join(target, "/"), linkPath, "dir");
+    console.log(`[Projects] Linked placeholder: ${linkPath} -> ${target}/`);
+  }
+
+  // Met à jour le marqueur en préservant la date de création d'origine.
+  const markerPath = join(cwd, ".pi-web-linked");
+  let createdAt = new Date().toISOString();
+  if (existsSync(markerPath)) {
+    try {
+      const existing = JSON.parse(readFileSync(markerPath, "utf-8"));
+      if (existing.createdAt) createdAt = existing.createdAt;
+    } catch {
+      // marqueur illisible → on repart sur la date courante
+    }
+  }
+  writeFileSync(
+    markerPath,
+    JSON.stringify({ linked: true, linkedProjectIds, createdAt }, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Ajoute un sous-projet lié à un projet LIÉ existant, puis resynchronise les
+ * symlinks du placeholder sur disque.
+ */
+export async function addLinkedProject(id: string, subProjectId: string): Promise<Project> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    if (project.storage !== "linked") throw new Error("Project is not a linked project");
+    if (subProjectId === id) throw new Error("Cannot link a project to itself");
+
+    const current = project.linkedProjectIds || [];
+    if (current.includes(subProjectId)) throw new Error("Project is already linked");
+
+    const newList = [...current, subProjectId];
+    // Réutilise validateLinkedProject : existence, local/SMB (pas ssh), pas
+    // imbriqué (pas un placeholder), pas de doublon, minimum de sous-projets.
+    validateLinkedProject(projects, project.name, newList);
+
+    project.linkedProjectIds = newList;
+    project.updatedAt = new Date().toISOString();
+    syncPlaceholderLinks(project.cwd, projects, newList);
+    saveProjects(projects);
+    return project;
+  });
+}
+
+/**
+ * Retire un sous-projet lié d'un projet LIÉ existant, puis resynchronise les
+ * symlinks du placeholder sur disque. Refuse de descendre sous 1 sous-projet.
+ */
+export async function removeLinkedProject(id: string, subId: string): Promise<Project> {
+  return projectsMutex.run(() => {
+    const projects = loadProjects();
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    if (project.storage !== "linked") throw new Error("Project is not a linked project");
+
+    const current = project.linkedProjectIds || [];
+    if (!current.includes(subId)) throw new Error("Linked project not found in this project");
+    if (current.length <= 1) throw new Error("A linked project requires at least 1 sub-project");
+
+    const newList = current.filter((x) => x !== subId);
+    project.linkedProjectIds = newList;
+    project.updatedAt = new Date().toISOString();
+    syncPlaceholderLinks(project.cwd, projects, newList);
+    saveProjects(projects);
+    return project;
   });
 }
 

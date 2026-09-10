@@ -398,6 +398,18 @@ export const en = {
       showHelp: "Show help",
     },
     dragToReorder: "Drag to reorder",
+    // Context menu of the linked placeholder (storage "linked" project).
+    linkedMenu: {
+      menuHint: "Linked project — click to manage sub-projects",
+      linkProject: "Link a project…",
+      pickTitle: (name: string) => `Link a project to "${name}"`,
+      pickBack: "Back",
+      unlinkSection: "Unlink",
+      showOrigins: "Show hidden origins",
+      showOriginsHint: "Sub-projects grouped in this project are hidden by default in the list",
+      linkError: (m: string) => `Failed to link: ${m}`,
+      unlinkError: (m: string) => `Failed to unlink: ${m}`,
+    },
     streaming: "Streaming",
     streamingStalled: "Streaming stalled",
     sessionActive: "Session active",

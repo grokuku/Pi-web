@@ -1008,6 +1008,7 @@ function App() {
             onSelectProject={handleSelectProject}
             onAddProject={handleAddProject}
             onDeleteProject={handleDeleteProject}
+            onProjectsChanged={loadProjects}
             session={session}
             projectSessions={projectSessionsRef.current}
             onSendCommand={(cmd: string) => {

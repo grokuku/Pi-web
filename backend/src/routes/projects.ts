@@ -6,6 +6,8 @@ import {
   updateProject,
   deleteProject,
   reorderProjects,
+  addLinkedProject,
+  removeLinkedProject,
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
@@ -93,6 +95,32 @@ router.put("/reorder", async (req: Request, res: Response) => {
     }
     const projects = await reorderProjects(projectIds);
     res.json(projects);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// POST add a linked sub-project to an existing linked project
+router.post("/:id/linked", async (req: Request, res: Response) => {
+  try {
+    const { subProjectId } = req.body;
+    if (!subProjectId) {
+      return res.status(400).json({ error: "subProjectId is required" });
+    }
+    const project = await addLinkedProject(req.params.id, subProjectId);
+    const safe = project.smb ? { ...project, smb: { ...project.smb, password: undefined } } : project;
+    res.json(safe);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// DELETE remove a linked sub-project from an existing linked project
+router.delete("/:id/linked/:subId", async (req: Request, res: Response) => {
+  try {
+    const project = await removeLinkedProject(req.params.id, req.params.subId);
+    const safe = project.smb ? { ...project, smb: { ...project.smb, password: undefined } } : project;
+    res.json(safe);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
