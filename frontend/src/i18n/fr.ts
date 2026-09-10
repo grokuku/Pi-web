@@ -325,6 +325,9 @@ export const fr = {
     close: "Fermer",
     attachment: "Pièce jointe",
     image: "Image",
+    fit: "Ajuster (fit)",
+    zoomIn: "Zoom avant",
+    zoomOut: "Zoom arrière",
   },
   modelQuickSwitch: {
     placeholder: "Rechercher des modèles...",

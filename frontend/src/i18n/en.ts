@@ -325,6 +325,9 @@ export const en = {
     close: "Close",
     attachment: "Attachment",
     image: "Image",
+    fit: "Fit",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
   },
   modelQuickSwitch: {
     placeholder: "Search models...",

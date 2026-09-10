@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ChevronDown, ChevronRight } from "lucide-react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -10,6 +10,10 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
+import { useIsMobile } from "../../hooks/useMediaQuery";
+// Brique HolafViewport (holaf-lib v0.1.3) — copie pinnée dans vendor/holaf.
+// Zoom/pan/fit de l'image plein écran (mode content, souris-only).
+import { HolafViewport } from "../../vendor/holaf/holaf-viewport.js";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup } from "../../utils/pi-events";
@@ -406,6 +410,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const viewerTokenRef = useRef<symbol | null>(null);
   // ── Plein écran natif du viewer d'images ──
   const viewerContainerRef = useRef<HTMLDivElement | null>(null);
+  // ── HolafViewport : conteneur + <img> de la visionneuse d'images ──
+  const viewerImageWrapRef = useRef<HTMLDivElement | null>(null);
+  const viewerImgRef = useRef<HTMLImageElement | null>(null);
+  const viewerVpRef = useRef<ReturnType<typeof HolafViewport.create> | null>(null);
+  const [viewerZoom, setViewerZoom] = useState(100);
+  // Mobile (<768px) : la brique est souris-only (pas de touch/pinch) → on
+  // désactive le drag pour ne pas casser le défilement tactile natif.
+  const isMobile = useIsMobile();
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -429,6 +441,40 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       if (viewerTokenRef.current === token) viewerTokenRef.current = null;
     };
   }, [viewerFile]);
+
+  // ── HolafViewport : zoom/pan/fit de l'image plein écran ──
+  // Échappatoire React documenté par la brique : useEffect + ref → create()
+  // → destroy() au cleanup. Le viewport ne capte PAS Escape (la fermeture Esc
+  // reste gérée par useOverlayStack / ModalDialog).
+  useEffect(() => {
+    if (!viewerFile || viewerFile.type !== "image") return;
+    const container = viewerImageWrapRef.current;
+    const img = viewerImgRef.current;
+    if (!container || !img) return;
+    const vp = HolafViewport.create(container, {
+      mode: "content",
+      content: img,
+      wheel: true,
+      doubleClickZoom: true,
+      drag: !isMobile,
+      dragButton: 0,
+    });
+    viewerVpRef.current = vp;
+    // Badge zoom % : abonnement multi-subscription (on/off) — mis à jour à
+    // chaque changement de transform (molette, dblclick, drag, boutons).
+    const updateZoom = (v: ReturnType<typeof HolafViewport.create>) =>
+      setViewerZoom(Math.round(v.getScale() * 100));
+    vp.on(updateZoom);
+    // Taille naturelle de l'image (si déjà chargée) pour un letterbox correct.
+    if (img.complete && img.naturalWidth > 0) {
+      vp.setImageSize(img.naturalWidth, img.naturalHeight);
+    }
+    return () => {
+      vp.off(updateZoom);
+      viewerVpRef.current = null;
+      vp.destroy();
+    };
+  }, [viewerFile, isMobile]);
 
   // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
   /** Instant scroll (for streaming — ResizeObserver-compatible) */
@@ -835,14 +881,25 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
             <div className="flex items-center justify-between px-4 py-2 border-b border-hacker-border shrink-0">
               <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || t('viewer.attachment')}</span>
               {viewerFile.type === "image" && (
-                <button onClick={toggleFullscreen} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')} aria-label={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')}>
-                  {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-                </button>
+                <>
+                  {/* Badge zoom % + contrôles HolafViewport (design hacker existant) */}
+                  <span className="text-hacker-text-dim text-xs tabular-nums ml-2 shrink-0">{viewerZoom}%</span>
+                  <button onClick={() => viewerVpRef.current?.fit()} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.fit')} aria-label={t('viewer.fit')}>⤢</button>
+                  <button onClick={() => viewerVpRef.current?.zoomBy(1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomIn')} aria-label={t('viewer.zoomIn')}><ZoomIn size={16} /></button>
+                  <button onClick={() => viewerVpRef.current?.zoomBy(1 / 1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomOut')} aria-label={t('viewer.zoomOut')}><ZoomOut size={16} /></button>
+                  <button onClick={toggleFullscreen} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')} aria-label={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')}>
+                    {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                  </button>
+                </>
               )}
               <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-auto p-4">
-              {viewerFile.type === "image" ? <img src={viewerFile.src} alt={viewerFile.name||t('viewer.image')} className="max-w-full max-h-full object-contain mx-auto" /> : <pre className="text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>}
+              {viewerFile.type === "image" ? (
+                <div ref={viewerImageWrapRef} className="w-full h-full overflow-hidden relative select-none" style={{ userSelect: "none", WebkitUserSelect: "none" }}>
+                  <img ref={viewerImgRef} src={viewerFile.src} alt={viewerFile.name||t('viewer.image')} draggable={false} onLoad={(e) => { const img = e.currentTarget; const vp = viewerVpRef.current; if (vp && img.naturalWidth > 0) vp.setImageSize(img.naturalWidth, img.naturalHeight); }} className="max-w-full max-h-full object-contain mx-auto" style={{ userSelect: "none", WebkitUserSelect: "none" }} />
+                </div>
+              ) : <pre className="text-xs text-hacker-text-bright font-mono whitespace-pre-wrap">{viewerFile.content}</pre>}
             </div>
           </div>
         </ModalDialog>
