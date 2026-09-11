@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check, Clock, Download, PlusSquare } from "lucide-react";
+import {
+  GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check,
+  Clock, Download, PlusSquare, ChevronRight, ChevronDown, Link2,
+} from "lucide-react";
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
@@ -38,12 +41,23 @@ type GitStatus = GitStatusFull | GitStatusNotRepo;
 
 type ActionType = "pull" | "push" | "commit-push" | "clone" | "init";
 
-interface Props {
+// ── GitProjectSection : section git d'UN projet (réutilisable) ──
+// Rendu pour le projet principal (isMain, déroulé, polling 30 s) ou pour
+// chaque projet LIÉ (accordéon replié par défaut, lazy — le statut n'est
+// chargé QUE quand la section est déroulée).
+function GitProjectSection({
+  project,
+  isMain,
+  isOpen,
+  onToggle,
+  refreshKey,
+}: {
   project: Project;
-  onRefresh?: () => void;
-}
-
-export function GitPanel({ project, onRefresh }: Props) {
+  isMain: boolean;
+  isOpen: boolean;
+  onToggle?: () => void;
+  refreshKey: number;
+}) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,11 +86,23 @@ export function GitPanel({ project, onRefresh }: Props) {
     }
   }, [project.id, project.git?.remote, t]);
 
+  // Chargement LAZY : seulement quand la section est DÉROULÉE.
+  // Le projet principal poll en plus toutes les 30 s (comportement historique).
+  // Une section linkée repliée → aucun fetch tant qu'elle n'est pas ouverte ;
+  // une fois repliée, sa section est démontée (plus de polling permanent).
   useEffect(() => {
+    if (!isOpen) return;
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+    const interval = isMain ? setInterval(fetchStatus, 30_000) : null;
+    return () => { if (interval) clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isMain]);
+
+  // Rafraîchissement global du panel (bouton refresh en haut).
+  useEffect(() => {
+    if (isOpen && refreshKey > 0) fetchStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey, isOpen]);
 
   const doAction = async (action: ActionType, url: string) => {
     setActionLoading(action);
@@ -85,13 +111,9 @@ export function GitPanel({ project, onRefresh }: Props) {
     setCommitMessage(null);
     try {
       const res = await fetch(url, { method: "POST" });
-      // Blindage : gère le HTML (login SSO) et les erreurs JSON { error }.
-      // parseJsonResponse attache le corps JSON à err.data pour les codes
-      // structurés (ex. GIT_AUTH_REQUIRED) traités dans le catch ci-dessous.
       const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
 
       if (action === "commit-push") {
-        // commit-push returns a structured result
         if (data.commitMessage) {
           setCommitMessage(data.commitMessage);
         }
@@ -106,8 +128,6 @@ export function GitPanel({ project, onRefresh }: Props) {
 
       await fetchStatus();
     } catch (err: any) {
-      // Erreur structurée du backend (corps JSON attaché par parseJsonResponse) :
-      // Auth required → show the credentials modal, remember what we were doing
       if (err?.data?.code === "GIT_AUTH_REQUIRED") {
         setPendingAuthAction({ url, action });
         setShowAuthModal(true);
@@ -119,51 +139,78 @@ export function GitPanel({ project, onRefresh }: Props) {
     }
   };
 
-  if (!project.git?.remote) return project.storage === "linked" ? <LinkedGitPanel project={project} onRefresh={onRefresh} /> : null;
+  // Projet sans dépôt : la section ne s'affiche que si elle est ouverte.
+  if (!project.git?.remote) {
+    if (!isOpen) return null;
+    return (
+      <div className="text-hacker-text-dim text-[0.75rem] italic py-1 flex items-center gap-1">
+        <AlertTriangle size={10} />
+        {project.name} — no git remote
+      </div>
+    );
+  }
 
-  // ── notRepo state ──
   const isNotRepo = status && "notRepo" in status;
   const dirIsEmpty = status && "notRepo" in status && status.isEmpty;
-
-  // ── Normal state ──
   const normalStatus = isNotRepo ? null : (status as GitStatusFull);
   const totalChanges = normalStatus
     ? normalStatus.staged.length + normalStatus.modified.length + normalStatus.deleted.length + normalStatus.created.length
     : 0;
 
-  const providerIcon = project.git.provider === "github" ? "🐙" : project.git.provider === "gitlab" ? "🦊" : "📦";
+  // Branche affichée dans le badge de l'en-tête (résolue dès le statut chargé).
+  const branchBadge = isNotRepo
+    ? project.git.branch || "main"
+    : normalStatus?.branch || project.git.branch || "…";
 
+  // ── En-tête de section : chevron + nom + badge branch ──
+  // Le projet principal (isMain) est déroulé et non repliable (pas de onToggle).
+  const header = (
+    <div
+      onClick={onToggle}
+      role={onToggle ? "button" : undefined}
+      title={onToggle ? (isOpen ? t('gitPanel.collapse') : t('gitPanel.expand')) : undefined}
+      className={`flex items-center gap-1.5 group ${onToggle ? "cursor-pointer hover:bg-hacker-border/40" : ""} ${isMain ? "mt-1" : "mt-1.5"} py-1 px-1 rounded transition-colors select-none`}
+    >
+      {isOpen ? (
+        <ChevronDown size={12} className="shrink-0 text-hacker-accent" />
+      ) : (
+        <ChevronRight size={12} className="shrink-0 text-hacker-text-dim group-hover:text-hacker-accent" />
+      )}
+      <span className={`truncate flex-1 font-bold tracking-wide ${isMain ? "text-hacker-accent text-[0.75rem]" : "text-hacker-accent text-[0.75rem]"}`}>
+        {project.name}
+      </span>
+      <span className="text-hacker-info text-[0.6875rem] border border-hacker-border bg-hacker-bg/30 px-1 rounded font-mono max-w-[90px] truncate">
+        <GitBranch size={9} className="inline mr-0.5 -mt-0.5" />
+        {branchBadge}
+      </span>
+    </div>
+  );
+
+  if (!isOpen) {
+    return <>{header}</>;
+  }
+
+  // ── Contenu (section DÉROULÉE) ──
   return (
-    <div className="p-2 border-b border-hacker-border">
-      <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-2 flex items-center gap-1">
-        <GitBranch size={12} />
-        GIT {providerIcon}
-        <div className="flex-1" />
-        <button
-          onClick={() => { fetchStatus(); onRefresh?.(); }}
-          className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
-          title="Refresh git status"
-        >
-          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
-        </button>
-      </div>
+    <>
+      {header}
 
       {loading && !status && (
-        <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1">
+        <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1 px-1">
           <RefreshCw size={10} className="animate-spin" />
           Loading...
         </div>
       )}
 
       {error && (
-        <div className="text-hacker-error text-[0.75rem] mb-1.5 flex items-center gap-1">
+        <div className="text-hacker-error text-[0.75rem] mb-1.5 px-1 flex items-center gap-1">
           <AlertTriangle size={10} />
           {error}
         </div>
       )}
 
       {message && (
-        <div className="text-hacker-accent text-[0.75rem] mb-1.5 flex items-center gap-1">
+        <div className="text-hacker-accent text-[0.75rem] mb-1.5 px-1 flex items-center gap-1">
           <Check size={10} />
           {message}
         </div>
@@ -171,7 +218,7 @@ export function GitPanel({ project, onRefresh }: Props) {
 
       {/* ── Not a repo yet ── */}
       {isNotRepo && (
-        <div className="space-y-2">
+        <div className="space-y-2 px-1">
           <div className="flex justify-between">
             <span className="text-hacker-text-dim">Remote</span>
             <span className="text-hacker-text-bright text-[0.6875rem] truncate max-w-[100px] text-right">
@@ -228,7 +275,7 @@ export function GitPanel({ project, onRefresh }: Props) {
 
       {/* ── Normal repo ── */}
       {normalStatus && (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 px-1">
           <div className="flex justify-between">
             <span className="text-hacker-text-dim">Branch</span>
             <span className="text-hacker-info">{normalStatus.branch}</span>
@@ -347,7 +394,7 @@ export function GitPanel({ project, onRefresh }: Props) {
         </div>
       )}
 
-      {/* ── Push modal ── */}
+      {/* ── Push modal (CE projectId) ── */}
       {showPushModal && (
         <CommitPushModal
           project={project}
@@ -367,7 +414,6 @@ export function GitPanel({ project, onRefresh }: Props) {
           onConfigured={() => {
             setShowAuthModal(false);
             setError("");
-            // Retry the pending git operation that required auth
             if (pendingAuthAction) {
               const { url, action } = pendingAuthAction;
               setPendingAuthAction(null);
@@ -378,7 +424,7 @@ export function GitPanel({ project, onRefresh }: Props) {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -393,172 +439,128 @@ function formatTimeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
-// ── GitPanel pour projets LIÉS (placeholder multi-repos) ──
-// Un placeholder n'a pas de remote ; le panel montre l'état PAR sous-projet
-// (reçu via l'endpoint de preview linked) et ouvre le CommitPushModal,
-// qui fait un commit + push séparaément pour chaque dépôt.
-
-interface LinkedRepoView {
-  name: string;
-  projectId: string;
-  cwd?: string;
-  error?: string;
-  skipped?: boolean;
-  reason?: string;
-  preview?: {
-    status?: {
-      branch: string;
-      ahead: number;
-      behind: number;
-      isClean: boolean;
-      staged: Array<{ path: string; status: string }>;
-      modified: Array<{ path: string; status: string }>;
-      created: Array<{ path: string; status: string }>;
-      deleted: Array<{ path: string; status: string }>;
-      conflict: Array<{ path: string; status: string }>;
-      files: Array<{ path: string; status: string }>;
-    };
-  };
+interface Props {
+  project: Project;
+  // Projets LIÉS du projet actif (résolus par la Sidebar) — une section
+  // accordéon par projet, chargée lazy au dépliage.
+  linkedProjects?: Project[];
+  onRefresh?: () => void;
 }
 
-function LinkedGitPanel({ project, onRefresh }: { project: Project; onRefresh?: () => void }) {
+const EXPANDED_KEY = "pi-web.gitpanel.expanded";
+
+export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
   const { t } = useTranslation();
-  const [repos, setRepos] = useState<LinkedRepoView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [showPushModal, setShowPushModal] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [showPushAllModal, setShowPushAllModal] = useState(false);
 
-  const fetchPreview = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const mainHasRepo = !!project.git?.remote;
+
+  // ── État accordéon des sections linkées (mémorisé en sessionStorage) ──
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try {
-      const res = await fetch(`/api/projects/${project.id}/git/commit-push/preview`, { method: "POST" });
-      // Blindage : erreur lisible si la réponse est du HTML (login SSO)
-      const data = await parseJsonResponse<any>(res, apiErrorLabels(t));
-      setRepos(data.linked ? data.repos : []);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+      return JSON.parse(sessionStorage.getItem(EXPANDED_KEY) || "{}");
+    } catch {
+      return {};
     }
-  }, [project.id, t]);
+  });
+  const persistExpanded = (next: Record<string, boolean>) => {
+    try { sessionStorage.setItem(EXPANDED_KEY, JSON.stringify(next)); } catch {}
+    setExpanded(next);
+  };
+  const toggleSection = (id: string) => {
+    persistExpanded({ ...expanded, [id]: !expanded[id] });
+  };
 
-  useEffect(() => {
-    fetchPreview();
-    const interval = setInterval(fetchPreview, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchPreview]);
+  const refreshAll = () => {
+    setRefreshKey((k) => k + 1);
+    onRefresh?.();
+  };
 
-  const totalChanges = repos.reduce((sum, r) => {
-    const st = r.preview?.status;
-    return sum + (st ? st.staged.length + st.modified.length + st.created.length + st.deleted.length : 0);
-  }, 0);
-  const repoErrors = repos.filter((r) => r.error);
-  const cleanCount = repos.filter((r) => !r.error && (!r.preview || (r.preview.status ? (r.preview.status.files.length === 0) : false) && (r.preview.status?.ahead ?? 0) === 0)).length;
+  // Icône provider : le placeholder lié n'a pas de remote → icône lien.
+  const providerIcon = mainHasRepo
+    ? project.git!.provider === "github" ? "🐙" : project.git!.provider === "gitlab" ? "🦊" : "📦"
+    : "🔗";
+
+  const hasAnySection = mainHasRepo || linkedProjects.length > 0;
 
   return (
     <div className="p-2 border-b border-hacker-border">
-      <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-2 flex items-center gap-1">
+      {/* En-tête global du panel : GIT + refresh (rafraîchit toutes les sections ouvertes) */}
+      <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-1 flex items-center gap-1">
         <GitBranch size={12} />
-        GIT 🔗
+        GIT {providerIcon}
         <div className="flex-1" />
         <button
-          onClick={() => { fetchPreview(); onRefresh?.(); }}
+          onClick={refreshAll}
           className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
-          title="Refresh linked repos status"
+          title={t('gitPanel.refresh')}
         >
-          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={10} className={refreshKey > 0 && hasAnySection ? "animate-spin" : ""} />
         </button>
       </div>
 
-      {loading && repos.length === 0 && (
-        <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1">
-          <RefreshCw size={10} className="animate-spin" />
-          Analyzing sub-repositories...
-        </div>
+      {/* ── Section du projet principal (déroulée, avec polling) ── */}
+      {mainHasRepo && (
+        <GitProjectSection
+          key={project.id}
+          project={project}
+          isMain
+          isOpen
+          refreshKey={refreshKey}
+        />
       )}
 
-      {error && (
-        <div className="text-hacker-error text-[0.75rem] mb-1.5 flex items-center gap-1">
-          <AlertTriangle size={10} />
-          {error}
-        </div>
-      )}
-
-      {repos.length > 0 && (
-        <div className="space-y-1.5">
-          {repos.map((r) => {
-            const st = r.preview?.status;
-            const count = st ? st.staged.length + st.modified.length + st.created.length + st.deleted.length : 0;
-            return (
-              <div key={r.projectId} className="border border-hacker-border bg-hacker-bg/30 px-2 py-1.5">
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-hacker-accent text-[0.75rem] font-bold truncate">{r.name}</span>
-                  {r.error ? (
-                    <span className="text-hacker-error text-[0.6875rem]">⚠ {t('commitPush.linkedError')}</span>
-                  ) : (r.preview === undefined) ? (
-                    <span className="text-hacker-warn text-[0.6875rem]">{t('commitPush.linkedError')}</span>
-                  ) : count > 0 ? (
-                    <span className="text-hacker-warn text-[0.6875rem]">{count} change(s)</span>
-                  ) : (st?.ahead ?? 0) > 0 ? (
-                    <span className="text-hacker-info text-[0.6875rem]">↑ {st?.ahead} to push</span>
-                  ) : (
-                    <Check size={10} className="text-hacker-accent" />
-                  )}
-                </div>
-                {st && st.files.length > 0 && (
-                  <div className="max-h-[50px] overflow-y-auto">
-                    {st.files.slice(0, 4).map((f) => (
-                      <div key={f.path} className="flex gap-1 text-hacker-text-dim/70 truncate text-[0.625rem]">
-                        <span className="text-hacker-accent w-4 shrink-0">{f.status}</span>
-                        <span className="truncate">{f.path}</span>
-                      </div>
-                    ))}
-                    {st.files.length > 4 && (
-                      <div className="text-hacker-text-dim/50 text-[0.625rem]">+{st.files.length - 4} more</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          <div className="text-hacker-text-dim text-[0.6875rem] flex items-center justify-between pt-0.5">
-            <span>{repos.length} sub-repos</span>
-            <span>{cleanCount} clean</span>
+      {/* ── Une section accordéon par projet LIÉ (repliée par défaut, lazy) ── */}
+      {linkedProjects.length > 0 && (
+        <>
+          <div className="mt-1.5 text-hacker-text-dim text-[0.625rem] tracking-widest uppercase mb-0.5 flex items-center gap-1">
+            <Link2 size={9} />
+            {t('gitPanel.linkedProjects')}
           </div>
+          {linkedProjects.map((lp) => (
+            <GitProjectSection
+              key={lp.id}
+              project={lp}
+              isMain={false}
+              isOpen={!!expanded[lp.id]}
+              onToggle={() => toggleSection(lp.id)}
+              refreshKey={refreshKey}
+            />
+          ))}
 
-          <div className="flex gap-1 pt-1">
+          {/* ── Push ALL (en bas) : un commit + push pour CHAQUE projet lié ──
+              Réutilise le CommitPushModal du placeholder : le backend détecte
+              storage === "linked" et pousse chaque sous-projet séparément. */}
+          <div className="pt-1.5">
             <button
-              onClick={() => { fetchPreview(); onRefresh?.(); }}
-              disabled={loading}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[0.75rem] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
-              title="Refresh"
+              onClick={() => setShowPushAllModal(true)}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-[0.75rem] text-hacker-accent hover:bg-hacker-accent/10 transition-colors"
+              title={t('commitPush.linkedPushAll')}
             >
-              {loading ? <RefreshCw size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-              Refresh
-            </button>
-            <button
-              onClick={() => setShowPushModal(true)}
-              disabled={loading}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 border border-hacker-accent/50 text-[0.75rem] text-hacker-accent hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
-              title="Commit & push every sub-repository (AI messages per repo)"
-            >
-              {loading ? <RefreshCw size={10} className="animate-spin" /> : <ArrowUp size={10} />}
-              Push All
+              <ArrowUp size={12} />
+              {t('gitPanel.pushAll')}
             </button>
           </div>
+        </>
+      )}
+
+      {/* Cas limite : placeholder sans lien résolu → note discrète */}
+      {!hasAnySection && (
+        <div className="text-hacker-text-dim text-[0.6875rem] italic flex items-start gap-1">
+          <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+          <span>{t('gitPanel.emptyLinked')}</span>
         </div>
       )}
 
-      {showPushModal && (
+      {/* ── Push ALL modal (sur le placeholder : couvre tous les sous-projets) ── */}
+      {showPushAllModal && (
         <CommitPushModal
           project={project}
-          onClose={() => setShowPushModal(false)}
+          onClose={() => setShowPushAllModal(false)}
           onDone={() => {
-            fetchPreview();
-            onRefresh?.();
-            setTimeout(() => setShowPushModal(false), 1200);
+            refreshAll();
+            setTimeout(() => setShowPushAllModal(false), 1200);
           }}
         />
       )}

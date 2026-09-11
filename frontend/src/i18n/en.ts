@@ -414,7 +414,10 @@ export const en = {
       returnToHome: "Return to home",
       showHelp: "Show help",
     },
-    dragToReorder: "Drag to reorder",
+    // ── Current-project block + selection dropdown (replaces the full list) ──
+    switchProject: "Switch project",
+    searchProject: "Search a project…",
+    noProjects: "No projects",
     // Context menu of the linked placeholder (storage "linked" project).
     linkedMenu: {
       menuHint: "Linked project — click to manage sub-projects",
@@ -430,7 +433,6 @@ export const en = {
     streaming: "Streaming",
     streamingStalled: "Streaming stalled",
     sessionActive: "Session active",
-    resizeProjectList: "Resize project list",
     // update/updateBadge : conservés (bouton cbm + fallback du badge pi-agent).
     update: "Update",
     updateBadge: "new!",
@@ -688,6 +690,12 @@ export const en = {
 
   // ── Git Panel ──
   gitPanel: {
+    linkedProjects: "Linked projects",
+    pushAll: "Push All",
+    refresh: "Refresh git status",
+    expand: "Show git panel",
+    collapse: "Hide git panel",
+    emptyLinked: "No linked projects to show — add sub-projects in the linked project menu.",
     pull: "Pull",
     push: "Push",
     commitPush: "Commit & Push",

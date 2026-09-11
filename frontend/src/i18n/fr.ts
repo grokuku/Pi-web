@@ -415,7 +415,10 @@ export const fr = {
       returnToHome: "Revenir à l'accueil",
       showHelp: "Afficher l'aide",
     },
-    dragToReorder: "Glisser pour réordonner",
+    // ── Bloc « projet actuel » + dropdown de sélection (remplace la liste complète) ──
+    switchProject: "Changer de projet",
+    searchProject: "Rechercher un projet…",
+    noProjects: "Aucun projet",
     // Menu contextuel du placeholder lié (projet storage "linked").
     linkedMenu: {
       menuHint: "Projet lié — cliquez pour gérer les sous-projets",
@@ -431,7 +434,6 @@ export const fr = {
     streaming: "Diffusion en cours",
     streamingStalled: "Diffusion bloquée",
     sessionActive: "Session active",
-    resizeProjectList: "Redimensionner la liste des projets",
     // update/updateBadge : conservés (bouton cbm + fallback du badge pi-agent).
     update: "Mettre à jour",
     updateBadge: "nouveau !",
@@ -689,6 +691,12 @@ export const fr = {
 
   // ── Git Panel ──
   gitPanel: {
+    linkedProjects: "Projets liés",
+    pushAll: "Tout pousser",
+    refresh: "Actualiser le statut git",
+    expand: "Afficher le panneau git",
+    collapse: "Masquer le panneau git",
+    emptyLinked: "Aucun projet lié à afficher — ajoutez des sous-projets via le menu du projet lié.",
     pull: "Tirer",
     push: "Pousser",
     commitPush: "Commit & Push",
