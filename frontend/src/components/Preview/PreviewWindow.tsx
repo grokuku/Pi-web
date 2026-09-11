@@ -5,15 +5,24 @@ import { useTranslation } from "../../i18n";
 // Fenêtre redimensionnable/déplaçable au-dessus du chat (z-index élevé).
 // - Draggable par sa barre de titre, resizable par le coin bas-droit.
 // - Position/taille persistées en localStorage (clé pi-web.preview-window).
-// - Barre de titre : titre (path ou « Mockup ») + boutons ⟳ / device / ↗ / ✕.
+// - Barre de titre : titre (path ou « Mockup ») + boutons
+//   ⟳ / device / ⛶ (maximize) / 🪟 (popup) / ↗ / ✕.
+// - Mode plein écran : position fixed inset:0, au-dessus de tout — la barre de
+//   titre RESTE TOUJOURS VISIBLE (bug corrigé : sans elle, pas de retour
+//   possible). Le bouton devient ⧉ restore ; Échap restaure au lieu de fermer.
+// - Mode popup : bouton 🪟 (géré par le parent via props) qui ouvre la preview
+//   dans une fenêtre de navigateur séparée.
 // - L'iframe charge l'URL de preview (contenu = code du projet de l'utilisateur)
 //   avec un sandbox permissif (scripts/forms/modals/popups/same-origin).
-// - Échap ferme la fenêtre.
 
 interface PreviewWindowProps {
   url: string;
   title: string;
   onClose: () => void;
+  // Mode popup (persisté côté App) — bouton stylé « actif » quand le mode est actif.
+  popupActive: boolean;
+  // Déclenché au clic sur le bouton 🪟 (le parent gère ouverture popup + bascule du mode).
+  onTogglePopup: () => void;
 }
 
 // ── Géométrie persistée ────────────────────────────────
@@ -39,7 +48,7 @@ function saveGeometry(g: Geometry) {
 const DEFAULT_W = 900;
 const DEFAULT_H = 600;
 
-export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
+export function PreviewWindow({ url, title, onClose, popupActive, onTogglePopup }: PreviewWindowProps) {
   const { t } = useTranslation();
 
   const saved = loadGeometry();
@@ -50,6 +59,7 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
   const [size, setSize] = useState({ w: saved?.w ?? DEFAULT_W, h: saved?.h ?? DEFAULT_H });
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [reloadKey, setReloadKey] = useState(0);
+  const [maximized, setMaximized] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -61,15 +71,27 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
 
   const forceSave = () => saveGeometry({ x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
 
-  // ── Échap ferme la fenêtre ──
+  // ── Échap : si plein écran → restore ; sinon → ferme la fenêtre ──
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (maximized) {
+        // Restauration depuis le plein écran — on empêche les autres handlers
+        // (abort streaming global d'App, etc.) d'interférer.
+        e.preventDefault();
+        e.stopPropagation();
+        setMaximized(false);
+      } else {
+        onClose();
+      }
+    };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [onClose]);
+  }, [maximized, onClose]);
 
-  // ── Drag par la barre de titre ──
+  // ── Drag par la barre de titre (désactivé en plein écran) ──
   const onTitleMouseDown = (e: React.MouseEvent) => {
+    if (maximized) return;
     if ((e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
     dragState.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
@@ -90,8 +112,9 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [isDragging]);
 
-  // ── Resize par le coin bas-droit ──
+  // ── Resize par le coin bas-droit (désactivé en plein écran) ──
   const onResizeMouseDown = (e: React.MouseEvent) => {
+    if (maximized) return;
     e.preventDefault(); e.stopPropagation();
     resizeState.current = { startX: e.clientX, startY: e.clientY, origW: size.w, origH: size.h };
     setIsResizing(true);
@@ -115,11 +138,23 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
 
   const iframeWidth = device === "mobile" ? 375 : "100%";
 
-  return (
-    <div
-      ref={boxRef}
-      className={`preview-window ${isDragging ? "dragging" : ""} ${isResizing ? "resizing" : ""}`}
-      style={{
+  // Styles appliqués à la fenêtre : mode normal (fenêtre flottante persistée)
+  // ou mode plein écran (fixed inset:0, au-dessus de tout).
+  const boxStyle: React.CSSProperties = maximized
+    ? {
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: 3000,
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--surface-raised)",
+        border: "none",
+        boxShadow: "none",
+        userSelect: "none",
+      }
+    : {
         position: "fixed",
         left: pos.x,
         top: pos.y,
@@ -132,9 +167,15 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
         border: "1px solid var(--accent-dim)",
         boxShadow: "0 0 30px rgba(var(--accent-rgb), 0.15)",
         userSelect: "none",
-      }}
+      };
+
+  return (
+    <div
+      ref={boxRef}
+      className={`preview-window ${maximized ? "maximized" : ""} ${isDragging ? "dragging" : ""} ${isResizing ? "resizing" : ""}`}
+      style={boxStyle}
     >
-      {/* Barre de titre */}
+      {/* Barre de titre — TOUJOURS visible, même en plein écran */}
       <div
         className="flex items-center justify-between px-2 h-8 border-b border-hacker-accent/20 bg-hacker-accent-dim/10 shrink-0 cursor-grab active:cursor-grabbing"
         onMouseDown={onTitleMouseDown}
@@ -153,6 +194,18 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
             aria-label={device === "desktop" ? t('preview.mobile') : t('preview.desktop')}
             className="p-1 text-hacker-text-dim hover:text-hacker-accent"
           >{device === "desktop" ? "📱" : "🖥"}</button>
+          <button
+            onClick={() => setMaximized(m => !m)}
+            title={maximized ? t('preview.restore') : t('preview.maximize')}
+            aria-label={maximized ? t('preview.restore') : t('preview.maximize')}
+            className="p-1 text-hacker-text-dim hover:text-hacker-accent"
+          >{maximized ? "⧉" : "⛶"}</button>
+          <button
+            onClick={onTogglePopup}
+            title={t('preview.popupMode')}
+            aria-label={t('preview.popupMode')}
+            className={`p-1 ${popupActive ? "text-hacker-accent bg-hacker-accent/15" : "text-hacker-text-dim hover:text-hacker-accent"}`}
+          >🪟</button>
           <button
             onClick={openNewTab}
             title={t('preview.openNewTab')}
@@ -184,12 +237,14 @@ export function PreviewWindow({ url, title, onClose }: PreviewWindowProps) {
         </div>
       </div>
 
-      {/* Poignée de resize (coin bas-droit) */}
-      <div
-        onMouseDown={onResizeMouseDown}
-        className="preview-resize-handle"
-        style={{ position: "absolute", right: 0, bottom: 0, width: 16, height: 16, cursor: "nwse-resize", zIndex: 10 }}
-      />
+      {/* Poignée de resize (coin bas-droit) — masquée en plein écran */}
+      {!maximized && (
+        <div
+          onMouseDown={onResizeMouseDown}
+          className="preview-resize-handle"
+          style={{ position: "absolute", right: 0, bottom: 0, width: 16, height: 16, cursor: "nwse-resize", zIndex: 10 }}
+        />
+      )}
     </div>
   );
 }

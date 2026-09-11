@@ -194,6 +194,53 @@ function App() {
   // previewOpen : visibilité de la fenêtre flottante.
   const [lastPreview, setLastPreview] = useState<{ url: string; title: string } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // ── Mode popup de preview (persisté) ──
+  // - 'internal' : les previews s'ouvrent dans la fenêtre interne flottante.
+  // - 'popup' : les previews naviguent dans une popup de navigateur nommée
+  //   « pi-web-preview » (réutilisée par nom, recréée si fermée) via
+  //   window.open → Pi-Web reste libre pour discuter avec l'IA.
+  const [previewMode, setPreviewMode] = useState<"internal" | "popup">(() =>
+    localStorage.getItem("pi-web.preview-mode") === "popup" ? "popup" : "internal"
+  );
+  const previewModeRef = useRef(previewMode); previewModeRef.current = previewMode;
+  // Ouvre une popup nommée de preview (réutilise la fenêtre existante si la
+  // feature popup=yes l'a nommée « pi-web-preview »), centrée à la première ouverture.
+  const openPreviewPopup = (url: string, center = false) => {
+    let features = "";
+    if (center) {
+      const w = 960, h = 720;
+      const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+      const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+      features = `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
+    }
+    window.open(url, "pi-web-preview", features);
+  };
+  // Présente une preview selon le mode courant : popup si actif, sinon fenêtre interne.
+  const presentPreview = useCallback((url: string, title: string) => {
+    if (previewModeRef.current === "popup") {
+      openPreviewPopup(url);
+      return;
+    }
+    setLastPreview({ url, title });
+    setPreviewOpen(true);
+  }, []);
+  // Bascule le mode popup : active = ouvre la popup (centrée) pour la preview
+  // courante, ferme la fenêtre interne (pas de doublon) puis persiste le mode.
+  // Désactive = re-clic, le mode repasse en interne ; la popup déjà ouverte
+  // reste ouverte, libre au user de la fermer.
+  const handleTogglePopup = useCallback(() => {
+    setPreviewMode(prev => {
+      if (prev === "popup") {
+        localStorage.setItem("pi-web.preview-mode", "internal");
+        return "internal";
+      }
+      // Activation : la preview courante part dans la popup centrée.
+      if (lastPreview) openPreviewPopup(lastPreview.url, true);
+      setPreviewOpen(false); // ferme la fenêtre interne → pas de doublon
+      localStorage.setItem("pi-web.preview-mode", "popup");
+      return "popup";
+    });
+  }, [lastPreview]);
   const [activeMode, setActiveMode] = useState<string>("code");
   // BUG mode-sync : l'activeMode réel du backend est exposé dans le payload WS
   // `connected` (data.activeSessions) qui arrive AVANT que le projet actif soit
@@ -508,8 +555,7 @@ function App() {
             const path = args.path;
             if (pid && path) {
               const url = `/api/preview/${pid}/${path}`;
-              setLastPreview({ url, title: String(path) });
-              setPreviewOpen(true);
+              presentPreview(url, String(path));
             }
           }
           break;
@@ -525,8 +571,7 @@ function App() {
             const text = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
             const m = text.match(/\/api\/preview-inline\/[a-f0-9]+/);
             if (m) {
-              setLastPreview({ url: m[0], title: t('preview.mockup') });
-              setPreviewOpen(true);
+              presentPreview(m[0], t('preview.mockup'));
             }
           }
           break;
@@ -655,7 +700,7 @@ function App() {
       unsubStarted();
       unsubConnected();
     };
-  }, [on, getProjectSession, updateProjectSession]);
+  }, [on, getProjectSession, updateProjectSession, presentPreview]);
 
   // ── Project selection ──
   const handleSelectProject = (project: Project) => {
@@ -1195,6 +1240,8 @@ function App() {
         <PreviewWindow
           url={lastPreview.url}
           title={lastPreview.title}
+          popupActive={previewMode === "popup"}
+          onTogglePopup={handleTogglePopup}
           onClose={() => setPreviewOpen(false)}
         />
       )}
