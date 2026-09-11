@@ -8,6 +8,7 @@ import {
   reorderProjects,
   addLinkedProject,
   removeLinkedProject,
+  resolvePushRepos,
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
@@ -237,10 +238,9 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
     }
 
     // ── Projet LIÉ : un commit + push PAR sous-projet (messages IA séparés) ──
+    // Le placeholder (storage === "linked") agrège tous ses sous-projets locaux.
     if (project.storage === "linked") {
-      const subs = (project.linkedProjectIds || [])
-        .map((id) => getProject(id))
-        .filter((p): p is NonNullable<typeof p> => p?.storage === "local");
+      const subs = resolvePushRepos(project);
       const commitModelInfo = await getCommitModelInfo();
       const repos: Array<Record<string, unknown>> = [];
       let anyCommitted = false;
@@ -387,10 +387,9 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
     }
 
     // ── Projet LIÉ : preview PAR sous-repo (pas de message commun) ──
+    // Le placeholder (storage === "linked") agrège ses sous-projets locaux.
     if (project.storage === "linked") {
-      const subs = (project.linkedProjectIds || [])
-        .map((id) => getProject(id))
-        .filter((p): p is NonNullable<typeof p> => p?.storage === "local");
+      const subs = resolvePushRepos(project);
       const repos: Array<Record<string, unknown>> = [];
       for (const sub of subs) {
         try {

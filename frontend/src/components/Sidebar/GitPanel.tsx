@@ -454,7 +454,14 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showPushAllModal, setShowPushAllModal] = useState(false);
 
-  const mainHasRepo = !!project.git?.remote;
+  // Un projet LIÉ est un placeholder (dossier de symlinks), PAS un dépôt git
+  // indépendant. Sa « section principale » ne doit jamais être rendue comme
+  // une section git pushable : son bouton Push passerait le placeholder au
+  // backend (storage === "linked") qui déclencherait alors le mode agrégateur
+  // et pousserait TOUS les sous-projets au lieu du seul visé. On ne montre donc
+  // que les sections individuelles des sous-projets (projectId = sous-projet
+  // réel) + le bouton « Push All » (sur le placeholder).
+  const mainHasRepo = !!project.git?.remote && project.storage !== "linked";
 
   // ── État accordéon des sections linkées (mémorisé en sessionStorage) ──
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {

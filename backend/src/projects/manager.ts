@@ -136,6 +136,23 @@ export function getProjectByName(name: string): Project | undefined {
 }
 
 /**
+ * Résout les cibles d'un commit+push à partir d'un projet.
+ *
+ * Contrat clé du GitPanel : pousser un SOUS-PROJET ≠ pousser le GROUPE.
+ *  - projet normal / sous-projet local : → [project] (push SEUL ce dépôt) ;
+ *  - placeholder LIÉ (storage === "linked") : → la liste des sous-projets
+ *    locaux (mode agrégateur = le bouton « Push All »).
+ *
+ * Permet de tester unitairement cette résolution sans toucher au disque.
+ */
+export function resolvePushRepos(project: Project): Project[] {
+  if (project.storage !== "linked") return [project];
+  return (project.linkedProjectIds || [])
+    .map((id) => getProject(id))
+    .filter((p): p is NonNullable<typeof p> => !!p && p.storage === "local");
+}
+
+/**
  * Valide la création d'un projet LIÉ : minimum 2 sous-projets, tous locaux,
  * existants, pas eux-mêmes des projets liés (1 niveau maximum).
  */
