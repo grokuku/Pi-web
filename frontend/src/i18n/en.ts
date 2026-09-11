@@ -20,6 +20,8 @@ export const en = {
     standaloneTitle: (panel: string) => `PI-WEB STANDALONE - ${panel}`,
     closeStandalone: "Close ✕",
     closeRestore: "Close and restore to main window",
+    preview: "Open preview",
+    previewDisabled: "No preview available yet",
   },
   mobileMenu: {
     label: "More actions",
@@ -328,6 +330,15 @@ export const en = {
     fit: "Fit",
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
+  },
+  // ── Preview window (floating) ──
+  preview: {
+    refresh: "Refresh",
+    mobile: "Mobile view (375px)",
+    desktop: "Desktop view (100%)",
+    openNewTab: "Open in new tab",
+    close: "Close",
+    mockup: "Mockup",
   },
   modelQuickSwitch: {
     placeholder: "Search models...",

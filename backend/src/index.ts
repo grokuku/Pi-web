@@ -28,6 +28,7 @@ import designRouter from "./routes/design.js";
 import librarianRouter from "./routes/librarian.js";
 import sharedMemoryRouter from "./routes/shared-memory.js";
 import memoryRouter from "./routes/memory.js";
+import previewRouter from "./routes/preview.js";
 import { startLibrarianCron } from "./pi/librarian-cron.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
@@ -184,6 +185,8 @@ app.use("/api/librarian", librarianRouter);
 app.use("/api/shared-memory", sharedMemoryRouter);
 // Mémoire UI interne (Lot M3) : couverte par apiAuth globale (same-origin).
 app.use("/api/memory", memoryRouter);
+// Preview (Lot Preview) : fichiers projet + mockups inline, couverts par apiAuth.
+app.use("/api", previewRouter);
 
 // ── CBM 3D Graph UI proxy ──────────────────────────────
 // The CBM UI is a Vite SPA that uses absolute paths (/assets/..., /rpc, ...).

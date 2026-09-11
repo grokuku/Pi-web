@@ -24,6 +24,7 @@ import { createCommitDraftTool } from "./commit-draft-tool.js";
 import { appendDraft } from "./commit-draft.js";
 import { librarianTools } from "./librarian-tools.js";
 import { memoryTools } from "./memory-tools.js";
+import { previewTools } from "./preview-tools.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject } from "../projects/manager.js";
@@ -363,7 +364,7 @@ export async function createPiSession(
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
-      customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId)],
+      customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
 
     // Inject project context into system prompt

@@ -18,6 +18,7 @@ import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { MobileHeaderMenu } from "./components/Header/MobileHeaderMenu";
 import { AccentPicker } from "./components/Header/AccentPicker";
 import { Window } from "./components/common/Window";
+import { PreviewWindow } from "./components/Preview/PreviewWindow";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
 import { X } from "lucide-react";
 import type { Project, PanelId, Activity } from "./types";
@@ -188,6 +189,11 @@ function App() {
   const [showUsageStats, setShowUsageStats] = useState(false);
   const [showGraph3D, setShowGraph3D] = useState(false);
   const [showCbmStats, setShowCbmStats] = useState(false);
+  // ── Preview (fenêtre flottante) ──
+  // lastPreview : dernière URL de preview (rouverte via le bouton header).
+  // previewOpen : visibilité de la fenêtre flottante.
+  const [lastPreview, setLastPreview] = useState<{ url: string; title: string } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<string>("code");
   // BUG mode-sync : l'activeMode réel du backend est exposé dans le payload WS
   // `connected` (data.activeSessions) qui arrive AVANT que le projet actif soit
@@ -494,12 +500,35 @@ function App() {
           } else {
             updateProjectSession(projectId, { activity: { type: "tool", toolName: typeof evt.toolName === "string" ? evt.toolName : undefined } });
           }
+          // ── Preview : tool `open_preview` → ouvrir la fenêtre dès le tool call.
+          // Les args suffisent (contrat backend) : {projectId, path} → /api/preview/<id>/<path>.
+          if (evt.toolName === "open_preview") {
+            const args = evt.args?.arguments ?? evt.args?.input ?? evt.args ?? {};
+            const pid = args.projectId ?? projectId;
+            const path = args.path;
+            if (pid && path) {
+              const url = `/api/preview/${pid}/${path}`;
+              setLastPreview({ url, title: String(path) });
+              setPreviewOpen(true);
+            }
+          }
           break;
         }
         case "tool_execution_end": {
           // Fin d'un outil → retour au libellé par défaut ; le prochain event
           // (thinking / text / nouvel outil) surchargera l'activité.
           updateProjectSession(projectId, { activity: null });
+          // ── Preview : résultat de `preview_html` contenant la ligne
+          // « Preview available at: /api/preview-inline/<id> » → ouvrir la fenêtre
+          // avec cette URL (regex contractuelle /api\/preview-inline\/[a-f0-9]+/).
+          if (evt.toolName === "preview_html") {
+            const text = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
+            const m = text.match(/\/api\/preview-inline\/[a-f0-9]+/);
+            if (m) {
+              setLastPreview({ url: m[0], title: t('preview.mockup') });
+              setPreviewOpen(true);
+            }
+          }
           break;
         }
         case "message_update": {
@@ -938,6 +967,21 @@ function App() {
 
         <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
+        {/* Preview button — rouvre la dernière preview (grisé si aucune) */}
+        <button
+          onClick={() => { if (lastPreview) setPreviewOpen(true); }}
+          disabled={!lastPreview}
+          className={`hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+            lastPreview
+              ? "border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+              : "border-transparent text-hacker-text-dim/40 cursor-not-allowed"
+          }`}
+          title={lastPreview ? t('header.preview') : t('header.previewDisabled')}
+          aria-label={t('header.preview')}
+        >
+          PREVIEW
+        </button>
+
         {/* Graph 3D button */}
         <button
           onClick={() => setShowGraph3D(true)}
@@ -1144,6 +1188,15 @@ function App() {
       )}
       {showCbmStats && (
         <CbmStatsModal onClose={() => setShowCbmStats(false)} />
+      )}
+
+      {/* ── PREVIEW WINDOW (flottante) ── */}
+      {previewOpen && lastPreview && (
+        <PreviewWindow
+          url={lastPreview.url}
+          title={lastPreview.title}
+          onClose={() => setPreviewOpen(false)}
+        />
       )}
     </div>
   );

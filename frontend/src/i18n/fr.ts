@@ -20,6 +20,8 @@ export const fr = {
     standaloneTitle: (panel: string) => `PI-WEB AUTONOME - ${panel}`,
     closeStandalone: "Fermer ✕",
     closeRestore: "Fermer et restaurer dans la fenêtre principale",
+    preview: "Ouvrir l'aperçu",
+    previewDisabled: "Aucun aperçu disponible",
   },
   mobileMenu: {
     label: "Plus d'actions",
@@ -328,6 +330,15 @@ export const fr = {
     fit: "Ajuster (fit)",
     zoomIn: "Zoom avant",
     zoomOut: "Zoom arrière",
+  },
+  // ── Fenêtre d'aperçu (flottante) ──
+  preview: {
+    refresh: "Actualiser",
+    mobile: "Vue mobile (375px)",
+    desktop: "Vue bureau (100%)",
+    openNewTab: "Ouvrir dans un nouvel onglet",
+    close: "Fermer",
+    mockup: "Maquette",
   },
   modelQuickSwitch: {
     placeholder: "Rechercher des modèles...",
