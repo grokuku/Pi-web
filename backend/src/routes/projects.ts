@@ -14,6 +14,7 @@ import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, g
 import { credentialStore } from "../projects/credential-store.js";
 import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification } from "../pi/session.js";
 import { getDraft, getCleanedCommit, saveCleanedCommit, clearDraft } from "../pi/commit-draft.js";
+import { buildPushNotification } from "../projects/push-notification.js";
 
 const router = Router();
 
@@ -237,6 +238,16 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    // ── Session cible de la notification ──
+    // Le GitPanel pousse parfois un SOUS-PROJET alors que la session AFFICHÉE
+    // est celle du projet ACTIF (placeholder lié). Le frontend transmet donc
+    // `notifyProjectId` (projet affiché) : le résumé doit atterrir dans cette
+    // session-là, pas dans celle du sous-projet poussé (souvent inexistante).
+    // Absent (push standard depuis son propre projet) → repli sur le projet poussé.
+    const { subject: reqSubject, body: reqBody, notifyProjectId } = req.body || {};
+    const notifyTarget =
+      typeof notifyProjectId === "string" && notifyProjectId ? notifyProjectId : project.id;
+
     // ── Projet LIÉ : un commit + push PAR sous-projet (messages IA séparés) ──
     // Le placeholder (storage === "linked") agrège tous ses sous-projets locaux.
     if (project.storage === "linked") {
@@ -292,6 +303,7 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
         }
       }
       // Notification SEULE agrégée (hash par repo) + reset du draft global.
+      // Cible = session affichée (`notifyTarget`) : identique au placeholder ici.
       if (anyCommitted) {
         clearDraft(project.id);
         const repoLines = repos
@@ -299,14 +311,15 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
           .map((r: any) => `- ${r.name}: ${r.result?.commitHash || "(no hash)"} — ${r.result?.commitMessage?.subject || ""}`)
           .join("\n");
         const failed = repos.filter((r: any) => r.error);
-        const notification = `✅ Linked project committed &amp; pushed.
+        const notification = `✅ Linked project committed & pushed.
 ${repoLines}${failed.length ? `\n⚠️ Failed repos: ${failed.map((r: any) => r.name).join(", ")}` : ""}`;
-        injectSessionNotification(project.id, notification, { linkedRepos: repos });
+        injectSessionNotification(notifyTarget, notification, { linkedRepos: repos });
       }
       return res.json({ linked: true, repos });
     }
 
-    let { subject, body } = req.body || {};
+    let subject = reqSubject;
+    let body = reqBody;
 
     // If no custom message, try AI generation
     if (!subject) {
@@ -326,7 +339,7 @@ ${repoLines}${failed.length ? `\n⚠️ Failed repos: ${failed.map((r: any) => r
     }
 
     const result = await gitCommitAndPush(project.cwd, subject, body);
-    await syncGitInfo(project);
+    const synced = await syncGitInfo(project);
 
     // Commit draft incrémental : reset du draft + cache nettoyé après succès.
     // Le prochain cycle de travail repart d'une feuille blanche.
@@ -336,16 +349,28 @@ ${repoLines}${failed.length ? `\n⚠️ Failed repos: ${failed.map((r: any) => r
       // Notify the AI session that code was pushed to GitHub
       const commitHash = result.commitHash || "";
       const remoteUrl = result.remoteUrl || "";
-      const notification = `✅ Code successfully pushed to GitHub.
-Commit: ${subject}${body ? "\n" + body : ""}
-Hash: ${commitHash}
-Remote: ${remoteUrl || "origin"}
+      const branch = synced.git?.branch || project.git?.branch || "";
 
-All changes from this commit are now live on the remote repository. Do not suggest modifications to files that were part of this commit unless the user explicitly asks for further changes.`;
-      injectSessionNotification(project.id, notification, {
+      // Push d'un SOUS-PROJET vers la session du projet ACTIF (GitPanel lié) :
+      // le résumé doit identifier le sous-projet et ses stats, sinon on croirait
+      // que c'est le projet affiché qui vient d'être poussé. Le push standard
+      // (notifyTarget === project.id) garde un texte strictement inchangé.
+      const isSubPush = notifyTarget !== project.id;
+      const notification = buildPushNotification({
+        isSubPush,
+        projectName: project.name,
+        subject,
+        body,
+        commitHash,
+        remoteUrl,
+        branch,
+        files: result.staged,
+      });
+      injectSessionNotification(notifyTarget, notification, {
         commitHash,
         subject,
         remote: remoteUrl,
+        ...(isSubPush ? { projectName: project.name, branch, files: result.staged } : {}),
       });
     }
 

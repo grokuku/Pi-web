@@ -74,11 +74,16 @@ interface LinkedPreview {
 
 interface Props {
   project: Project;
+  // Projet AFFICHÉ (session active) où injecter le résumé du push.
+  // Push standard : identique à `project.id`. Push d'un SOUS-PROJET depuis le
+  // GitPanel du placeholder lié : vaut l'id du placeholder actif, pour que le
+  // résumé apparaisse dans le chat affiché (et non dans la session du sous-projet).
+  notifyProjectId?: string;
   onClose: () => void;
   onDone: () => void;
 }
 
-export function CommitPushModal({ project, onClose, onDone }: Props) {
+export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: Props) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [linkedData, setLinkedData] = useState<LinkedPreview | null>(null);
@@ -168,6 +173,8 @@ export function CommitPushModal({ project, onClose, onDone }: Props) {
         body: JSON.stringify({
           subject: subject.trim(),
           body: body.trim() || undefined,
+          // Session cible du résumé (cf. Props.notifyProjectId).
+          notifyProjectId: notifyProjectId || project.id,
         }),
       });
       // Blindage : gère le HTML (login SSO) et les erreurs JSON { error }.
