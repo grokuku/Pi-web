@@ -80,6 +80,13 @@ function isEditable(ext: string): boolean {
   return CODE_EXTS.has(ext) || MARKDOWN_EXTS.has(ext) || ext === "" || [".txt", ".log", ".csv", ".env"].includes(ext);
 }
 
+// ── Splitter arborescence / viewer (onglet files) ──
+// Clé de persistance + bornes de largeur de l'arborescence.
+const FILES_SPLIT_KEY = "pi-web.files-split";
+const FILES_TREE_MIN = 180;        // largeur mini (px)
+const FILES_TREE_DEFAULT = 240;    // largeur par défaut (px)
+const FILES_TREE_MAX_RATIO = 0.6;  // max 60% de la largeur du panneau
+
 function getFileIcon(name: string) {
   const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : "";
   if (IMAGE_EXTS.has(ext)) return <Image size={16} className="text-hacker-info shrink-0" />;
@@ -429,19 +436,76 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
     setSelectedPaths(all);
   }, [tree]);
 
-  const [treeWidth, setTreeWidth] = useState(240);
-  const fileTreeResizeRef = useRef(false);
+  // ── Splitter arborescence / viewer ──
+  // Largeur restaurée depuis localStorage (clé pi-web.files-split) si présente.
+  const [treeWidth, setTreeWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(FILES_SPLIT_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : FILES_TREE_DEFAULT;
+  });
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Ref = valeur courante pour persister au pointerup sans attendre le re-render.
+  const treeWidthRef = useRef(treeWidth);
+  treeWidthRef.current = treeWidth;
+  // Bornes + offset du conteneur capturés au pointerdown (évite le saut et les reflows).
+  const treeResizeRef = useRef<{ left: number; maxWidth: number } | null>(null);
+  const [isResizingTree, setIsResizingTree] = useState(false);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!fileTreeResizeRef.current) return;
-      setTreeWidth((prev) => Math.max(160, Math.min(500, e.clientX)));
+  const startTreeResize = (e: React.PointerEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Capture du pointeur : le drag continue même si la souris quitte le handle
+    // (large de 1px) — sinon la souris en sort aussitôt et le resize se coupe.
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    treeResizeRef.current = {
+      left: rect.left,
+      maxWidth: Math.max(FILES_TREE_MIN, rect.width * FILES_TREE_MAX_RATIO),
     };
-    const handleMouseUp = () => { fileTreeResizeRef.current = false; };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
-  }, []);
+    setIsResizingTree(true);
+  };
+
+  // Listeners attachés sur window (jamais sur le handle) pendant le drag, avec
+  // cleanup à la fin : mousemove -> largeur, mouseup/pointercancel -> fin + save.
+  useEffect(() => {
+    if (!isResizingTree) return;
+    const handleMove = (e: PointerEvent) => {
+      const d = treeResizeRef.current;
+      if (!d) return;
+      // Position RELATIVE au bord gauche du conteneur (pas clientX absolu : le
+      // panneau est décalé par la sidebar/layout, d'où le saut à 500px).
+      const next = Math.max(FILES_TREE_MIN, Math.min(d.maxWidth, e.clientX - d.left));
+      treeWidthRef.current = next;
+      setTreeWidth(next);
+    };
+    const handleUp = () => {
+      setIsResizingTree(false);
+      treeResizeRef.current = null;
+      try { localStorage.setItem(FILES_SPLIT_KEY, String(treeWidthRef.current)); } catch {}
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+    };
+  }, [isResizingTree]);
+
+  // Pendant le drag : curseur global + user-select:none (sinon sélection de texte
+  // et drag saccadé), restaurés à la fin.
+  useEffect(() => {
+    if (!isResizingTree) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [isResizingTree]);
 
   const canEdit = fileContent && isEditable(fileContent.ext);
 
@@ -454,7 +518,7 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
   }
 
   return (
-    <div className="h-full flex">
+    <div ref={containerRef} className="h-full flex">
       {/* Tree panel */}
       <div style={{ width: treeWidth }} className="shrink-0 border-r border-hacker-border-bright bg-hacker-surface/50 flex flex-col relative">
         <div className="flex items-center justify-between px-2 py-1.5 border-b border-hacker-border">
@@ -508,8 +572,8 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
         </div>
         {/* Resize handle */}
         <div
-          onMouseDown={(e) => { e.preventDefault(); fileTreeResizeRef.current = true; }}
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors"
+          onPointerDown={startTreeResize}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize touch-none hover:bg-hacker-accent/30 active:bg-hacker-accent/50 transition-colors"
           title="Resize"
         />
       </div>
