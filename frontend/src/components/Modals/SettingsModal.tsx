@@ -9,6 +9,7 @@ import { MemorySettingsTab } from "./MemorySettingsTab";
 import type { ModelLibrary, RegisteredModel, ProviderConfig } from "../../types";
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
+import { toast } from "../../utils/holaf-toast";
 import type { ResourceType } from "./settings/types";
 import ShortcutsTab from "./settings/ShortcutsTab";
 import SecurityTab from "./settings/SecurityTab";
@@ -241,7 +242,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [authUser, setAuthUser] = useState(() => localStorage.getItem("pi-web-auth-user") || "");
   const [authPass, setAuthPass] = useState(() => localStorage.getItem("pi-web-auth-pass") || "");
   const [showPass, setShowPass] = useState(false);
-  const [authSaved, setAuthSaved] = useState(false);
   const [thinkExpand, setThinkExpand] = useState(() => {
     return localStorage.getItem("pi-web-thinking-expand") !== "false";
   });
@@ -250,7 +250,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
   const [maxAgentSlots, setMaxAgentSlots] = useState(5);
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
-  const [concurrencySaved, setConcurrencySaved] = useState(false);
 
   // ── Webclaw config state ──
   // Durcissement (lot XSS) : la clé n'est plus renvoyée par l'API. Le champ
@@ -259,13 +258,11 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [webclawApiKey, setWebclawApiKey] = useState("");
   const [webclawHasApiKey, setWebclawHasApiKey] = useState(false);
   const [webclawKeyPreview, setWebclawKeyPreview] = useState("");
-  const [webclawSaved, setWebclawSaved] = useState(false);
 
   // ── Tavily config state ──
   const [tavilyApiKey, setTavilyApiKey] = useState("");
   const [tavilyHasApiKey, setTavilyHasApiKey] = useState(false);
   const [tavilyKeyPreview, setTavilyKeyPreview] = useState("");
-  const [tavilySaved, setTavilySaved] = useState(false);
 
   const loadWebclawConfig = useCallback(async () => {
     try {
@@ -295,8 +292,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           setWebclawHasApiKey(!!data.hasApiKey);
           setWebclawKeyPreview(data.apiKeyPreview || "");
         }
-        setWebclawSaved(true);
-        setTimeout(() => setWebclawSaved(false), 2000);
+        toast(t('common.saved'), "success");
       }
     } catch (e: any) {
       console.error("[webclaw] Failed to save:", e);
@@ -327,8 +323,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         setTavilyApiKey("");
         setTavilyHasApiKey((prev) => prev || !!tavilyApiKey);
         if (tavilyApiKey) setTavilyKeyPreview(`••••${tavilyApiKey.slice(-4)}`);
-        setTavilySaved(true);
-        setTimeout(() => setTavilySaved(false), 2000);
+        toast(t('common.saved'), "success");
       }
     } catch (e: any) {
       console.error("[tavily] Failed to save:", e);
@@ -354,8 +349,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       });
       const data = await res.json();
       setConcurrencyStats(data.stats);
-      setConcurrencySaved(true);
-      setTimeout(() => setConcurrencySaved(false), 2000);
+      toast(t('common.saved'), "success");
     } catch (e: any) {
       console.error("[concurrency] Failed to save:", e);
     }
@@ -374,8 +368,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       localStorage.removeItem("pi-web-auth-user");
       localStorage.removeItem("pi-web-auth-pass");
     }
-    setAuthSaved(true);
-    setTimeout(() => setAuthSaved(false), 2000);
+    toast(t('common.saved'), "success");
   };
 
   // ── i18n ──
@@ -738,9 +731,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   </div>
                   <button
                     onClick={saveWebclawConfig}
-                    className={`btn-hacker text-xs px-4 py-1.5 ${webclawSaved ? "text-hacker-accent border-hacker-accent" : ""}`}
+                    className="btn-hacker text-xs px-4 py-1.5"
                   >
-                    {webclawSaved ? "✓ SAVED" : "SAVE"}
+                    SAVE
                   </button>
                 </div>
               </div>
@@ -774,9 +767,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </div>
                     <button
                       onClick={saveTavilyConfig}
-                      className={`btn-hacker text-xs px-4 py-1.5 ${tavilySaved ? "text-hacker-accent border-hacker-accent" : ""}`}
+                      className="btn-hacker text-xs px-4 py-1.5"
                     >
-                      {tavilySaved ? "✓ SAVED" : "SAVE"}
+                      SAVE
                     </button>
                   </div>
                 </div>
@@ -938,8 +931,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </div>
                   </div>
                   <button onClick={saveAuth}
-                    className={`btn-hacker text-xs px-4 py-1.5 ${authSaved ? "text-hacker-accent border-hacker-accent" : ""}`}>
-                    {authSaved ? "✓ SAVED" : "SAVE CREDENTIALS"}
+                    className="btn-hacker text-xs px-4 py-1.5">
+                    SAVE CREDENTIALS
                   </button>
                 </div>
               </div>
@@ -1030,8 +1023,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </div>
                   </div>
                   <button onClick={saveConcurrency}
-                    className={`btn-hacker text-xs px-4 py-1.5 ${concurrencySaved ? "text-hacker-accent border-hacker-accent" : ""}`}>
-                    {concurrencySaved ? "✓ SAVED" : "SAVE"}
+                    className="btn-hacker text-xs px-4 py-1.5">
+                    SAVE
                   </button>
                   {concurrencyStats && (
                     <div className="text-[10px] text-hacker-text-dim space-y-1 mt-2 pt-2 border-t border-hacker-border/30">

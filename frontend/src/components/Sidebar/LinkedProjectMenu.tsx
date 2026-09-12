@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, Link2, Unlink, X } from "lucide-react";
 import { useTranslation } from "../../i18n";
+import { toast } from "../../utils/holaf-toast";
 import type { Project } from "../../types";
 
 const MENU_WIDTH = 240;
@@ -132,7 +133,7 @@ export function LinkedProjectMenu({
       onClose();
     } catch (e: any) {
       console.error("[LinkedProjectMenu] Link failed:", e);
-      alert(t('sidebar.linkedMenu.linkError', e?.message ?? String(e)));
+      toast(t('sidebar.linkedMenu.linkError', e?.message ?? String(e)), "error");
     } finally {
       setBusyId(null);
     }
@@ -151,7 +152,7 @@ export function LinkedProjectMenu({
       onClose();
     } catch (e: any) {
       console.error("[LinkedProjectMenu] Unlink failed:", e);
-      alert(t('sidebar.linkedMenu.unlinkError', e?.message ?? String(e)));
+      toast(t('sidebar.linkedMenu.unlinkError', e?.message ?? String(e)), "error");
     } finally {
       setBusyId(null);
     }

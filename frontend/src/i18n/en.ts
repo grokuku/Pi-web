@@ -361,6 +361,7 @@ export const en = {
     loading: "Loading...",
     error: "Error",
     success: "Success",
+    saved: "Saved",
     confirm: "Confirm",
     yes: "Yes",
     no: "No",

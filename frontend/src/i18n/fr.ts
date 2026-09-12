@@ -361,6 +361,7 @@ export const fr = {
     loading: "Chargement...",
     error: "Erreur",
     success: "Succès",
+    saved: "Enregistré",
     confirm: "Confirmer",
     yes: "Oui",
     no: "Non",

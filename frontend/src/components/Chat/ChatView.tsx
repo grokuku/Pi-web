@@ -14,6 +14,7 @@ import { useIsMobile } from "../../hooks/useMediaQuery";
 // Brique HolafViewport (holaf-lib v0.1.3) — copie pinnée dans vendor/holaf.
 // Zoom/pan/fit de l'image plein écran (mode content, souris-only).
 import { HolafViewport } from "../../vendor/holaf/holaf-viewport.js";
+import { toast } from "../../utils/holaf-toast";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup } from "../../utils/pi-events";
@@ -223,7 +224,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   });
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
-  const [thinkingToast, setThinkingToast] = useState("");
   const [error, setError] = useState("");
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -385,8 +385,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           const levels = ["off","minimal","low","medium","high"];
           const idx = levels.indexOf(data.level||"medium");
           const next = levels[(idx+1)%levels.length];
-          setThinkingLevel(next); setThinkingToast(`THINKING: ${next.toUpperCase()}`);
-          setTimeout(() => setThinkingToast(""), 1500);
+          setThinkingLevel(next);
+          // Retour visuel du changement de niveau : toast GLOBAL (réglage
+          // applicatif) plutôt que la bannière inline historique dans le flux
+          // du chat — 1500 ms, cohérent avec l'ancien timeout.
+          toast(`THINKING: ${next.toUpperCase()}`, "info", 1500);
           fetch("/api/settings/thinking", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({level:next}) });
         }).catch(()=>{});
         return;
@@ -810,7 +813,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
           {/* Bannière WS déconnecté (Lot B) — sticky : reste visible pendant le scroll */}
           {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
-          {thinkingToast && <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 mb-2 bg-hacker-accent/5"><PiLogo className="w-3.5 h-3.5 inline" /> {thinkingToast}</div>}
 
           {/* Messages */}
           <div ref={messagesWrapperRef}>

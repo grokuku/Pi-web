@@ -9,6 +9,7 @@ import {
   type RoutingConfig,
   type TaskCategory,
 } from "../../types";
+import { toast } from "../../utils/holaf-toast";
 
 interface Props {
   onClose: () => void;
@@ -109,7 +110,6 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
   }));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
 
   const updateCategoryModel = (category: TaskCategory, modelId: string | null) => {
     setRouting(prev => ({ ...prev, [category]: { modelId } as CategoryConfig }));
@@ -118,11 +118,9 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
   const handleSave = async () => {
     setLoading(true);
     setError("");
-    setSaved(false);
     try {
       await onSave(routing);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      toast("Routage enregistré", "success");
     } catch (e: any) {
       setError(e?.message || "Échec de l'enregistrement du routage");
     } finally {
@@ -138,7 +136,6 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
           <div className="flex items-center gap-2">
             <span className="text-hacker-accent text-sm font-bold tracking-wider flex items-center gap-2">
               🧭 CONFIGURATION DU ROUTAGE
-              {saved && <span className="text-green-400 text-[10px] font-normal">✓ enregistré</span>}
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-error">
@@ -274,7 +271,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
             disabled={loading}
             className="btn-hacker text-xs px-4 py-1.5 text-hacker-accent border-hacker-accent disabled:opacity-50"
           >
-            {loading ? "Enregistrement…" : saved ? "✓ Enregistré" : "Enregistrer"}
+            {loading ? "Enregistrement…" : "Enregistrer"}
           </button>
         </div>
       </div>

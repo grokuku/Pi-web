@@ -24,6 +24,7 @@ import { X } from "lucide-react";
 import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
+import { initToastTheme, toast } from "./utils/holaf-toast";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -340,6 +341,12 @@ function App() {
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  // ── Toast HolafToast : thème « pi-web » posé une fois au boot ──
+  // (idempotent ; le wrapper rejoue l'init paresseusement au premier toast()) ──
+  useEffect(() => {
+    initToastTheme();
+  }, []);
 
   // ── Model change version counter (forces ModelQuickSwitch to reload) ──
   const [modelChangeVersion, setModelChangeVersion] = useState(0);
@@ -778,7 +785,7 @@ function App() {
       await loadProjects();
     } catch (e: any) {
       console.error("Failed to delete project:", e.message);
-      alert(t('error.deleteProject', e.message));
+      toast(t('error.deleteProject', e.message), "error");
     }
   };
 
