@@ -3,6 +3,7 @@ import { DesignCanvas } from "./DesignCanvas";
 import { Toolbar } from "./Toolbar";
 import { ExportModal } from "./ExportModal";
 import { useTranslation } from "../../i18n";
+import { popupFeatures } from "../../utils/preview-mode";
 
 interface DesignPanelProps {
   projectId?: string;
@@ -250,7 +251,9 @@ export function DesignPanel({ projectId, designId, send, on }: DesignPanelProps)
     const html = editorRef.current?.getHtml?.() ?? htmlContent;
     const css = editorRef.current?.getCss?.() ?? cssContent;
     const full = `<!DOCTYPE html><html><head><style>${css}</style></head><body>${html}</body></html>`;
-    const win = window.open("", "_blank");
+    // Features fournies → vraie popup. Sans elles, window.open("", "_blank")
+    // ouvre un onglet vide dans la plupart des navigateurs.
+    const win = window.open("", "_blank", popupFeatures(1000, 750));
     if (win) {
       win.document.write(full);
       win.document.close();

@@ -46,6 +46,54 @@ export function onPreviewModeChange(cb: (mode: PreviewMode) => void): () => void
   return () => window.removeEventListener(EVENT_NAME, handler);
 }
 
+// ── Dernière preview (persistée) ─────────────────────────────────────────
+// La preview la plus récente est mémorisée pour que le bouton « PREVIEW » du
+// header puisse la rouvrir APRÈS un reload (l'état React serait perdu sinon).
+// Clé localStorage : pi-web.last-preview = { url, title }.
+export interface LastPreview {
+  url: string;
+  title: string;
+}
+
+const LAST_PREVIEW_KEY = "pi-web.last-preview";
+
+// Lit la dernière preview persistée. Retourne null si absente ou invalide.
+export function loadLastPreview(): LastPreview | null {
+  try {
+    const raw = localStorage.getItem(LAST_PREVIEW_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.url === "string" && typeof parsed.title === "string") {
+      return { url: parsed.url, title: parsed.title };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// Persiste la dernière preview (best-effort : quota / mode privé ignorés).
+export function saveLastPreview(preview: LastPreview): void {
+  try {
+    localStorage.setItem(
+      LAST_PREVIEW_KEY,
+      JSON.stringify({ url: preview.url, title: preview.title }),
+    );
+  } catch { /* ignore */ }
+}
+
+// ── Features d'une vraie popup ───────────────────────────────────────────
+// Sans chaîne de features, window.open(url, name) ouvre un ONGLET dans la
+// plupart des navigateurs. Avec « popup=yes » + dimensions on obtient une vraie
+// fenêtre popup, centrée par rapport à la fenêtre courante (viewport).
+export function popupFeatures(w: number, h: number): string {
+  const baseX = typeof window.screenX === "number" ? window.screenX : 0;
+  const baseY = typeof window.screenY === "number" ? window.screenY : 0;
+  const outerW = window.outerWidth || window.screen.width || w;
+  const outerH = window.outerHeight || window.screen.height || h;
+  const left = Math.max(0, Math.round(baseX + (outerW - w) / 2));
+  const top = Math.max(0, Math.round(baseY + (outerH - h) / 2));
+  return `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
+}
+
 // ── Popups d'images ──────────────────────────────────────────────────────
 // hashCourt : FNV-1a 32 bits (base36) — stable pour une même source, court,
 // sans dépendance. Sert à nommer la fenêtre de popup d'une image.
@@ -108,7 +156,7 @@ export function openImagePopup(src: string): boolean {
 
   // 1) URL navigable directement (même origine ou absolue).
   if (/^(https?:|blob:)/i.test(src) || src.startsWith("/")) {
-    window.open(src, winName);
+    window.open(src, winName, popupFeatures(900, 700));
     return true;
   }
 
@@ -121,7 +169,7 @@ export function openImagePopup(src: string): boolean {
       blobUrl = built;
       blobUrlCache.set(src, blobUrl);
     }
-    window.open(blobUrl, winName);
+    window.open(blobUrl, winName, popupFeatures(900, 700));
     return true;
   }
 

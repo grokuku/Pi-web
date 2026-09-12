@@ -25,7 +25,7 @@ import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
-import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "./utils/preview-mode";
+import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -122,7 +122,7 @@ function App() {
     const width = 1200, height = 800;
     const left = window.screenX + 100;
     const top = window.screenY + 100;
-    const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
+    const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
     // Build URL with standalone mode and panel parameter
     const url = new URL(window.location.href);
     url.searchParams.set('standalone', 'true');
@@ -193,8 +193,9 @@ function App() {
   const [showCbmStats, setShowCbmStats] = useState(false);
   // ── Preview (fenêtre flottante) ──
   // lastPreview : dernière URL de preview (rouverte via le bouton header).
+  // Persistée en localStorage (pi-web.last-preview) → survit au reload.
   // previewOpen : visibilité de la fenêtre flottante.
-  const [lastPreview, setLastPreview] = useState<{ url: string; title: string } | null>(null);
+  const [lastPreview, setLastPreview] = useState<LastPreview | null>(() => loadLastPreview());
   const [previewOpen, setPreviewOpen] = useState(false);
   // ── Mode popup (previews + images) — centralisé dans utils/preview-mode ──
   // La source de vérité vit dans localStorage (pi-web.preview-mode) ; on garde
@@ -210,25 +211,24 @@ function App() {
     previewModeRef.current = mode;
     setPreviewModeState(mode);
   }), []);
-  // Ouvre une popup nommée de preview (réutilise la fenêtre existante si la
-  // feature popup=yes l'a nommée « pi-web-preview »), centrée à la première ouverture.
-  const openPreviewPopup = (url: string, center = false) => {
-    let features = "";
-    if (center) {
-      const w = 960, h = 720;
-      const left = Math.max(0, Math.round((window.screen.width - w) / 2));
-      const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-      features = `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
-    }
-    window.open(url, "pi-web-preview", features);
+  // Ouvre une popup nommée de preview (réutilise la fenêtre existante nommée
+  // « pi-web-preview »). Les features sont TOUJOURS fournies : sans elles,
+  // window.open(url, name) ouvre un ONGLET au lieu d'une vraie popup. Les
+  // dimensions ne s'appliquent qu'à la première ouverture (le navigateur
+  // réutilise ensuite la fenêtre nommée existante).
+  const openPreviewPopup = (url: string) => {
+    window.open(url, "pi-web-preview", popupFeatures(960, 720));
   };
   // Présente une preview selon le mode courant : popup si actif, sinon fenêtre interne.
+  // On persiste la dernière preview (localStorage) quel que soit le mode, pour
+  // que le bouton PREVIEW du header reste fonctionnel après un reload.
   const presentPreview = useCallback((url: string, title: string) => {
+    setLastPreview({ url, title });
+    saveLastPreview({ url, title });
     if (previewModeRef.current === "popup") {
       openPreviewPopup(url);
       return;
     }
-    setLastPreview({ url, title });
     setPreviewOpen(true);
   }, []);
   // Bascule le mode popup : active = ouvre la popup (centrée) pour la preview
@@ -239,7 +239,7 @@ function App() {
     const next: PreviewMode = previewModeRef.current === "popup" ? "internal" : "popup";
     if (next === "popup") {
       // Activation : la preview courante part dans la popup centrée.
-      if (lastPreview) openPreviewPopup(lastPreview.url, true);
+      if (lastPreview) openPreviewPopup(lastPreview.url);
       setPreviewOpen(false); // ferme la fenêtre interne → pas de doublon
     }
     // utilitaire : persiste + émet l'event (l'état local suit via l'abonnement).
