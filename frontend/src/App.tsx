@@ -25,6 +25,7 @@ import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
+import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "./utils/preview-mode";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -195,15 +196,20 @@ function App() {
   // previewOpen : visibilité de la fenêtre flottante.
   const [lastPreview, setLastPreview] = useState<{ url: string; title: string } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // ── Mode popup de preview (persisté) ──
-  // - 'internal' : les previews s'ouvrent dans la fenêtre interne flottante.
-  // - 'popup' : les previews naviguent dans une popup de navigateur nommée
-  //   « pi-web-preview » (réutilisée par nom, recréée si fermée) via
-  //   window.open → Pi-Web reste libre pour discuter avec l'IA.
-  const [previewMode, setPreviewMode] = useState<"internal" | "popup">(() =>
-    localStorage.getItem("pi-web.preview-mode") === "popup" ? "popup" : "internal"
-  );
+  // ── Mode popup (previews + images) — centralisé dans utils/preview-mode ──
+  // La source de vérité vit dans localStorage (pi-web.preview-mode) ; on garde
+  // ici un état local uniquement pour le rendu (bouton 🪟 « actif ») et on
+  // s'abonne au CustomEvent 'pi-web-preview-mode' pour propager les changements
+  // en LIVE (réglage des paramètres ou toggle de la toolbar).
+  // - 'internal' : previews dans la fenêtre interne, images dans la modale.
+  // - 'popup' : previews dans la popup unique « pi-web-preview », images dans
+  //   une popup par image (« pi-web-img-<hash-court> »).
+  const [previewMode, setPreviewModeState] = useState<PreviewMode>(() => getPreviewMode());
   const previewModeRef = useRef(previewMode); previewModeRef.current = previewMode;
+  useEffect(() => onPreviewModeChange((mode) => {
+    previewModeRef.current = mode;
+    setPreviewModeState(mode);
+  }), []);
   // Ouvre une popup nommée de preview (réutilise la fenêtre existante si la
   // feature popup=yes l'a nommée « pi-web-preview »), centrée à la première ouverture.
   const openPreviewPopup = (url: string, center = false) => {
@@ -230,17 +236,14 @@ function App() {
   // Désactive = re-clic, le mode repasse en interne ; la popup déjà ouverte
   // reste ouverte, libre au user de la fermer.
   const handleTogglePopup = useCallback(() => {
-    setPreviewMode(prev => {
-      if (prev === "popup") {
-        localStorage.setItem("pi-web.preview-mode", "internal");
-        return "internal";
-      }
+    const next: PreviewMode = previewModeRef.current === "popup" ? "internal" : "popup";
+    if (next === "popup") {
       // Activation : la preview courante part dans la popup centrée.
       if (lastPreview) openPreviewPopup(lastPreview.url, true);
       setPreviewOpen(false); // ferme la fenêtre interne → pas de doublon
-      localStorage.setItem("pi-web.preview-mode", "popup");
-      return "popup";
-    });
+    }
+    // utilitaire : persiste + émet l'event (l'état local suit via l'abonnement).
+    setPreviewMode(next);
   }, [lastPreview]);
   const [activeMode, setActiveMode] = useState<string>("code");
   // BUG mode-sync : l'activeMode réel du backend est exposé dans le payload WS
@@ -1019,9 +1022,14 @@ function App() {
 
         <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
-        {/* Preview button — rouvre la dernière preview (grisé si aucune) */}
+        {/* Preview button — rouvre la dernière preview (grisé si aucune).
+            Respecte le mode courant : popup si actif, sinon fenêtre interne. */}
         <button
-          onClick={() => { if (lastPreview) setPreviewOpen(true); }}
+          onClick={() => {
+            if (!lastPreview) return;
+            if (previewModeRef.current === "popup") openPreviewPopup(lastPreview.url);
+            else setPreviewOpen(true);
+          }}
           disabled={!lastPreview}
           className={`hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
             lastPreview

@@ -10,6 +10,7 @@ import type { ModelLibrary, RegisteredModel, ProviderConfig } from "../../types"
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { toast } from "../../utils/holaf-toast";
+import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "../../utils/preview-mode";
 import type { ResourceType } from "./settings/types";
 import ShortcutsTab from "./settings/ShortcutsTab";
 import SecurityTab from "./settings/SecurityTab";
@@ -239,6 +240,12 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   }, [activeProjectId]);
 
   // ── General parameters state ──
+  // ── Mode d'ouverture des images & previews (reflète utils/preview-mode) ──
+  // S'abonne au CustomEvent pour rester synchrone avec la toolbar 🪟 ; le clic
+  // appelle setPreviewMode (persiste + émet) → effet LIVE sans reload.
+  const [previewMode, setPreviewModeState] = useState<PreviewMode>(() => getPreviewMode());
+  useEffect(() => onPreviewModeChange(setPreviewModeState), []);
+
   const [authUser, setAuthUser] = useState(() => localStorage.getItem("pi-web-auth-user") || "");
   const [authPass, setAuthPass] = useState(() => localStorage.getItem("pi-web-auth-pass") || "");
   const [showPass, setShowPass] = useState(false);
@@ -954,6 +961,34 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       <option value="fr">Français</option>
                       <option value="en">English</option>
                     </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Interface — ouverture des images & previews (modale interne ↔ popup) */}
+              <div className="border border-hacker-border bg-hacker-surface/50">
+                <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🪟 {t('ui.previewMode.title')}</span>
+                </div>
+                <div className="p-3 space-y-2">
+                  <div className="text-[11px] text-hacker-text-dim">{t('ui.previewMode.desc')}</div>
+                  <div className="flex items-center gap-1">
+                    {(["internal", "popup"] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => setPreviewMode(m)}
+                        className={`text-xs px-3 py-1 border transition-colors ${
+                          previewMode === m
+                            ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
+                            : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
+                        }`}
+                      >
+                        {m === "internal" ? t('ui.previewMode.internal') : t('ui.previewMode.popup')}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-hacker-text-dim">
+                    {previewMode === "popup" ? t('ui.previewMode.popupHint') : t('ui.previewMode.internalHint')}
                   </div>
                 </div>
               </div>

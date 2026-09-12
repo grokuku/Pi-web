@@ -15,6 +15,7 @@ import { useIsMobile } from "../../hooks/useMediaQuery";
 // Zoom/pan/fit de l'image plein écran (mode content, souris-only).
 import { HolafViewport } from "../../vendor/holaf/holaf-viewport.js";
 import { toast } from "../../utils/holaf-toast";
+import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup } from "../../utils/pi-events";
@@ -479,6 +480,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     };
   }, [viewerFile, isMobile]);
 
+  // ── Ouverture d'un fichier depuis le chat (image ou texte) ──
+  // En mode popup, les IMAGES s'ouvrent dans une popup PAR image
+  // (window.open nommée par hash de la source — la même image réutilise sa
+  // fenêtre). Les sources non navigables (data: non convertible) retombent sur
+  // la visionneuse modale interne. Le texte garde toujours la modale.
+  const handleFileClick = useCallback((f: { type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string }) => {
+    if (f.type === "image" && getPreviewMode() === "popup" && openImagePopup(f.src)) return;
+    setViewerFile(f);
+  }, []);
+
   // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
   /** Instant scroll (for streaming — ResizeObserver-compatible) */
   const scrollToBottomInstant = useCallback(() => {
@@ -816,7 +827,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
           {/* Messages */}
           <div ref={messagesWrapperRef}>
-            <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={setViewerFile} />
+            <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={handleFileClick} />
           </div>
           <div ref={chatEndRef} />
 

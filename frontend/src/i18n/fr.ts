@@ -343,6 +343,17 @@ export const fr = {
     close: "Fermer",
     mockup: "Maquette",
   },
+  // ── Réglages d'interface (préférences d'ouverture) ──
+  ui: {
+    previewMode: {
+      title: "IMAGES ET PREVIEWS",
+      desc: "Ouvrir les images et les previews web dans une fenêtre popup du navigateur au lieu des fenêtres internes.",
+      internal: "Modale interne",
+      popup: "Popup",
+      internalHint: "Previews et images s'ouvrent dans des fenêtres intégrées à Pi-Web.",
+      popupHint: "Previews dans une popup unique réutilisée ; chaque image dans sa propre popup.",
+    },
+  },
   modelQuickSwitch: {
     placeholder: "Rechercher des modèles...",
     noResults: "Aucun modèle trouvé",

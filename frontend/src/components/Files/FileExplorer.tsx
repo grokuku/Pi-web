@@ -9,6 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 
 interface FileEntry {
   name: string;
@@ -295,7 +296,15 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
 
     const ext = filePath.lastIndexOf(".") >= 0 ? filePath.slice(filePath.lastIndexOf(".")).toLowerCase() : "";
     if (IMAGE_EXTS.has(ext)) {
-      setImageUrl(`/api/files/read?path=${encodeURIComponent(filePath)}`);
+      // Route servie à l'image (même origine).
+      const url = `/api/files/read?path=${encodeURIComponent(filePath)}`;
+      // Mode popup : ouverture dans une popup PAR image (nommée par hash du
+      // chemin → la même image réutilise sa fenêtre). window.open est ici
+      // SYNCHRONE (aucun await avant) donc dans le geste utilisateur : le
+      // popup blocker ne le refuse pas. On garde aussi l'aperçu inline dans
+      // le panneau FILES pour ne pas laisser la zone vide.
+      if (getPreviewMode() === "popup") openImagePopup(url);
+      setImageUrl(url);
       setImageExt(ext);
       return;
     }
