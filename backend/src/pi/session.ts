@@ -25,6 +25,7 @@ import { appendDraft } from "./commit-draft.js";
 import { librarianTools } from "./librarian-tools.js";
 import { memoryTools } from "./memory-tools.js";
 import { previewTools } from "./preview-tools.js";
+import { filterImagesForModel } from "./image-budget.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject } from "../projects/manager.js";
@@ -366,6 +367,26 @@ export async function createPiSession(
       modelRuntime: sharedModelRuntime!,
       customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
+
+    // ── Budget images (règle anti-erreur provider 400) ──
+    // Le SDK convertit l'historique AgentMessage[] → Message[] via
+    // agent.convertToLlm() à CHAQUE tour, juste avant l'envoi au provider.
+    // On l'enveloppe pour filtrer les images : les images générées par l'agent
+    // (toolResult/assistant, ex. web_screenshot) ne repartent jamais au modèle,
+    // et seules les images du DERNIER message user sont conservées. Rien n'est
+    // supprimé de l'UI / de la session (cf. pi/image-budget.ts).
+    try {
+      const agent = (session as any).agent;
+      if (agent && typeof agent.convertToLlm === "function") {
+        const origConvertToLlm = agent.convertToLlm.bind(agent);
+        agent.convertToLlm = async (messages: unknown[]) =>
+          filterImagesForModel(await origConvertToLlm(messages));
+        console.log(`[PiSession] Image budget filter installed for project ${projectId}`);
+      }
+    } catch (e: any) {
+      // Le filtre ne doit jamais empêcher la création de session.
+      console.warn(`[PiSession] Image budget filter install failed (${projectId}): ${e?.message || e}`);
+    }
 
     // Inject project context into system prompt
     if (options?.projectName) {
