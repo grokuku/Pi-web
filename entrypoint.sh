@@ -60,6 +60,17 @@ NPM_GLOBAL_ROOT=$(npm root -g)
 mkdir -p "$NPM_GLOBAL_ROOT"
 
 if [ -f "$PI_SETTINGS" ]; then
+  # CONSTAT (étape 2, double chargement cbm/harness) : ce bloc ne PURGE PAS
+  # inconditionnellement settings.extensions. Le reset `settings.extensions = [...]`
+  # (plus bas) n'est atteint que si settings.packages contient des packages npm/git
+  # (branche `if [ -n "$PACKAGES" ]`). Or avec `packages: []`, la branche « Also add
+  # local extensions » ne fait que PUSH sans vider : les vieux chemins
+  # /app/extensions/codebase-memory/index.ts et /app/extensions/harness-orchestrator/
+  # index.ts restent donc dans le settings PERSISTANT (volume /root/.pi/agent). Ils
+  # sont désormais absents du repo, mais le garde-fou est ailleurs : session.ts filtre
+  # ces chemins via DefaultResourceLoaderOptions.extensionsOverride, quel que soit
+  # l'état du settings. La lecture de /app/extensions est elle-même sûre (readdir +
+  # existsSync) : les 2 dossiers retirés n'ajoutent aucun chemin cassé.
   PACKAGES=$(node -e "
     try {
       const s = JSON.parse(require('fs').readFileSync('$PI_SETTINGS','utf8'));
@@ -191,8 +202,9 @@ mkdir -p "$CBM_CACHE_DIR"
 # Start CBM HTTP server in background (3D graph UI on port 9749).
 # NOTE (v0.10.4): in --ui mode the HTTP /rpc endpoint is restricted — only
 # list_projects and get_code_snippet are allowed; everything else returns 403
-# "UI RPC method is not allowed". The Pi extension (extensions/codebase-memory)
-# therefore talks to the binary over MCP stdio for the FULL tool surface;
+# "UI RPC method is not allowed". The Pi extension (inline: backend/src/pi/
+# ext-inline/codebase-memory.ts, ex extensions/codebase-memory) therefore talks
+# to the binary over MCP stdio for the FULL tool surface;
 # this HTTP server is kept alive for the Pi-Web 3D graph UI (/cbm-ui/).
 # The binary is an MCP stdio server — it exits if stdin closes.
 # We keep stdin open with `tail -f /dev/null` so the HTTP UI stays alive.

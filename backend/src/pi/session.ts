@@ -1,4 +1,6 @@
-import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime, buildSessionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager, ModelRuntime, SettingsManager, buildSessionContext, estimateTokens, getAgentDir } from "@earendil-works/pi-coding-agent";
+import harnessExtension from "./ext-inline/harness.js";
+import codebaseMemoryExtension from "./ext-inline/codebase-memory.js";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -360,11 +362,59 @@ export async function createPiSession(
     sessionManager = SessionManager.create(cwd, sessionDir);
   }
 
+  // ── Extensions INLINE (CORE, étape 1+2) ────────────────────────
+  // harness-orchestrator + codebase-memory sont injectés INLINE via le
+  // DefaultResourceLoader du SDK 0.85.1 (DefaultResourceLoaderOptions.extensionFactories
+  // : InlineExtension[]). createAgentSession n'expose PAS de champ inline natif : la
+  // branche passe par un resourceLoader pré-construit (reload() déjà appelé, comme le
+  // fait le SDK quand il crée lui-même son loader. Les deux sont ainsi inconditionnels,
+  // indépendamment de settings.json/entrypoint.
+  //
+  // ÉTAPE 2 — fin du DOUBLE chargement : le SDK charge AUSSI ces 2 extensions depuis
+  // settings.extensions (chemins /app/extensions/... ajoutés par entrypoint.sh) en PLUS
+  // des factories inline → tools en double (delegate, cbm_*). extensionsOverride filtre
+  // le LoadExtensionsResult APRÈS chargement, en excluant tout chemin contenant
+  // /codebase-memory/ ou /harness-orchestrator/ (quel que soit le préfixe /app ou autre).
+  // C'est un garde-fou durable : même si le settings PERSISTANT contient encore ces
+  // anciens chemins (entrypoint ne purge jamais settings.extensions, il ne fait que
+  // push), ils sont ignorés. Les 3 annexes (web-screenshot, file-analyzer,
+  // compaction-checkpoint) ne matchent pas → elles passent. Les factories inline ont un
+  // path synthétique `<inline:N>` → jamais filtrées.
+  //
+  // NOTE idempotence (sessions créées/reloadées plusieurs fois) :
+  //  - cbm : état module-level partagé (status, spawnPromise, downloadInFlight,
+  //    attemptedAutoInstall) + check du port avant spawn (isServerReady, re-use du 2e
+  //    process via BUG-61) → pas de double serveur ; le client stdio est lui aussi
+  //    module-level (stdioReadyPromise) ; re-index gardé (tool_execution_end, throttle).
+  //  - harness : handler before_agent_start idempotent (bloc HARNESS_ROLE retiré puis
+  //    réinjecté à chaque turn) ; le tool `delegate` est enregistré une seule fois
+  //    (première registration gagne dans le runner du SDK).
+  const inlineSettingsManager = SettingsManager.create(cwd, getAgentDir());
+  const inlineResourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    settingsManager: inlineSettingsManager,
+    extensionFactories: [harnessExtension, codebaseMemoryExtension],
+    // Exclut les extensions désormais fournies INLINE (double chargement éteint).
+    extensionsOverride: (base) => {
+      const EXCLUDED = ["/codebase-memory/", "/harness-orchestrator/"];
+      const isExcluded = (p: string | undefined): boolean =>
+        !!p && EXCLUDED.some((seg) => p.includes(seg));
+      const extensions = base.extensions.filter((ext) => !isExcluded(ext.path) && !isExcluded(ext.resolvedPath));
+      // On purge aussi les erreurs/diagnostics associés aux chemins exclus.
+      const errors = base.errors.filter((err) => !isExcluded(err.path));
+      return { ...base, extensions, errors };
+    },
+  });
+  await inlineResourceLoader.reload();
+
   try {
     const { session } = await createAgentSession({
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
+      settingsManager: inlineSettingsManager,
+      resourceLoader: inlineResourceLoader,
       customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
 

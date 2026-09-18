@@ -933,7 +933,7 @@ export default async function (pi: ExtensionAPI) {
       if (params.limit) args.limit = params.limit;
       if (params.file_pattern) args.file_pattern = params.file_pattern;
       const result = await mcpCallForProject("search_graph", ctx.cwd, args, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -955,7 +955,7 @@ export default async function (pi: ExtensionAPI) {
         direction: params.direction,
         depth: params.depth || 3,
       }, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -978,7 +978,7 @@ export default async function (pi: ExtensionAPI) {
       };
       if (params.file) args.file = params.file;
       const result = await mcpCallForProject("get_code_snippet", ctx.cwd, args, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -998,7 +998,7 @@ export default async function (pi: ExtensionAPI) {
       if (params.file_pattern) args.file_pattern = params.file_pattern;
       if (params.limit) args.limit = params.limit;
       const result = await mcpCallForProject("search_code", ctx.cwd, args, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -1049,11 +1049,13 @@ export default async function (pi: ExtensionAPI) {
             text: `cbm_diff : impossible de lire le diff git dans "${repoDir}" — ${e.message}. ` +
               "Vérifiez que ce chemin est un dépôt git valide.",
           }],
+          details: undefined,
         };
       }
       if (files.length === 0) {
         return {
           content: [{ type: "text", text: "cbm_diff : aucune modification détectée (working tree propre)." }],
+          details: undefined,
         };
       }
       const lines: string[] = [`Modifications détectées (${files.length} fichier(s)) :`];
@@ -1079,7 +1081,7 @@ export default async function (pi: ExtensionAPI) {
           lines.push(`  (recherche de symboles impossible : ${e.message})`);
         }
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      return { content: [{ type: "text", text: lines.join("\n") }], details: undefined };
     },
   });
 
@@ -1098,7 +1100,7 @@ export default async function (pi: ExtensionAPI) {
       const args: Record<string, unknown> = {};
       if (params.path) args.path = params.path;
       const result = await mcpCallForProject("get_architecture", ctx.cwd, args, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -1113,7 +1115,7 @@ export default async function (pi: ExtensionAPI) {
     parameters: cypherParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
       const result = await mcpCallForProject("query_graph", ctx.cwd, { query: params.query }, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -1127,7 +1129,7 @@ export default async function (pi: ExtensionAPI) {
     parameters: schemaParams,
     async execute(_toolCallId, _params: any, signal, _onUpdate, ctx) {
       const result = await mcpCallForProject("get_graph_schema", ctx.cwd, {}, signal);
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
 
@@ -1136,7 +1138,7 @@ export default async function (pi: ExtensionAPI) {
     description: "Update codebase-memory-mcp binary to the latest version",
     handler: async (_args, ctx) => {
       if (!existsSync(BIN_PATH)) {
-        ctx.ui.notify("Binary not installed. It will download on next session start.", "warn");
+        ctx.ui.notify("Binary not installed. It will download on next session start.", "info");
         return;
       }
       ctx.ui.setStatus("cbm", "Updating...");
