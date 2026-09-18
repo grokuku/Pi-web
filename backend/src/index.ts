@@ -8,6 +8,12 @@ import { setMaxListeners } from "events";
 
 // Increase max listeners for abort signals (Pi SDK creates many per session)
 setMaxListeners(50);
+
+// P0 observabilité 2/2 : capture de tout console.error « extérieur » (modules,
+// SDK, startup...) vers .data/logs/backend-*.log. Le logger lui-même écrit via
+// la référence pristine de console.error → aucune boucle. Installé le plus tôt
+// possible pour couvrir aussi le bootstrap.
+installConsoleCapture();
 import { fileURLToPath } from "url";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 
@@ -32,6 +38,15 @@ import previewRouter from "./routes/preview.js";
 import { startLibrarianCron } from "./pi/librarian-cron.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
+// buildFullUiHistory (+ serializeMessagesForUi) vit dans pi/ui-history.ts :
+// module PUR, extrait de index.ts pour être testable sans les effets de bord
+// du bootstrap serveur (Express + WS + crons). Cf. pi/ui-history.test.ts.
+import { buildFullUiHistory } from "./pi/ui-history.js";
+
+// ── Logger fichier (P0 observabilité 2/2) ──
+// Chaque erreur/crash est dupliqué dans .data/logs/ (persistant, lisible via
+// le volume Docker) EN PLUS de stdout. Cf. utils/logger.ts et docs/logs-backend.md.
+import { logger, installConsoleCapture } from "./utils/logger.js";
 import {
   createPiSession,
   subscribeToEvents,
@@ -289,63 +304,6 @@ async function cbmProxy(req: any, res: any) {
     console.error("[cbm-proxy] Request failed:", cbmUrl, e.message, e.cause?.message || "");
     res.status(502).send("CBM graph server not available.");
   }
-}
-
-// ── Fonction partagée de sérialisation des messages (BUG-46 fix) ──
-// Utilisée par pi_start et pi_history_request pour reconstruire l'historique UI.
-function serializeMessagesForUi(messages: any[]): any[] {
-  return messages.map((m: any) => {
-    const base: any = {
-      id: m.id,
-      role: m.role,
-      timestamp: m.timestamp,
-    };
-    if (m.role === "user") {
-      base.content = m.content;
-    } else if (m.role === "assistant") {
-      const rawContent = Array.isArray(m.content) ? m.content : m.content;
-      base.content = Array.isArray(rawContent)
-        ? rawContent.map((b: any) => {
-            if (b.type === "tool_use" || b.type === "function") {
-              return {
-                ...b,
-                type: "toolCall",
-                name: b.name || b.toolName || "unknown",
-                arguments: b.arguments || b.input || b.args || {},
-              };
-            }
-            return b;
-          })
-        : rawContent;
-      base.usage = m.usage;
-      // BUG-68 : préserver les métadonnées d'échec LLM (stopReason:"error" + errorMessage)
-      // Sinon l'erreur est avalée ici et le frontend ne reçoit qu'un message assistant vide.
-      base.stopReason = m.stopReason;
-      base.errorMessage = m.errorMessage;
-      base.thinking = Array.isArray(base.content)
-        ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
-        : undefined;
-    } else if (m.role === "toolResult") {
-      base.toolCallId = m.toolCallId;
-      base.toolName = m.toolName;
-      base.content = m.content;
-      base.details = m.details;
-    } else if (m.role === "bashExecution") {
-      base.command = m.command;
-      base.output = m.output;
-      base.exitCode = m.exitCode;
-      base.cancelled = m.cancelled;
-    } else if (m.role === "compactionSummary") {
-      base.summary = m.summary;
-      base.tokensBefore = m.tokensBefore;
-    } else if (m.role === "custom") {
-      base.content = m.content;
-      base.customType = m.customType;
-      base.display = m.display;
-      base.details = m.details;
-    }
-    return base;
-  });
 }
 
 // Main UI page (iframe src)
@@ -677,7 +635,12 @@ wss.on("connection", (ws: ExtendedWS) => {
       const msg = JSON.parse(raw.toString());
       await handleWsMessage(ws, msg);
     } catch (e) {
-      console.error("WS message error:", e);
+      // P0 observabilité : trace persistante ; le miroir console reste actif
+      // (docker logs) via logger.error.
+      logger.error("ws", "WS message error", {
+        error: e instanceof Error ? e.message : String(e),
+        stack: e instanceof Error ? e.stack : undefined,
+      });
       const errorMessage = e instanceof Error ? e.message : "Unknown error";
       ws.send(
         JSON.stringify({ type: "error", error: errorMessage })
@@ -773,15 +736,22 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
         // Send full message history for UI reconstruction
         if (state.session) {
-          const messages = state.session.messages || [];
+          // fix « messages récents manquants » : historique COMPLET (entrées
+          // brutes, pré-compaction incluse) au lieu du seul contexte LLM.
+          const messages = buildFullUiHistory(state.session);
           ws.send(JSON.stringify({
             type: "pi_history",
             projectId: pid,
-            messages: serializeMessagesForUi(messages),
+            messages,
           }));
         }
       } catch (e: any) {
-        console.error("Failed to create/resume Pi session:", e);
+        // P0 observabilité : trace persistante + miroir console (docker logs).
+        logger.error("pi-session", "Failed to create/resume Pi session", {
+          projectId: pid,
+          error: e?.message ?? String(e),
+          stack: e?.stack,
+        });
         ws.send(
           JSON.stringify({ type: "error", error: `Failed to start Pi session: ${e.message}` })
         );
@@ -793,11 +763,12 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     case "pi_history_request": {
       const state = getSession(projectId);
       if (state?.session) {
-        const messages = state.session.messages || [];
+        // fix « messages récents manquants » : cf. buildFullUiHistory.
+        const messages = buildFullUiHistory(state.session);
         ws.send(JSON.stringify({
           type: "pi_history",
           projectId,
-          messages: serializeMessagesForUi(messages),
+          messages,
         }));
       }
       break;
@@ -974,7 +945,12 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
 // ─── Global error handler (catch unhandled errors) ────────
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("[Express] Unhandled error:", err);
+  // P0 observabilité : trace persistante + miroir console (docker logs).
+  // Volontairement SANS body/headers de la requête (risque de fuite de secrets).
+  logger.error("express", "Unhandled error", {
+    error: err?.message ?? String(err),
+    stack: err?.stack,
+  });
   const message = err?.message || (typeof err === "string" ? err : "Internal server error");
   res.status(500).json({ error: message });
 });
@@ -1050,6 +1026,9 @@ process.on("SIGINT", shutdown);
 
 // ── Crash handler ──
 process.on("uncaughtException", (error) => {
+  // P0 observabilité : dump persistant SYNCHRONE AVANT le process.exit(1)
+  // ci-dessous (écriture en qq ms, très largement dans la fenêtre de 1s).
+  logger.crash(error, "uncaughtException");
   console.error("\n========== UNCAUGHT EXCEPTION ==========");
   console.error("Time:", new Date().toISOString());
   console.error("Error:", error);
@@ -1061,6 +1040,8 @@ process.on("uncaughtException", (error) => {
 });
 
 process.on("unhandledRejection", (reason, promise) => {
+  // P0 observabilité : dump persistant synchrone (cf. uncaughtException).
+  logger.crash(reason, "unhandledRejection", { promise: String(promise) });
   console.error("\n========== UNHANDLED REJECTION ==========");
   console.error("Time:", new Date().toISOString());
   console.error("Reason:", reason);

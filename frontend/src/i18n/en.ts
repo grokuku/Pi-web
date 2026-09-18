@@ -40,7 +40,7 @@ export const en = {
     llmError: "LLM error — empty response (the process stopped). Try again or check the model/provider.",
     timeoutError: "Interrupted: no model response for 5 min",
     thoughtFor: (dur: string) => `thought for ${dur}`,
-    historyHint: (n: number) => `${n} earlier message${n > 1 ? "s" : ""} — scroll up for full history`,
+    loadEarlier: (n: number) => `Load ${n} earlier message${n > 1 ? "s" : ""}`,
     streaming: "⚡ STREAMING",
     response: "🤖 RESPONSE",
     dropFiles: "DROP FILES HERE",

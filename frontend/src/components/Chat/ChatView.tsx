@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef, type RefObject } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -239,6 +239,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const messagesRef = useRef<DisplayMessage[]>([]);
   // BUG-21 fix: flag pour ignorer le pi_history qui arrive après un /new ou /clear
   const justClearedRef = useRef(false);
+  // Horodate du /clear ou /new : le pi_history n'est avalé que s'il arrive
+  // dans la fenêtre qui suit la commande. Avant ce fix, le flag restait vrai
+  // pour toujours quand aucun pi_history ne suivait la commande (le backend ne
+  // en push PAS après /clear//new, et un pi_history vide sortait avant le
+  // reset du flag) → la PROCHAINE resync légitime (reconnexion WS, changement
+  // de projet) était avalée elle aussi : l'historique affiché restait
+  // tronqué/périmé jusqu'à un reload complet (« les récents manquent »).
+  const clearedAtRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
 
@@ -319,9 +327,19 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const pid = msg.projectId;
       if (!pid || !msg.messages || !Array.isArray(msg.messages) || msg.messages.length === 0) return;
       // BUG-21 fix: ignorer le pi_history qui arrive juste après un /new ou /clear
+      // (fenêtre de 10 s : au-delà, c'est une resync légitime — reconnect,
+      // changement de projet — qui ne doit PAS être avalée, sinon l'UI reste
+      // bloquée sur un état périmé et les derniers messages disparaissent).
       if (justClearedRef.current) {
+        if (Date.now() - clearedAtRef.current < 10_000) {
+          justClearedRef.current = false;
+          clearedAtRef.current = 0;
+          return;
+        }
+        // Resync tardive (> 10 s après le clear) : c'est un vrai état backend,
+        // on l'applique et on nettoie le flag.
         justClearedRef.current = false;
-        return;
+        clearedAtRef.current = 0;
       }
 
       const existing = chatHistory.getMessagesFor(pid);
@@ -334,10 +352,34 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         const nonStreamingCount = existing.length - streamingMsgs.length;
         const display = convertHistoryToDisplayMessages(msg.messages);
         if (display.length > nonStreamingCount) {
-          // Agent likely finished while disconnected — apply finalized history
-          chatHistory.saveMessagesFor(display, pid);
-          currentAssistantIdRef.current = null;
-          if (pid === projectId) setMessages(display);
+          // Agent likely finished while disconnected — apply finalized history.
+          // (fix « récents manquants ») Les messages EN COURS de streaming ne
+          // sont pas dans pi_history (commités à message_end uniquement) : au
+          // lieu de les JETER (l'id en cours était perdu, les deltas suivants
+          // ne trouvaient plus leur message → le tour disparaissait de l'écran
+          // jusqu'à la prochaine resync), on les RÉATTACHE à la fin de
+          // l'historique finalisé et on garde l'assistantId actif.
+          // Attention : si le message_end a été manqué pendant la coupure, le
+          // message est DÉJÀ finalisé dans l'historique (avec un autre id —
+          // l'id d'entrée ≠ l'id live) → dédup par contenu (le streamé est un
+          // préfixe du finalisé) sur les derniers messages.
+          const tail = display.slice(-3);
+          const isAlreadyCommitted = (s: DisplayMessage): boolean => {
+            if (s.role !== "assistant") return false;
+            const probe = (s.content || "").trim();
+            if (!probe) return false; // vide → pas identifiable, on garde
+            return tail.some(d => d.role === "assistant" && (d.content || "").includes(probe));
+          };
+          const stillStreaming = streamingMsgs.filter(m => !isAlreadyCommitted(m));
+          const merged = stillStreaming.length > 0 ? [...display, ...stillStreaming] : display;
+          chatHistory.saveMessagesFor(merged, pid);
+          if (pid === projectId) {
+            setMessages(merged);
+            // L'assistant en cours est le dernier message _streaming conservé.
+            const lastStreaming = [...stillStreaming].reverse().find(m => m.role === "assistant");
+            currentAssistantIdRef.current = lastStreaming ? lastStreaming.id : null;
+            chatHistory.setAssistantIdFor(pid, currentAssistantIdRef.current);
+          }
         }
         // Otherwise agent still running — preserve live streaming state.
         return;
@@ -641,6 +683,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       if (msg.command === "clear" || msg.command === "new") {
         setMessages([]);
         justClearedRef.current = true;
+        clearedAtRef.current = Date.now();
       }
       if (msg.command === "quit") onQuit?.();
     });
@@ -827,7 +870,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
           {/* Messages */}
           <div ref={messagesWrapperRef}>
-            <GroupedMessages messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={handleFileClick} />
+            <GroupedMessages key={projectId} messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={handleFileClick} scrollContainerRef={chatContainerRef} />
           </div>
           <div ref={chatEndRef} />
 
@@ -931,9 +974,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 // ── Grouped Messages ──
 interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; thinkingDurationMs?:number; }
 
-const MAX_VISIBLE_GROUPS = 200;
+// Fenêtre d'affichage paginée des messages : on ne rend que les N derniers
+// groupes au départ, puis « charger les messages antérieurs » étend la fenêtre
+// vers le haut. Avant, un slice(-200) définitif faisait disparaître pour
+// toujours les messages plus anciens (l'indice « faites défiler » mentait :
+// ils n'étaient pas dans le DOM). Objectif : tout l'historique reste
+// accessible sans créer un DOM géant d'un coup.
+const INITIAL_VISIBLE_GROUPS = 200;
+const VISIBLE_GROUPS_STEP = 200;
 
-const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
+const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick, scrollContainerRef }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -963,12 +1013,58 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
     prevGroupsRef.current = { src: messages, groups: next };
     return next;
   }, [messages]);
-  // Only render the last MAX_VISIBLE_GROUPS groups to prevent extremely long chats from
-  // creating unmanageable DOM trees (200 groups ≈ 400+ messages is a reasonable cap).
-  const visibleGroups = groups.length > MAX_VISIBLE_GROUPS ? groups.slice(-MAX_VISIBLE_GROUPS) : groups;
+  // Nombre de groupes effectivement rendus (fenêtre extensible vers le haut).
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_GROUPS);
+  const visibleGroups = groups.length > visibleCount ? groups.slice(-visibleCount) : groups;
   const hiddenCount = groups.length - visibleGroups.length;
+
+  // Insertion de contenu AU-DESSUS du viewport lors d'un « charger plus » :
+  // on mémorise la distance vue↔bas avant le rendu puis on la restaure pour
+  // éviter que l'écran saute.
+  const scrollAnchorRef = useRef<number | null>(null);
+  const adjustScrollBeforeRender = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) scrollAnchorRef.current = el.scrollHeight - el.scrollTop;
+  }, [scrollContainerRef]);
+  const handleLoadEarlier = useCallback(() => {
+    adjustScrollBeforeRender();
+    setVisibleCount((c) => c + VISIBLE_GROUPS_STEP);
+  }, [adjustScrollBeforeRender]);
+  const handleLoadAll = useCallback(() => {
+    adjustScrollBeforeRender();
+    // Tous les groupes rendus de façon permanente : les messages qui arrivent
+    // ensuite ne doivent pas re-masquer les plus anciens.
+    setVisibleCount(Number.MAX_SAFE_INTEGER);
+  }, [adjustScrollBeforeRender]);
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (el && scrollAnchorRef.current !== null) {
+      el.scrollTop = el.scrollHeight - scrollAnchorRef.current;
+      scrollAnchorRef.current = null;
+    }
+  }, [visibleCount, scrollContainerRef]);
+
   return <>
-    {hiddenCount > 0 && <div className="text-center text-hacker-text-dim text-xs py-2 border border-hacker-border/30 rounded mb-3 bg-hacker-surface/50">{t('chat.historyHint', hiddenCount)}</div>}
+    {hiddenCount > 0 && (
+      <div className="flex flex-col items-center gap-2 mb-3">
+        <button
+          type="button"
+          onClick={handleLoadEarlier}
+          className="text-xs px-3 py-1.5 rounded border border-hacker-border bg-hacker-surface/50 text-hacker-text-bright hover:border-hacker-accent hover:text-hacker-accent transition-colors"
+        >
+          ▲ {t('chat.loadEarlier', Math.min(VISIBLE_GROUPS_STEP, hiddenCount))}
+        </button>
+        {hiddenCount > VISIBLE_GROUPS_STEP && (
+          <button
+            type="button"
+            onClick={handleLoadAll}
+            className="text-[11px] px-2 py-1 rounded text-hacker-text-dim hover:text-hacker-accent transition-colors"
+          >
+            {t('chat.showAll')} ({hiddenCount})
+          </button>
+        )}
+      </div>
+    )}
     {visibleGroups.map((group) => {
       const first = group[0];
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;

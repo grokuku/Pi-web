@@ -11,6 +11,16 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// ── P0 observabilité (volet 1/2) : archivage des délégués en échec ──
+// Module local SANS dépendance externe (fs/path uniquement, pas d'import du
+// backend Express) : le chargement de l'extension reste inoffensif.
+// - archiveFailedSession : boîte noire (JSONL + meta) en échec uniquement.
+// - classifyFailure : filet de classification pour les exceptions non annotées.
+import {
+  archiveFailedSession,
+  classifyFailure,
+} from "./harness-archive.js";
+
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
 // directs (bash, edit, read…) — retirés de sa session en mode harness — puis
@@ -141,18 +151,66 @@ function mapRoleToFunction(role: string): string {
 }
 
 /**
+ * BUG-68 (porté aux délégués — P0 observabilité volet 1/2) : le SDK transforme
+ * une erreur modèle en message assistant VIDE (stopReason:"error" + errorMessage)
+ * et prompt() ne reject JAMAIS. On lit donc les métadonnées du DERNIER message
+ * assistant pour remonter la VRAIE erreur (au lieu de « n'a produit aucune réponse »).
+ * Seul le DERNIER assistant compte : un turn réussi après des erreurs antérieures
+ * signifie que le retry implicite du SDK a fonctionné.
+ */
+function detectModelErrorMessage(messages: any[]): string | null {
+  try {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m || m.role !== "assistant") continue;
+      const failed =
+        m.stopReason === "error" ||
+        (typeof m.errorMessage === "string" && m.errorMessage.length > 0);
+      return failed ? (m.errorMessage || `stopReason=${m.stopReason ?? "inconnu"}`) : null;
+    }
+  } catch {}
+  return null;
+}
+
+/** Label "provider/model" effectif de la session (diagnosticable dans les erreurs). */
+function getSessionModelLabel(tempSession: any): string {
+  try {
+    const model = (tempSession as any)?.model;
+    return `${model?.provider ?? "?"}/${model?.id ?? "?"}`;
+  } catch {
+    return "?";
+  }
+}
+
+/**
+ * Message explicite pour un échec modèle — provider/modèle inclus (BUG-68).
+ */
+function formatModelErrorMessage(errorMessage: string, modelLabel: string, funcLabel: string): string {
+  return `❌ Erreur modèle : ${errorMessage} (délégué ${funcLabel} sur ${modelLabel})`;
+}
+
+/**
  * Collecte la réponse partielle d'une session d'expert (messages assistant déjà produits).
  * Utilisée pour récupérer le travail d'un expert interrompu par un abort (BUG-67)
  * ou par un timeout (inactivité / global) — le travail partiel n'est pas perdu.
+ * BUG-68 (P0 volet 1/2) : si aucun texte n'a été produit mais que le modèle a
+ * échoué (stopReason:"error" + errorMessage), retourne l'erreur explicite au
+ * lieu d'une chaîne vide — les messages de timeout/abort deviennent diagnosables.
  */
 function collectExpertResponse(tempSession: any): string {
   try {
     const messages: any[] = tempSession?.messages || [];
-    return messages
+    const text = messages
       .filter((m: any) => m.role === "assistant")
       .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "")
       .filter((t: string) => t.length > 0)
       .join("\n\n");
+    if (text.length > 0) return text;
+    const modelError = detectModelErrorMessage(messages);
+    if (modelError) {
+      return `⚠️ Erreur modèle (aucun texte produit) : ${modelError} — modèle ${getSessionModelLabel(tempSession)}`;
+    }
+    return "";
   } catch {
     return "";
   }
@@ -410,6 +468,15 @@ export default function (pi: ExtensionAPI) {
       const requestedFunc = FUNCTION_BY_NAME.get(functionName)!;
       console.log(`[harness-orchestrator] Délégation à ${requestedFunc.label} (${functionName}): ${task.slice(0, 80)}...`);
 
+      // ── P0 observabilité (volet 1/2) : état d'issue de la délégation ──
+      // pendingSessionFile : fichier de session du délégué tant qu'il n'a pas
+      // été traité (archivé en échec / supprimé en succès). Permet au catch
+      // externe d'archiver la boîte noire si l'échec survient AVANT le try
+      // interne (ex. createAgentSession) — le finally interne le met à null.
+      // delegateStartedAt : début de la délégation (durée totale dans la meta).
+      let pendingSessionFile: string | null = null;
+      const delegateStartedAt = Date.now();
+
       try {
         // Créer une session temporaire pour la fonction
         const { createAgentSession, SessionManager } = await import("@earendil-works/pi-coding-agent");
@@ -446,6 +513,10 @@ export default function (pi: ExtensionAPI) {
 
         const tempSessionManager = SessionManager.create(cwd);
         const tempSessionFile = tempSessionManager.getSessionFile();
+        // P0 : le fichier de session existe désormais (boîte noire potentielle).
+        // (getSessionFile peut retourner undefined selon le SDK — on ne prend
+        // que les strings, le catch externe archivera sinon "rien à archiver".)
+        pendingSessionFile = typeof tempSessionFile === "string" ? tempSessionFile : null;
 
         // SDK 0.80+: modelRuntime remplace authStorage + modelRegistry.
         // Si on ne passe rien, le SDK crée un ModelRuntime par défaut (~/.pi/agent/auth.json).
@@ -513,6 +584,23 @@ export default function (pi: ExtensionAPI) {
         // raison que tempUnsub : visible depuis le finally de cleanup.
         let silenceTimer: ReturnType<typeof setInterval> | null = null;
 
+        // ── P0 observabilité (volet 1/2) : suivi de l'issue, visible du finally
+        // de cleanup. success = réponse valide retournée au tool (fichier de
+        // session supprimé) ; tout autre chemin = ÉCHEC → archivage boîte noire
+        // (.data/logs/harness/) avec cause/tentatives/événements/modèle/durée.
+        let success = false;
+        let archiveCause: string | null = null;
+        let archiveErrorMessage: string | undefined = undefined;
+        let attemptsMade = 0;
+        let usedModelLabel = "?";
+        // Compteurs d'événements du sous-agent : déclarés ICI (try externe) car
+        // un `let` d'un bloc try n'est pas visible du finally du même try —
+        // la meta d'archivage du finally en a besoin (portées de bloc séparées).
+        let eventCount = 0;               // nb total d'events reçus du sous-agent
+        let thinkingChars = 0;            // chars de réflexion accumulés (text_delta)
+        let lastEventAt = Date.now();     // horodatage du dernier event reçu
+        let lastEventSummary: string | null = null; // extrait du dernier event (meta P0)
+
         try {
           // Set le modèle — priorité au modèle conseillé par le routeur,
           // puis héritage de la session principale.
@@ -536,6 +624,8 @@ export default function (pi: ExtensionAPI) {
           }
           // [harness-debug] TEMPORAIRE — à retirer après diagnostic
           console.log(`[harness-debug] modèle actif de tempSession après setModel : ${(tempSession as any).model?.provider ?? "?"}/${(tempSession as any).model?.id ?? "aucun"}`);
+          // P0 : mémoriser le modèle/provider effectifs pour la meta d'archivage
+          usedModelLabel = getSessionModelLabel(tempSession);
 
           // Restreindre les outils de la fonction
           if (effectiveFunc.tools.length > 0) {
@@ -596,9 +686,6 @@ export default function (pi: ExtensionAPI) {
           const EMIT_THROTTLE_MS = 2_000;   // 1 update max toutes les ~2s
           const SILENCE_AFTER_MS = 30_000;  // sous-agent muet si >30s sans event
           const SILENCE_TICK_MS = 10_000;   // timer périodique de détection de silence
-          let eventCount = 0;               // nb total d'events reçus du sous-agent
-          let thinkingChars = 0;            // chars de réflexion accumulés (text_delta)
-          let lastEventAt = Date.now();     // horodatage du dernier event reçu
           let lastEmitAt = 0;               // horodatage du dernier update émis
           const recentEvents: { at: number; label: string }[] = []; // 8 derniers events
 
@@ -667,6 +754,8 @@ export default function (pi: ExtensionAPI) {
               eventCount++;
               lastEventAt = Date.now();
               const line = formatEventLine(event);
+              // P0 : extrait court du dernier event pour la meta d'archivage
+              lastEventSummary = line || event?.type || "inconnu";
               if (line) {
                 recentEvents.push({ at: Date.now(), label: line });
                 if (recentEvents.length > 8) recentEvents.shift();
@@ -688,6 +777,8 @@ export default function (pi: ExtensionAPI) {
           const runPromptWithTimeouts = async (): Promise<boolean> => {
             // Si le signal est déjà aborté avant le lancement, ne pas relancer un prompt
             if (signal?.aborted) {
+              // P0 : abort sans travail → échec, boîte noire à archiver
+              archiveCause = "abort-utilisateur";
               throw new Error("Délégation interrompue par l'utilisateur (abort de l'orchestrator)");
             }
 
@@ -745,6 +836,9 @@ export default function (pi: ExtensionAPI) {
               // on tente de récupérer ce que la fonction a déjà produit avant de rendre la main.
               // Le travail est souvent terminé (fichiers modifiés) — seule la réponse finale manque.
               if (msg.includes("abort de l'orchestrator")) {
+                // P0 : abort de l'orchestrator → échec (avec ou sans travail
+                // récupéré), boîte noire à archiver dans tous les cas.
+                archiveCause = "abort-utilisateur";
                 const partial = collectExpertResponse(tempSession);
                 if (partial) {
                   console.log(`[harness-orchestrator] Fonction ${effectiveFunction} interrompue mais ${partial.length} chars récupérés`);
@@ -756,6 +850,8 @@ export default function (pi: ExtensionAPI) {
               // atterrit dans l'historique) puis on le collecte avant de rejeter
               // (pas de retry sur le timeout global).
               if (msg.includes("timeout global")) {
+                // P0 : pas de retry sur le timeout global → échec définitif.
+                archiveCause = "timeout-global";
                 try { await tempSession.waitForIdle(); } catch {}
                 const partial = collectExpertResponse(tempSession);
                 console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: timeout global — ${partial.length} chars récupérés`);
@@ -779,6 +875,7 @@ export default function (pi: ExtensionAPI) {
           // Exécution avec retry (1 retry sur timeout d'inactivité uniquement)
           let succeeded = false;
           for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            attemptsMade = attempt; // P0 : tentatives réellement jouées (meta d'archivage)
             const ok = await runPromptWithTimeouts();
             if (ok) {
               succeeded = true;
@@ -797,6 +894,9 @@ export default function (pi: ExtensionAPI) {
             }
           }
           if (!succeeded) {
+            // P0 : timeout d'inactivité épuisé (2 attempts) → échec définitif,
+            // cause explicite pour l'archivage de la boîte noire.
+            archiveCause = "timeout-inactivite";
             // Récupération partielle au timeout : attendre que l'abort de la
             // session temp soit terminé (le dernier message assistant partiel
             // atterrit dans l'historique) puis le collecter pour l'orchestrator.
@@ -814,26 +914,131 @@ export default function (pi: ExtensionAPI) {
             .filter((t: string) => t.length > 0);
           const fullResponse = assistantTexts.join("\n\n");
 
+          // ── BUG-68 (porté aux délégués — P0 observabilité volet 1/2) : le SDK
+          // transforme une erreur modèle en message assistant VIDE
+          // (stopReason:"error" + errorMessage) et prompt() ne reject JAMAIS.
+          // On remonte la VRAIE erreur au lieu du générique « n'a produit aucune
+          // réponse ». Ce retour explicite est un ÉCHEC (success reste false) →
+          // le finally archive la boîte noire (cause : erreur-modele).
+          const modelError = detectModelErrorMessage(messages);
+          if (modelError) {
+            archiveCause = "erreur-modele";
+            archiveErrorMessage = modelError;
+            console.error(`[harness-orchestrator] ${effectiveFunc.label} : erreur modèle — ${modelError} (modèle ${usedModelLabel})`);
+            const partialNote = fullResponse
+              ? `\n\nTravail partiel récupéré avant l'erreur :\n\n${fullResponse.slice(0, 2000)}`
+              : "";
+            return {
+              content: [{
+                type: "text" as const,
+                text: formatModelErrorMessage(modelError, usedModelLabel, effectiveFunc.label) + partialNote,
+              }],
+              details: undefined,
+            };
+          }
+
+          // Réponse vide SANS erreur modèle explicite : échec aussi — c'était le
+          // seul cas qui passait inaperçu (message générique sans cause). La
+          // boîte noire est archivée pour permettre le diagnostic post-mortem.
+          if (!fullResponse.trim()) {
+            archiveCause = "reponse-vide";
+            archiveErrorMessage = "Aucun message assistant produit (sans stopReason error)";
+            console.error(`[harness-orchestrator] ${effectiveFunc.label} : réponse vide (modèle ${usedModelLabel})`);
+            return {
+              content: [{
+                type: "text" as const,
+                text: `❌ ${effectiveFunc.label} n'a produit aucune réponse. ` +
+                  `Session archivée dans .data/logs/harness/ (cause : réponse vide).`,
+              }],
+              details: undefined,
+            };
+          }
+
           console.log(`[harness-orchestrator] ${effectiveFunc.label} terminé: ${fullResponse.length} chars`);
 
+          // SUCCÈS : le finally supprimera le fichier de session (pas de pollution).
+          success = true;
           return {
             content: [{
               type: "text" as const,
-              text: fullResponse || `${effectiveFunc.label} n'a produit aucune réponse.`,
+              text: fullResponse,
             }],
             details: undefined,
           };
+        } catch (e: any) {
+          // P0 volet 1/2 : annoter la cause d'échec AVANT le finally (le catch
+          // externe traite l'erreur APRÈS que le finally ait archivé). Le filet
+          // classifyFailure couvre les exceptions non annotées en amont.
+          if (!archiveCause) {
+            archiveCause = classifyFailure(e?.message || String(e));
+          }
+          if (!archiveErrorMessage) {
+            archiveErrorMessage = e?.message || String(e);
+          }
+          throw e; // le catch externe conserve le comportement d'origine
         } finally {
           // Cleanup session
           if (silenceTimer) clearInterval(silenceTimer); // arrêter le timer de détection de silence
           if (tempUnsub) tempUnsub();
           try { (tempSession as any).dispose?.(); } catch {}
+          // ── P0 volet 1/2 : boîte noire du délégué ──
+          // SUCCÈS → suppression (comme avant, pas de pollution).
+          // ÉCHEC  → archivage JSONL + meta dans .data/logs/harness/
+          //          (rétention 7 jours, cause/tentatives/events/modèle/durée).
+          // L'archivage est best-effort : une erreur I/O ne masque jamais
+          // l'issue réelle de la délégation.
           try {
-            if (typeof tempSessionFile === "string" && existsSync(tempSessionFile)) unlinkSync(tempSessionFile);
-          } catch {}
+            if (typeof tempSessionFile === "string" && existsSync(tempSessionFile)) {
+              if (success) {
+                unlinkSync(tempSessionFile);
+              } else {
+                const archivePath = archiveFailedSession(tempSessionFile, {
+                  functionName: effectiveFunction,
+                  cause: archiveCause || "erreur-exception",
+                  attempts: attemptsMade,
+                  eventCount,
+                  lastEventAt,
+                  model: usedModelLabel,
+                  durationMs: Date.now() - delegateStartedAt,
+                  lastEventExcerpt: lastEventSummary || "(aucun événement)",
+                  errorMessage: archiveErrorMessage,
+                });
+                if (archivePath) {
+                  console.log(`[harness-orchestrator] Session déléguée en échec archivée : ${archivePath}`);
+                }
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Nettoyage/archivage de la session déléguée impossible : ${e?.message || e}`);
+          }
+          // Fichier traité (archivé ou supprimé) : le catch externe n'a plus rien à faire.
+          pendingSessionFile = null;
         }
       } catch (err: any) {
         console.error(`[harness-orchestrator] Erreur ${functionName}:`, err.message);
+        // ── P0 volet 1/2 : échec AVANT le try interne (ex. createAgentSession,
+        // ré-enregistrement des providers) → la boîte noire n'a pas encore été
+        // traitée par le finally interne. On l'archive ici ; sinon c'est le
+        // finally interne qui l'a déjà fait (pendingSessionFile === null).
+        if (pendingSessionFile) {
+          try {
+            const archivePath = archiveFailedSession(pendingSessionFile, {
+              functionName: functionName || "unknown",
+              cause: "erreur-sdk",
+              attempts: 0,
+              eventCount: 0,
+              lastEventAt: null,
+              model: "?",
+              durationMs: Date.now() - delegateStartedAt,
+              lastEventExcerpt: "(échec avant tout événement du sous-agent)",
+              errorMessage: err?.message || String(err),
+            });
+            if (archivePath) {
+              console.log(`[harness-orchestrator] Session déléguée en échec (création) archivée : ${archivePath}`);
+            }
+          } catch {}
+          pendingSessionFile = null;
+        }
         // Les erreurs de timeout sont déjà pré-formatées avec l'extrait du travail
         // partiel récupéré (préfixe "❌") → renvoyées telles quelles à l'orchestrator.
         if (typeof err?.message === "string" && err.message.startsWith("❌")) {

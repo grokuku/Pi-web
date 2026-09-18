@@ -40,7 +40,7 @@ export const fr = {
     llmError: "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider.",
     timeoutError: "Interrompu : le modèle n'a pas répondu depuis 5 min",
     thoughtFor: (dur: string) => `a réfléchi ${dur}`,
-    historyHint: (n: number) => `${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""} — faites défiler pour voir l'historique complet`,
+    loadEarlier: (n: number) => `Charger ${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""}`,
     streaming: "⚡ STREAMING",
     response: "🤖 RÉPONSE",
     dropFiles: "DÉPOSEZ LES FICHIERS ICI",
