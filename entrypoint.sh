@@ -177,6 +177,41 @@ if [ -f "$PI_SETTINGS" ]; then
       // No local extensions directory
     }
   "
+
+  # ── Garde-fou : purge des chemins d'extensions MORTS (AJUSTEMENT 3) ──
+  # Les blocs ci-dessus ne font qu'AJOUTER des extensions ; ils ne retirent
+  # JAMAIS les entrées devenues invalides. Constat de l'incident : les chemins
+  # /app/extensions/codebase-memory/index.ts et /app/extensions/harness-
+  # orchestrator/index.ts (dossiers supprimés par le chantier « harness+cbm
+  # core ») ont survécu dans le settings PERSISTANT du volume /root/.pi/agent
+  # (la branche qui réinitialise settings.extensions n'est atteinte que si
+  # settings.packages contient des packages npm/git — pas le cas ici). Non
+  # bloquant (session.ts filtre via extensionsOverride), mais config sale et
+  # trompeuse. On filtre donc par existsSync : tout chemin absent du disque
+  # disparaît au boot, quel que soit l'historique du settings. Les annexes
+  # réelles (web-screenshot, file-analyzer, compaction-checkpoint) existent
+  # dans /app/extensions et sont conservées. Écriture UNIQUEMENT si un chemin
+  # a été retiré (pas de réécriture inutile du fichier persistant).
+  node -e "
+    const fs = require('fs');
+    try {
+      const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
+      const before = settings.extensions || [];
+      const kept = before.filter(p => typeof p === 'string' && fs.existsSync(p));
+      const removed = before.filter(p => !kept.includes(p));
+      if (removed.length > 0) {
+        settings.extensions = kept;
+        fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
+        console.log('[PI-WEB] Purged', removed.length, 'dead extension path(s) from settings:', removed);
+        console.log('[PI-WEB] Remaining extensions:', kept);
+      } else {
+        console.log('[PI-WEB] Extension paths all exist on disk — nothing to purge');
+      }
+    } catch(e) {
+      // settings illisible ou indisponible : on ne bloque JAMAIS le boot là-dessus
+      console.error('[PI-WEB] settings.json dead-path purge skipped:', e.message);
+    }
+  "
 else
   echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
 fi

@@ -559,11 +559,51 @@ interface ExtendedWS extends WebSocket {
   subscribedProjects: Set<string>;  // (sécurité #5) projets auxquels ce socket est abonné
 }
 
+// ── Observabilité : envois pi_history + seuil « rattrapage massif » (AJUSTEMENT 1) ──
+// L'incident « chat figé puis rattrapage massif » (WS coupé par Authentik →
+// resync au retour : 2228 messages d'un coup) n'a laissé AUCUNE trace car seuls
+// les sites d'erreur loggaient. Chaque envoi de pi_history trace désormais UNE
+// ligne : cause (déclencheur), nb de messages, taille, durée de construction.
+// Au-delà des seuils → WARN : c'est le signal « rattrapage massif » à chercher
+// dans les logs la prochaine fois.
+const PI_HISTORY_WARN_MESSAGES = 500;
+const PI_HISTORY_WARN_BYTES = 1024 * 1024; // ~1 Mo
+
+/**
+ * Envoie un message WS `pi_history` et trace l'événement (catégorie `ws`).
+ * Une ligne INFO par envoi — WARN si les seuils de rattrapage massif sont
+ * dépassés. `cause` distingue les déclencheurs : pi_start (premier start),
+ * pi_start_replay (rejeu après reconnexion, BUG-83), pi_history_request
+ * (resync client), pi_prompt_fallback (session recréée au vol pour un prompt).
+ * La sérialisation n'est faite QU'UNE FOIS : la chaîne produite sert à la fois
+ * de payload WS et de source pour la taille loggée.
+ */
+function sendPiHistory(ws: ExtendedWS, pid: string, messages: unknown[], cause: string, buildMs?: number): void {
+  const payload = JSON.stringify({ type: "pi_history", projectId: pid, messages });
+  const details: Record<string, unknown> = {
+    projectId: pid,
+    cause,
+    messages: Array.isArray(messages) ? messages.length : 0,
+    bytes: Buffer.byteLength(payload),
+  };
+  if (buildMs !== undefined) details.buildMs = buildMs;
+  if ((details.messages as number) > PI_HISTORY_WARN_MESSAGES || (details.bytes as number) > PI_HISTORY_WARN_BYTES) {
+    logger.warn("ws", "pi_history volumineux envoyé (rattrapage massif ?)", details);
+  } else {
+    logger.info("ws", "pi_history envoyé", details);
+  }
+  ws.send(payload);
+}
+
 wss.on("connection", (ws: ExtendedWS) => {
   ws.isAlive = true;
   ws.subscribedProjects = new Set();
   let cleanedUp = false;
-  console.log("WebSocket client connected");
+  // AJUSTEMENT 1 : chaque connexion est tracée (l'incident a DÉBUTÉ par une
+  // coupure WS invisible dans les logs). projectId inconnu à ce stade (le
+  // client s'abonne ensuite via {type:"subscribe"}) → null ; il sera connu
+  // à la déconnexion si le client en a envoyé un.
+  logger.info("ws", "WS client connecté", { projectId: ws.projectId ?? null, clients: wss.clients.size });
 
   // Ping/pong to keep alive
   ws.on("pong", () => {
@@ -620,10 +660,23 @@ wss.on("connection", (ws: ExtendedWS) => {
   );
 
   // ── Cleanup helper (idempotent) ──
-  const cleanup = () => {
+  const cleanup = (cause: "close" | "error", code?: number, reason?: Buffer, errMsg?: string) => {
     if (cleanedUp) return;
     cleanedUp = true;
-    console.log("WebSocket client disconnected");
+    // AJUSTEMENT 1 : déconnexion tracée avec le contexte de l'incident —
+    // dernier projectId vu, abonnements, nb de clients restants (ce socket
+    // exclu s'il figure encore dans wss.clients) et raison de fermeture
+    // quand elle est connue (code+raison WS sur close, message sur error).
+    const details: Record<string, unknown> = {
+      projectId: ws.projectId ?? null,
+      subscribedProjects: [...ws.subscribedProjects],
+      clients: wss.clients.size - (wss.clients.has(ws) ? 1 : 0),
+      cause,
+    };
+    if (code !== undefined) details.code = code;
+    if (reason?.length) details.reason = reason.toString();
+    if (errMsg) details.error = errMsg;
+    logger.info("ws", "WS client déconnecté", details);
     unsub();
     terminalEvents.off("data", onTermData);
     terminalEvents.off("exit", onTermExit);
@@ -650,9 +703,11 @@ wss.on("connection", (ws: ExtendedWS) => {
     }
   });
 
-  // ── Close handler ──
-  ws.on("close", cleanup);
-  ws.on("error", cleanup);
+  // ── Close/error handlers ──
+  // Code + raison WS passés au trace quand disponibles (ex. code 1006 =
+  // coupure anormale — exactement le scénario Authentik forward_auth).
+  ws.on("close", (code, reason) => cleanup("close", code, reason));
+  ws.on("error", (e) => cleanup("error", undefined, undefined, e instanceof Error ? e.message : String(e)));
 });
 
 // Keep-alive interval
@@ -712,6 +767,13 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       if (!project) return;
       const cwd = project.cwd;
 
+      // AJUSTEMENT 1 : détection du replay BUG-83 (5bbe558) — un pi_start reçu
+      // alors que la session du projet existe déjà est un rejeu (file d'attente
+      // re-jouée après reconnexion WS, ou re-sélection du projet).
+      // createPiSession étant idempotent (réutilise la session en mémoire), on
+      // se contente de tracer l'événement et le volume d'historique renvoyé.
+      const isReplay = !!getSession(pid)?.session;
+
       try {
         const state = await createPiSession(cwd, pid, {
           resume: msg.resume !== false, // Resume by default!
@@ -740,12 +802,17 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         if (state.session) {
           // fix « messages récents manquants » : historique COMPLET (entrées
           // brutes, pré-compaction incluse) au lieu du seul contexte LLM.
+          const t0 = Date.now();
           const messages = buildFullUiHistory(state.session);
-          ws.send(JSON.stringify({
-            type: "pi_history",
-            projectId: pid,
-            messages,
-          }));
+          // AJUSTEMENT 1 : événement replay tracé à part (grep facile), le
+          // détail volumétrique partant via sendPiHistory ci-dessous.
+          if (isReplay) {
+            logger.info("pi-session", "pi_start rejoué après reconnexion (BUG-83)", {
+              projectId: pid,
+              messages: messages.length,
+            });
+          }
+          sendPiHistory(ws, pid, messages, isReplay ? "pi_start_replay" : "pi_start", Date.now() - t0);
         }
       } catch (e: any) {
         // P0 observabilité : trace persistante + miroir console (docker logs).
@@ -766,12 +833,9 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const state = getSession(projectId);
       if (state?.session) {
         // fix « messages récents manquants » : cf. buildFullUiHistory.
+        const t0 = Date.now();
         const messages = buildFullUiHistory(state.session);
-        ws.send(JSON.stringify({
-          type: "pi_history",
-          projectId,
-          messages,
-        }));
+        sendPiHistory(ws, projectId, messages, "pi_history_request", Date.now() - t0);
       }
       break;
     }
@@ -825,11 +889,11 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
             })
           );
           if (state.session) {
-            ws.send(JSON.stringify({
-              type: "pi_history",
-              projectId: pid,
-              messages: buildFullUiHistory(state.session),
-            }));
+            const t0 = Date.now();
+            const messages = buildFullUiHistory(state.session);
+            // AJUSTEMENT 1 : fallback auto-guérison — le prompt a réveillé un
+            // projet sans session ; l'historique restauré est aussi tracé.
+            sendPiHistory(ws, pid, messages, "pi_prompt_fallback", Date.now() - t0);
           }
         }
         const result = await sendPrompt(message, pid, images);

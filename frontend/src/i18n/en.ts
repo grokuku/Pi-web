@@ -75,6 +75,8 @@ export const en = {
     wsOffline: "Connection lost — reconnecting…",
     wsPendingMessages: (n: number) => `${n} message${n !== 1 ? "s" : ""} waiting to be sent`,
     wsQueueFull: "Message queue full — the last message was not transmitted",
+    // ── Ajustement 2: massive history resync feedback ──
+    historyResynced: (n: number) => `History resynced: ${n} message${n !== 1 ? "s" : ""}`,
   },
   // ── Tool descriptions (C1) ──
   tools: {

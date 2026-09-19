@@ -19,11 +19,38 @@ de fichiers :
 
 `<ISO timestamp> [NIVEAU] [catégorie] message | détails JSON compact`.
 
-Catégories en place : `ws` (messages WebSocket), `pi-session` (création/resume
-de session Pi), `express` (erreurs middleware global), `console` (capture des
+Catégories en place : `ws` (messages WebSocket — erreurs, mais aussi le cycle
+ de vie complet : connexions/déconnexions client, envois `pi_history`, replays
+ `pi_start` après reconnexion, cf. section suivante), `pi-session`
+(création/resume de session Pi, y compris les replays `pi_start` sur session
+déjà active), `express` (erreurs middleware global), `console` (capture des
 `console.error` extérieurs), `crash` (résumé d'un crash), `harness`
 (délégués du harness inline — archivage des sessions en échec, cause et
 contexte de l'échec).
+
+## Événements INFO/WARN du cycle WS et des envois d'historique
+
+Suite à l'incident « chat figé puis rattrapage massif » (WS coupé par le
+forward_auth Authentik → l'UI figée sur un vieux rendu, puis resync au retour
+avec l'historique complet d'un coup — 2228 messages sans aucune trace), le
+cycle de vie WS et les envois d'historique sont tracés (catégorie `ws`, sauf
+mention contraire) :
+
+| Ligne de log | Niveau | Signification |
+|---|---|---|
+| `WS client connecté` | INFO | Chaque connexion : projectId (si déjà connu), nb de clients. |
+| `WS client déconnecté` | INFO | Chaque déconnexion : dernier projectId vu, abonnements, nb de clients restants, raison de fermeture (`code` + `reason` WS, ex. 1006 = coupure anormale, ou `error`). |
+| `pi_history envoyé` | INFO | Chaque envoi d'historique : `cause` (`pi_start` / `pi_start_replay` / `pi_history_request` / `pi_prompt_fallback`), nb de `messages`, taille en `bytes`, durée de construction `buildMs`. |
+| `pi_start rejoué après reconnexion (BUG-83)` | INFO (`pi-session`) | Un `pi_start` reçu sur une session déjà active (rejeu idempotent après reconnexion ou re-sélection du projet) : projectId + nb de messages renvoyés. |
+| `pi_history volumineux envoyé (rattrapage massif ?)` | WARN | Un envoi dépasse 500 messages ou ~1 Mo — c'est LE signal « rattrapage massif » à surveiller (ex. resync complet après coupure longue). |
+
+```bash
+# Retrouver un rattrapage massif (le signal manquant pendant l'incident)
+grep 'pi_history volumineux' .data/logs/backend-$(date +%Y%m%d).log
+
+# Reconstituer une séquence coupure → reconnexion → replay → resync
+grep -E 'WS client|pi_history|rejoué' .data/logs/backend-$(date +%Y%m%d).log
+```
 
 ## Contenu d'un dump de crash
 

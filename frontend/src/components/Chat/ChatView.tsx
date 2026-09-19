@@ -214,6 +214,20 @@ const WsOfflineBanner = memo(function WsOfflineBanner({ pendingMessages }: { pen
   );
 });
 
+// ── Ajustement 2 : feedback « Historique resynchronisé » ──────────────────
+// Après une coupure WS (ou un changement d'état backend), la resync renvoie
+// l'historique COMPLET (buildFullUiHistory — cas réel : 2228 messages bruts /
+// 644 groupes affichables) qui remplace le chat d'un coup, sans explication :
+// l'utilisateur a cru à un bug et a aborté (incident « chat figé puis
+// rattrapage massif »). Un pi_history massif arrivant dans la fenêtre qui
+// suit une RECONNEXION affiche donc un toast discret. Le chargement initial
+// (montage / activation de projet → pi_history_request de activateProject)
+// reste silencieux : un historique complet y est NORMAL.
+const RESYNC_FEEDBACK_WINDOW_MS = 10_000; // pi_history de resync attendu < 1 s après le _ws_reconnect
+const RESYNC_MASSIVE_MIN = 100;           // seuil « massif en soi » : > 100 messages affichables reçus
+const RESYNC_MASSIVE_DELTA = 50;          // seuil « rattrapage » : > 50 de plus que l'affiché actuel
+const RESYNC_TOAST_DURATION_MS = 4500;
+
 export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, connected, pendingMessages, onQuit }: Props) {
   const { t } = useTranslation();
 
@@ -247,6 +261,17 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   // de projet) était avalée elle aussi : l'historique affiché restait
   // tronqué/périmé jusqu'à un reload complet (« les récents manquent »).
   const clearedAtRef = useRef(0);
+  // Ajustement 2 : horodate de la dernière reconnexion WS (_ws_reconnect — émis
+  // par useWebSocket à CHAQUE reconnexion, JAMAIS à la première connexion).
+  // Un pi_history arrivant dans RESYNC_FEEDBACK_WINDOW_MS après ce signal est
+  // une resync post-coupure → éligible au toast « Historique resynchronisé »
+  // s'il est massif. Le chargement initial / l'activation de projet (hors
+  // fenêtre) restent silencieux.
+  const lastWsReconnectAtRef = useRef(0);
+  // Ajustement 2 : anti-doublon du toast de resync (pi_start rejoué de la file
+  // + pi_history_request renvoyé par App peuvent provoquer deux pi_history
+  // rapprochés dans la même fenêtre de reconnexion).
+  const lastResyncToastAtRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
 
@@ -312,6 +337,30 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [messages, projectId]);
 
+  // ── Ajustement 2 : toast « Historique resynchronisé : N messages » ───────
+  // Appelé aux points où un pi_history est réellement APPLIQUÉ au projet
+  // actif (seul cas où le chat visible change). Décision = contexte ET
+  // massivité :
+  //  1. dans la fenêtre qui suit une reconnexion WS (_ws_reconnect) — c'est
+  //     ce qui distingue la resync post-coupure du chargement initial (la
+  //     première connexion n'émet pas _ws_reconnect) et du changement de
+  //     projet (pi_history_request de activateProject, hors fenêtre) ;
+  //  2. massivité : historique reçu > RESYNC_MASSIVE_MIN messages affichables,
+  //     OU apporte > RESYNC_MASSIVE_DELTA de plus que l'affiché (store local
+  //     vide/tronqué — le « rattrapage massif » de l'incident) ;
+  //  3. anti-doublon : un seul toast par fenêtre de resync.
+  // Compte affiché = nombre de messages/groupes DisplayMessage (les tool
+  // results sont foldés), c'est ce que l'utilisateur voit à l'écran.
+  const notifyHistoryResync = useCallback((before: number, after: number) => {
+    const now = Date.now();
+    if (lastWsReconnectAtRef.current === 0 ||
+        now - lastWsReconnectAtRef.current >= RESYNC_FEEDBACK_WINDOW_MS) return;
+    if (after <= RESYNC_MASSIVE_MIN && after - before <= RESYNC_MASSIVE_DELTA) return;
+    if (now - lastResyncToastAtRef.current < RESYNC_FEEDBACK_WINDOW_MS) return;
+    lastResyncToastAtRef.current = now;
+    toast(t("chat.historyResynced", after), "info", RESYNC_TOAST_DURATION_MS);
+  }, [t]);
+
   // ── History restoration ──
   // pi_history is the backend's full state sync. Route to the correct
   // project's store, not just the active one, so that switching project
@@ -375,6 +424,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           chatHistory.saveMessagesFor(merged, pid);
           if (pid === projectId) {
             setMessages(merged);
+            // Ajustement 2 : feedback si cette resync post-coupure est massive.
+            notifyHistoryResync(existing.length, merged.length);
             // L'assistant en cours est le dernier message _streaming conservé.
             const lastStreaming = [...stillStreaming].reverse().find(m => m.role === "assistant");
             currentAssistantIdRef.current = lastStreaming ? lastStreaming.id : null;
@@ -390,10 +441,12 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
       if (pid === projectId) {
         setMessages(display);
+        // Ajustement 2 : feedback si cette resync post-coupure est massive.
+        notifyHistoryResync(existing.length, display.length);
       }
     });
     return () => unsub();
-  }, [on, projectId]);
+  }, [on, projectId, notifyHistoryResync]);
 
   // ── (sécurité #5) Abonnement WS par projet ────────────────────────────
   // Le serveur ne route les events pi_event QUE vers les sockets abonnés au
@@ -410,6 +463,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
   useEffect(() => {
     const unsub = on("_ws_reconnect", () => {
+      // Ajustement 2 : noter la reconnexion — le pi_history de resync qui suit
+      // (pi_history_request renvoyé par App) devient alors éligible au toast
+      // « Historique resynchronisé » s'il est massif. La première connexion
+      // n'émet pas _ws_reconnect : le chargement initial reste silencieux.
+      lastWsReconnectAtRef.current = Date.now();
       if (projectId) send({ type: "subscribe", projectId });
     });
     return () => unsub();
