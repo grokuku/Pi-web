@@ -847,6 +847,20 @@ function App() {
       rerender();
       // Re-request session state for the active project
       if (activeProject) {
+        // Correctif « aucune session active » : si la session n'a jamais pu
+        // être créée (WS coupé au moment du clic → pi_start perdu), on la
+        // recrée au retour de la connexion. Sans ça, l'UI restait à vie sur
+        // l'écran vide « Session active — tapez un message… » avec « Aucun
+        // modèle sélectionné », quel que soit le projet choisi.
+        if (!getProjectSession(activeProject.id).session) {
+          console.log(`[App] No session for ${activeProject.id} — re-sending pi_start`);
+          send({
+            type: "pi_start",
+            projectId: activeProject.id,
+            resume: true,
+            sessionId: activeProject.lastSessionId,
+          });
+        }
         send({
           type: "pi_history_request",
           projectId: activeProject.id,
@@ -867,7 +881,7 @@ function App() {
       }
     });
     return () => unsub();
-  }, [on, activeProject, send]);
+  }, [on, activeProject, send, getProjectSession]);
 
   // ── BroadcastChannel for cross-tab/window communication ──
   useEffect(() => {

@@ -22,12 +22,19 @@ const QUEUE_MAX = 50;
 //  - pi_abort : inutile hors connexion et dangereux à rejouer — provoquerait un
 //    « abort fantôme » tuant une génération légitime après reconnexion ;
 //  - ping / keepalive : messages de santé de la connexion, sans sens différé ;
-//  - messages techniques (pi_start, pi_history_request, mode_switch,
-//    terminal_*) : déjà renvoyés ou resynchronisés par la logique existante
-//    à la reconnexion (_ws_reconnect / payload "connected").
+//  - messages techniques (pi_history_request, mode_switch, terminal_*) :
+//    déjà renvoyés ou resynchronisés par la logique existante à la
+//    reconnexion (_ws_reconnect / payload "connected").
+//
+// pi_start FAIT partie de la file (correctif « aucune session active ») :
+// sélectionner un projet pendant une coupure WS perdait définitivement la
+// création de session, car pi_start n'était rejoué NULLE PART (_ws_reconnect
+// ne renvoie que pi_history_request). Le renvoyer à l'ouverture est idempotent
+// côté backend : createPiSession réutilise la session existante.
 const QUEUEABLE_TYPES: ReadonlySet<string> = new Set([
   "pi_prompt",
   "pi_steer",
+  "pi_start",
   "design_send_to_chat",
   "subscribe",
 ]);
