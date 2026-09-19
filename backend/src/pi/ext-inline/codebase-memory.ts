@@ -29,10 +29,10 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { execSync, spawn, type ChildProcess } from "child_process";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { dirname } from "path";
 
 /**
@@ -47,7 +47,12 @@ function isLinkedProject(cwd: string): boolean {
 
 // ── Config ──────────────────────────────────────────────
 
-const BIN_PATH = join(homedir(), ".local", "bin", "codebase-memory-mcp");
+// Chemin du binaire : CBM_BIN_PATH (exporté par entrypoint.sh → volume
+// persistant /app/.data/bin) sinon repli historique ~/.local/bin. Les deux
+// modules qui lisent ce chemin (cette extension + routes/cbm.ts) DOIVENT
+// utiliser la même résolution, sinon l'un croit le binaire absent.
+const BIN_PATH =
+  process.env.CBM_BIN_PATH || join(homedir(), ".local", "bin", "codebase-memory-mcp");
 const PORT = 9749;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DOWNLOAD_URL =
@@ -131,10 +136,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Extrait « 0.11.0 » de la sortie de `--version` (« codebase-memory-mcp 0.11.0 »).
+ * Tolère un préfixe « v » et un suffixe de pré-version.
+ */
+function parseVersion(output: string): string | null {
+  const m = output.trim().match(/v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Version du binaire installé, ou null s'il est absent/illisible.
+ *
+ * On interroge `--version` (≈25 ms, sortie « codebase-memory-mcp 0.11.0 ») et
+ * NON `version` : ce dernier déclenche une activation de daemon, prend ~7 s et
+ * n'écrit RIEN sur stdout (mesuré sur 0.11.0) — avec l'ancien timeout de 5 s il
+ * renvoyait toujours null, ce qui faisait passer un binaire installé pour
+ * absent (cf. la route /api/cbm/status).
+ */
 function getVersion(): string | null {
   if (!existsSync(BIN_PATH)) return null;
   try {
-    return execSync(`"${BIN_PATH}" version`, { timeout: 5000, encoding: "utf-8" }).trim();
+    return parseVersion(execSync(`"${BIN_PATH}" --version`, { timeout: 10_000, encoding: "utf-8" }));
   } catch {
     return null;
   }
@@ -150,15 +173,26 @@ async function ensureBinary(): Promise<void> {
   console.log("[cbm] Binary not found, downloading...");
   status.error = null;
 
-  // Ensure ~/.local/bin exists
+  // Installer DANS le dossier du binaire (et non ~/.local/bin en dur) :
+  // entrypoint.sh installe dans le volume persistant et exporte CBM_BIN_PATH —
+  // ce fallback doit viser le MÊME chemin, sinon le binaire téléchargé reste
+  // invisible pour BIN_PATH.
   const binDir = dirname(BIN_PATH);
   if (!existsSync(binDir)) {
     mkdirSync(binDir, { recursive: true });
   }
 
+  // Téléchargement en 2 temps (script puis exécution) pour détecter réellement
+  // un échec de curl (avec `curl | bash`, le code retour observé est celui de
+  // bash, qui vaut 0 même si curl a échoué).
+  // NB : execSync bloque la boucle d'événements pendant le téléchargement
+  // (~286 Mo) ; ce chemin n'est qu'un FILET DE SÉCURITÉ — l'installation est
+  // faite au démarrage du conteneur par entrypoint.sh.
+  const script = join(tmpdir(), `cbm-install-${process.pid}.sh`);
   try {
-    execSync(`curl -fsSL ${DOWNLOAD_URL} | bash`, {
-      timeout: 120_000,
+    execSync(`curl -fsSL "${DOWNLOAD_URL}" -o "${script}"`, { timeout: 60_000, encoding: "utf-8" });
+    execSync(`bash "${script}" --dir "${binDir}" --skip-config`, {
+      timeout: 240_000,
       encoding: "utf-8",
     });
     status.installed = existsSync(BIN_PATH);
@@ -168,6 +202,10 @@ async function ensureBinary(): Promise<void> {
     status.error = `Download failed: ${e.message}`;
     console.error("[cbm] Download failed:", e.message);
     throw e;
+  } finally {
+    try {
+      rmSync(script, { force: true });
+    } catch {}
   }
 }
 

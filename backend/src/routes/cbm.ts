@@ -1,22 +1,44 @@
 import { Router, type Request, type Response } from "express";
 import { existsSync, readdirSync, statSync, readFileSync, realpathSync } from "fs";
 import { execSync } from "child_process";
-import { join, extname, basename, relative, resolve } from "path";
+import { join, extname, basename, relative, resolve, dirname } from "path";
 import { isPathAllowed } from "../utils/path-security.js";
 import os from "os";
 
 const router = Router();
 
-const BIN_PATH = join(os.homedir(), ".local", "bin", "codebase-memory-mcp");
+// Même résolution de chemin que l'extension inline (backend/src/pi/ext-inline/
+// codebase-memory.ts) : entrypoint.sh installe le binaire dans le volume
+// persistant /app/.data/bin et exporte CBM_BIN_PATH. Sans cette variable, un
+// binaire installé là serait vu comme « absent » par cette route.
+const BIN_PATH =
+  process.env.CBM_BIN_PATH || join(os.homedir(), ".local", "bin", "codebase-memory-mcp");
+const CBM_INSTALL_URL =
+  "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh";
 
 /**
- * Get the version of the installed codebase-memory-mcp binary.
- * Returns null if the binary is not installed or version can't be read.
+ * Extrait « 0.11.0 » de la sortie de `--version` (« codebase-memory-mcp 0.11.0 »).
+ */
+function parseVersion(output: string): string | null {
+  const m = output.trim().match(/v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Version du binaire installé (null s'il est absent ou illisible).
+ *
+ * IMPORTANT : on interroge `--version` (≈25 ms, sortie « codebase-memory-mcp
+ * 0.11.0 ») et NON `version`. Cette dernière sous-commande, sur 0.11.0, lance
+ * une activation de daemon : elle prend ~7 s et n'écrit RIEN sur stdout → avec
+ * l'ancien timeout de 5 s, `getCbmVersion()` renvoyait toujours null et
+ * `/api/cbm/status` annonçait `installed:false` même binaire installé et
+ * serveur actif sur 9749 (le modal « Graphe 3D » affichait « Serveur non
+ * démarré » pour tous les projets).
  */
 function getCbmVersion(): string | null {
   if (!existsSync(BIN_PATH)) return null;
   try {
-    return execSync(`"${BIN_PATH}" version`, { timeout: 5000, encoding: "utf-8" }).trim();
+    return parseVersion(execSync(`"${BIN_PATH}" --version`, { timeout: 10_000, encoding: "utf-8" }));
   } catch {
     return null;
   }
@@ -61,9 +83,13 @@ function isServerRunning(): boolean {
 // GET /api/cbm/status — version info and update availability
 router.get("/status", async (_req: Request, res: Response) => {
   try {
-    const version = getCbmVersion();
-    const installed = version !== null;
-    const running = installed ? isServerRunning() : false;
+    // `installed` ne dépend QUE de la présence du binaire : une lecture de
+    // version ratée ne doit JAMAIS faire passer un binaire installé pour
+    // absent (l'UI en déduisait « Serveur non démarré » alors que 9749
+    // répondait). `running` est évalué indépendamment.
+    const installed = existsSync(BIN_PATH);
+    const version = installed ? getCbmVersion() : null;
+    const running = installed && isServerRunning();
     const latestVersion = await getLatestVersion();
 
     // Update available if latest is different from current (normalize v-prefix)
@@ -129,10 +155,11 @@ router.post("/download", async (_req: Request, res: Response) => {
       return res.json({ success: true, message: "Already installed", version: getCbmVersion() });
     }
 
-    // Download using the official install script
+    // Download using the official install script — dans le dossier de BIN_PATH
+    // (volume persistant) pour que le binaire soit bien celui que le backend lit.
     const output = execSync(
-      'curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash',
-      { timeout: 120_000, encoding: "utf-8" }
+      `curl -fsSL ${CBM_INSTALL_URL} | bash -s -- --dir "${dirname(BIN_PATH)}" --skip-config`,
+      { timeout: 300_000, encoding: "utf-8" }
     );
 
     const version = getCbmVersion();

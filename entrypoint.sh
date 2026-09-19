@@ -181,18 +181,41 @@ else
   echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
 fi
 
-# ── Download codebase-memory-mcp binary if not installed ──
-CBM_BIN="$HOME/.local/bin/codebase-memory-mcp"
+# ── codebase-memory-mcp : binaire PERSISTANT sur le volume /app/.data ──
+#
+# Deux régressions corrigées ici :
+#  1. `--ui` n'existe PLUS dans l'installeur upstream (vérifié : « install.sh:
+#     unknown option '--ui' ») — l'ancienne commande échouait donc TOUJOURS.
+#     L'erreur était avalée par `2>&1 | tail -3 || true`, d'où un CBM jamais
+#     installé sur un Pi-Web neuf (le binaire « --ui » est désormais inclus
+#     dans l'archive portable : aucun flag d'installeur n'est nécessaire).
+#  2. $HOME/.local/bin n'est PAS un volume : le binaire (~286 Mo) était perdu à
+#     chaque rebuild. On l'installe dans /app/.data/bin (volume pi-appdata) et
+#     on exporte CBM_BIN_PATH, lu par le backend (routes/cbm.ts) et par
+#     l'extension inline ext-inline/codebase-memory.ts.
+CBM_BIN_DIR="/app/.data/bin"
+CBM_BIN="$CBM_BIN_DIR/codebase-memory-mcp"
+CBM_INSTALL_URL="https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
+export CBM_BIN_PATH="$CBM_BIN"
+mkdir -p "$CBM_BIN_DIR"
 if [ ! -f "$CBM_BIN" ]; then
-  echo "[PI-WEB] Downloading codebase-memory-mcp (UI variant)..."
-  curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui --skip-config 2>&1 | tail -3 || true
-  if [ -f "$CBM_BIN" ]; then
-    echo "[PI-WEB] ✓ codebase-memory-mcp installed"
+  echo "[PI-WEB] Installing codebase-memory-mcp into persistent volume ($CBM_BIN_DIR)..."
+  # Téléchargement du script PUIS exécution (pas de pipe) : avec `curl | bash`,
+  # le code de sortie vu par le shell est celui de bash (0) même si curl a
+  # échoué — impossible de détecter l'échec.
+  if curl -fsSL "$CBM_INSTALL_URL" -o /tmp/cbm-install.sh \
+     && bash /tmp/cbm-install.sh --dir "$CBM_BIN_DIR" --skip-config; then
+    if [ -f "$CBM_BIN" ]; then
+      echo "[PI-WEB] ✓ codebase-memory-mcp installed: $CBM_BIN"
+    else
+      echo "[PI-WEB] WARNING: installer exited 0 but no binary at $CBM_BIN"
+    fi
   else
-    echo "[PI-WEB] WARNING: codebase-memory-mcp download failed — graph tools will be unavailable"
+    echo "[PI-WEB] WARNING: codebase-memory-mcp install failed (see errors above) — graph tools will be unavailable"
   fi
+  rm -f /tmp/cbm-install.sh
 else
-  echo "[PI-WEB] codebase-memory-mcp already installed"
+  echo "[PI-WEB] codebase-memory-mcp already installed: $CBM_BIN"
 fi
 
 # Persist CBM cache on the /app/.data volume (survives Docker rebuilds)
