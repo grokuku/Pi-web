@@ -210,6 +210,23 @@ export const fr = {
         save: "ENREGISTRER",
         saved: "✓ ENREGISTRÉ",
       },
+      concurrency: {
+        title: "CONCURRENCE",
+        description: "Limite le nombre d'appels LLM et de sessions agent simultanés. Les appels en attente sont mis en file d'attente.",
+        llmSlots: "☎️ LLM slots max",
+        agentSlots: "🔧 Agent slots max",
+        save: "ENREGISTRER",
+        perProvider: "Limites par provider",
+        perProviderHint: "Laisser vide = hériter du défaut global (LLM slots max).",
+        provider: "Provider",
+        inherit: "hérite",
+        noProviders: "Aucun provider configuré.",
+        statsLlm: (used: number, max: number, queue: number) =>
+          `☎️ LLM : ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
+        statsAgents: (used: number, max: number, queue: number) =>
+          `🔧 Agents : ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
+        saveError: "Échec de l'enregistrement de la concurrence",
+      },
       additional: "Des paramètres supplémentaires seront ajoutés ici si nécessaire.",
     },
     security: {

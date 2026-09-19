@@ -87,7 +87,7 @@ function makeLibrary(models: RegisteredModel[]): ModelLibrary {
     audioModelId: null,
     librarianModelId: null,
     projectModes: {},
-    concurrency: { maxLLMSlots: 2, maxAgentSlots: 4 },
+    concurrency: { maxLLMSlots: 2, maxAgentSlots: 4, providerMaxLLMSlots: {} },
   };
 }
 

@@ -210,6 +210,23 @@ export const en = {
         save: "SAVE CREDENTIALS",
         saved: "✓ SAVED",
       },
+      concurrency: {
+        title: "CONCURRENCY",
+        description: "Limits the number of simultaneous LLM calls and agent sessions. Pending calls are queued.",
+        llmSlots: "☎️ LLM slots max",
+        agentSlots: "🔧 Agent slots max",
+        save: "SAVE",
+        perProvider: "Per-provider limits",
+        perProviderHint: "Leave empty = inherit from the global default (LLM slots max).",
+        provider: "Provider",
+        inherit: "inherits",
+        noProviders: "No provider configured.",
+        statsLlm: (used: number, max: number, queue: number) =>
+          `☎️ LLM: ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
+        statsAgents: (used: number, max: number, queue: number) =>
+          `🔧 Agents: ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
+        saveError: "Failed to save concurrency settings",
+      },
       additional: "Additional parameters will be added here as needed.",
     },
     security: {

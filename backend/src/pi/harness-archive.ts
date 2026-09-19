@@ -2,8 +2,9 @@
  * harness-archive.ts — Archivage « boîte noire » des délégués en échec
  * (P0 OBSERVABILITÉ, volet 1/2).
  *
- * Problème : le harness inline (harness.ts) détruisait le fichier de session
- * JSONL du délégué dans le `finally` quel que soit l'issue (unlinkSync) →
+ * Problème : le harness (extensions/harness-orchestrator/index.ts) détruisait
+ * le fichier de session JSONL du délégué dans le `finally` quel que soit
+ * l'issue (unlinkSync) →
  * aucun diagnostic post-mortem possible (timeout, erreur modèle, réponse vide…).
  *
  * Solution : en cas d'ÉCHEC uniquement, le fichier de session est ARCHIVÉ
@@ -19,6 +20,12 @@
  * harness-archive.test.ts) ; seules purgeExpiredArchives / archiveFailedSession /
  * logHarnessEvent ont des effets de bord, tous best-effort : un échec
  * d'archivage ne doit JAMAIS masquer l'erreur du délégué lui-même.
+ *
+ * NOTE rollback harness+cbm (étape A) : ce module reste dans BACKEND/src/pi/
+ * (pas dans extensions/) car il dépend du logger backend (utils/logger.ts) et
+ * de la racine projet (.data). Il est importé par l'extension
+ * harness-orchestrator via un chemin relatif résolu par jiti ; conserver le
+ * test ici garantit qu'il reste scanné par vitest (backend/vitest.config.ts).
  */
 
 import {
@@ -36,10 +43,12 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Convention DATA_DIR du backend (cf. utils/logger.ts, pi/providers.ts) :
-// <racine projet>/.data — 4 niveaux depuis pi/ext-inline (même profondeur en
-// src/dev via tsx et en dist/prod via node : src/pi/ext-inline ≡ dist/pi/ext-inline).
-const DATA_DIR = path.join(__dirname, "..", "..", "..", "..", ".data");
-
+// <racine projet>/.data — 3 niveaux depuis pi/ (même profondeur en src/dev via
+// tsx et en dist/prod via node : src/pi ≡ dist/pi).
+// NOTE rollback : ce module vit dans backend/src/pi/ (et non plus dans
+// l'extension) car il dépend du logger backend ET de la racine projet ; il est
+// importé par l'extension harness-orchestrator via jiti (chemin relatif).
+const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
 /** Dossier d'archivage des sessions déléguées en échec. */
 export const HARNESS_ARCHIVE_DIR = path.join(DATA_DIR, "logs", "harness");
 /** Rétention des archives : 7 jours — purge au moment d'écrire, pas de cron. */
@@ -255,7 +264,7 @@ export function logHarnessEvent(
     `${new Date().toISOString()} [${level.toUpperCase()}] [harness] ${message}` +
     (details === undefined ? "" : ` | ${safeJson(details)}`);
   try {
-    void import("../../utils/logger.js")
+    void import("../utils/logger.js")
       .then(({ logger }) => {
         logger[level]("harness", message, details);
       })

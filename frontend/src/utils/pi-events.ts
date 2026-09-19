@@ -20,26 +20,52 @@ export function appendMessageDedup(prev: DisplayMessage[], msg: DisplayMessage):
   return [...prev, msg];
 }
 
-// ── Préservation des messages user « en vol » ─────────────────────────────
+// ── Préservation des messages user « en vol » ───────────────────────────
 // Un pi_history peut arriver pendant que le client vient d'envoyer un prompt
 // (filet de secours needsHistory — régression 6210d1c, rejeu de file WS,
 // fallback pi_prompt) : le backend construit l'historique AVANT de committer
-// le message de l'utilisateur dans la session, donc le remplacement wholesale
-// de la liste par l'historique reçu ferait DISPARAÎTRE le message tout juste
-// tapé (id optimiste ≠ id d'entrée backend, dédup par id inopérant). On
-// identifie ici les messages user optimistes RÉCENTS (≤ windowMs) absents de
-// l'historique reçu, pour que l'appelant les ré-attache à la fin.
-// Comparaison par CONTENU sur le DERNIER message user de l'historique : le
-// message de l'utilisateur, une fois commité par le backend, est
-// chronologiquement le DERNIER user de l'historique — s'il y est déjà (flux
-// normal), pas de ré-ajout (pas de doublon permanent) ; un doublon plus ancien
-// à contenu identique ne le masque pas.
+// le message de l'utilisateur, donc le remplacement wholesale de la liste par
+// l'historique reçu ferait DISPARAÎTRE le message tout juste tapé (id
+// optimiste ≠ id d'entrée backend, dédup par id inopérant).
+//
+// Correctif « question disparue » (incident Yuki) : l'ancienne fenêtre de 15 s
+// expirait pendant les gros rattrapages (1,96 Mo à transférer/parser) et la
+// question du user disparaissait. La préservation ne dépend PLUS de l'ÂGE :
+// un message user optimiste est préservé tant qu'il n'est PAS PRÉSENT dans
+// l'historique reçu (confirmation par CONTENU, quel que soit l'âge) :
+//   - « dernier user » : s'il est le DERNIER user de l'historique reçu, c'est
+//     le flux normal (commité) → pas de ré-ajout (pas de doublon permanent) ;
+//   - « absent partout » : jamais commité → PRÉSERVÉ, quel que soit l'âge ;
+//   - « doublon ancien » : matche un user PLUS ANCIEN de l'historique — un
+//     candidat RÉCENT (< windowMs) est quand même préservé (nouvel envoi à
+//     contenu identique : un doublon ancien ne doit pas le masquer) ; un
+//     candidat ANCIEN est considéré déjà commité (on ne ressuscite pas un
+//     vieux message que l'historique contient déjà) ;
+//   - fenêtrage serveur (pi_history tronqué, windowFrom > 0) : les messages
+//     ANTÉRIEURS au plus vieux message de la fenêtre sont ATTENDUS absents
+//     (ils vivent dans les lots antérieurs, pi_history_page) — on ne peut ni
+//     les confirmer ni les déclarer perdus : on ne les ré-attache PAS (sinon
+//     chaque resync dupliquerait en queue les vieux lots déjà chargés).
+//     Marge PENDING_WINDOW_SKEW_MS : horloges client/serveur désynchronisées.
 export const PENDING_USER_WINDOW_MS = 15_000;
+/** Marge d'horloge client/serveur pour la borne « hors fenêtre serveur ». */
+export const PENDING_WINDOW_SKEW_MS = 120_000;
+
+export interface PendingUserOptions {
+  /**
+   * Index (dans la liste complète backend) du PREMIER message de l'historique
+   * reçu. 0 (défaut) = historique complet ; > 0 = fenêtre (pi_history
+   * tronqué, complété par les lots pi_history_page).
+   */
+  windowFrom?: number;
+}
+
 export function findPendingUserMessages(
   existing: DisplayMessage[],
   history: DisplayMessage[],
   now: number = Date.now(),
   windowMs: number = PENDING_USER_WINDOW_MS,
+  opts: PendingUserOptions = {},
 ): DisplayMessage[] {
   const candidates = existing.filter(
     (m) =>
@@ -47,13 +73,38 @@ export function findPendingUserMessages(
       !m._streaming &&
       typeof m.timestamp === "number" &&
       Number.isFinite(m.timestamp) &&
-      now - m.timestamp >= 0 &&
-      now - m.timestamp < windowMs
+      now - m.timestamp >= 0
   );
   if (candidates.length === 0) return [];
+
+  // Borne « hors fenêtre serveur » : si l'historique reçu est une TRANCHE,
+  // les candidats plus vieux que son message le plus ancien (marge de skew)
+  // sont attendus absents → jamais ré-attachés (pas de résurrection des lots
+  // antérieurs déjà chargés à chaque resync).
+  let windowFloorTs = -Infinity;
+  if ((opts.windowFrom ?? 0) > 0) {
+    const stamps = history
+      .map((m) => m.timestamp)
+      .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts));
+    if (stamps.length > 0) windowFloorTs = Math.min(...stamps) - PENDING_WINDOW_SKEW_MS;
+  }
+
   const lastUser = [...history].reverse().find((m) => m.role === "user");
-  if (!lastUser) return candidates;
-  return candidates.filter((c) => (lastUser.content || "") !== (c.content || ""));
+  const historyUserContents = new Set(
+    history.filter((m) => m.role === "user").map((m) => (m.content || "").trim())
+  );
+
+  return candidates.filter((c) => {
+    const ts = c.timestamp as number;
+    if (ts <= windowFloorTs) return false; // antérieur à la fenêtre serveur → hors périmètre
+    const content = (c.content || "").trim();
+    if (!content) return true; // non identifiable (ex. image seule) → conservé
+    if (lastUser && (lastUser.content || "").trim() === content) return false; // commité en dernier user (flux normal)
+    if (!historyUserContents.has(content)) return true; // absent de l'historique reçu → NON confirmé → préservé, quel que soit l'âge
+    // Présent mais PAS en dernier user (doublon ancien) : récent → nouvel
+    // envoi à contenu identique (préservé) ; ancien → déjà commité (jeté).
+    return now - ts < windowMs;
+  });
 }
 
 // ── Chargement par lots : préfixage d'un lot antérieur (pi_history_page) ──

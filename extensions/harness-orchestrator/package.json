@@ -1,0 +1,11 @@
+{
+  "name": "harness-orchestrator",
+  "version": "1.0.0",
+  "description": "Conversational harness orchestrator (delegate tool + sub-agent routing) for Pi-Web",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "name": "harness-orchestrator",
+    "description": "Routes execution tasks to isolated sub-agent functions via the delegate tool (harness mode)"
+  }
+}

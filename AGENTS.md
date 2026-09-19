@@ -53,7 +53,9 @@ Ce fichier contient les règles de base que les assistants IA (Claude Code, GitH
 │       ├── hooks/              # Hooks custom (useWebSocket, etc.)
 │       ├── i18n/               # Traductions (fr, en)
 │       └── styles/             # CSS (hacker-theme.css)
-├── extensions/                 # Extensions Pi locales (codebase-memory, file-analyzer)
+├── extensions/                 # Extensions Pi locales (harness-orchestrator,
+│                                 codebase-memory, file-analyzer, web-screenshot,
+│                                 compaction-checkpoint)
 ├── docs/                       # Documentation
 │   └── agent-api.md
 ├── ROADMAP.md                  # Suivi du projet (lire en premier)

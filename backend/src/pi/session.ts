@@ -1,6 +1,4 @@
-import { createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager, ModelRuntime, SettingsManager, buildSessionContext, estimateTokens, getAgentDir } from "@earendil-works/pi-coding-agent";
-import harnessExtension from "./ext-inline/harness.js";
-import codebaseMemoryExtension from "./ext-inline/codebase-memory.js";
+import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime, buildSessionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -169,9 +167,13 @@ async function withSessionTimeout(
   label: string,
 ): Promise<void> {
   // BUG-59 : slotKey unique par appel pour éviter la réentrance par projectId
-  const slotKey = `${projectId}::${label}`;
-  // Acquire LLM slot (respects max parallel LLM calls)
-  await concurrencyManager.acquireLLMSlot(slotKey, label);
+  // Concurrency par provider : le slot consomme la limite du provider du modèle
+  // de la session (fallback "__default__" si le provider est inconnu — jamais
+  // de rejet pour provider inconnu, cf. ConcurrencyManager).
+  const provider = session.model?.provider ?? "__default__";
+  const slotKey = `${provider}::${projectId}::${label}`;
+  // Acquire LLM slot (respects max parallel LLM calls, per provider)
+  await concurrencyManager.acquireLLMSlot(slotKey, label, provider);
 
   let timer: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<void>((_, reject) => {
@@ -407,59 +409,27 @@ async function createPiSessionInternal(
     sessionManager = SessionManager.create(cwd, sessionDir);
   }
 
-  // ── Extensions INLINE (CORE, étape 1+2) ────────────────────────
-  // harness-orchestrator + codebase-memory sont injectés INLINE via le
-  // DefaultResourceLoader du SDK 0.85.1 (DefaultResourceLoaderOptions.extensionFactories
-  // : InlineExtension[]). createAgentSession n'expose PAS de champ inline natif : la
-  // branche passe par un resourceLoader pré-construit (reload() déjà appelé, comme le
-  // fait le SDK quand il crée lui-même son loader. Les deux sont ainsi inconditionnels,
-  // indépendamment de settings.json/entrypoint.
+  // ── Extensions (ROLLBACK harness+cbm inline → extensions normales) ──
+  // harness-orchestrator + codebase-memory sont redevenues des extensions
+  // NORMALES (extensions/harness-orchestrator/, extensions/codebase-memory/),
+  // chargées par le DefaultResourceLoader PAR DÉFAUT du SDK via
+  // settings.extensions (chemins /app/extensions/... ajoutés par entrypoint.sh).
+  // Le loader custom (inlineSettingsManager/inlineResourceLoader/extensionFactories
+  // + extensionsOverride) a été retiré : plus de double chargement possible,
+  // donc plus besoin du filtre extensionsOverride.
   //
-  // ÉTAPE 2 — fin du DOUBLE chargement : le SDK charge AUSSI ces 2 extensions depuis
-  // settings.extensions (chemins /app/extensions/... ajoutés par entrypoint.sh) en PLUS
-  // des factories inline → tools en double (delegate, cbm_*). extensionsOverride filtre
-  // le LoadExtensionsResult APRÈS chargement, en excluant tout chemin contenant
-  // /codebase-memory/ ou /harness-orchestrator/ (quel que soit le préfixe /app ou autre).
-  // C'est un garde-fou durable : même si le settings PERSISTANT contient encore ces
-  // anciens chemins (entrypoint ne purge jamais settings.extensions, il ne fait que
-  // push), ils sont ignorés. Les 3 annexes (web-screenshot, file-analyzer,
-  // compaction-checkpoint) ne matchent pas → elles passent. Les factories inline ont un
-  // path synthétique `<inline:N>` → jamais filtrées.
-  //
-  // NOTE idempotence (sessions créées/reloadées plusieurs fois) :
-  //  - cbm : état module-level partagé (status, spawnPromise, downloadInFlight,
-  //    attemptedAutoInstall) + check du port avant spawn (isServerReady, re-use du 2e
-  //    process via BUG-61) → pas de double serveur ; le client stdio est lui aussi
-  //    module-level (stdioReadyPromise) ; re-index gardé (tool_execution_end, throttle).
-  //  - harness : handler before_agent_start idempotent (bloc HARNESS_ROLE retiré puis
-  //    réinjecté à chaque turn) ; le tool `delegate` est enregistré une seule fois
-  //    (première registration gagne dans le runner du SDK).
-  const inlineSettingsManager = SettingsManager.create(cwd, getAgentDir());
-  const inlineResourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir: getAgentDir(),
-    settingsManager: inlineSettingsManager,
-    extensionFactories: [harnessExtension, codebaseMemoryExtension],
-    // Exclut les extensions désormais fournies INLINE (double chargement éteint).
-    extensionsOverride: (base) => {
-      const EXCLUDED = ["/codebase-memory/", "/harness-orchestrator/"];
-      const isExcluded = (p: string | undefined): boolean =>
-        !!p && EXCLUDED.some((seg) => p.includes(seg));
-      const extensions = base.extensions.filter((ext) => !isExcluded(ext.path) && !isExcluded(ext.resolvedPath));
-      // On purge aussi les erreurs/diagnostics associés aux chemins exclus.
-      const errors = base.errors.filter((err) => !isExcluded(err.path));
-      return { ...base, extensions, errors };
-    },
-  });
-  await inlineResourceLoader.reload();
-
+  // GARDE cbmem DURABLE (étape B, entrypoint.sh) : l'ancien extensionsOverride
+  // excluait aussi « extensions/cbmem » — le fichier cbmem.ts AUTO-GÉNÉRÉ par le
+  // binaire CBM dans ~/.pi/agent/extensions/ (tools à nom nu, spawn d'un chemin
+  // de binaire inexistant → ENOENT). Le SDK charge tout *.ts de ce dossier
+  // global : entrypoint.sh neutralise donc le fichier au boot (cbmem.ts →
+  // .disabled-broken-binpath) — destruction au boot = seul garde possible,
+  // le binaire régénère le fichier à chaque install/update.
   try {
     const { session } = await createAgentSession({
       cwd,
       sessionManager,
       modelRuntime: sharedModelRuntime!,
-      settingsManager: inlineSettingsManager,
-      resourceLoader: inlineResourceLoader,
       customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
 
@@ -2374,8 +2344,13 @@ export async function generateAiCommitMessage(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
 
-    // Acquire LLM slot for the provider call
-    await concurrencyManager.acquireLLMSlot(`${projectId}::commit`, "commit");
+    // Concurrency par provider : utiliser le provider du modèle réellement
+    // sélectionné (fallback commitModel.providerId, puis défaut global).
+    const provider = model?.provider ?? commitModel?.providerId ?? "__default__";
+    const commitSlotKey = `${provider}::${projectId}::commit`;
+
+    // Acquire LLM slot for the provider call (limite par provider)
+    await concurrencyManager.acquireLLMSlot(commitSlotKey, "commit", provider);
 
     let commitResult: { subject: string; body: string } | null = null;
     try {
@@ -2402,7 +2377,7 @@ export async function generateAiCommitMessage(
         commitResult = { subject: subject || text, body };
       }
     } finally {
-      concurrencyManager.releaseLLMSlot(`${projectId}::commit`);
+      concurrencyManager.releaseLLMSlot(commitSlotKey);
     }
     return commitResult;
   } catch (error: any) {
@@ -2535,8 +2510,13 @@ export async function generateCleanCommitMessage(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
 
-    // Acquire LLM slot for the provider call
-    await concurrencyManager.acquireLLMSlot(`${projectId}::commit-clean`, "commit-clean");
+    // Concurrency par provider : utiliser le provider du modèle réellement
+    // sélectionné (fallback commitModel.providerId, puis défaut global).
+    const provider = model?.provider ?? commitModel?.providerId ?? "__default__";
+    const cleanSlotKey = `${provider}::${projectId}::commit-clean`;
+
+    // Acquire LLM slot for the provider call (limite par provider)
+    await concurrencyManager.acquireLLMSlot(cleanSlotKey, "commit-clean", provider);
 
     let commitResult: { subject: string; body: string } | null = null;
     try {
@@ -2560,7 +2540,7 @@ export async function generateCleanCommitMessage(
         commitResult = parseCleanCommitJson(text);
       }
     } finally {
-      concurrencyManager.releaseLLMSlot(`${projectId}::commit-clean`);
+      concurrencyManager.releaseLLMSlot(cleanSlotKey);
     }
     return commitResult;
   } catch (error: any) {

@@ -203,6 +203,10 @@ describe("applyPiEvent — cycle complet du streaming", () => {
 // ── Tests unitaires : findPendingUserMessages (filet de secours 6210d1c) ──
 // Un pi_history construit AVANT le commit du message de l'utilisateur ne doit
 // pas faire disparaître le message tout juste tapé de l'affichage.
+// Correctif « question disparue » (incident Yuki) : la préservation ne dépend
+// plus de l'âge (la fenêtre de 15 s expirait pendant les gros rattrapages)
+// mais de la PRÉSENCE du contenu dans l'historique reçu — avec une borne
+// « hors fenêtre serveur » quand l'historique est une tranche (windowFrom>0).
 describe("findPendingUserMessages — messages user en vol", () => {
   const NOW = 1_000_000;
 
@@ -225,9 +229,52 @@ describe("findPendingUserMessages — messages user en vol", () => {
     expect(findPendingUserMessages([pending], history, NOW)).toHaveLength(0);
   });
 
-  it("ignore les messages user trop anciens (hors fenêtre de 15 s)", () => {
+  it("préserve un message user ANCIEN absent d'un historique COMPLET (plus de fenêtre d'âge — incident Yuki)", () => {
+    // Le rattrapage (1,96 Mo) peut prendre > 15 s à arriver : l'ancienne
+    // fenêtre d'âge faisait disparaître la question. Absent de l'historique
+    // complet = non confirmé → préservé quel que soit l'âge.
+    const old = userMsg("opti-old", "ma question", NOW - 16_000);
+    const missing = findPendingUserMessages([old], [userMsg("h1", "vieux", NOW - 60_000)], NOW);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].id).toBe("opti-old");
+  });
+
+  it("préserve aussi un message ancien quand l'historique reçu est VIDE", () => {
     const old = userMsg("opti-old", "ancien", NOW - 16_000);
-    expect(findPendingUserMessages([old], [], NOW)).toHaveLength(0);
+    expect(findPendingUserMessages([old], [], NOW)).toHaveLength(1);
+  });
+
+  it("ne préserve PAS un message antérieur à la fenêtre serveur (pi_history tronqué, windowFrom > 0)", () => {
+    // Message issu d'un lot antérieur déjà chargé (pi_history_page) : la
+    // resync fenêtrée ne le contient pas et c'est NORMAL (il vit dans les
+    // lots serveur) → le ré-attacher dupliquerait les vieux lots à chaque
+    // resync. Marge de skew PENDING_WINDOW_SKEW_MS dépassée.
+    const old = userMsg("page-old", "vieux lot", NOW - 600_000);
+    const history = [userMsg("h1", "récent", NOW - 5_000), userMsg("h2", "récent2", NOW - 1_000)];
+    const missing = findPendingUserMessages([old], history, NOW, undefined, { windowFrom: 40 });
+    expect(missing).toHaveLength(0);
+  });
+
+  it("préserve un candidat RÉCENT absent d'un historique FENÊTRÉ (plus récent que la fenêtre)", () => {
+    // Le scénario incident : rattrapage fenêtré construit AVANT le commit de
+    // la question — la question est plus récente que tout ce que la fenêtre
+    // contient, donc non confirmable → préservée.
+    const pending = userMsg("opti-1", "ma question", NOW - 20_000); // > 15 s
+    const history = [userMsg("h1", "vieux", NOW - 900_000), userMsg("h2", "récent", NOW - 100)];
+    const missing = findPendingUserMessages([pending], history, NOW, undefined, { windowFrom: 40 });
+    expect(missing).toHaveLength(1);
+  });
+
+  it("ne ressuscite PAS un message ANCIEN dont le contenu existe déjà dans l'historique (doublon ancien)", () => {
+    // Un vieux message user déjà commité (présent dans l'historique reçu, pas
+    // en dernier) ne doit pas être ré-attaché en queue à chaque resync.
+    const old = userMsg("old-1", "ma question", NOW - 600_000);
+    const history = [
+      userMsg("h1", "ma question", NOW - 500_000),
+      userMsg("h2", "réponse", NOW - 400_000),
+      userMsg("h3", "autre", NOW - 100),
+    ];
+    expect(findPendingUserMessages([old], history, NOW)).toHaveLength(0);
   });
 
   it("ignore les messages _streaming et les assistants", () => {
@@ -248,6 +295,11 @@ describe("findPendingUserMessages — messages user en vol", () => {
     ];
     const missing = findPendingUserMessages([pending], history, NOW);
     expect(missing).toHaveLength(1);
+  });
+
+  it("un message user sans contenu identifiable (image seule) est conservé", () => {
+    const imgOnly = userMsg("opti-img", "", NOW - 100);
+    expect(findPendingUserMessages([imgOnly], [userMsg("h1", "vieux", NOW - 9000)], NOW)).toHaveLength(1);
   });
 
   it("aucun candidat → tableau vide (l'appelant ne modifie rien)", () => {

@@ -112,7 +112,7 @@ En complément, `docker logs` garde stdout (les deux flux restent redondants).
 - `backend/src/utils/logger.ts` — module logger (`error/info/warn`,
   `crash`, `installConsoleCapture`, purge 14 jours à l'init, surcharge du
   répertoire via `PI_WEB_LOGS_DIR` pour les tests).
-- `backend/src/pi/ext-inline/harness-archive.ts` — archivage « boîte noire »
+- `backend/src/pi/harness-archive.ts` — archivage « boîte noire »
   des délégués en échec (P0 observabilité, volet 1/2) : copie JSONL + meta
   dans `.data/logs/harness/`, purge 7 jours, traçage catégorie `harness`
   (logger partagé si dispo, sinon fallback `appendFileSync` — même format et

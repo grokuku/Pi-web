@@ -10,6 +10,12 @@ import type { ModelLibrary, RegisteredModel, ProviderConfig } from "../../types"
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { toast } from "../../utils/holaf-toast";
+import {
+  normalizeProviderOverrides,
+  mergeProviderLimits,
+  buildProviderOverridesPayload,
+  type ProviderLimitRow,
+} from "../../utils/concurrency";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "../../utils/preview-mode";
 import type { ResourceType } from "./settings/types";
 import ShortcutsTab from "./settings/ShortcutsTab";
@@ -257,6 +263,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
   const [maxAgentSlots, setMaxAgentSlots] = useState(5);
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
+  // Limites LLM par provider : une ligne par provider (GET /api/providers),
+  // value null = champ vide = hérite du défaut global (maxLLMSlots).
+  const [providerRows, setProviderRows] = useState<ProviderLimitRow[]>([]);
 
   // ── Webclaw config state ──
   // Durcissement (lot XSS) : la clé n'est plus renvoyée par l'API. Le champ
@@ -344,6 +353,16 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       setMaxLLMSlots(data.config.maxLLMSlots ?? 3);
       setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
       setConcurrencyStats(data.stats);
+      // Limites par provider : liste (GET /api/providers) + overrides
+      // (config.providerMaxLLMSlots) fusionnés — value null = hérite du défaut.
+      try {
+        const pres = await fetch("/api/providers");
+        if (pres.ok) {
+          const list: Array<{ id: string; name?: string }> = await pres.json();
+          const overrides = normalizeProviderOverrides(data.config?.providerMaxLLMSlots);
+          setProviderRows(mergeProviderLimits(list ?? [], overrides));
+        }
+      } catch {}
     } catch {}
   }, []);
 
@@ -352,13 +371,25 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/concurrency", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxLLMSlots, maxAgentSlots }),
+        // providerMaxLLMSlots : les champs vides sont retirés de la map →
+        // override supprimé (le provider hérite à nouveau du défaut global).
+        body: JSON.stringify({
+          maxLLMSlots,
+          maxAgentSlots,
+          providerMaxLLMSlots: buildProviderOverridesPayload(providerRows),
+        }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        // Validation serveur refusée (ex. valeur hors 1..20) → toast erreur.
+        toast(data?.error || t("settings.general.concurrency.saveError"), "error");
+        return;
+      }
       setConcurrencyStats(data.stats);
       toast(t('common.saved'), "success");
     } catch (e: any) {
       console.error("[concurrency] Failed to save:", e);
+      toast(t("settings.general.concurrency.saveError"), "error");
     }
   };
 
@@ -1022,17 +1053,16 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
               {/* Concurrency Section */}
               <div className="border border-hacker-border bg-hacker-surface/50">
                 <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
-                  <span className="text-xs font-bold text-hacker-accent tracking-wider">☎️ CONCURRENCE</span>
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">☎️ {t('settings.general.concurrency.title')}</span>
                 </div>
                 <div className="p-3 space-y-3">
                   <p className="text-[11px] text-hacker-text-dim">
-                    Limite le nombre d'appels LLM et de sessions agent simultanés.
-                    Les appels en attente sont mis en file d'attente.
+                    {t('settings.general.concurrency.description')}
                   </p>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="text-hacker-text-dim text-xs block mb-1">
-                        ☎️ LLM slots max
+                        {t('settings.general.concurrency.llmSlots')}
                       </label>
                       <input
                         type="number"
@@ -1045,7 +1075,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </div>
                     <div>
                       <label className="text-hacker-text-dim text-xs block mb-1">
-                        🔧 Agent slots max
+                        {t('settings.general.concurrency.agentSlots')}
                       </label>
                       <input
                         type="number"
@@ -1057,14 +1087,53 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       />
                     </div>
                   </div>
+
+                  {/* Limites par provider — champ vide = hérite du défaut global */}
+                  <div className="pt-2 border-t border-hacker-border/30">
+                    <div className="text-[11px] font-bold text-hacker-text-dim">{t('settings.general.concurrency.perProvider')}</div>
+                    <div className="text-[10px] text-hacker-text-dim/80 mb-2">{t('settings.general.concurrency.perProviderHint')}</div>
+                    {providerRows.length === 0 ? (
+                      <div className="text-[10px] text-hacker-text-dim/70 italic">{t('settings.general.concurrency.noProviders')}</div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        <div className="text-[10px] uppercase tracking-wider text-hacker-text-dim/60">
+                          {t('settings.general.concurrency.provider')}
+                        </div>
+                        {providerRows.map(row => (
+                          <div key={row.id} className="flex items-center gap-2">
+                            <span className="text-[11px] text-hacker-text flex-1 truncate" title={row.name}>
+                              {row.name}
+                            </span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              placeholder={t('settings.general.concurrency.inherit')}
+                              value={row.value ?? ""}
+                              onChange={e => {
+                                const raw = e.target.value;
+                                setProviderRows(prev => prev.map(r =>
+                                  r.id === row.id
+                                    ? { ...r, value: raw === "" ? null : Math.max(1, Math.min(20, parseInt(raw) || 1)) }
+                                    : r
+                                ));
+                              }}
+                              className="input-hacker w-24 text-xs py-1 px-2 text-right"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <button onClick={saveConcurrency}
                     className="btn-hacker text-xs px-4 py-1.5">
-                    SAVE
+                    {t('settings.general.concurrency.save')}
                   </button>
                   {concurrencyStats && (
                     <div className="text-[10px] text-hacker-text-dim space-y-1 mt-2 pt-2 border-t border-hacker-border/30">
-                      <div>☎️ LLM : {concurrencyStats.llmSlots.used}/{concurrencyStats.llmSlots.max} utilisé{concurrencyStats.llmSlots.queue > 0 ? ` · ${concurrencyStats.llmSlots.queue} en attente` : ""}</div>
-                      <div>🔧 Agents : {concurrencyStats.agentSlots.used}/{concurrencyStats.agentSlots.max} utilisé{concurrencyStats.agentSlots.queue > 0 ? ` · ${concurrencyStats.agentSlots.queue} en attente` : ""}</div>
+                      <div>{t('settings.general.concurrency.statsLlm', concurrencyStats.llmSlots.used, concurrencyStats.llmSlots.max, concurrencyStats.llmSlots.queue)}</div>
+                      <div>{t('settings.general.concurrency.statsAgents', concurrencyStats.agentSlots.used, concurrencyStats.agentSlots.max, concurrencyStats.agentSlots.queue)}</div>
                     </div>
                   )}
                 </div>

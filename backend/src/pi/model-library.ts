@@ -94,8 +94,9 @@ export interface ModelLibrary {
   librarianModelId: string | null;        // model for librarian doc synthesis (null = use default)
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
   concurrency: {                          // Concurrency Manager config
-    maxLLMSlots: number;
-    maxAgentSlots: number;
+    maxLLMSlots: number;                  // limite LLM par DÉFAUT (globale)
+    maxAgentSlots: number;                // sessions Pi SDK simultanées max (global)
+    providerMaxLLMSlots: Record<string, number>;  // override de limite LLM par providerId
   };
 }
 
@@ -146,6 +147,40 @@ function createDefaultProjectMode(): ProjectModeConfig {
   };
 }
 
+// Défauts du bloc concurrency (factored pour getConcurrencyConfig/setConcurrencyConfig)
+const DEFAULT_CONCURRENCY: ModelLibrary["concurrency"] = {
+  maxLLMSlots: 3,
+  maxAgentSlots: 5,
+  providerMaxLLMSlots: {},
+};
+
+/**
+ * Normalise le bloc concurrency issu du disque (migration/rétro-compatibilité).
+ * Garantit que `providerMaxLLMSlots` existe toujours ({} par défaut) et que
+ * toutes les valeurs sont des entiers valides — une config legacy sans map,
+ * ou avec des entrées corrompues, est réparée sans rejet.
+ */
+function normalizeConcurrency(c: any): ModelLibrary["concurrency"] {
+  if (!c || typeof c !== "object") {
+    return { ...DEFAULT_CONCURRENCY, providerMaxLLMSlots: {} };
+  }
+  const providerMaxLLMSlots: Record<string, number> = {};
+  if (c.providerMaxLLMSlots && typeof c.providerMaxLLMSlots === "object" && !Array.isArray(c.providerMaxLLMSlots)) {
+    for (const [key, value] of Object.entries(c.providerMaxLLMSlots)) {
+      // Clés réservées JS : jamais acceptées (protection pollution de prototype).
+      if (typeof key !== "string" || !key || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+      // Valeurs > 0 uniquement (entiers) : toute entrée invalide est ignorée.
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1) continue;
+      providerMaxLLMSlots[key] = value;
+    }
+  }
+  return {
+    maxLLMSlots: typeof c.maxLLMSlots === "number" && c.maxLLMSlots > 0 ? c.maxLLMSlots : DEFAULT_CONCURRENCY.maxLLMSlots,
+    maxAgentSlots: typeof c.maxAgentSlots === "number" && c.maxAgentSlots > 0 ? c.maxAgentSlots : DEFAULT_CONCURRENCY.maxAgentSlots,
+    providerMaxLLMSlots,
+  };
+}
+
 function getDefaultLibrary(): ModelLibrary {
   return {
     models: [],
@@ -155,7 +190,7 @@ function getDefaultLibrary(): ModelLibrary {
     audioModelId: null,
     librarianModelId: null,
     projectModes: {},
-    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 },
+    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} },
   };
 }
 
@@ -185,16 +220,32 @@ export function saveModelLibrary(library: ModelLibrary): void {
 
 // ── Concurrency config ─────────────────────────────
 
-export function getConcurrencyConfig() {
+export function getConcurrencyConfig(): ModelLibrary["concurrency"] {
   const lib = loadModelLibrary();
-  return lib.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5 };
+  // migrateLibrary garantit un bloc normalisé ; fallback défensif inchangé.
+  return lib.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} };
 }
 
-export async function setConcurrencyConfig(config: { maxLLMSlots?: number; maxAgentSlots?: number }) {
+export async function setConcurrencyConfig(config: {
+  maxLLMSlots?: number;
+  maxAgentSlots?: number;
+  providerMaxLLMSlots?: Record<string, number>;
+}) {
   const lib = loadModelLibrary();
-  if (!lib.concurrency) lib.concurrency = { maxLLMSlots: 3, maxAgentSlots: 5 };
+  if (!lib.concurrency) lib.concurrency = { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} };
   if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) lib.concurrency.maxLLMSlots = config.maxLLMSlots;
   if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) lib.concurrency.maxAgentSlots = config.maxAgentSlots;
+  // Map de limites par provider : remplacée ENTIÈREMENT quand fournie
+  // (permet de supprimer un override), inchangée sinon (update partiel).
+  if (config.providerMaxLLMSlots !== undefined) {
+    const sanitized: Record<string, number> = {};
+    for (const [key, value] of Object.entries(config.providerMaxLLMSlots || {})) {
+      if (typeof key !== "string" || !key || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1) continue;
+      sanitized[key] = value;
+    }
+    lib.concurrency.providerMaxLLMSlots = sanitized;
+  }
   saveModelLibrary(lib);
   // Sync with the runtime manager
   const { concurrencyManager } = await import("./concurrency.js");
@@ -204,7 +255,8 @@ export async function setConcurrencyConfig(config: { maxLLMSlots?: number; maxAg
 
 // ── Migration ─────────────────────────────────────────
 
-function migrateLibrary(data: any): ModelLibrary {
+// Exporté pour les tests de migration (pure function, pas d'I/O).
+export function migrateLibrary(data: any): ModelLibrary {
   // If it's the old format (has "modes" key), migrate
   if (data.modes && !data.models) {
     return migrateFromOldFormat(data);
@@ -218,7 +270,8 @@ function migrateLibrary(data: any): ModelLibrary {
     audioModelId: data.audioModelId || null,
     librarianModelId: data.librarianModelId || null,
     projectModes: {},
-    concurrency: data.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5 },
+    // Normalisation systématique : providerMaxLLMSlots existe toujours ({}).
+    concurrency: normalizeConcurrency(data.concurrency),
   };
 
   // Migrate project modes
@@ -232,7 +285,7 @@ function migrateLibrary(data: any): ModelLibrary {
 }
 
 function migrateFromOldFormat(data: any): ModelLibrary {
-  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, librarianModelId: null, projectModes: {}, concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 } };
+  const lib: ModelLibrary = { models: [], defaultModelId: null, commitModelId: null, visionModelId: null, audioModelId: null, librarianModelId: null, projectModes: {}, concurrency: normalizeConcurrency(undefined) };
 
   // Collect all unique models from all modes
   const seenIds = new Set<string>();

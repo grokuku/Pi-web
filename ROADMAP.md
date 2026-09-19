@@ -604,9 +604,11 @@ Backend (Express + WebSocket + node-pty + Pi SDK)
   └── pi/session.ts → orchestration sessions, modes, harness, auto-review
 
 Extensions Pi
+  ├── harness-orchestrator/ → delegate_to_expert (harness v3 conversationnel)
+  ├── codebase-memory/ → cbm_* tools (graph-based code intelligence)
+  ├── web-screenshot/ → web_screenshot tool
   ├── file-analyzer/ → analyze_file tool
-  ├── compaction-checkpoint/ → session_compact event
-  └── codebase-memory/ → cbm_* tools (graph-based code intelligence)
+  └── compaction-checkpoint/ → session_compact event
 
 Stockage
   /data/

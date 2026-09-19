@@ -51,171 +51,164 @@ fi
 echo "[PI-WEB] Building frontend..."
 npm run build
 
-# ─── Reinstall Pi extensions from settings ────
+# ─── Extensions Pi : check & install ROBUSTE (recalcul inconditionnel) ───
+#
+# ROLLBACK « harness+cbm inline → extensions normales » : les deux extensions
+# sont redevenues des extensions NORMALES (extensions/harness-orchestrator/,
+# extensions/codebase-memory/ — elles ne sont PAS supprimées), chargées par le
+# loader PAR DÉFAUT du SDK via settings.extensions.
+#
+# LE BUG D'ORIGINE : l'ancien bloc était sous garde `if [ -f settings.json ]`
+# et son recalcul de settings.extensions n'était atteint que si
+# settings.packages contenait des packages npm/git. Sur une install neuve
+# (settings.json absent, ou packages: []) : rien n'était écrit → ni
+# harness-orchestrator ni codebase-memory dans le settings persistant
+# (volume /root/.pi/agent), d'où des sessions sans tools cbm_*/delegate.
+#
+# Nouvelle logique (à CHAQUE boot, sans condition préalable) :
+#  1. settings.json est CRÉÉ s'il est absent (structure minimale valide
+#     { packages: [], extensions: [] } — celle du settings-manager du SDK :
+#     packages = string[] | {source}[], extensions = string[]) ;
+#  2. settings.extensions est RECALCULÉ de façon INCONDITIONNELLE comme
+#     l'union de :
+#       - extensions npm/git déclarées dans settings.packages, résolues via
+#         npm root -g (manifest pi.extensions du package ; chemins vérifiés
+#         existsSync — les natifs better-sqlite3/sqlite-vec y sont compilés) ;
+#       - extensions locales /app/extensions/*/index.ts présentes sur disque
+#         (harness-orchestrator, codebase-memory + les annexes) ;
+#  3. ce recalcul EST la purge des chemins morts : tout chemin non vérifié
+#     existsSync disparaît du settings au boot. C'est désormais le SEUL
+#     garde-fou — l'ancien filtre extensionsOverride (loader custom de
+#     session.ts) a été supprimé à l'étape A ;
+#  4. idempotence : écriture SEULEMENT si le contenu change (pas d'écriture
+#     inutile du volume persistant).
 PI_AGENT_DIR="/root/.pi/agent"
 PI_SETTINGS="${PI_AGENT_DIR}/settings.json"
 NPM_GLOBAL_ROOT=$(npm root -g)
 
-# Ensure global npm root exists
-mkdir -p "$NPM_GLOBAL_ROOT"
+# Ensure global npm root + agent dir exist
+mkdir -p "$NPM_GLOBAL_ROOT" "$PI_AGENT_DIR"
 
-if [ -f "$PI_SETTINGS" ]; then
-  # CONSTAT (étape 2, double chargement cbm/harness) : ce bloc ne PURGE PAS
-  # inconditionnellement settings.extensions. Le reset `settings.extensions = [...]`
-  # (plus bas) n'est atteint que si settings.packages contient des packages npm/git
-  # (branche `if [ -n "$PACKAGES" ]`). Or avec `packages: []`, la branche « Also add
-  # local extensions » ne fait que PUSH sans vider : les vieux chemins
-  # /app/extensions/codebase-memory/index.ts et /app/extensions/harness-orchestrator/
-  # index.ts restent donc dans le settings PERSISTANT (volume /root/.pi/agent). Ils
-  # sont désormais absents du repo, mais le garde-fou est ailleurs : session.ts filtre
-  # ces chemins via DefaultResourceLoaderOptions.extensionsOverride, quel que soit
-  # l'état du settings. La lecture de /app/extensions est elle-même sûre (readdir +
-  # existsSync) : les 2 dossiers retirés n'ajoutent aucun chemin cassé.
-  PACKAGES=$(node -e "
-    try {
-      const s = JSON.parse(require('fs').readFileSync('$PI_SETTINGS','utf8'));
-      const pkgs = (s.packages || []).map(p => typeof p === 'string' ? p : p.source).filter(p => p && !p.startsWith('./') && !p.startsWith('/'));
-      if (pkgs.length) console.log(pkgs.join(' '));
-    } catch(e) {}
-  ")
-
-  if [ -n "$PACKAGES" ]; then
-    echo "[PI-WEB] Reinstalling Pi extensions: $PACKAGES"
-
-    # Install globally — the Pi SDK resolves packages via npm root -g
-    # Global install compiles native modules (better-sqlite3, sqlite-vec, etc.)
-    if npm install -g $PACKAGES --no-audit --no-fund 2>&1; then
-      echo "[PI-WEB] Extensions installed globally successfully"
-    else
-      echo "[PI-WEB] WARNING: Some extensions failed to install globally (see errors above)"
-    fi
-
-    # Update settings.extensions with resolved paths from GLOBAL npm root
-    # (native modules like better-sqlite3 are compiled there, not in agent dir)
-    node -e "
-      const fs = require('fs');
-      const path = require('path');
-      const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
-      const packages = (settings.packages || []).map(p => typeof p === 'string' ? p : p.source);
-      const extensions = [];
-      const globalRoot = '$NPM_GLOBAL_ROOT';
-      for (const pkg of packages) {
-        // Resolve extension entry points from GLOBAL npm root
-        // This is critical: native modules (better-sqlite3, sqlite-vec) are compiled here
-        let pkgJsonPath = path.join(globalRoot, pkg, 'package.json');
-        try {
-          const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-          const pi = pkgJson.pi || {};
-          const pkgDir = path.dirname(pkgJsonPath);
-          if (pi.extensions) {
-            for (const ext of pi.extensions) {
-              const extPath = path.resolve(pkgDir, ext);
-              if (fs.existsSync(extPath)) {
-                extensions.push(extPath);
-              }
-            }
-          }
-          if (pi.skills) {
-            // skills paths are also relative to package dir
-            // Pi SDK resolves them automatically from packages
-          }
-        } catch(e) {
-          console.error('[PI-WEB] Could not read manifest for', pkg, ':', e.message);
-        }
-      }
-      settings.extensions = [...new Set(extensions)];
-
-      // Add local extensions from /app/extensions/
-      const localExtDir = '/app/extensions';
-      try {
-        const localExts = fs.readdirSync(localExtDir, { withFileTypes: true })
-          .filter(d => d.isDirectory())
-          .map(d => path.join(localExtDir, d.name, 'index.ts'))
-          .filter(p => fs.existsSync(p));
-        for (const ext of localExts) {
-          if (!extensions.includes(ext)) {
-            extensions.push(ext);
-            settings.extensions.push(ext);
-          }
-        }
-        if (localExts.length > 0) {
-          console.log('[PI-WEB] Added local extensions:', localExts);
-        }
-      } catch(e) {
-        // No local extensions directory — that's fine
-      }
-
-      fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-      console.log('[PI-WEB] Updated settings.extensions:', settings.extensions.length, 'entries:', settings.extensions);
-    "
-  else
-    echo "[PI-WEB] No npm/git extensions to reinstall"
-  fi
-
-  # Also add local extensions even if no npm packages
-  node -e "
-    const fs = require('fs');
-    const path = require('path');
-    const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
-    const localExtDir = '/app/extensions';
-    let added = 0;
-    try {
-      const localExts = fs.readdirSync(localExtDir, { withFileTypes: true })
-        .filter(d => d.isDirectory())
-        .map(d => path.join(localExtDir, d.name, 'index.ts'))
-        .filter(p => fs.existsSync(p));
-      for (const ext of localExts) {
-        if (!(settings.extensions || []).includes(ext)) {
-          settings.extensions = settings.extensions || [];
-          settings.extensions.push(ext);
-          added++;
-        }
-      }
-      if (added > 0) fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-      if (added > 0 || localExts.length > 0) console.log('[PI-WEB] Local extensions:', localExts.length, 'found,', added, 'added');
-    } catch(e) {
-      // No local extensions directory
-    }
-  "
-
-  # ── Garde-fou : purge des chemins d'extensions MORTS (AJUSTEMENT 3) ──
-  # Les blocs ci-dessus ne font qu'AJOUTER des extensions ; ils ne retirent
-  # JAMAIS les entrées devenues invalides. Constat de l'incident : les chemins
-  # /app/extensions/codebase-memory/index.ts et /app/extensions/harness-
-  # orchestrator/index.ts (dossiers supprimés par le chantier « harness+cbm
-  # core ») ont survécu dans le settings PERSISTANT du volume /root/.pi/agent
-  # (la branche qui réinitialise settings.extensions n'est atteinte que si
-  # settings.packages contient des packages npm/git — pas le cas ici). Non
-  # bloquant (session.ts filtre via extensionsOverride), mais config sale et
-  # trompeuse. On filtre donc par existsSync : tout chemin absent du disque
-  # disparaît au boot, quel que soit l'historique du settings. Les annexes
-  # réelles (web-screenshot, file-analyzer, compaction-checkpoint) existent
-  # dans /app/extensions et sont conservées. Écriture UNIQUEMENT si un chemin
-  # a été retiré (pas de réécriture inutile du fichier persistant).
-  node -e "
-    const fs = require('fs');
-    try {
-      const settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
-      const before = settings.extensions || [];
-      const kept = before.filter(p => typeof p === 'string' && fs.existsSync(p));
-      const removed = before.filter(p => !kept.includes(p));
-      if (removed.length > 0) {
-        settings.extensions = kept;
-        fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-        console.log('[PI-WEB] Purged', removed.length, 'dead extension path(s) from settings:', removed);
-        console.log('[PI-WEB] Remaining extensions:', kept);
-      } else {
-        console.log('[PI-WEB] Extension paths all exist on disk — nothing to purge');
-      }
-    } catch(e) {
-      // settings illisible ou indisponible : on ne bloque JAMAIS le boot là-dessus
-      console.error('[PI-WEB] settings.json dead-path purge skipped:', e.message);
-    }
-  "
-else
-  echo "[PI-WEB] No Pi settings file found, skipping extension reinstall"
+# ── Garde DURABLE : neutraliser cbmem.ts (extension auto-générée par CBM) ──
+# Le binaire codebase-memory-mcp écrit ~/.pi/agent/extensions/cbmem.ts à
+# CHAQUE install/update (bloc auto-régénéré, non éditable durablement). C'est
+# un doublon NUISIBLE de nos tools cbm_* de l'extension extensions/codebase-
+# memory :
+#  - tools à nom NU (search_code, search_graph...) au lieu des cbm_* officiels ;
+#  - spawn EN DUR de /root/.local/bin/codebase-memory-mcp — chemin NULLE PART
+#    chez nous (le binaire vit dans le volume persistant /app/.data/bin,
+#    exporté via CBM_BIN_PATH) → « spawn ENOENT » à chaque appel.
+# Le SDK charge AUTOMATIQUEMENT tout *.ts de ~/.pi/agent/extensions/ (scan du
+# dossier global extensions/, cf. discoverExtensionsInDir du loader) et
+# l'ancien garde extensionsOverride a disparu avec le loader custom : la seule
+# neutralisation durable est de détruire le fichier au boot. Il sera régénéré
+# par le binaire ; on reneutralisera au boot suivant. (Le SDK ne charge que
+# *.ts/*.js : le renommage en .disabled-broken-binpath suffit. Les autres
+# fichiers du dossier — firecrawl.json, config du package npm
+# @benvargas/pi-firecrawl — ne sont pas des extensions .ts : on n'y touche pas.)
+CBMEM_EXT="${PI_AGENT_DIR}/extensions/cbmem.ts"
+if [ -f "$CBMEM_EXT" ]; then
+  mv -f "$CBMEM_EXT" "${CBMEM_EXT}.disabled-broken-binpath"
+  echo "[PI-WEB] Neutralized auto-generated CBM extension (cbmem.ts → .disabled-broken-binpath — doublon des tools cbm_*, BIN_PATH inexistant)"
 fi
 
+# Packages npm/git déclarés dans le settings (résolus puis installés
+# globalement ci-dessous) — les extensions locales /app/extensions ne
+# nécessitent AUCUN npm install : elles vivent dans l'image /app.
+PACKAGES=$(node -e "
+  try {
+    const s = JSON.parse(require('fs').readFileSync('$PI_SETTINGS','utf8'));
+    const pkgs = (s.packages || []).map(p => typeof p === 'string' ? p : (p && p.source)).filter(p => p && !p.startsWith('./') && !p.startsWith('/'));
+    if (pkgs.length) console.log(pkgs.join(' '));
+  } catch(e) {}
+")
+
+if [ -n "$PACKAGES" ]; then
+  echo "[PI-WEB] Reinstalling Pi extensions: $PACKAGES"
+
+  # Install globally — the Pi SDK resolves packages via npm root -g
+  # Global install compiles native modules (better-sqlite3, sqlite-vec, etc.)
+  if npm install -g $PACKAGES --no-audit --no-fund 2>&1; then
+    echo "[PI-WEB] Extensions installed globally successfully"
+  else
+    echo "[PI-WEB] WARNING: Some extensions failed to install globally (see errors above)"
+  fi
+else
+  echo "[PI-WEB] No npm/git packages declared — local extensions only"
+fi
+
+# Recalcul INCONDITIONNEL de settings.extensions (union npm/git résolus ∪
+# locales existantes) + création de settings.json si absent + purge des
+# chemins morts (existsSync) + écriture seulement si changement (idempotence).
+# Un échec ici ne doit JAMAIS bloquer le boot : chaque étape est try/catchée.
+node -e "
+  const fs = require('fs');
+  const path = require('path');
+
+  // 1. Charger ou CRÉER settings.json (install neuve : volume /root/.pi/agent vide)
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync('$PI_SETTINGS', 'utf8'));
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('bad shape');
+  } catch (e) {
+    console.log('[PI-WEB] settings.json absent/illisible — création structure minimale valide');
+    settings = {};
+  }
+  if (!Array.isArray(settings.packages)) settings.packages = [];
+  if (!Array.isArray(settings.extensions)) settings.extensions = [];
+
+  // 2. Recalcul : union, chaque chemin poussé est vérifié existsSync
+  //    → la purge des chemins morts est intégrée au recalcul
+  const next = [];
+
+  // 2a. Packages npm/git : manifest pi.extensions résolu dans npm root -g
+  const globalRoot = '$NPM_GLOBAL_ROOT';
+  for (const pkg of settings.packages) {
+    const source = typeof pkg === 'string' ? pkg : (pkg && pkg.source);
+    if (!source || source.startsWith('./') || source.startsWith('/')) continue;
+    try {
+      const pkgJsonPath = path.join(globalRoot, source, 'package.json');
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      const pkgDir = path.dirname(pkgJsonPath);
+      for (const ext of (pkgJson.pi && pkgJson.pi.extensions) || []) {
+        const extPath = path.resolve(pkgDir, ext);
+        if (fs.existsSync(extPath) && !next.includes(extPath)) next.push(extPath);
+      }
+    } catch (e) {
+      console.error('[PI-WEB] Could not read manifest for', source, ':', e.message);
+    }
+  }
+
+  // 2b. Extensions locales /app/extensions/*/index.ts (existantes sur disque)
+  const localDir = '/app/extensions';
+  try {
+    for (const d of fs.readdirSync(localDir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const extPath = path.join(localDir, d.name, 'index.ts');
+      if (fs.existsSync(extPath) && !next.includes(extPath)) next.push(extPath);
+    }
+  } catch (e) {
+    // Pas de dossier /app/extensions — ok
+  }
+
+  // 3. Écrire SEULEMENT si le contenu change (idempotence : pas d'écriture
+  //    inutile du volume persistant /root/.pi/agent). try/catch : un échec
+  //    d'écriture ne doit jamais faire avorter le boot (set -e).
+  try {
+    if (JSON.stringify(settings.extensions) !== JSON.stringify(next)) {
+      settings.extensions = next;
+      fs.writeFileSync('$PI_SETTINGS', JSON.stringify(settings, null, 2) + '\n');
+      console.log('[PI-WEB] settings.extensions recalculated (' + next.length + ' entries):', next);
+    } else {
+      console.log('[PI-WEB] settings.extensions up to date (' + next.length + ' entries) — nothing to write');
+    }
+    if (next.length === 0) {
+      console.log('[PI-WEB] WARNING: aucune extension résolue — vérifier /app/extensions et settings.packages');
+    }
+  } catch (e) {
+    console.error('[PI-WEB] settings.json write skipped:', e.message);
+  }
+"
 # ── codebase-memory-mcp : binaire PERSISTANT sur le volume /app/.data ──
 #
 # Deux régressions corrigées ici :
@@ -227,7 +220,7 @@ fi
 #  2. $HOME/.local/bin n'est PAS un volume : le binaire (~286 Mo) était perdu à
 #     chaque rebuild. On l'installe dans /app/.data/bin (volume pi-appdata) et
 #     on exporte CBM_BIN_PATH, lu par le backend (routes/cbm.ts) et par
-#     l'extension inline ext-inline/codebase-memory.ts.
+#     l'extension extensions/codebase-memory/index.ts.
 CBM_BIN_DIR="/app/.data/bin"
 CBM_BIN="$CBM_BIN_DIR/codebase-memory-mcp"
 CBM_INSTALL_URL="https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
@@ -260,8 +253,8 @@ mkdir -p "$CBM_CACHE_DIR"
 # Start CBM HTTP server in background (3D graph UI on port 9749).
 # NOTE (v0.10.4): in --ui mode the HTTP /rpc endpoint is restricted — only
 # list_projects and get_code_snippet are allowed; everything else returns 403
-# "UI RPC method is not allowed". The Pi extension (inline: backend/src/pi/
-# ext-inline/codebase-memory.ts, ex extensions/codebase-memory) therefore talks
+# "UI RPC method is not allowed". The Pi extension
+# (extensions/codebase-memory/index.ts) therefore talks
 # to the binary over MCP stdio for the FULL tool surface;
 # this HTTP server is kept alive for the Pi-Web 3D graph UI (/cbm-ui/).
 # The binary is an MCP stdio server — it exits if stdin closes.

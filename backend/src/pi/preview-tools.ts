@@ -20,6 +20,16 @@ import { isPathAllowed } from "../utils/path-security.js";
 import { storeInlineHtml } from "../routes/preview.js";
 
 // ── open_preview ──────────────────────────────────────────
+// NOTE mécanisme prompt : `promptSnippet` alimente la liste « Available tools »
+// et `promptGuidelines` la section « Guidelines: » du prompt système (SDK,
+// buildSystemPrompt) TANT QUE le tool est actif — même canal que le tool
+// delegate (extensions/harness-orchestrator/index.ts). Renforcer ces champs = renforcer le prompt
+// système ; pas d'autre ligne à maintenir ailleurs.
+//
+// Incident Yuki : l'agent répondait avec des liens /api/attachments/<id>/file
+// (qui n'ouvrent AUCUNE fenêtre) et des web_screenshot (capture pour lui, pas
+// pour le user) au lieu d'appeler open_preview. Guidelines ci-dessous
+// volontairement explicites et interdictives sur ce point.
 
 const openPreviewSchema = Type.Object({
   projectId: Type.String({
@@ -35,11 +45,20 @@ export const openPreviewToolDef = defineTool({
   name: "open_preview",
   label: "Open Preview",
   description:
-    "Affiche une page du projet dans la fenêtre Preview du user — à utiliser après avoir créé/modifié un fichier HTML pour qu'il voie le rendu.",
-  promptSnippet: "Open a project page in the user's Preview window",
+    "Ouvre une page du projet dans la fenêtre Preview du user (popup de rendu) — le SEUL moyen de " +
+    "faire VOIR une page au user. À appeler dès qu'il demande à voir une page, une interface, un " +
+    "design ou un rendu (« montre-moi », « affiche », « preview », « à quoi ça ressemble ») et après " +
+    "toute création/modification d'un fichier HTML. Ne te contente JAMAIS de donner un lien : les " +
+    "liens (notamment /api/attachments/<id>/file) n'ouvrent aucune fenêtre côté user.",
+  promptSnippet: "Open a project page in the user's Preview window (popup) — the ONLY way to let the user SEE a page or design",
   promptGuidelines: [
-    "Use open_preview after creating or modifying an HTML file so the user can see the rendered result",
-    "Provide the projectId and the relative path to the file within the project",
+    // Incident Yuki : l'agent donnait des liens d'attachements au lieu d'appeler
+    // open_preview. Guidelines actionnables, injectées dans le prompt système
+    // tant que le tool est actif.
+    "Quand l'utilisateur demande à VOIR une page, une interface, un design ou un rendu (voir, montrer, afficher, preview, « à quoi ça ressemble »…), appelle open_preview avec le chemin du fichier — ne réponds JAMAIS avec un simple lien ni une description.",
+    "Les liens /api/attachments/<id>/file n'ouvrent AUCUNE fenêtre chez le user : ne les donne JAMAIS pour montrer une page. Une capture (web_screenshot…) est une image pour TOI, pas une fenêtre pour le user.",
+    "Après avoir créé ou modifié un fichier HTML, appelle open_preview pour que le user voie immédiatement le rendu.",
+    "Fichier existant du projet → open_preview (projectId + chemin relatif, ex. 'index.html' ou 'dist/index.html') ; HTML ad-hoc sans fichier → preview_html.",
   ],
   parameters: openPreviewSchema,
   async execute(
@@ -86,10 +105,10 @@ export const previewHtmlToolDef = defineTool({
   name: "preview_html",
   label: "Preview HTML",
   description:
-    "Affiche un mockup HTML ad-hoc — pour les rendus visuels sans fichier.",
+    "Affiche un mockup HTML ad-hoc dans la fenêtre Preview du user — pour les rendus visuels sans fichier.",
   promptSnippet: "Show an ad-hoc HTML mockup in the user's Preview window",
   promptGuidelines: [
-    "Use preview_html to show a visual mockup without creating a file",
+    "Use preview_html to show a visual mockup without creating a file (for an existing project file, use open_preview instead)",
     "Provide the complete HTML to render",
   ],
   parameters: previewHtmlSchema,

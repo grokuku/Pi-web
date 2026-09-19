@@ -779,12 +779,20 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     // abonnés au projet concerné (Set<projectId> par socket).
     case "subscribe": {
       const pid = msg.projectId || projectId;
-      if (pid) ws.subscribedProjects.add(pid);
+      if (pid) {
+        ws.subscribedProjects.add(pid);
+        // Correctif 1 (observabilité réception) : la demande d'abonnement du
+        // client était invisible — une enquête ne voyait que les ENVOIS.
+        logger.info("ws", "subscribe reçu", { projectId: pid });
+      }
       break;
     }
     case "unsubscribe": {
       const pid = msg.projectId || projectId;
-      if (pid) ws.subscribedProjects.delete(pid);
+      if (pid) {
+        ws.subscribedProjects.delete(pid);
+        logger.info("ws", "unsubscribe reçu", { projectId: pid });
+      }
       break;
     }
 
@@ -801,6 +809,13 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       // createPiSession étant idempotent (réutilise la session en mémoire), on
       // se contente de tracer l'événement et le volume d'historique renvoyé.
       const isReplay = !!getSession(pid)?.session;
+      // Correctif 1 : la RÉCEPTION du pi_start était invisible (on ne voyait
+      // que l'envoi pi_history qui suit) — on trace la demande du client.
+      logger.info("ws", "pi_start reçu", {
+        projectId: pid,
+        replay: isReplay,
+        resume: msg.resume !== false,
+      });
 
       try {
         const state = await createPiSession(cwd, pid, {
@@ -878,6 +893,15 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     // (idempotent + sérialisé, cf. e9e88be) puis envoi de l'historique (fenêtre
     // plafonnée, chargement par lots).
     case "pi_history_request": {
+      // Correctif 1 : la demande de resync du client était totalement
+      // invisible (seul l'envoi pi_history était tracé). Première question de
+      // toute enquête « UI périmée » : est-ce que le client a DEMANDÉ ?
+      // `cause` = état de la session à la réception (recréation = le client
+      // a demandé après une perte côté backend).
+      logger.info("ws", "pi_history_request reçu", {
+        projectId,
+        cause: getSession(projectId)?.session ? "session existante" : "session absente (auto-guérison)",
+      });
       let state = getSession(projectId);
       if (!state?.session) {
         const project = getProject(projectId);
@@ -927,6 +951,14 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     // (choix explicite de l'utilisateur, payload potentiellement gros → WARN).
     case "pi_history_page": {
       const pid = msg.projectId || projectId;
+      // Correctif 1 : réception tracée avec le curseur demandé (before/all) —
+      // distingue une pagination utilisateur d'un « Tout afficher ».
+      logger.info("ws", "pi_history_page reçu", {
+        projectId: pid,
+        before: msg.before,
+        beforeId: msg.beforeId,
+        all: msg.all === true,
+      });
       const project = getProject(pid);
       if (!project) {
         ws.send(JSON.stringify({ type: "error", projectId: pid, error: `Project not found: ${pid}` }));
@@ -1010,7 +1042,15 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const project = getValidatedProject(pid);
       if (!project) return;
       const { message, images } = msg;
-      console.log(`[Pi] Prompt received for ${pid}: ${message.substring(0, 80)}${message.length > 80 ? "..." : ""} (images: ${images?.length || 0})`);
+      // Correctif 1 : réception tracée en logger (fichier persistant) et
+      // SANS contenu — l'ancien console.log affichait les 80 premiers
+      // caractères du message. Seules des métadonnées sont loggées.
+      logger.info("ws", "pi_prompt reçu", {
+        projectId: pid,
+        messageLength: typeof message === "string" ? message.length : 0,
+        images: Array.isArray(images) ? images.length : 0,
+        needsHistory: !!msg.needsHistory,
+      });
       try {
         // ── Anti-course pi_start/pi_prompt + filet de sécurité ──
         // pi_start peut être encore en vol (rejeu de file WS après coupure,
@@ -1233,6 +1273,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 // ─── Start Server ──────────────────────────────────────
 httpServer.listen(PORT, async () => {
+  // ── P0 observabilité : trace de BOOT persistante (INVESTIGATION #4) ──
+  // Les sessions vivent UNIQUEMENT en mémoire (sessionsByProject) : tout
+  // redémarrage du process les vide et déclenche les rattrapages
+  // pi_prompt_fallback côté client. Or avant af5c6cf, ni le boot ni le
+  // SIGTERM n'étaient tracés dans backend-*.log : les redéploiements Docker
+  // étaient indétectables (on ne voyait que des « clients » qui disparaissent
+  // sans ligne de déconnexion). Chaque boot écrit désormais une ligne dans le
+  // log fichier — toute répétition de cette ligne prouve un restart et
+  // explique les sessions manquantes qui suivent.
+  logger.info("express", "BOOT — serveur démarré ; sessionsByProject vide (sessions rétablies à la demande depuis le disque)", {
+    version: process.env.PI_WEB_VERSION || "unknown",
+    pid: process.pid,
+    node: process.version,
+  });
+
   // NOTE sécurité : plus aucun temp file résident au boot. Le plaintext n'existe
   // que de façon transitoire pendant les opérations git (via withTempFile).
 

@@ -412,15 +412,30 @@ router.get("/concurrency", async (_req: Request, res: Response) => {
 
 router.put("/concurrency", async (req: Request, res: Response) => {
   try {
-    const { maxLLMSlots, maxAgentSlots } = req.body;
+    const { maxLLMSlots, maxAgentSlots, providerMaxLLMSlots } = req.body;
     if (maxLLMSlots !== undefined && (typeof maxLLMSlots !== "number" || maxLLMSlots < 1 || maxLLMSlots > 20)) {
       return res.status(400).json({ error: "maxLLMSlots must be between 1 and 20" });
     }
     if (maxAgentSlots !== undefined && (typeof maxAgentSlots !== "number" || maxAgentSlots < 1 || maxAgentSlots > 50)) {
       return res.status(400).json({ error: "maxAgentSlots must be between 1 and 50" });
     }
+    // Limites LLM par provider : objet { providerId → entier 1..20 }, 400 sinon.
+    if (providerMaxLLMSlots !== undefined) {
+      if (typeof providerMaxLLMSlots !== "object" || providerMaxLLMSlots === null || Array.isArray(providerMaxLLMSlots)) {
+        return res.status(400).json({ error: "providerMaxLLMSlots must be an object" });
+      }
+      for (const [key, value] of Object.entries(providerMaxLLMSlots)) {
+        // Clés réservées JS : jamais acceptées (protection pollution de prototype).
+        if (key === "__proto__" || key === "constructor" || key === "prototype" || !key.trim()) {
+          return res.status(400).json({ error: `providerMaxLLMSlots: invalid provider key "${key}"` });
+        }
+        if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 20) {
+          return res.status(400).json({ error: `providerMaxLLMSlots.${key} must be an integer between 1 and 20` });
+        }
+      }
+    }
     const { setConcurrencyConfig } = await import("../pi/model-library.js");
-    const config = setConcurrencyConfig({ maxLLMSlots, maxAgentSlots });
+    const config = await setConcurrencyConfig({ maxLLMSlots, maxAgentSlots, providerMaxLLMSlots });
     const { concurrencyManager } = await import("../pi/concurrency.js");
     const stats = concurrencyManager.getStats();
     res.json({ config, stats });

@@ -520,10 +520,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
             return tail.some(d => d.role === "assistant" && (d.content || "").includes(probe));
           };
           const stillStreaming = streamingMsgs.filter(m => !isAlreadyCommitted(m));
-          // Préservation des messages user optimistes récents (envoi en cours,
-          // absent de l'historique construit AVANT commit) : insérés AVANT le
-          // streaming en cours pour garder l'ordre chronologique.
-          const pending = findPendingUserMessages(existing, display);
+          // Préservation des messages user en vol (envoi NON confirmé dans
+          // l'historique reçu, quel que soit son âge — correctif « question
+          // disparue », incident Yuki) : insérés AVANT le streaming en cours
+          // pour garder l'ordre chronologique. windowFrom : l'historique reçu
+          // peut être une fenêtre (lots antérieurs via pi_history_page).
+          const pending = findPendingUserMessages(existing, display, Date.now(), undefined, {
+            windowFrom: typeof msg.from === "number" ? msg.from : 0,
+          });
           const merged = pending.length > 0
             ? [...display, ...pending, ...stillStreaming]
             : (stillStreaming.length > 0 ? [...display, ...stillStreaming] : display);
@@ -546,9 +550,13 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       }
 
       const display = convertHistoryToDisplayMessages(msg.messages);
-      // Préservation des messages user optimistes récents (envoi en cours,
-      // absent de l'historique construit AVANT le traitement du prompt).
-      const pending = findPendingUserMessages(existing, display);
+      // Préservation des messages user en vol (envoi NON confirmé dans
+      // l'historique reçu, quel que soit l'âge — correctif « question
+      // disparue », incident Yuki). windowFrom : l'historique reçu peut être
+      // une fenêtre (lots antérieurs via pi_history_page).
+      const pending = findPendingUserMessages(existing, display, Date.now(), undefined, {
+        windowFrom: typeof msg.from === "number" ? msg.from : 0,
+      });
       const mergedDisplay = pending.length > 0 ? [...display, ...pending] : display;
       chatHistory.saveMessagesFor(mergedDisplay, pid);
 

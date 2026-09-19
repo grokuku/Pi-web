@@ -54,7 +54,7 @@ beforeAll(async () => {
   // Pré-charge le logger partagé : l'import dynamique (fire-and-forget) de
   // logHarnessEvent se résout alors en microtasks, AVANT le teardown — aucune
   // écriture différée ne peut s'échapper après le nettoyage.
-  await import("../../utils/logger.js");
+  await import("../utils/logger.js");
 });
 
 afterAll(async () => {

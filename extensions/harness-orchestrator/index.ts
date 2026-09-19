@@ -12,14 +12,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── P0 observabilité (volet 1/2) : archivage des délégués en échec ──
-// Module local SANS dépendance externe (fs/path uniquement, pas d'import du
-// backend Express) : le chargement de l'extension reste inoffensif.
+// Module backend (backend/src/pi/harness-archive.ts) : helpers PURS fs/path,
+// SANS dépendance Express — le chargement de l'extension reste inoffensif.
+// Conservé dans backend/ (plutôt que copié dans l'extension) car il dépend du
+// logger backend ET de la racine projet (.data), et pour que son test reste
+// scanné par vitest (backend/vitest.config.ts). Résolu par jiti au chargement.
 // - archiveFailedSession : boîte noire (JSONL + meta) en échec uniquement.
 // - classifyFailure : filet de classification pour les exceptions non annotées.
 import {
   archiveFailedSession,
   classifyFailure,
-} from "./harness-archive.js";
+} from "../../backend/src/pi/harness-archive.js";
 
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
@@ -283,8 +286,8 @@ async function resolveRoutingDecision(
  * La bibliothèque Pi-Web stocke les ids composites sous forme SANITISÉE
  * (ex. "qwen3.8-flash-next" → "qwen3_8-flash-next"), alors que le registry
  * du SDK garde l'id d'origine (avec les points). On duplique ici la regex
- * pour rester autonome (l'extension ne peut pas importer le backend) ;
- * toute évolution de makeModelId doit être répercutée ici.
+ * pour rester autonome (l'extension n'importe PAS model-library.ts, couplé au
+ * backend Express) ; toute évolution de makeModelId doit être répercutée ici.
  */
 function sanitizeModelId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_\-:]/g, "_");

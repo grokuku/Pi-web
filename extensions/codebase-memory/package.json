@@ -1,0 +1,11 @@
+{
+  "name": "codebase-memory",
+  "version": "1.0.0",
+  "description": "Graph-based code intelligence (cbm_* tools) wrapping the codebase-memory-mcp binary for Pi-Web",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "name": "codebase-memory",
+    "description": "Exposes codebase-memory-mcp graph tools (search, trace, arch, cypher, ...) as Pi tools"
+  }
+}

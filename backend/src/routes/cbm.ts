@@ -7,8 +7,8 @@ import os from "os";
 
 const router = Router();
 
-// Même résolution de chemin que l'extension inline (backend/src/pi/ext-inline/
-// codebase-memory.ts) : entrypoint.sh installe le binaire dans le volume
+// Même résolution de chemin que l'extension extensions/codebase-memory/
+// index.ts : entrypoint.sh installe le binaire dans le volume
 // persistant /app/.data/bin et exporte CBM_BIN_PATH. Sans cette variable, un
 // binaire installé là serait vu comme « absent » par cette route.
 const BIN_PATH =

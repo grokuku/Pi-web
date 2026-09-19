@@ -48,7 +48,7 @@ function makeLibrary(models: RegisteredModel[], defaultModelId: string | null): 
     audioModelId: null,
     librarianModelId: null,
     projectModes: {},
-    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5 },
+    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} },
   };
 }
 
