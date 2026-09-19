@@ -55,7 +55,6 @@ import {
   abortPi,
   getSession,
   getSessionInfo,
-  getSessionMessages,
   disposeAllSessions,
   listSessions,
   newSession as newPiSession,
@@ -423,7 +422,10 @@ app.get("/api/status/update", async (_req, res) => {
 // ── REST API for session history (for reconnection) ──
 app.get("/api/sessions/:projectId/history", (req, res) => {
   const { projectId } = req.params;
-  const messages = getSessionMessages(projectId);
+  const state = getSession(projectId);
+  // Historique UI COMPLET (entrées brutes, pré-compaction incluse) et non le
+  // seul contexte LLM compaction-aware : cf. buildFullUiHistory.
+  const messages = state?.session ? buildFullUiHistory(state.session) : [];
   res.json({ messages });
 });
 
@@ -797,6 +799,39 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const { message, images } = msg;
       console.log(`[Pi] Prompt received for ${pid}: ${message.substring(0, 80)}${message.length > 80 ? "..." : ""} (images: ${images?.length || 0})`);
       try {
+        // ── Anti-course pi_start/pi_prompt + filet de sécurité ──
+        // pi_start peut être encore en vol (rejeu de file WS après coupure,
+        // double envoi) ou avoir été perdu (WS coupé au moment du clic) : on
+        // s'assure que la session existe AVANT d'envoyer le prompt. Sans ça,
+        // sendPrompt jetait « No active Pi session for this project » quel que
+        // soit le projet. createPiSession est idempotent et sérialisé : un appel
+        // concurrent au pi_start en cours attend la MÊME promesse.
+        // On pousse aussi l'historique COMPLET, sinon l'UI resterait vide alors
+        // que le backend vient de restaurer la conversation.
+        if (!getSession(pid)?.session) {
+          const state = await createPiSession(project.cwd, pid, {
+            resume: true,
+            projectName: project.name,
+          });
+          ws.send(
+            JSON.stringify({
+              type: "pi_started",
+              data: {
+                cwd: project.cwd,
+                projectId: pid,
+                sessionId: state.session?.sessionId,
+                resumed: !!state.session?.sessionId,
+              },
+            })
+          );
+          if (state.session) {
+            ws.send(JSON.stringify({
+              type: "pi_history",
+              projectId: pid,
+              messages: buildFullUiHistory(state.session),
+            }));
+          }
+        }
         const result = await sendPrompt(message, pid, images);
         // If it was a slash command, send the result back
         if (result && result.command) {

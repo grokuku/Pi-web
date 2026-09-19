@@ -67,6 +67,14 @@ export interface PiSessionState {
 // Sessions survive across WebSocket connections and can be resumed from disk.
 const sessionsByProject = new Map<string, PiSessionState>();
 
+// ─── Créations de session en vol (anti-course) ─────────────
+// pi_start est rejoué à la reconnexion WS (BUG-83) et peut donc arriver juste
+// avant un pi_prompt mis en file : sans sérialisation, deux createPiSession
+// concurrents (ou un sendPrompt qui lit sessionsByProject avant la fin de la
+// création) provoquaient « No active Pi session for this project ». On
+// mémorise la promesse de création pour que tout appel concurrent l'attende.
+const pendingSessionCreations = new Map<string, Promise<PiSessionState>>();
+
 // Shared instances - reused across sessions
 // ModelRuntime is async to create, so we initialize lazily
 let sharedModelRuntime: ModelRuntime | null = null;
@@ -314,12 +322,49 @@ function stopAllStreamingHeartbeats(): void {
 /**
  * Create or resume a Pi session for a project.
  *
- * - If a session already exists in memory for this project, return it.
+ * Enveloppe sérialisée de createPiSessionInternal :
+ * - si une session existe déjà en mémoire, la renvoie ;
+ * - si une création est EN COURS pour ce projet, renvoie SA promesse au lieu
+ *   de lancer une seconde création concurrente (course pi_start/pi_prompt).
+ *
  * - If the project has a saved sessionId, resume it from disk.
  * - Otherwise, try to continue the most recent session for this cwd.
  * - If no session exists, create a new one.
  */
-export async function createPiSession(
+export function createPiSession(
+  cwd: string,
+  projectId: string,
+  options?: { resume?: boolean; sessionId?: string; projectName?: string }
+): Promise<PiSessionState> {
+  // ── Reuse existing in-memory session ──
+  const existing = sessionsByProject.get(projectId);
+  if (existing?.session) {
+    console.log(`[PiSession] Reusing existing session for project ${projectId}`);
+    return Promise.resolve(existing);
+  }
+
+  // ── Une création est déjà en vol : attendre la MÊME promesse ──
+  const inFlight = pendingSessionCreations.get(projectId);
+  if (inFlight) {
+    console.log(`[PiSession] Session creation already in progress for ${projectId}, awaiting it`);
+    return inFlight;
+  }
+
+  const creation = createPiSessionInternal(cwd, projectId, options);
+  pendingSessionCreations.set(projectId, creation);
+  // Nettoyage idempotent : only si la map pointe encore sur CETTE promesse.
+  // then(onFulfilled, onRejected) (pas finally) pour ne jamais laisser une
+  // rejection non gérée sur la promesse retournée par finally().
+  const clear = () => {
+    if (pendingSessionCreations.get(projectId) === creation) {
+      pendingSessionCreations.delete(projectId);
+    }
+  };
+  creation.then(clear, clear);
+  return creation;
+}
+
+async function createPiSessionInternal(
   cwd: string,
   projectId: string,
   options?: { resume?: boolean; sessionId?: string; projectName?: string }
@@ -684,6 +729,27 @@ export function getProjectSession(projectId: string): PiSessionState | undefined
 }
 
 /**
+ * Renvoie l'état de session prêt à l'emploi pour un projet, en attendant une
+ * éventuelle création déjà en vol (course pi_start/pi_prompt après reconnexion
+ * WS). Sans ça, sendPrompt/steerPrompt voyaient la map encore vide et jetaient
+ * « No active Pi session for this project » alors que la session arrivait.
+ * Ne crée JAMAIS de session (un getter ne doit pas avoir d'effet de bord).
+ */
+async function getReadySession(projectId: string): Promise<PiSessionState | undefined> {
+  const direct = sessionsByProject.get(projectId);
+  if (direct?.session) return direct;
+  const pending = pendingSessionCreations.get(projectId);
+  if (pending) {
+    try {
+      await pending;
+    } catch {
+      // L'échec de création est signalé à l'appelant via l'état final (absent).
+    }
+  }
+  return sessionsByProject.get(projectId);
+}
+
+/**
  * État de streaming RÉEL d'un projet : la source de vérité est le SDK
  * (session.isStreaming reflète run + retry + compaction + drain, jusqu'à
  * agent_settled). Le flag backend state.isStreaming n'est qu'un fallback
@@ -714,7 +780,8 @@ export async function sendPrompt(
   projectId: string,
   images?: { data: string; mimeType: string }[]
 ): Promise<{ command?: string; result?: string } | void> {
-  const state = sessionsByProject.get(projectId);
+  // ── Attente d'une création de session en vol (anti-course pi_start/pi_prompt) ──
+  const state = await getReadySession(projectId);
 
   // ── Harness mode ──
   // Le mode HARNESS est géré par l'extension harness-orchestrator.
@@ -988,7 +1055,7 @@ export async function steerPrompt(
   projectId: string,
   images?: { data: string; mimeType: string }[]
 ): Promise<void> {
-  const state = sessionsByProject.get(projectId);
+  const state = await getReadySession(projectId);
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
@@ -1084,7 +1151,7 @@ export async function setModel(
 }
 
 export async function cycleModel(projectId: string): Promise<any> {
-  const state = sessionsByProject.get(projectId);
+  const state = await getReadySession(projectId);
   if (!state?.session) throw new Error("No active Pi session for this project");
   return await state.session.cycleModel();
 }
@@ -1141,7 +1208,7 @@ export async function compactSession(
   projectId: string,
   customInstructions?: string
 ): Promise<any> {
-  const state = sessionsByProject.get(projectId);
+  const state = await getReadySession(projectId);
   if (!state?.session) throw new Error("No active Pi session for this project");
   return compactSessionInternal(state.session, customInstructions);
 }
