@@ -1,28 +1,95 @@
-# Build context
-node_modules/
-dist/
-*.tsbuildinfo
+# ══════════════════════════════════════════════════════════════════════
+# .dockerignore — Pi-Web
+#
+# Ce que le Dockerfile copie réellement (COPY explicites, ne RIEN exclure
+# de cette liste) :
+#   COPY VERSION
+#   COPY backend/       → package.json, package-lock.json, tsconfig.json,
+#                         src/ (incl. src/projects/git-askpass.sh copié par
+#                         "npm run build"), vitest.config.ts
+#   COPY frontend/      → package.json, package-lock.json, tsconfig.json,
+#                         index.html, vite.config.ts, tailwind.config.js,
+#                         postcss.config.js, src/, vitest.config.ts
+#   COPY extensions/    → */index.ts, */package.json (+ lock éventuel)
+#   COPY entrypoint.sh
+#
+# ⚠ PIÈGE DE SYNTAXE : un pattern sans "**" ne matche que la RACINE du
+# contexte. L'ancien .dockerignore avec "node_modules/" excluait donc
+# UNIQUEMENT /node_modules (inexistant) et laissait passer
+# backend/node_modules (411 Mo) + frontend/node_modules (149 Mo), d'où un
+# contexte de build de 3.127 Go. D'où les "**/" systématiques ci-dessous.
+#
+# Le build tsc/vite a lieu DANS entrypoint.sh (npm install + npm run build
+# au démarrage du conteneur) : seuls les SOURCES et les manifests npm sont
+# nécessaires dans le contexte.
+# ══════════════════════════════════════════════════════════════════════
+
+# ─── Dépendances installées ────────────────────────────────────────────
+# Régénérées par entrypoint.sh (npm install backend + frontend au boot).
+# backend/node_modules ≈ 411 Mo, frontend/node_modules ≈ 149 Mo,
+# extensions/compaction-checkpoint/node_modules ≈ 9 Mo (better-sqlite3,
+# non requis : index.ts n'importe que des modules Node natifs + un import
+# type-only éliminé au runtime).
+**/node_modules/
+
+# ─── Artefacts de build ────────────────────────────────────────────────
+# backend/dist (≈ 2,1 Mo) et frontend/dist (≈ 3,2 Mo) régénérés par
+# "npm run build" de l'entrypoint ; caches incrémentaux tsc -b.
+**/dist/
+**/build/
+**/*.tsbuildinfo
+
+# ─── Données runtime (volume docker pi-appdata → /app/.data) ───────────
+# projects.json, agent-keys.json, usage/, sessions, et surtout le graphe
+# CBM (.data/cbm) + binaire CBM (.data/bin ≈ 286 Mo) : des centaines de Mo
+# sur le NAS, montés en volume, JAMAIS nécessaires au build d'image.
+# Variants : .data racine, backend/.data (allowed-origins.json), .pi-agent.
+**/.data/
+**/.pi-agent/
+
+# ─── Git ───────────────────────────────────────────────────────────────
+# Historique ≈ 38 Mo ; le Dockerfile ne copie jamais .git.
 .git/
+.gitignore
 
-# Data at runtime
-backend/.data/
-backend/.pi-agent/
-.data/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Env
-.env
-.env.local
-
-# Logs
-*.log
+# ─── Logs ──────────────────────────────────────────────────────────────
+**/*.log
 npm-debug.log*
+
+# ─── Caches et temporaires (Vite, coverage vitest, divers) ─────────────
+**/.vite/
+**/coverage/
+**/.cache/
+**/tmp/
+
+# ─── Environnement / secrets ───────────────────────────────────────────
+# Aucun .env n'est copié par le Dockerfile ; s'il en apparaît un (backend/.env),
+# il ne doit pas finir dans l'image.
+**/.env
+**/.env.*
+
+# ─── Éditeur / IDE ─────────────────────────────────────────────────────
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+
+# ─── Fichiers OS ───────────────────────────────────────────────────────
+**/.DS_Store
+**/Thumbs.db
+
+# ─── Documentation & meta, non copiés par le Dockerfile ────────────────
+# docs/ (≈ 86 Ko) ainsi que README.md, ROADMAP.md, AGENTS.md, LICENSE,
+# docker-compose.yml : aucun n'est dans un COPY → inutiles dans le contexte.
+# NB : "*.md" sans "**" ne vise que la racine (les .md éventuels copiés dans
+# backend/, frontend/ ou extensions/ restent inclus — aucun n'existe dans src/).
+docs/
+*.md
+LICENSE
+docker-compose.yml
+.dockerignore
+
+# ─── Tests : GARDÉS volontairement (ne pas exclure) ────────────────────
+# backend/tsconfig.json a "include": ["src/**/*"] : les *.test.ts vivent
+# dans src/ et seraient manquants pour tsc s'ils étaient exclus du contexte
+# ; vitest.config.ts sert à "npm run test". Coût résiduel : quelques Ko.

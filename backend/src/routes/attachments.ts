@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import path from "path";
 import { randomUUID } from "crypto";
 import os from "os";
-import { loadModelLibrary } from "../pi/model-library.js";
+import { loadModelLibrary, resolveModelCapability } from "../pi/model-library.js";
 import { loadProviders } from "../pi/providers.js";
 
 // ─── Config ──────────────────────────────────────────────
@@ -103,7 +103,28 @@ export interface VisionModelInfo {
 export function getVisionModelInfo(): VisionModelInfo | null {
   try {
     const library = loadModelLibrary();
-    const visionModelId = library.visionModelId;
+    let visionModelId = library.visionModelId;
+
+    // ── Fallback documenté (contrat ModelLibrary.visionModelId : « null = use
+    //    default or fallback » ; l'UI Settings → Analysis Models affiche
+    //    « None (use main model) »). Sans visionModelId explicite, on choisit :
+    //    a) le modèle par défaut S'il a la vision (capacité RÉSOLUE via
+    //       resolveModelCapability — l'override manuel prime sur l'inférence) ;
+    //    b) sinon le premier modèle vision-capable de la library.
+    //    Avant ce fix : visionModelId null → return null immédiat →
+    //    « No vision model configured » même quand des modèles vision existent
+    //    dans la library (bug « analyze_file » remonté par le user).
+    if (!visionModelId) {
+      const visionCapable = library.models.filter((m) => resolveModelCapability(m, "vision"));
+      const chosen =
+        visionCapable.find((m) => m.id === library.defaultModelId) || visionCapable[0];
+      if (chosen) {
+        visionModelId = chosen.id;
+        console.log(
+          `[attachments] Aucun vision model explicite — fallback automatique sur "${chosen.name}" (${chosen.id})`
+        );
+      }
+    }
     if (!visionModelId) return null;
 
     // 1) Source de vérité : la model library. On y trouve le RegisteredModel
@@ -158,6 +179,31 @@ export function getVisionModelInfo(): VisionModelInfo | null {
     // BUG-3 : ne pas avaler l'erreur en silence — logguer pour le diagnostic.
     console.warn("[attachments] getVisionModelInfo failed:", e?.message || e);
     return null;
+  }
+}
+
+/**
+ * Diagnostic lisible quand aucun modèle vision n'est résolvable : indique CE QUI
+ * manque et OÙ le corriger, au lieu d'un message générique. Appelé uniquement
+ * quand getVisionModelInfo() === null (sinon l'analyse fonctionne).
+ */
+export function getVisionSetupHint(): string {
+  try {
+    const library = loadModelLibrary();
+    const visionModels = library.models.filter((m) => resolveModelCapability(m, "vision"));
+    if (visionModels.length === 0) {
+      // Aucun modèle vision dans la library : le user doit d'abord en ajouter un.
+      return "No vision-capable model exists in the model library. Add a vision-capable model in Settings → Model Library (check its Vision capability), then select it in Settings → Analysis Models → Vision Model.";
+    }
+    if (library.visionModelId && !visionModels.some((m) => m.id === library.visionModelId)) {
+      // Sélection obsolète : le visionModelId pointe un modèle supprimé.
+      return `The selected vision model (id: ${library.visionModelId}) no longer exists in the model library. Select a valid one in Settings → Analysis Models → Vision Model (vision-capable models found: ${visionModels.map((m) => m.name).join(", ")}).`;
+    }
+    // Des modèles vision existent mais la résolution a échoué (provider absent
+    // de providers.json, ou modèle introuvable dans la library + models.json).
+    return `${visionModels.length} vision-capable model(s) exist (${visionModels.map((m) => m.name).join(", ")}) but none could be resolved — check the provider configuration, or explicitly select a vision model in Settings → Analysis Models → Vision Model.`;
+  } catch {
+    return "Configure a vision model in Settings → Analysis Models → Vision Model.";
   }
 }
 
@@ -698,9 +744,9 @@ router.post("/:id/analyze", async (req: Request, res: Response) => {
             };
           }
         } else {
-          // No vision model configured
+          // Aucun modèle vision résolvable — message précis (ce qui manque + où).
           result = {
-            content: `[Image file: ${meta.name}, ${meta.size} bytes, ${meta.mimeType}]\n\n⚠️ No vision model configured. To enable image analysis, configure a vision model in Settings → Analysis Models.`,
+            content: `[Image file: ${meta.name}, ${meta.size} bytes, ${meta.mimeType}]\n\n⚠️ No vision model available for image analysis. ${getVisionSetupHint()}`,
             type: "image-no-vision",
           };
         }
