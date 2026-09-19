@@ -829,8 +829,40 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     }
 
     // ── Request history refresh for a project's active session ──
+    // BUG « chat figé après restart » (incident 2026-09-19 12:22→12:28) : sans
+    // session EN MÉMOIRE (restart/crash/deploy du backend), ce handler était un
+    // NO-OP SILENCIEUX — ni log, ni erreur, ni fallback. Or c'est LE message
+    // que le frontend envoie à chaque reconnexion WS pour un projet dont il
+    // croit la session vivante (state.session périmé côté client — il ne peut
+    // pas savoir que le backend a redémarré). Résultat : après chaque deploy,
+    // les fenêtres ouvertes ne se resynchronisaient JAMAIS (UI figée sur son
+    // dernier rendu, ou sur le fallback localStorage après reload — le « vieux
+    // message ALLOWED_ORIGINS »). Seul un prompt guérissait l'onglet actif
+    // (pi_prompt_fallback), laissant toutes les autres fenêtres figées.
+    // Auto-guérison ici aussi : resume de la dernière session du projet
+    // (idempotent + sérialisé, cf. e9e88be) puis envoi de l'historique complet.
     case "pi_history_request": {
-      const state = getSession(projectId);
+      let state = getSession(projectId);
+      if (!state?.session) {
+        const project = getProject(projectId);
+        if (!project) {
+          ws.send(JSON.stringify({ type: "error", projectId, error: `Project not found: ${projectId}` }));
+          break;
+        }
+        try {
+          state = await createPiSession(project.cwd, projectId, {
+            resume: true,
+            projectName: project.name,
+          });
+        } catch (e: any) {
+          logger.error("pi-session", "pi_history_request: échec de recréation de session", {
+            projectId,
+            error: e?.message ?? String(e),
+          });
+          ws.send(JSON.stringify({ type: "error", projectId, error: `Failed to resume session: ${e?.message ?? e}` }));
+          break;
+        }
+      }
       if (state?.session) {
         // fix « messages récents manquants » : cf. buildFullUiHistory.
         const t0 = Date.now();
