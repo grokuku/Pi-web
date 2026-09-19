@@ -41,6 +41,7 @@ export const en = {
     timeoutError: "Interrupted: no model response for 5 min",
     thoughtFor: (dur: string) => `thought for ${dur}`,
     loadEarlier: (n: number) => `Load ${n} earlier message${n > 1 ? "s" : ""}`,
+    loadingEarlier: "Loading history…",
     streaming: "⚡ STREAMING",
     response: "🤖 RESPONSE",
     dropFiles: "DROP FILES HERE",
@@ -77,6 +78,8 @@ export const en = {
     wsQueueFull: "Message queue full — the last message was not transmitted",
     // ── Ajustement 2: massive history resync feedback ──
     historyResynced: (n: number) => `History resynced: ${n} message${n !== 1 ? "s" : ""}`,
+    // ── Safety net 6210d1c: displayed content from local cache ──
+    localCache: "Displaying from local cache — waiting for sync…",
   },
   // ── Tool descriptions (C1) ──
   tools: {

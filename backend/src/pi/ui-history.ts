@@ -150,3 +150,80 @@ export function buildFullUiHistory(session: any): any[] {
   }
   return uiMessages;
 }
+
+// ── Chargement par lots : fenêtre d'historique envoyée au client ──────────
+// CAUSE RACINE du bug « messages récents manquants » : pi_history envoyait le
+// payload COMPLET (2321 messages / 10,3 Mo sur la session de référence) à
+// chaque ouverture/reconnexion. Un tel payload sur le WS provoque le flapping
+// (fermetures 1001/1005) → l'historique est perdu en route. Correctif de
+// fond : le serveur n'envoie que les N DERNIERS messages + des métadonnées de
+// curseur (from/total/hasMore) ; le client demande les lots antérieurs à la
+// demande via pi_history_page. La pagination DOM (GroupedMessages) et la
+// reconstruction buildFullUiHistory restent inchangées.
+//
+// Taille du lot initial : 300 messages ≈ quelques centaines de Ko max (les
+// images pré-compaction sont déjà dépouillées par buildFullUiHistory). Seuil
+// ajustable ici — aucune config runtime nécessaire.
+export const HISTORY_PAGE_SIZE = 300;
+// Garde-fou pour un lot demandé (count) : un client buggé ne doit pas pouvoir
+// faire exploser un frame WS. « Tout afficher » (all) court-circuite ce
+// plafond : c'est un choix EXPLICITE de l'utilisateur (bouton dédié).
+export const HISTORY_PAGE_MAX = 2000;
+
+export interface UiHistoryWindowMeta {
+  /** Index du PREMIER message envoyé, dans la liste complète (curseur). */
+  from: number;
+  /** Nombre total de messages UI de la session. */
+  total: number;
+  /** True s'il reste des messages antérieurs non envoyés. */
+  hasMore: boolean;
+}
+
+export interface UiHistoryWindow extends UiHistoryWindowMeta {
+  messages: any[];
+  /** Index exclusif de fin de la fenêtre (= index du premier message NON envoyé). */
+  end: number;
+}
+
+/** Convertit en entier tronqué, ou renvoie fallback si non numérique. */
+function toIntOr(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+/**
+ * Calcule la tranche d'historique à envoyer (helper PUR, testable).
+ *
+ * Fenêtre par défaut : les N derniers messages (count, défaut
+ * HISTORY_PAGE_SIZE). `before` = curseur EXCLUSIF (index dans la liste
+ * complète du premier message non chargé par le client) — les messages
+ * [before-count, before-1] sont renvoyés. `beforeId` (id du premier message
+ * déjà chargé) prime sur `before` quand il est trouvé dans la liste : le
+ * curseur survit ainsi à tout décalage d'index (restart, purge d'entrées).
+ * La liste `full` (buildFullUiHistory) est APPEND-ONLY : les index des
+ * messages anciens sont stables entre deux appels, le curseur numérique seul
+ * suffirait — beforeId est la ceinture de sécurité.
+ *
+ * `all: true` renvoie tout ce qui précède le curseur (from = 0) : utilisé
+ * pour « Tout afficher », où l'utilisateur demande explicitement le poids.
+ */
+export function sliceUiHistoryWindow(
+  full: any[],
+  opts?: { before?: unknown; beforeId?: unknown; count?: unknown; all?: boolean },
+): UiHistoryWindow {
+  const total = Array.isArray(full) ? full.length : 0;
+  const count = opts?.all
+    ? Math.max(total, 1)
+    : Math.min(Math.max(toIntOr(opts?.count, HISTORY_PAGE_SIZE), 1), HISTORY_PAGE_MAX);
+  // Curseur par défaut = fin de liste (première page = les plus récents).
+  let end = total;
+  if (opts?.before !== undefined && opts?.before !== null) {
+    end = Math.min(Math.max(toIntOr(opts.before, total), 0), total);
+  }
+  if (opts?.beforeId !== undefined && opts?.beforeId !== null && opts?.beforeId !== "") {
+    const idx = (full as any[]).findIndex((m: any) => m?.id === String(opts?.beforeId));
+    if (idx >= 0) end = Math.min(idx, total);
+  }
+  const from = Math.max(0, end - count);
+  return { messages: full.slice(from, end), from, total, hasMore: from > 0, end };
+}

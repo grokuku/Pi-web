@@ -20,6 +20,72 @@ export function appendMessageDedup(prev: DisplayMessage[], msg: DisplayMessage):
   return [...prev, msg];
 }
 
+// ── Préservation des messages user « en vol » ─────────────────────────────
+// Un pi_history peut arriver pendant que le client vient d'envoyer un prompt
+// (filet de secours needsHistory — régression 6210d1c, rejeu de file WS,
+// fallback pi_prompt) : le backend construit l'historique AVANT de committer
+// le message de l'utilisateur dans la session, donc le remplacement wholesale
+// de la liste par l'historique reçu ferait DISPARAÎTRE le message tout juste
+// tapé (id optimiste ≠ id d'entrée backend, dédup par id inopérant). On
+// identifie ici les messages user optimistes RÉCENTS (≤ windowMs) absents de
+// l'historique reçu, pour que l'appelant les ré-attache à la fin.
+// Comparaison par CONTENU sur le DERNIER message user de l'historique : le
+// message de l'utilisateur, une fois commité par le backend, est
+// chronologiquement le DERNIER user de l'historique — s'il y est déjà (flux
+// normal), pas de ré-ajout (pas de doublon permanent) ; un doublon plus ancien
+// à contenu identique ne le masque pas.
+export const PENDING_USER_WINDOW_MS = 15_000;
+export function findPendingUserMessages(
+  existing: DisplayMessage[],
+  history: DisplayMessage[],
+  now: number = Date.now(),
+  windowMs: number = PENDING_USER_WINDOW_MS,
+): DisplayMessage[] {
+  const candidates = existing.filter(
+    (m) =>
+      m.role === "user" &&
+      !m._streaming &&
+      typeof m.timestamp === "number" &&
+      Number.isFinite(m.timestamp) &&
+      now - m.timestamp >= 0 &&
+      now - m.timestamp < windowMs
+  );
+  if (candidates.length === 0) return [];
+  const lastUser = [...history].reverse().find((m) => m.role === "user");
+  if (!lastUser) return candidates;
+  return candidates.filter((c) => (lastUser.content || "") !== (c.content || ""));
+}
+
+// ── Chargement par lots : préfixage d'un lot antérieur (pi_history_page) ──
+// Le backend n'envoie que les N derniers messages dans pi_history (fix de
+// fond du bug « messages récents manquants » : un payload complet faisait
+// flapper le WS). Les lots antérieurs arrivent via pi_history_page et sont
+// PRÉFIXÉS à la liste locale. Helper PUR, testable hors React.
+//
+// - Dédup par id : le lot et la liste locale partagent l'espace d'ids d'entrée
+//   backend ; un doublon (rejeu de file, race avec un pi_history) est écarté.
+// - Aucun doublon DANS le lot lui-même (idem, garde-fou).
+// - L'ordre est préservé : [lot…, existant…] — le lot est chronologiquement
+//   antérieur. Les messages sans id ne sont jamais dupliqués mais aussi
+//   jamais dédupés (conservés tels quels, comportement conservateur).
+export function prependHistoryBatch(prev: DisplayMessage[], batch: DisplayMessage[]): DisplayMessage[] {
+  if (batch.length === 0) return prev;
+  const fresh: DisplayMessage[] = [];
+  const batchIds = new Set<string>();
+  for (const m of batch) {
+    if (m.id) {
+      if (batchIds.has(m.id)) continue; // doublon DANS le lot
+      batchIds.add(m.id);
+    }
+    fresh.push(m);
+  }
+  if (fresh.length === 0) return prev;
+  const known = new Set(prev.map((m) => m.id));
+  const novel = fresh.filter((m) => !m.id || !known.has(m.id));
+  if (novel.length === 0) return prev;
+  return [...novel, ...prev];
+}
+
 /**
  * Applique un événement de streaming Pi à la liste de messages courante.
  * @param prev        messages actuels (non mutés)

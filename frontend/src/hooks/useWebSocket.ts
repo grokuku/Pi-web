@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { upsertDedup } from "../utils/ws-queue";
 
 type WsMessage = {
   type: string;
@@ -22,21 +23,46 @@ const QUEUE_MAX = 50;
 //  - pi_abort : inutile hors connexion et dangereux à rejouer — provoquerait un
 //    « abort fantôme » tuant une génération légitime après reconnexion ;
 //  - ping / keepalive : messages de santé de la connexion, sans sens différé ;
-//  - messages techniques (pi_history_request, mode_switch, terminal_*) :
-//    déjà renvoyés ou resynchronisés par la logique existante à la
-//    reconnexion (_ws_reconnect / payload "connected").
+//  - messages techniques (mode_switch, terminal_*) : déjà renvoyés ou
+//    resynchronisés par la logique existante à la reconnexion
+//    (_ws_reconnect / payload "connected").
 //
 // pi_start FAIT partie de la file (correctif « aucune session active ») :
 // sélectionner un projet pendant une coupure WS perdait définitivement la
 // création de session, car pi_start n'était rejoué NULLE PART (_ws_reconnect
 // ne renvoie que pi_history_request). Le renvoyer à l'ouverture est idempotent
 // côté backend : createPiSession réutilise la session existante.
+//
+// pi_history_request FAIT AUSSI partie de la file (régression 6210d1c) :
+// ouvert un projet pendant une coupure WS jetait la demande d'historique
+// silencieusement (jamais rejouée — l'auto-guérison backend ne se déclenchait
+// donc jamais pour ce chargement, l'onglet restait vide). Elle est
+// DÉDOUPLONNÉE par projet (DEDUP_BY_PROJECT_TYPES, « dernier gagne ») pour ne
+// pas rafaler N demandes identiques au retour de la connexion.
+//
+// pi_history_page FAIT AUSSI partie de la file (même logique, fix de fond
+// « messages récents manquants ») : un « charger N antérieurs » cliqué pendant
+// une micro-coupure est rejoué à la reconnexion au lieu d'être perdu. Dernier
+// gagne par projet : seul le curseur le plus récent a du sens (la demande
+// précédente est sous-somée par la suivante).
 const QUEUEABLE_TYPES: ReadonlySet<string> = new Set([
   "pi_prompt",
   "pi_steer",
   "pi_start",
   "design_send_to_chat",
   "subscribe",
+  "pi_history_request",
+  "pi_history_page",
+]);
+
+// Types « dernier gagne » : un doublon (même type + même projectId) déjà en
+// file est REMPLACÉ SUR PLACE au lieu d'être empilé. La position d'origine est
+// conservée (l'ordre relatif avec les autres messages en file, ex. pi_start
+// avant pi_history_request, reste respecté) et un seul exemplaire est rejoué
+// à la reconnexion. Purement frontend : la demande est idempotent côté backend.
+export const DEDUP_BY_PROJECT_TYPES: ReadonlySet<string> = new Set([
+  "pi_history_request",
+  "pi_history_page",
 ]);
 
 export function useWebSocket() {
@@ -203,6 +229,16 @@ export function useWebSocket() {
     if (!QUEUEABLE_TYPES.has(msg.type)) {
       // pi_abort, ping/keepalive, messages techniques : refus volontaire,
       // sans mise en file (voir commentaire de QUEUEABLE_TYPES).
+      return false;
+    }
+    // Dédoublonnage « dernier gagne » (ex. pi_history_request) : remplace le
+    // doublon déjà en file AU LIEU d'en empiler un N-ième exemplaire. AVANT le
+    // contrôle de file pleine : un remplacement ne grossit pas la file, il
+    // doit donc rester possible même à QUEUE_MAX atteinte.
+    const deduped = upsertDedup(queueRef.current, msg, DEDUP_BY_PROJECT_TYPES);
+    if (deduped !== queueRef.current) {
+      queueRef.current = deduped;
+      setQueueSize(queueRef.current.length);
       return false;
     }
     if (queueRef.current.length >= QUEUE_MAX) {

@@ -41,6 +41,7 @@ export const fr = {
     timeoutError: "Interrompu : le modèle n'a pas répondu depuis 5 min",
     thoughtFor: (dur: string) => `a réfléchi ${dur}`,
     loadEarlier: (n: number) => `Charger ${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""}`,
+    loadingEarlier: "Chargement de l'historique…",
     streaming: "⚡ STREAMING",
     response: "🤖 RÉPONSE",
     dropFiles: "DÉPOSEZ LES FICHIERS ICI",
@@ -77,6 +78,8 @@ export const fr = {
     wsQueueFull: "File d'attente pleine — le dernier message n'a pas été transmis",
     // ── Ajustement 2 : feedback de resynchronisation d'historique massif ──
     historyResynced: (n: number) => `Historique resynchronisé : ${n} message${n > 1 ? "s" : ""}`,
+    // ── Filet de secours 6210d1c : contenu affiché issu du cache local ──
+    localCache: "Affichage depuis un cache local — en attente de synchronisation…",
   },
   // ── Descriptions d'outils (C1) ──
   tools: {

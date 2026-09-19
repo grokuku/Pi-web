@@ -16,7 +16,18 @@
  *  - types d'entrée non-message (session/label/model_change/…) exclus.
  */
 import { describe, it, expect } from "vitest";
-import { buildFullUiHistory, serializeMessagesForUi } from "./ui-history.js";
+import {
+  buildFullUiHistory,
+  serializeMessagesForUi,
+  sliceUiHistoryWindow,
+  HISTORY_PAGE_SIZE,
+  HISTORY_PAGE_MAX,
+} from "./ui-history.js";
+
+// Fabriquant de liste complète factice : N messages avec ids stables (e0…eN).
+function makeFull(n: number): any[] {
+  return Array.from({ length: n }, (_, i) => ({ id: `e${i}`, role: "user", content: `m${i}`, timestamp: i }));
+}
 
 // Petit fabriquant de session factice : entries[] = ordre chronologique du
 // fichier de session (c'est la garantie fournie par getEntries()).
@@ -109,6 +120,129 @@ describe("buildFullUiHistory", () => {
       { id: "b1", role: "custom", customType: "branch_summary", content: "résumé de branche", display: true, timestamp: 1 },
       { id: "c1", role: "custom", content: "/clear", customType: "pi_command", display: true, timestamp: 2 },
     ]);
+  });
+});
+
+// ── Chargement par lots : fenêtre envoyée au client (fix de fond) ───────
+describe("sliceUiHistoryWindow — tranche et curseur", () => {
+  it("fenêtre par défaut : les N derniers messages + curseur + hasMore", () => {
+    const full = makeFull(1000);
+    const win = sliceUiHistoryWindow(full);
+    expect(win.messages).toHaveLength(HISTORY_PAGE_SIZE); // 300
+    // Les RÉCENTS sont toujours inclus : la dernière tranche est la fin de liste.
+    expect(win.messages[0].id).toBe("e700");
+    expect(win.messages[win.messages.length - 1].id).toBe("e999");
+    expect(win.from).toBe(1000 - HISTORY_PAGE_SIZE);
+    expect(win.total).toBe(1000);
+    expect(win.hasMore).toBe(true);
+    expect(win.end).toBe(1000);
+  });
+
+  it("session courte : tout est envoyé, hasMore=false, curseur à 0", () => {
+    const full = makeFull(120);
+    const win = sliceUiHistoryWindow(full);
+    expect(win.messages).toHaveLength(120);
+    expect(win.from).toBe(0);
+    expect(win.hasMore).toBe(false);
+  });
+
+  it("lot antérieur via curseur before : [before-count, before-1]", () => {
+    const full = makeFull(1000);
+    // Le client a les 300 derniers (from=700) ; il demande le lot précédent.
+    const win = sliceUiHistoryWindow(full, { before: 700 });
+    expect(win.messages).toHaveLength(HISTORY_PAGE_SIZE);
+    expect(win.messages[0].id).toBe("e400");
+    expect(win.messages[win.messages.length - 1].id).toBe("e699");
+    expect(win.from).toBe(400);
+    expect(win.total).toBe(1000);
+    expect(win.hasMore).toBe(true);
+  });
+
+  it("dernier lot antérieur : from=0, hasMore=false, tranche partielle", () => {
+    const full = makeFull(1000);
+    const win = sliceUiHistoryWindow(full, { before: 100, count: 300 });
+    expect(win.messages).toHaveLength(100); // tronqué au début de liste
+    expect(win.messages[0].id).toBe("e0");
+    expect(win.messages[win.messages.length - 1].id).toBe("e99");
+    expect(win.from).toBe(0);
+    expect(win.hasMore).toBe(false);
+  });
+
+  it("beforeId prime sur before et est robuste au décalage d'index", () => {
+    const full = makeFull(500);
+    // L'id du premier message chargé est e200 → la fenêtre s'arrête AVANT.
+    const win = sliceUiHistoryWindow(full, { before: 999, beforeId: "e300" });
+    expect(win.end).toBe(300);
+    expect(win.messages[win.messages.length - 1].id).toBe("e299");
+    expect(win.from).toBe(0); // 300 - 300
+    expect(win.hasMore).toBe(false);
+    // beforeId inconnu (purge) → retombe sur le curseur numérique.
+    const win2 = sliceUiHistoryWindow(full, { before: 300, beforeId: "ghost" });
+    expect(win2.end).toBe(300);
+  });
+
+  it("all=true : tout ce qui précède le curseur en un seul lot", () => {
+    const full = makeFull(1000);
+    const win = sliceUiHistoryWindow(full, { before: 700, all: true });
+    expect(win.messages).toHaveLength(700);
+    expect(win.from).toBe(0);
+    expect(win.hasMore).toBe(false);
+    // Sans curseur, all renvoie aussi la liste complète.
+    expect(sliceUiHistoryWindow(full, { all: true }).messages).toHaveLength(1000);
+  });
+
+  it("plafond de sécurité : count borné à [1, HISTORY_PAGE_MAX]", () => {
+    const full = makeFull(5000);
+    // count énorme (client buggé) → plafonné.
+    expect(sliceUiHistoryWindow(full, { count: 999_999 }).messages).toHaveLength(HISTORY_PAGE_MAX);
+    expect(sliceUiHistoryWindow(full, { count: 999_999 }).from).toBe(5000 - HISTORY_PAGE_MAX);
+    // count nul/négatif → plancher à 1 ; count non numérique → défaut (300).
+    expect(sliceUiHistoryWindow(full, { count: 0 }).messages).toHaveLength(1);
+    expect(sliceUiHistoryWindow(full, { count: -50 }).messages).toHaveLength(1);
+    expect(sliceUiHistoryWindow(full, { count: "beaucoup" as any }).messages).toHaveLength(HISTORY_PAGE_SIZE);
+  });
+
+  it("curseurs dégénérés : NaN/négatif/au-delà de total → bornés", () => {
+    const full = makeFull(100);
+    // NaN (non numérique) → fin de liste par défaut.
+    expect(sliceUiHistoryWindow(full, { before: "x" as any }).end).toBe(100);
+    // Au-delà du total → borné au total.
+    expect(sliceUiHistoryWindow(full, { before: 5000 }).end).toBe(100);
+    // Négatif → borné à 0 (lot vide, hasMore=false).
+    const win = sliceUiHistoryWindow(full, { before: -10 });
+    expect(win.end).toBe(0);
+    expect(win.messages).toHaveLength(0);
+    expect(win.hasMore).toBe(false);
+  });
+
+  it("liste vide : fenêtre vide, pas d'erreur", () => {
+    const win = sliceUiHistoryWindow([]);
+    expect(win.messages).toEqual([]);
+    expect(win.total).toBe(0);
+    expect(win.from).toBe(0);
+    expect(win.hasMore).toBe(false);
+  });
+
+  it("stabilité des curseurs : pages successives recouvrent la liste complète", () => {
+    const full = makeFull(1000);
+    // Simule le client : page 1 (par défaut), puis before=from, etc.
+    const pages: number[][] = [];
+    let cursor: number | undefined;
+    for (let i = 0; i < 10; i++) {
+      const win = sliceUiHistoryWindow(full, { before: cursor });
+      pages.push(win.messages.map((m: any) => Number(m.id.slice(1))));
+      if (!win.hasMore) break;
+      cursor = win.from;
+    }
+    // Aucun trou, aucun doublon, couverture totale (les pages sont des blocs
+    // DESCENDANTS : la 1re page contient les plus récents, chaque lot suivant
+    // remonte vers le début de liste).
+    const flat = pages.flat();
+    const sorted = [...flat].sort((a, b) => a - b);
+    expect(sorted).toEqual(Array.from({ length: 1000 }, (_, i) => i));
+    expect(new Set(flat).size).toBe(1000);
+    // Le dernier lot remonte bien jusqu'au tout premier message (e0).
+    expect(pages[pages.length - 1][0]).toBe(0);
   });
 });
 

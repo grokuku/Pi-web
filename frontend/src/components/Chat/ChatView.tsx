@@ -18,7 +18,8 @@ import { toast } from "../../utils/holaf-toast";
 import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
-import { applyPiEvent, appendMessageDedup } from "../../utils/pi-events";
+import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "../../utils/pi-events";
+import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 
 // ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
 // Retarde la propagation d'une valeur qui change très souvent (contenu
@@ -214,6 +215,21 @@ const WsOfflineBanner = memo(function WsOfflineBanner({ pendingMessages }: { pen
   );
 });
 
+// ── Bannière « affichage depuis un cache local » (filet de secours 6210d1c) ─
+// Le fallback localStorage peut fournir un contenu qui n'est PAS la vérité
+// backend (snapshot tronqué à 200 messages, figé à la dernière session). Tant
+// qu'aucun pi_history n'a été appliqué pour le projet, un bandeau discret le
+// signale — il disparaît dès la première resync backend.
+const LocalCacheBanner = memo(function LocalCacheBanner() {
+  const { t } = useTranslation();
+  return (
+    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-1.5 mb-2 text-xs text-hacker-text-dim bg-hacker-bg/95 backdrop-blur-sm border border-hacker-border rounded-sm">
+      <span className="w-1.5 h-1.5 rounded-full bg-hacker-text-dim animate-pulse shrink-0" />
+      <span className="truncate">{t('chat.localCache')}</span>
+    </div>
+  );
+});
+
 // ── Ajustement 2 : feedback « Historique resynchronisé » ──────────────────
 // Après une coupure WS (ou un changement d'état backend), la resync renvoie
 // l'historique COMPLET (buildFullUiHistory — cas réel : 2228 messages bruts /
@@ -275,6 +291,48 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
 
+  // ── Chargement par lots (fix de fond « messages récents manquants ») ──
+  // Le backend n'envoie plus l'historique COMPLET dans pi_history (un payload
+  // de 10 Mo / 2321 messages faisait flapper le WS → historique perdu en
+  // route) mais les N derniers messages + un curseur :
+  //   { from: index du 1er message envoyé dans la liste complète,
+  //     total, hasMore }
+  // serverHistoryMeta suit ce curseur pour que « charger les antérieurs »
+  // puisse demander le lot précédent (pi_history_page) au bon endroit.
+  // null = historique complet reçu (ancien format sans métadonnées) → pas de
+  // pagination serveur nécessaire, comportement legacy inchangé.
+  const [serverHistoryMeta, setServerHistoryMeta] = useState<{ from: number; total: number; hasMore: boolean } | null>(null);
+  const serverHistoryMetaRef = useRef<{ from: number; total: number; hasMore: boolean } | null>(null);
+  // Lot serveur en cours de chargement (anti double-clic + feedback bouton).
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const loadingEarlierRef = useRef(false);
+  // Timeout de sécurité : si la réponse ne vient jamais (replay file perdu),
+  // le bouton est réarmé pour permettre une nouvelle tentative.
+  const loadingEarlierTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Signal d'arrivée d'un lot (séquentiel) + flag « all » du dernier lot :
+  // consommé par GroupedMessages pour étendre sa fenêtre visible APRÈS le
+  // préfixage (sinon le lot fraîchement chargé resterait masqué au-dessus du
+  // viewport). Séquentiel : un remount (changement de projet) part de la seq
+  // courante, sans re-déclencher les anciens lots.
+  const [serverBatch, setServerBatch] = useState<{ seq: number; all: boolean }>({ seq: 0, all: false });
+  const armLoadingTimer = useCallback(() => {
+    if (loadingEarlierTimerRef.current) clearTimeout(loadingEarlierTimerRef.current);
+    loadingEarlierTimerRef.current = setTimeout(() => {
+      loadingEarlierRef.current = false;
+      setLoadingEarlier(false);
+    }, 15_000);
+  }, []);
+  // Filet de secours « needsHistory » (régression 6210d1c) : projets pour
+  // lesquels un pi_history NON VIDE a été appliqué depuis le chargement de la
+  // page. Le premier prompt d'un projet absent de cet ensemble porte le
+  // marqueur needsHistory → le backend renvoie l'historique (fenêtre serveur,
+  // plafonnée au lot initial). Le cache
+  // localStorage NE compte PAS (snapshot tronqué, pas la vérité backend).
+  const historyReceivedRef = useRef<Set<string>>(new Set());
+  // Bandeau « affichage depuis un cache local » : vrai tant que l'affichage
+  // courant vient du fallback localStorage sans confirmation backend.
+  const [localCacheOnly, setLocalCacheOnly] = useState(false);
+
   const hasContent = messages.length > 0;
   const prevProjectIdRef = useRef(projectId);
 
@@ -292,33 +350,50 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     const stored = chatHistory.getMessages();
     if (stored.length > 0) {
       setMessages(stored);
+      // Contenu tenu à jour par les events/pi_history backend : vérité vivante.
+      setLocalCacheOnly(false);
       // Restore the assistantId for in-progress streaming reconciliation
       currentAssistantIdRef.current = chatHistory.getAssistantIdFor(projectId);
     } else {
-      // Fallback: localStorage for sessions that predate the routing fix
+      // Fallback: localStorage for sessions that predate the routing fix.
+      // Garde d'ancienneté : un snapshot de PLUS de 24 h ne doit jamais être
+      // présenté comme l'état courant (le backend a pu tourner des heures
+      // entre-temps) → chat vide, la resync backend (pi_history) fera foi.
       try {
-        const raw = localStorage.getItem(`pi-web-chat-${projectId}`);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            chatHistory.saveMessages(parsed);
-            setMessages(parsed);
-          } else {
-            setMessages([]);
-          }
+        const snap = parseChatCacheSnapshot(localStorage.getItem(`pi-web-chat-${projectId}`));
+        if (snap && snap.fresh) {
+          chatHistory.saveMessages(snap.messages);
+          setMessages(snap.messages);
+          // Contenu issu du CACHE (pas du backend) : bandeau discret jusqu'à
+          // la première resync pi_history.
+          setLocalCacheOnly(true);
         } else {
+          if (snap) {
+            console.log(`[Chat] Cache local de ${projectId} périmé (${snap.ageMs === Infinity ? "sans horodatage" : Math.round(snap.ageMs / 3_600_000) + " h"}) — ignoré, en attente de resync backend`);
+          }
           setMessages([]);
+          setLocalCacheOnly(false);
         }
       } catch {
         setMessages([]);
+        setLocalCacheOnly(false);
       }
       currentAssistantIdRef.current = null;
     }
     setError("");
+    // Chargement par lots : le curseur serveur est propre au projet — réinit.
+    // La resync pi_history déclenchée à l'activation du projet re-pose un
+    // curseur frais, aligné sur la liste rechargée.
+    setServerHistoryMeta(null);
+    serverHistoryMetaRef.current = null;
+    setLoadingEarlier(false);
+    loadingEarlierRef.current = false;
   }, [projectId]);
 
   // Instant ref sync (cheap)
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { serverHistoryMetaRef.current = serverHistoryMeta; }, [serverHistoryMeta]);
+  useEffect(() => { loadingEarlierRef.current = loadingEarlier; }, [loadingEarlier]);
 
   // Debounced persistence (expensive — localStorage + JSON.stringify blocks main thread)
   useEffect(() => {
@@ -394,6 +469,31 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const existing = chatHistory.getMessagesFor(pid);
       const streamingMsgs = existing.filter(m => m._streaming);
 
+      // needsHistory (filet de secours, régression 6210d1c) : un pi_history
+      // NON VIDE appliqué (ou au moins reçu non avalé) marque le projet comme
+      // « historique reçu » → les prompts suivants ne porteront plus le
+      // marqueur : l'historique n'est renvoyé par le backend qu'UNE fois.
+      historyReceivedRef.current.add(pid);
+
+      // Chargement par lots : mémoriser le curseur serveur joint au payload
+      // (from/total/hasMore). Absent → historique complet (ancien format ou
+      // session courte) : pas de pagination serveur nécessaire (null).
+      // Posé ICI (pi_history APPLIQUÉ ou au moins reçu non avalé) — la liste
+      // locale devient la fenêtre [from, from+messages.length[ de la liste
+      // complète backend.
+      const applyHistoryWindowMeta = (m: any) => {
+        // Réservé au projet AFFICHÉ : la méta est l'état du chat courant (les
+        // projets en arrière-plan re-synchroniseront leur curseur à l'activation
+        // via pi_history_request).
+        if (pid !== projectId) return;
+        const meta =
+          typeof m.from === "number" && typeof m.total === "number"
+            ? { from: m.from, total: m.total, hasMore: !!m.hasMore }
+            : null;
+        setServerHistoryMeta(meta);
+        serverHistoryMetaRef.current = meta;
+      };
+
       if (streamingMsgs.length > 0) {
         // Streaming in progress — but check if agent finished during WS gap.
         // If history has MORE finalized messages than our non-streaming count,
@@ -420,10 +520,18 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
             return tail.some(d => d.role === "assistant" && (d.content || "").includes(probe));
           };
           const stillStreaming = streamingMsgs.filter(m => !isAlreadyCommitted(m));
-          const merged = stillStreaming.length > 0 ? [...display, ...stillStreaming] : display;
+          // Préservation des messages user optimistes récents (envoi en cours,
+          // absent de l'historique construit AVANT commit) : insérés AVANT le
+          // streaming en cours pour garder l'ordre chronologique.
+          const pending = findPendingUserMessages(existing, display);
+          const merged = pending.length > 0
+            ? [...display, ...pending, ...stillStreaming]
+            : (stillStreaming.length > 0 ? [...display, ...stillStreaming] : display);
           chatHistory.saveMessagesFor(merged, pid);
           if (pid === projectId) {
             setMessages(merged);
+            // La vérité backend est affichée : le bandeau cache local tombe.
+            setLocalCacheOnly(false);
             // Ajustement 2 : feedback si cette resync post-coupure est massive.
             notifyHistoryResync(existing.length, merged.length);
             // L'assistant en cours est le dernier message _streaming conservé.
@@ -431,22 +539,101 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
             currentAssistantIdRef.current = lastStreaming ? lastStreaming.id : null;
             chatHistory.setAssistantIdFor(pid, currentAssistantIdRef.current);
           }
+          applyHistoryWindowMeta(msg);
         }
         // Otherwise agent still running — preserve live streaming state.
         return;
       }
 
       const display = convertHistoryToDisplayMessages(msg.messages);
-      chatHistory.saveMessagesFor(display, pid);
+      // Préservation des messages user optimistes récents (envoi en cours,
+      // absent de l'historique construit AVANT le traitement du prompt).
+      const pending = findPendingUserMessages(existing, display);
+      const mergedDisplay = pending.length > 0 ? [...display, ...pending] : display;
+      chatHistory.saveMessagesFor(mergedDisplay, pid);
 
       if (pid === projectId) {
-        setMessages(display);
+        setMessages(mergedDisplay);
+        // La vérité backend est affichée : le bandeau cache local tombe.
+        setLocalCacheOnly(false);
         // Ajustement 2 : feedback si cette resync post-coupure est massive.
-        notifyHistoryResync(existing.length, display.length);
+        notifyHistoryResync(existing.length, mergedDisplay.length);
       }
+      applyHistoryWindowMeta(msg);
     });
     return () => unsub();
   }, [on, projectId, notifyHistoryResync]);
+
+  // ── Chargement par lots : lot antérieur (pi_history_page) ─────────────
+  // Réponse à une demande « charger les antérieurs » quand la fenêtre locale
+  // est épuisée : le lot est PRÉFIXÉ à la liste (helper pur prependHistoryBatch),
+  // le curseur avance (from du lot) et le signal seq déclenche l'extension de
+  // la fenêtre visible dans GroupedMessages avec ancrage scroll (sinon le lot
+  // fraîchement chargé resterait masqué au-dessus du viewport).
+  useEffect(() => {
+    const unsub = on("pi_history_page", (msg: any) => {
+      const pid = msg.projectId;
+      if (!pid || !Array.isArray(msg.messages)) return;
+      // Réservé au projet AFFICHÉ (seul lui a pu demander un lot). Une réponse
+      // arrivant après un changement de projet est ignorée : appliquer son
+      // curseur au nouveau projet affiché mélangerait deux listes distinctes
+      // (la resync à l'activation re-pose un curseur frais de toute façon).
+      if (pid !== projectId) return;
+      // Désarmement du loader + timeout de sécurité.
+      if (loadingEarlierTimerRef.current) clearTimeout(loadingEarlierTimerRef.current);
+      loadingEarlierRef.current = false;
+      setLoadingEarlier(false);
+      const batch = convertHistoryToDisplayMessages(msg.messages);
+      if (batch.length > 0) {
+        setMessages((prev) => prependHistoryBatch(prev, batch));
+        // La vérité backend est affichée : le bandeau cache local tombe.
+        setLocalCacheOnly(false);
+        // Extension de la fenêtre visible pour rendre le lot (avec ancrage).
+        setServerBatch((b) => ({ seq: b.seq + 1, all: !!msg.all }));
+      }
+      // Le curseur avance : le premier message chargé est celui du lot reçu
+      // (même sans message actif — un lot vide confirme hasMore=false).
+      const meta = {
+        from: typeof msg.from === "number" ? msg.from : 0,
+        total: typeof msg.total === "number" ? msg.total : 0,
+        hasMore: !!msg.hasMore,
+      };
+      setServerHistoryMeta(meta);
+      serverHistoryMetaRef.current = meta;
+    });
+    return () => {
+      unsub();
+      // Timeout de sécurité du loader : nettoyé au démontage (pas de fuite).
+      if (loadingEarlierTimerRef.current) clearTimeout(loadingEarlierTimerRef.current);
+    };
+  }, [on, projectId]);
+
+  // ── Chargement par lots : demande du lot antérieur au backend ──────────
+  // before = curseur serveur courant (index du 1er message chargé dans la
+  // liste complète) ; beforeId = id de ce premier message (résolution robuste
+  // côté backend si l'index a glissé). all=true = « Tout afficher » : tout ce
+  // qui précède le curseur en un seul lot (payload plus gros, choix explicite).
+  const fetchEarlierFromServer = useCallback((all: boolean) => {
+    const meta = serverHistoryMetaRef.current;
+    if (!meta || !meta.hasMore || !projectId) return;
+    if (loadingEarlierRef.current) return; // anti double-clic
+    const first = messagesRef.current[0];
+    loadingEarlierRef.current = true;
+    setLoadingEarlier(true);
+    // NB : send renvoie true SEULEMENT en envoi immédiat ; socket fermée →
+    // message mis en file (rejoué à la reconnexion) ou refusé (file pleine),
+    // les deux renvoyant false. Le timeout de sécurité (15 s) réarme le
+    // bouton dans tous les cas ; une réponse qui arrive plus tard est appliquée
+    // normalement (dédup par id).
+    send({
+      type: "pi_history_page",
+      projectId,
+      before: meta.from,
+      beforeId: first?.id,
+      all,
+    });
+    armLoadingTimer();
+  }, [send, projectId, armLoadingTimer]);
 
   // ── (sécurité #5) Abonnement WS par projet ────────────────────────────
   // Le serveur ne route les events pi_event QUE vers les sockets abonnés au
@@ -854,7 +1041,17 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     // Pendant le streaming, envoyer comme steer au lieu de prompt
     // Le steer est injecté par le Pi SDK entre les appels d'outils
     const msgType = isStreaming ? "pi_steer" : "pi_prompt";
-    send({ type:msgType, projectId, message:fullMessage, images: imagesData.length > 0 ? imagesData : undefined });
+    // ── Filet de secours « needsHistory » (régression 6210d1c) ──
+    // Si aucun pi_history n'a été appliqué pour ce projet depuis le chargement
+    // (resync perdue dans une coupure WS — l'écran peut afficher le cache
+    // localStorage, qui n'est PAS la vérité backend), on marque le prompt : le
+    // backend renverra l'historique (la fenêtre serveur plafonnée) avec ce
+    // prompt. UNE SEULE FOIS :
+    // dès qu'un premier pi_history est appliqué, le marqueur disparaît (pas
+    // de renvoi systématique à chaque prompt). Pas de marqueur sur les steers
+    // (streaming actif = état live déjà en main) ni sur les slash commands.
+    const needsHistory = msgType === "pi_prompt" && !fullMessage.trim().startsWith("/") && !historyReceivedRef.current.has(projectId);
+    send({ type:msgType, projectId, message:fullMessage, images: imagesData.length > 0 ? imagesData : undefined, needsHistory: needsHistory || undefined });
     // Force-scroll to bottom after sending (instant — critical for streaming)
     // Uses direct scrollTop assignment which is synchronous with DOM layout,
     // unlike smooth scrolling which conflicts with ResizeObserver.
@@ -925,10 +1122,27 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
           {/* Bannière WS déconnecté (Lot B) — sticky : reste visible pendant le scroll */}
           {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
+          {/* Bannière « cache local » : contenu affiché non confirmé par le backend */}
+          {localCacheOnly && <LocalCacheBanner />}
 
           {/* Messages */}
           <div ref={messagesWrapperRef}>
-            <GroupedMessages key={projectId} messages={deferredMessages} thinkDefaultExpanded={thinkDefaultExpanded} onFileClick={handleFileClick} scrollContainerRef={chatContainerRef} />
+            <GroupedMessages
+              key={projectId}
+              messages={deferredMessages}
+              thinkDefaultExpanded={thinkDefaultExpanded}
+              onFileClick={handleFileClick}
+              scrollContainerRef={chatContainerRef}
+              // Chargement par lots : le backend n'envoie que les N derniers
+              // messages (pi_history) — au-delà, le lot antérieur est demandé
+              // via pi_history_page (curseur serverHistoryMeta).
+              serverHasMore={!!serverHistoryMeta?.hasMore}
+              serverRemaining={serverHistoryMeta ? Math.max(0, serverHistoryMeta.from) : 0}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlierFromServer={fetchEarlierFromServer}
+              serverBatchSeq={serverBatch.seq}
+              serverBatchAll={serverBatch.all}
+            />
           </div>
           <div ref={chatEndRef} />
 
@@ -948,6 +1162,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         <div className="flex-1 flex flex-col">
           {/* Bannière WS déconnecté (Lot B) — aussi visible sans messages */}
           {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
+          {/* Bannière « cache local » : contenu affiché non confirmé par le backend */}
+          {localCacheOnly && <LocalCacheBanner />}
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <div className="text-hacker-accent mb-4 flex justify-center"><PiLogo className="w-[25vmin] h-[25vmin]" /></div>
@@ -1041,7 +1257,7 @@ interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:T
 const INITIAL_VISIBLE_GROUPS = 200;
 const VISIBLE_GROUPS_STEP = 200;
 
-const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick, scrollContainerRef }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null> }) {
+const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -1084,16 +1300,34 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
     const el = scrollContainerRef.current;
     if (el) scrollAnchorRef.current = el.scrollHeight - el.scrollTop;
   }, [scrollContainerRef]);
+  // ── Chargement par lots : deux sources de « messages antérieurs » ──
+  //  1. locale : des messages déjà chargés mais masqués par la fenêtre de
+  //     rendu (pagination DOM) → étendre la fenêtre localement ;
+  //  2. serveur : la fenêtre locale est épuisée (le backend n'envoie plus que
+  //     les N derniers dans pi_history — fix de fond du flapping WS) →
+  //     demander le lot antérieur via pi_history_page (onLoadEarlierFromServer).
   const handleLoadEarlier = useCallback(() => {
     adjustScrollBeforeRender();
-    setVisibleCount((c) => c + VISIBLE_GROUPS_STEP);
-  }, [adjustScrollBeforeRender]);
+    if (hiddenCount > 0) {
+      setVisibleCount((c) => c + VISIBLE_GROUPS_STEP);
+    } else if (onLoadEarlierFromServer) {
+      // Fenêtre locale épuisée : le lot antérieur doit venir du backend.
+      onLoadEarlierFromServer(false);
+    }
+  }, [adjustScrollBeforeRender, hiddenCount, onLoadEarlierFromServer]);
   const handleLoadAll = useCallback(() => {
     adjustScrollBeforeRender();
-    // Tous les groupes rendus de façon permanente : les messages qui arrivent
-    // ensuite ne doivent pas re-masquer les plus anciens.
-    setVisibleCount(Number.MAX_SAFE_INTEGER);
-  }, [adjustScrollBeforeRender]);
+    if (hiddenCount > 0) {
+      // Tous les groupes locaux rendus de façon permanente : les messages qui
+      // arrivent ensuite ne doivent pas re-masquer les plus anciens.
+      setVisibleCount(Number.MAX_SAFE_INTEGER);
+    } else if (onLoadEarlierFromServer) {
+      // « Tout afficher » serveur : tout ce qui précède le curseur en un seul
+      // appel (choix explicite de l'utilisateur, payload potentiellement gros
+      // — le backend trace un WARN).
+      onLoadEarlierFromServer(true);
+    }
+  }, [adjustScrollBeforeRender, hiddenCount, onLoadEarlierFromServer]);
   useLayoutEffect(() => {
     const el = scrollContainerRef.current;
     if (el && scrollAnchorRef.current !== null) {
@@ -1101,6 +1335,31 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
       scrollAnchorRef.current = null;
     }
   }, [visibleCount, scrollContainerRef]);
+
+  // ── Lot serveur reçu (pi_history_page préfixé dans messages) ──
+  // La fenêtre visible est étendue POUR rendre le lot fraîchement préfixé
+  // (sinon il resterait masqué au-dessus du viewport). L'ancrage scroll est
+  // capturé ICI, pas au clic : le lot peut arriver longtemps après (latence
+  // réseau, replay de file) et le DOM du clic ne reflète pas ce qui va être
+  // préfixé. Séquence : capture (DOM inchangé, le lot est hors fenêtre) →
+  // extension de la fenêtre → restauration par le useLayoutEffect [visibleCount]
+  // ci-dessus → le viewport reste collé aux mêmes messages, le lot apparaît
+  // au-dessus. all=true → tout rendre (l'utilisateur a demandé « Tout
+  // afficher » : tout est désormais chargé). La seq est séquentielle et la
+  // ref initialisée à la valeur COURANTE : un remount (changement de projet)
+  // ne rejoue pas les lots déjà consommés.
+  const lastBatchSeqRef = useRef(serverBatchSeq ?? 0);
+  useLayoutEffect(() => {
+    if ((serverBatchSeq ?? 0) > lastBatchSeqRef.current) {
+      lastBatchSeqRef.current = serverBatchSeq ?? 0;
+      adjustScrollBeforeRender();
+      if (serverBatchAll) setVisibleCount(Number.MAX_SAFE_INTEGER);
+      else setVisibleCount((c) => c + VISIBLE_GROUPS_STEP);
+    }
+  }, [serverBatchSeq, serverBatchAll, adjustScrollBeforeRender]);
+
+  const showServerLoad = hiddenCount === 0 && !!serverHasMore && !!onLoadEarlierFromServer;
+  const showServerAll = showServerLoad && (serverRemaining ?? 0) > VISIBLE_GROUPS_STEP;
 
   return <>
     {hiddenCount > 0 && (
@@ -1119,6 +1378,28 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
             className="text-[11px] px-2 py-1 rounded text-hacker-text-dim hover:text-hacker-accent transition-colors"
           >
             {t('chat.showAll')} ({hiddenCount})
+          </button>
+        )}
+      </div>
+    )}
+    {showServerLoad && (
+      <div className="flex flex-col items-center gap-2 mb-3">
+        <button
+          type="button"
+          onClick={handleLoadEarlier}
+          disabled={loadingEarlier}
+          className="text-xs px-3 py-1.5 rounded border border-hacker-border bg-hacker-surface/50 text-hacker-text-bright hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-50 disabled:cursor-wait"
+        >
+          ▲ {loadingEarlier ? t('chat.loadingEarlier') : t('chat.loadEarlier', Math.min(VISIBLE_GROUPS_STEP, serverRemaining ?? 0))}
+        </button>
+        {showServerAll && (
+          <button
+            type="button"
+            onClick={handleLoadAll}
+            disabled={loadingEarlier}
+            className="text-[11px] px-2 py-1 rounded text-hacker-text-dim hover:text-hacker-accent transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {t('chat.showAll')} ({serverRemaining})
           </button>
         )}
       </div>

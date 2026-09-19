@@ -38,10 +38,12 @@ import previewRouter from "./routes/preview.js";
 import { startLibrarianCron } from "./pi/librarian-cron.js";
 import { apiAuth } from "./middleware/api-auth.js";
 import type { Project } from "./projects/manager.js";
-// buildFullUiHistory (+ serializeMessagesForUi) vit dans pi/ui-history.ts :
-// module PUR, extrait de index.ts pour être testable sans les effets de bord
-// du bootstrap serveur (Express + WS + crons). Cf. pi/ui-history.test.ts.
-import { buildFullUiHistory } from "./pi/ui-history.js";
+// buildFullUiHistory (+ serializeMessagesForUi, sliceUiHistoryWindow) vit dans
+// pi/ui-history.ts : module PUR, extrait de index.ts pour être testable sans
+// les effets de bord du bootstrap serveur (Express + WS + crons). Cf.
+// pi/ui-history.test.ts. sliceUiHistoryWindow = chargement par lots (fix de
+// fond du bug « messages récents manquants » : payload WS borné).
+import { buildFullUiHistory, sliceUiHistoryWindow, type UiHistoryWindowMeta } from "./pi/ui-history.js";
 
 // ── Logger fichier (P0 observabilité 2/2) ──
 // Chaque erreur/crash est dupliqué dans .data/logs/ (persistant, lisible via
@@ -574,18 +576,44 @@ const PI_HISTORY_WARN_BYTES = 1024 * 1024; // ~1 Mo
  * Une ligne INFO par envoi — WARN si les seuils de rattrapage massif sont
  * dépassés. `cause` distingue les déclencheurs : pi_start (premier start),
  * pi_start_replay (rejeu après reconnexion, BUG-83), pi_history_request
- * (resync client), pi_prompt_fallback (session recréée au vol pour un prompt).
+ * (resync client), pi_prompt_fallback (session recréée au vol pour un prompt),
+ * pi_prompt_needs_history (filet needsHistory).
  * La sérialisation n'est faite QU'UNE FOIS : la chaîne produite sert à la fois
  * de payload WS et de source pour la taille loggée.
+ *
+ * Chargement par lots : `window` (from/total/hasMore) est joint au payload
+ * quand l'appelant a tronqué l'historique (sliceUiHistoryWindow) — le client
+ * sait alors qu'il peut demander la suite via pi_history_page. Absent →
+ * historique complet (format legacy, toujours supporté côté client).
  */
-function sendPiHistory(ws: ExtendedWS, pid: string, messages: unknown[], cause: string, buildMs?: number): void {
-  const payload = JSON.stringify({ type: "pi_history", projectId: pid, messages });
+function sendPiHistory(
+  ws: ExtendedWS,
+  pid: string,
+  messages: unknown[],
+  cause: string,
+  buildMs?: number,
+  window?: UiHistoryWindowMeta,
+): void {
+  const body: Record<string, unknown> = { type: "pi_history", projectId: pid, messages };
+  if (window) {
+    body.from = window.from;
+    body.total = window.total;
+    body.hasMore = window.hasMore;
+  }
+  const payload = JSON.stringify(body);
   const details: Record<string, unknown> = {
     projectId: pid,
     cause,
     messages: Array.isArray(messages) ? messages.length : 0,
     bytes: Buffer.byteLength(payload),
   };
+  if (window) {
+    // Curseur de fenêtrage : from = index du 1er message envoyé, total = taille
+    // complète, hasMore = reste-t-il des messages antérieurs à charger.
+    details.from = window.from;
+    details.total = window.total;
+    details.hasMore = window.hasMore;
+  }
   if (buildMs !== undefined) details.buildMs = buildMs;
   if ((details.messages as number) > PI_HISTORY_WARN_MESSAGES || (details.bytes as number) > PI_HISTORY_WARN_BYTES) {
     logger.warn("ws", "pi_history volumineux envoyé (rattrapage massif ?)", details);
@@ -798,21 +826,28 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           })
         );
 
-        // Send full message history for UI reconstruction
+        // Send message history for UI reconstruction (plafonné au lot initial)
         if (state.session) {
           // fix « messages récents manquants » : historique COMPLET (entrées
-          // brutes, pré-compaction incluse) au lieu du seul contexte LLM.
+          // brutes, pré-compaction incluse) au lieu du seul contexte LLM —
+          // puis CHARGEMENT PAR LOTS : seuls les N derniers messages partent
+          // sur le WS (le payload complet, 10 Mo / 2321 messages sur la
+          // session de référence, faisait flapper la connexion → l'historique
+          // était perdu en route). Le client demande les lots antérieurs via
+          // pi_history_page. La source reste buildFullUiHistory (entrées
+          // brutes, ids, compactions inline) — seule la TRANCHÉE change.
           const t0 = Date.now();
-          const messages = buildFullUiHistory(state.session);
+          const full = buildFullUiHistory(state.session);
           // AJUSTEMENT 1 : événement replay tracé à part (grep facile), le
           // détail volumétrique partant via sendPiHistory ci-dessous.
           if (isReplay) {
             logger.info("pi-session", "pi_start rejoué après reconnexion (BUG-83)", {
               projectId: pid,
-              messages: messages.length,
+              messages: full.length,
             });
           }
-          sendPiHistory(ws, pid, messages, isReplay ? "pi_start_replay" : "pi_start", Date.now() - t0);
+          const win = sliceUiHistoryWindow(full);
+          sendPiHistory(ws, pid, win.messages, isReplay ? "pi_start_replay" : "pi_start", Date.now() - t0, win);
         }
       } catch (e: any) {
         // P0 observabilité : trace persistante + miroir console (docker logs).
@@ -840,7 +875,8 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
     // message ALLOWED_ORIGINS »). Seul un prompt guérissait l'onglet actif
     // (pi_prompt_fallback), laissant toutes les autres fenêtres figées.
     // Auto-guérison ici aussi : resume de la dernière session du projet
-    // (idempotent + sérialisé, cf. e9e88be) puis envoi de l'historique complet.
+    // (idempotent + sérialisé, cf. e9e88be) puis envoi de l'historique (fenêtre
+    // plafonnée, chargement par lots).
     case "pi_history_request": {
       let state = getSession(projectId);
       if (!state?.session) {
@@ -865,10 +901,91 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       }
       if (state?.session) {
         // fix « messages récents manquants » : cf. buildFullUiHistory.
+        // Chargement par lots : le resync n'envoie plus TOUT (10 Mo possibles
+        // à chaque reconnexion = la cause racine du flapping) mais les N
+        // derniers messages + curseur (le client pagine via pi_history_page).
         const t0 = Date.now();
-        const messages = buildFullUiHistory(state.session);
-        sendPiHistory(ws, projectId, messages, "pi_history_request", Date.now() - t0);
+        const full = buildFullUiHistory(state.session);
+        const win = sliceUiHistoryWindow(full);
+        sendPiHistory(ws, projectId, win.messages, "pi_history_request", Date.now() - t0, win);
       }
+      break;
+    }
+
+    // ── Chargement par lots : lot antérieur d'historique (fix de fond) ──
+    // Le pi_history initial ne transporte que les N derniers messages (le
+    // payload complet faisait flapper le WS — codes 1001/1005 — et l'historique
+    // était perdu en route). Quand l'utilisateur remonte au-delà du lot
+    // chargé, le client envoie { projectId, before, beforeId, all? } et reçoit
+    // le lot PRÉCÉDENT (avant le curseur) : mêmes messages sérialisés que
+    // pi_history (buildFullUiHistory : entrées brutes, ids, compactions
+    // inline) + curseur (from/total/hasMore). `before` est un index sur la
+    // liste complète (stable : entries append-only) ; `beforeId` (id du 1er
+    // message déjà chargé) prime dessus quand il est retrouvé — le curseur
+    // survit ainsi à un décalage d'index (restart, purge). `all: true` =
+    // « Tout afficher » : tout ce qui précède le curseur en un seul appel
+    // (choix explicite de l'utilisateur, payload potentiellement gros → WARN).
+    case "pi_history_page": {
+      const pid = msg.projectId || projectId;
+      const project = getProject(pid);
+      if (!project) {
+        ws.send(JSON.stringify({ type: "error", projectId: pid, error: `Project not found: ${pid}` }));
+        break;
+      }
+      // Auto-guérison, comme pi_history_request : la session peut avoir été
+      // perdue (restart backend) entre le pi_history initial et ce lot.
+      let pageState = getSession(pid);
+      if (!pageState?.session) {
+        try {
+          pageState = await createPiSession(project.cwd, pid, {
+            resume: true,
+            projectName: project.name,
+          });
+        } catch (e: any) {
+          logger.error("pi-session", "pi_history_page: échec de recréation de session", {
+            projectId: pid,
+            error: e?.message ?? String(e),
+          });
+          ws.send(JSON.stringify({ type: "error", projectId: pid, error: `Failed to resume session: ${e?.message ?? e}` }));
+          break;
+        }
+      }
+      if (!pageState?.session) break;
+      const t0 = Date.now();
+      // buildFullUiHistory reste la SOURCE (entrées brutes, ids, compactions
+      // inline) : on ne change que la tranche envoyée.
+      const full = buildFullUiHistory(pageState.session);
+      const win = sliceUiHistoryWindow(full, {
+        before: msg.before,
+        beforeId: msg.beforeId,
+        all: msg.all === true,
+      });
+      const payload = JSON.stringify({
+        type: "pi_history_page",
+        projectId: pid,
+        messages: win.messages,
+        from: win.from,
+        total: win.total,
+        hasMore: win.hasMore,
+        before: win.end,
+        all: msg.all === true,
+      });
+      const details = {
+        projectId: pid,
+        messages: win.messages.length,
+        bytes: Buffer.byteLength(payload),
+        from: win.from,
+        total: win.total,
+        before: win.end,
+        all: msg.all === true,
+        buildMs: Date.now() - t0,
+      };
+      if (details.messages > PI_HISTORY_WARN_MESSAGES || details.bytes > PI_HISTORY_WARN_BYTES) {
+        logger.warn("ws", "pi_history_page volumineux envoyé (lot antérieur)", details);
+      } else {
+        logger.info("ws", "pi_history_page envoyé (lot antérieur)", details);
+      }
+      ws.send(payload);
       break;
     }
 
@@ -904,6 +1021,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         // concurrent au pi_start en cours attend la MÊME promesse.
         // On pousse aussi l'historique COMPLET, sinon l'UI resterait vide alors
         // que le backend vient de restaurer la conversation.
+        let historySentByFallback = false;
         if (!getSession(pid)?.session) {
           const state = await createPiSession(project.cwd, pid, {
             resume: true,
@@ -922,10 +1040,33 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           );
           if (state.session) {
             const t0 = Date.now();
-            const messages = buildFullUiHistory(state.session);
+            const full = buildFullUiHistory(state.session);
+            const win = sliceUiHistoryWindow(full);
             // AJUSTEMENT 1 : fallback auto-guérison — le prompt a réveillé un
             // projet sans session ; l'historique restauré est aussi tracé.
-            sendPiHistory(ws, pid, messages, "pi_prompt_fallback", Date.now() - t0);
+            sendPiHistory(ws, pid, win.messages, "pi_prompt_fallback", Date.now() - t0, win);
+            historySentByFallback = true;
+          }
+        }
+        // ── Filet de secours « needsHistory » (régression 6210d1c) ──
+        // Depuis 6210d1c, pi_history_request recrée LUI-MÊME la session (auto-
+        // guérison) : le test ci-dessus (!getSession(pid)?.session) ne se
+        // déclenche donc plus quand le client a manqué le pi_history de resync
+        // (réponse envoyée, puis perdue dans une nouvelle coupure WS). Or seul
+        // le CLIENT peut savoir qu'il n'a appliqué aucun historique pour ce
+        // projet : il le déclare via msg.needsHistory (posé par ChatView au
+        // premier prompt d'un projet sans pi_history appliqué). On renvoie
+        // alors l'historique (la fenêtre serveur plafonnée) UNE FOIS : le
+        // marqueur disparaît côté
+        // client dès qu'un premier pi_history est appliqué → JAMAIS de renvoi
+        // systématique à chaque prompt (coût borné, pas de « 10 Mo par prompt »).
+        if (msg.needsHistory && !historySentByFallback) {
+          const stateNow = getSession(pid);
+          if (stateNow?.session) {
+            const t0 = Date.now();
+            const full = buildFullUiHistory(stateNow.session);
+            const win = sliceUiHistoryWindow(full);
+            sendPiHistory(ws, pid, win.messages, "pi_prompt_needs_history", Date.now() - t0, win);
           }
         }
         const result = await sendPrompt(message, pid, images);
@@ -948,6 +1089,10 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
 
     case "pi_abort": {
       const pid = msg.projectId || projectId;
+      // Observabilité incident : un Stop utilisateur était TOTALEMENT
+      // invisible (aucune trace avant abortPi) — impossible de distinguer
+      // dans les logs un abort volontaire d'une génération qui meurt seule.
+      logger.warn("ws", "pi_abort reçu", { projectId: pid });
       if (!getValidatedProject(pid)) return;
       try {
         await abortPi(pid);
@@ -1140,13 +1285,27 @@ httpServer.listen(PORT, async () => {
 
 // Graceful shutdown
 const shutdown = async () => {
-  console.log("Shutting down...");
+  // P0 observabilité : la mort du process était invisible dans backend-*.log
+  // (seul console.log → stdout, non persisté) — les déploys/restarts
+  // (SIGTERM) ne laissaient AUCUNE trace dans le fichier, indiscernables
+  // d'un crash. logger.error : niveau élevé + trace persistante.
+  logger.error("express", "SIGTERM reçu — shutdown en cours");
   clearInterval(interval);
   // Unmount SMB shares gracefully
   try { await unmountAllSmb(); } catch (e) { console.error("[SMB] Unmount error:", e); }
   // Don't kill terminals on shutdown — they should persist
   // (In production with tmux, they'd survive process restarts)
-  await disposeAllSessions();
+  // Observabilité : la fermeture des sessions Pi est tracée (au moins une
+  // ligne avant/après) — sinon l'arrêt est indistinguable d'un crash.
+  try {
+    logger.info("express", "disposeAllSessions — fermeture des sessions Pi");
+    await disposeAllSessions();
+    logger.info("express", "disposeAllSessions terminé");
+  } catch (e) {
+    logger.error("express", "disposeAllSessions: erreur", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
   wss.close();
   httpServer.close();
   process.exit(0);
