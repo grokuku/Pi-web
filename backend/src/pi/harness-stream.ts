@@ -82,6 +82,15 @@ export interface SubagentEventBase {
 export interface SubagentEnvelope extends SubagentEventBase {
   type: "subagent";
   source: "subagent";
+  /**
+   * Projet auquel CE sous-agent appartient (résolu côté extension via le pont
+   * cwd → UUID, ou ctx.projectId). ÉTANCHÉITÉ inter-projets : présent DANS
+   * l'enveloppe (et pas seulement sur la frame WS {type:"pi_event",
+   * projectId}), il permet au frontend de vérifier la cohérence frame/enveloppe
+   * et de filtrer de façon fiable même si le canal est diffusé à un socket
+   * abonné à plusieurs projets (multi-onglets / arrière-plan).
+   */
+  projectId?: string;
   /** Événement SDK brut (ou clone tronqué) du sous-agent. */
   event: unknown;
 }
@@ -143,14 +152,23 @@ export function makeDelegateRunId(now: number = Date.now()): string {
 
 // ── Enveloppe + émission ─────────────────────────────────
 
-/** Construit l'enveloppe (pur — testé). Aucune mutation de l'event interne. */
+/**
+ * Construit l'enveloppe (pur — testé). Aucune mutation de l'event interne.
+ * `projectId` : projet concerné par le sous-agent (emitSubagentEvent le passe
+ * toujours) — l'enveloppe est AUTONOME (le frontend peut vérifier que la frame
+ * WS qui la transporte est bien celle du même projet).
+ */
 export function buildSubagentEnvelope(
   base: SubagentEventBase,
   event: unknown,
+  projectId?: string,
 ): SubagentEnvelope {
   return {
     type: "subagent",
     source: "subagent",
+    // Étanchéité : le projet d'appartenance est porté DANS l'enveloppe
+    // (chaînes vides/null → champ absent, pas de valeur mensongère).
+    ...(typeof projectId === "string" && projectId ? { projectId } : {}),
     delegateRunId: String(base?.delegateRunId ?? ""),
     attempt: Number.isFinite(base?.attempt) ? Number(base.attempt) : 1,
     delegateFunction: String(base?.delegateFunction ?? "unknown"),
@@ -183,7 +201,10 @@ export function emitSubagentEvent(
     if (!projectId) return;
     const emit = resolveSubagentEmitter();
     if (!emit) return; // no-op : pont absent (tests, hôte inattendu)
-    emit(buildSubagentEnvelope(base, event), projectId);
+    // Le projectId est passé (1) à l'émetteur → routage WS ciblé par projet
+    // (index.ts filtre ws.subscribedProjects) ET (2) DANS l'enveloppe → le
+    // frontend peut vérifier la cohérence et filtrer de façon fiable.
+    emit(buildSubagentEnvelope(base, event, projectId), projectId);
   } catch {
     // Permanemment silencieux : le streaming est un plus, jamais une dépendance.
   }

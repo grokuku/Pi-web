@@ -537,6 +537,16 @@ body {
   scroll-behavior: smooth;
 }
 
+/* Conteneur à pin automatique du bas.
+   overflow-anchor:none DÉSACTIVE l'ancrage de scroll natif du navigateur, qui
+   ajustait scrollTop tout seul pendant la croissance du contenu : ces
+   ajustements étaient interprétés comme un geste utilisateur et cassaient le
+   pin. L'ancrage de pagination est géré MANUELLEMENT (GroupedMessages,
+   scrollAnchorRef + useLayoutEffect) → rien n'est perdu. */
+.chat-autoscroll {
+  overflow-anchor: none;
+}
+
 /* ── Scroll-to-bottom button ─────────────── */
 .scroll-to-bottom-btn {
   pointer-events: auto;

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
-import { DEFAULT_ROUTING_CONFIG, type RoutingConfig } from "./routing-types.js";
+import { DEFAULT_ROUTING_CONFIG, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -119,6 +119,18 @@ function createDefaultRoutingConfig(): RoutingConfig {
 }
 
 /**
+ * Normalise une catégorie de routage issue du disque : `modelId` conservé tel
+ * quel, `thinkingLevel` conservé SEULEMENT s'il est valide (sinon omis → niveau
+ * du mode). Rétro-compatible : une config historique sans `thinkingLevel` reste
+ * valide et signifie « défaut du mode ».
+ */
+function normalizeCategoryConfig(raw: any, fallback: CategoryConfig): CategoryConfig {
+  const cfg: CategoryConfig = { modelId: raw?.modelId ?? fallback.modelId };
+  if (isThinkingLevel(raw?.thinkingLevel)) cfg.thinkingLevel = raw.thinkingLevel;
+  return cfg;
+}
+
+/**
  * Normalise une config de routage issue du disque (migration/rétro-compatibilité).
  * Garantit que `enabled` vaut `true` si l'ancienne config ne le renseignait pas.
  */
@@ -127,10 +139,10 @@ function normalizeRoutingConfig(routing: any): RoutingConfig {
   if (!routing || typeof routing !== "object") return d;
   return {
     enabled: routing.enabled ?? d.enabled,
-    trivial: { modelId: routing.trivial?.modelId ?? d.trivial.modelId },
-    standard: { modelId: routing.standard?.modelId ?? d.standard.modelId },
-    complex: { modelId: routing.complex?.modelId ?? d.complex.modelId },
-    review: { modelId: routing.review?.modelId ?? d.review.modelId },
+    trivial: normalizeCategoryConfig(routing.trivial, d.trivial),
+    standard: normalizeCategoryConfig(routing.standard, d.standard),
+    complex: normalizeCategoryConfig(routing.complex, d.complex),
+    review: normalizeCategoryConfig(routing.review, d.review),
     reviewRiskThreshold: routing.reviewRiskThreshold ?? d.reviewRiskThreshold,
     confidenceThreshold: routing.confidenceThreshold ?? d.confidenceThreshold,
     classifierModelId: routing.classifierModelId ?? d.classifierModelId,

@@ -64,8 +64,48 @@ export interface SignalsInput {
   contextUsage?: number;
 }
 
+/**
+ * Niveau de réflexion (reasoning effort) supporté par le SDK pi-coding-agent
+ * 0.85.1 : c'est le type EXACT `ThinkingLevel` exporté par
+ * `@earendil-works/pi-agent-core` (dist/types.d.ts).
+ *
+ * "off" désactive la réflexion ; "minimal".."max" correspondent à un effort
+ * croissant réellement envoyé au LLM (mappé vers `reasoning_effort` par le
+ * SDK, cf. pi-ai).
+ */
+export type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+/** Toutes les valeurs de thinking acceptées, dans l'ordre croissant d'effort. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/** Garde de type : la valeur est-elle un ThinkingLevel valide du SDK ? */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export interface CategoryConfig {
   modelId: string | null;
+  /**
+   * Niveau de réflexion de la catégorie. Absent/undefined = « défaut » : on
+   * garde le niveau de réflexion du MODE (rétro-compatibilité totale avec les
+   * configs historiques qui ne contenaient que `modelId`).
+   */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface RoutingConfig {

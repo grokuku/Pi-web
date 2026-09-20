@@ -78,10 +78,14 @@ const ParallelColumn = memo(function ParallelColumn({ run, fixedWidth }: { run: 
  * Mur des sous-agents simultanés. S'abonne au store isolé (useConcurrentRuns) :
  * son re-rendu ne provoque PAS celui du fil de messages. N'affiche rien tant
  * qu'il n'y a pas ≥2 runs actifs concurrents (sinon comportement fil normal).
+ *
+ * ÉTANCHÉITÉ inter-projets : `projectId` (projet affiché) borne la sélection —
+ * le mur ne compte QUE les sous-agents du projet courant, même si d'autres
+ * projets délèguent en parallèle et émettent sur le même socket WS.
  */
-export const ParallelSubAgents = memo(function ParallelSubAgents() {
+export const ParallelSubAgents = memo(function ParallelSubAgents({ projectId }: { projectId?: string }) {
   const { t } = useTranslation();
-  const groups = useConcurrentRuns();
+  const groups = useConcurrentRuns(projectId);
   if (groups.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 my-2">

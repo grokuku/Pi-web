@@ -43,6 +43,13 @@ export interface SubagentEnvelope {
   delegateLabel?: string;
   model?: string;
   taskExcerpt?: string;
+  /**
+   * ÉTANCHÉITÉ inter-projets : projet d'appartenance du sous-agent (porté par
+   * l'enveloppe backend — miroir de harness-stream.buildSubagentEnvelope).
+   * Permet de vérifier la cohérence avec le projectId de la frame WS et de
+   * n'exposer un run QUE dans la conversation de son projet.
+   */
+  projectId?: string;
   /** Événement SDK brut (ou clone tronqué) du sous-agent. */
   event: any;
 }
@@ -99,6 +106,10 @@ function createRun(env: SubagentEnvelope, now: number): SubAgentRun {
     attempt: env.attempt ?? 1,
     actions: [],
     messages: [],
+    // Étanchéité : le run est marqué du projet de son enveloppe (l'enveloppe
+    // est la source d'autorité — sinon assignation par l'appelant, cf.
+    // routeSubagentEnvelope).
+    ...(typeof env.projectId === "string" && env.projectId ? { projectId: env.projectId } : {}),
   };
 }
 
@@ -110,6 +121,9 @@ function envelopeMeta(env: SubagentEnvelope, base: SubAgentRun) {
     modelId: env.model && env.model !== "?" ? env.model : base.modelId,
     attempt: env.attempt ?? base.attempt,
     task: env.taskExcerpt || base.task,
+    // Le projet d'appartenance NE CHANGE JAMAIS en cours de run : préservé si
+    // l'enveloppe ne le porte pas (frames antérieurs au correctif).
+    projectId: env.projectId || base.projectId,
   };
 }
 
@@ -346,13 +360,38 @@ export function flushSubagentNotifications(): void {
   pendingNotify.clear();
 }
 
-/** Remet le store à zéro (changement de projet / nouvelle conversation). */
-export function resetSubagentRuns(): void {
+/**
+ * Remet le store à zéro. Sans argument : purge TOTALE (comportement historique).
+ * Avec `projectId` : purge CIBLÉE du projet quitté (changement de projet) —
+ *  - les runs TERMINÉS du projet sont supprimés (nettoyage ; les versions
+ *    archivées seront ré-enregistrées par la resync pi_history) ;
+ *  - les runs ENCORE ACTIFS sont PRÉSERVÉS : le projet peut continuer à
+ *    déléguer en arrière-plan (deux projets émettant en parallèle), et à son
+ *    retour l'utilisateur retrouve son sous-agent en cours dans SA conversation ;
+ *  - les runs des AUTRES projets ne sont jamais touchés (étanchéité).
+ */
+export function resetSubagentRuns(projectId?: string): void {
   for (const timer of pendingNotify.values()) clearTimeout(timer);
   pendingNotify.clear();
-  runs.clear();
-  attachment.clear();
-  bumpAttachment();
+  if (projectId) {
+    const removed = new Set<string>();
+    for (const [id, r] of runs) {
+      if (r.projectId === projectId && !isRunActive(r)) {
+        removed.add(id);
+        runs.delete(id);
+      }
+    }
+    if (removed.size > 0) {
+      for (const [tcId, runId] of attachment) {
+        if (removed.has(runId)) attachment.delete(tcId);
+      }
+      bumpAttachment();
+    }
+  } else {
+    runs.clear();
+    attachment.clear();
+    bumpAttachment();
+  }
   version++;
   for (const cb of globalListeners) cb();
 }
@@ -403,8 +442,37 @@ export function extractDelegateCalls(
  * ancien sans details. Le rendu de SubAgentBlock, lui, lit directement
  * toolCall.details.delegateRunId (useSubAgentRun) → il est EXACT dès que le
  * toolCall commité porte le retour du tool, sans dépendre de cette table.
+ *
+ * ÉTANCHÉITÉ : `messagesProjectId` est le projet des messages fournis. Un run
+ * appartenant à un AUTRE projet n'est JAMAIS rattaché à ces toolCalls (le FIFO
+ * de secours, aveugle par nature, accrocherait sinon un run étranger à un
+ * message local). Si le run n'a pas encore de projectId (frame héritée), il
+ * adopte celui des messages — les deux listes appartiennent à la même
+ * conversation par construction.
  */
-function attachRun(runId: string, fn: string, messages: DisplayMessage[]): void {
+function attachRun(
+  runId: string,
+  fn: string,
+  messages: DisplayMessage[],
+  messagesProjectId?: string,
+): void {
+  const run = runs.get(runId);
+  if (!run) return;
+  // Garde-fou d'étanchéité : run et messages doivent être du même projet.
+  if (
+    messagesProjectId &&
+    run.projectId &&
+    run.projectId !== messagesProjectId
+  ) {
+    return; // run étranger → jamais rattaché ici (il se rattachera dans SON projet)
+  }
+  // Le run hérite du projet des messages tant qu'il n'en a pas (frames
+  // antérieurs au champ enveloppe.projectId) — cohérent : on ne rattache un
+  // run qu'aux toolCalls de la conversation qui l'a émis.
+  if (messagesProjectId && !run.projectId) {
+    runs.set(runId, { ...run, projectId: messagesProjectId });
+  }
+
   const calls = extractDelegateCalls(messages);
 
   // 1) Rattachement EXACT par details.delegateRunId (autoritaire).
@@ -435,20 +503,37 @@ function attachRun(runId: string, fn: string, messages: DisplayMessage[]): void 
  * toolCall `delegate` visé. Retourne le run à jour. Ne touche JAMAIS `messages`.
  * Le rattachement privilégie details.delegateRunId (LOT 2a) ; le FIFO par
  * args.function reste le secours tant que le retour du tool n'est pas commité.
+ *
+ * ÉTANCHÉITÉ inter-projets : `projectId` est le projet de la frame WS reçue
+ * (msg.projectId) — et du fil de messages fourni (l'appelant, ChatView, passe
+ * déjà les messages du projet `pid`).
+ *  - incohérence enveloppe ↔ frame (env.projectId défini et différent) → event
+ *    IGNORÉ : il appartient à un autre projet, quel que soit l'affichage ;
+ *  - le run est marqué de ce projet et n'est rattaché qu'aux toolCalls du même
+ *    projet (cf. attachRun) ; les API de sélection (getAllRuns, getOrphanRuns,
+ *    useConcurrentRuns) filtrent ensuite par projet.
  */
 export function routeSubagentEnvelope(
   env: SubagentEnvelope,
   messages: DisplayMessage[],
   now: number = Date.now(),
+  projectId?: string,
 ): SubAgentRun | undefined {
   if (!env || typeof env.delegateRunId !== "string" || !env.delegateRunId) return undefined;
+  // Incohérence enveloppe ↔ frame = événement d'un AUTRE projet : ignorer.
+  // (Le backend inclut désormais projectId DANS l'enveloppe ; les frames
+  // antérieurs ne le portent pas → aucune rejection dans ce cas.)
+  if (typeof env.projectId === "string" && env.projectId && projectId && env.projectId !== projectId) {
+    return undefined;
+  }
   const prev = runs.get(env.delegateRunId);
   const next = applySubagentEvent(prev, env, now);
   runs.set(env.delegateRunId, next);
   // Tant que le run n'est pas rattaché, on retente (le toolCall `delegate` peut
-  // être commité un render après le premier event).
+  // être commité un render après le premier event). Le rattachement est borné
+  // au projet du run (cf. attachRun) — jamais inter-projets.
   if (![...attachment.values()].includes(env.delegateRunId)) {
-    attachRun(env.delegateRunId, next.function, messages);
+    attachRun(env.delegateRunId, next.function, messages, projectId ?? env.projectId);
   }
   scheduleRunNotify(env.delegateRunId);
   return runs.get(env.delegateRunId);
@@ -457,17 +542,27 @@ export function routeSubagentEnvelope(
 /**
  * Enregistre des runs « archivés » (relecture historique) puis les rattache
  * aux tool calls `delegate` de la liste convertie. Idempotent (dédup par id).
+ * ÉTANCHÉITÉ : `projectId` (conversation qui relit ces runs) est marqué sur
+ * chaque run avant stockage et borne le rattachement — un run archivé ne peut
+ * jamais apparaître ni s'accrocher dans une conversation d'un autre projet.
  */
-export function registerArchivedRuns(list: SubAgentRun[], messages: DisplayMessage[]): void {
+export function registerArchivedRuns(
+  list: SubAgentRun[],
+  messages: DisplayMessage[],
+  projectId?: string,
+): void {
   let added = false;
   for (const r of list) {
     if (!r || runs.has(r.id)) continue;
-    runs.set(r.id, r);
+    // Marque le projet d'appartenance (relecture = conversation courante).
+    runs.set(r.id, projectId && !r.projectId ? { ...r, projectId } : r);
     added = true;
   }
   if (!added) return;
   for (const r of list) {
-    if (![...attachment.values()].includes(r.id)) attachRun(r.id, r.function, messages);
+    if (![...attachment.values()].includes(r.id)) {
+      attachRun(r.id, r.function, messages, projectId);
+    }
   }
   version++;
   for (const cb of globalListeners) cb();
@@ -512,10 +607,18 @@ export function subscribeRuns(cb: () => void): () => void {
   return () => { globalListeners.delete(cb); };
 }
 
-/** Runs ARCHIVÉS non rattachés à un toolCall (rendus en fin de fil, dégradé). */
-export function getOrphanRuns(): SubAgentRun[] {
+/** Runs ARCHIVÉS non rattachés à un toolCall (rendus en fin de fil, dégradé).
+ * ÉTANCHÉITÉ : sans `projectId` → tous les orphelins (compat) ; avec
+ * `projectId` → uniquement les orphelins DE CE projet (une conversation ne
+ * montre jamais les orphelins d'un autre projet). */
+export function getOrphanRuns(projectId?: string): SubAgentRun[] {
   const attached = new Set(attachment.values());
-  return [...runs.values()].filter((r) => r.archived && !attached.has(r.id));
+  return [...runs.values()].filter(
+    (r) =>
+      r.archived &&
+      !attached.has(r.id) &&
+      (!projectId || r.projectId === projectId),
+  );
 }
 
 // ── Détection de CONCURRENCE (LOT 4 : vue en colonnes) ───────────────────────
@@ -609,21 +712,32 @@ export function selectConcurrentRuns(runs: SubAgentRun[], now: number = Date.now
   return groups;
 }
 
-/** Tous les runs connus (actifs + archivés), dans l'ordre d'insertion. */
-export function getAllRuns(): SubAgentRun[] {
-  return [...runs.values()];
+/** Tous les runs connus (actifs + archivés), dans l'ordre d'insertion.
+ * ÉTANCHÉITÉ : sans `projectId` → tous les runs (compat) ; avec `projectId`
+ * → uniquement les runs DE CE projet (deux projets émettant en parallèle ne
+ * se mélangent jamais dans la vue de l'un ou de l'autre). */
+export function getAllRuns(projectId?: string): SubAgentRun[] {
+  const all = [...runs.values()];
+  return projectId ? all.filter((r) => r.projectId === projectId) : all;
 }
 
 /**
  * Hook : groupes de runs simultanés ACTIFS à afficher côte à côte. S'abonne au
  * store ISOLÉ (version globale) → son re-rendu ne touche PAS le tableau
  * `messages` (aucun re-render du fil).
+ * ÉTANCHÉITÉ : `projectId` (projet affiché) borne la sélection — le mur des
+ * colonnes ne compte QUE les sous-agents du projet courant, même si d'autres
+ * projets émettent des runs en parallèle sur le même socket.
  */
-export function useConcurrentRuns(): SubAgentRun[][] {
+export function useConcurrentRuns(projectId?: string): SubAgentRun[][] {
   const version = useSyncExternalStore(subscribeRuns, getRunsVersion, getRunsVersion);
   // `version` change à chaque notification → recalcul (getAllRuns renvoie un
   // nouveau tableau à chaque appel).
-  return useMemo(() => selectConcurrentRuns(getAllRuns()), [version]);
+  return useMemo(
+    () => selectConcurrentRuns(getAllRuns(projectId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version, projectId],
+  );
 }
 
 /** Vrai si le run appartient à un groupe concurrent (donc affiché en colonne). */

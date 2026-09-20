@@ -16,8 +16,8 @@ import {
   resolveModelCapability,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
-import type { Route, SignalsInput } from "./routing-types.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, resolveRoute } from "./routing.js";
+import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
@@ -912,8 +912,11 @@ async function applyMessageRouting(
 
     const route = resolveRoute(message, config, signals, llmRoute);
     const model = pickRoutedModel(route, config, library);
+    // Niveau de réflexion de la catégorie EFFECTIVE (la même que le modèle :
+    // gate review + biais conservateur inclus). `undefined` → thinking du mode.
+    const routedThinking = pickRoutedThinkingLevel(route, config);
 
-    // Trace de la décision (audit) — y compris catégorie/risque/confiance/modèle.
+    // Trace de la décision (audit) — y compris catégorie/risque/confiance/modèle/thinking.
     logger.info("routing", `route message → ${route.category}`, {
       projectId,
       category: route.category,
@@ -924,6 +927,8 @@ async function applyMessageRouting(
       confidenceThreshold: config.confidenceThreshold,
       modelId: model?.id ?? null,
       model: model ? `${model.providerId}/${model.modelId}` : null,
+      // Thinking appliqué (catégorie) ; null = niveau du mode conservé.
+      thinkingLevel: routedThinking ?? null,
       llmClassifierUsed: llmRoute !== null,
       reason: route.reason,
     });
@@ -938,10 +943,17 @@ async function applyMessageRouting(
     }
 
     // Évite un setModel (et un refresh du registre) inutile à chaque message
-    // quand le modèle routé est déjà celui de la session.
+    // quand le modèle routé est déjà celui de la session. IMPORTANT : même si
+    // le modèle NE change PAS, on doit pouvoir poser un niveau de réflexion
+    // DIFFÉRENT d'un message à l'autre (cas d'usage : même modèle sur plusieurs
+    // catégories, seul le thinking varie) — d'où l'application explicite du
+    // thinking ci-dessous, à CHAQUE envoi routé.
     const current = (state.session as any)?.model;
     if (current && current.provider === model.providerId && current.id === model.modelId) {
       state.lastRoute = route;
+      if (routedThinking && (state.session as any)?.thinkingLevel !== routedThinking) {
+        await setThinkingLevel(routedThinking, projectId);
+      }
       return true;
     }
 
@@ -950,6 +962,7 @@ async function applyMessageRouting(
       model,
       projectId,
       DEFAULT_THINKING[state.activeMode || "code"] || "medium",
+      routedThinking,
     );
     return true;
   } catch (e: any) {
@@ -1361,7 +1374,8 @@ export async function cycleModel(projectId: string): Promise<any> {
 }
 
 export async function setThinkingLevel(level: string, projectId?: string): Promise<boolean> {
-  const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  // Aligné sur le type `ThinkingLevel` du SDK 0.85.1 ("max" inclus).
+  const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   if (!validLevels.includes(level)) {
     throw new Error(`Invalid thinking level: ${level}`);
   }
@@ -2165,6 +2179,10 @@ async function applyModelAndThinking(
   model: RegisteredModel | null | undefined,
   projectId: string,
   thinkingFallback: string,
+  // Niveau de réflexion EXPLICITE (ex. catégorie de routage) : prime sur le
+  // thinkingLevel du modèle et sur le fallback du mode. `undefined` →
+  // comportement historique inchangé (model.thinkingLevel || mode).
+  explicitThinking?: ThinkingLevel,
 ): Promise<void> {
   const state = sessionsByProject.get(projectId);
   if (!state?.session) return;
@@ -2266,7 +2284,7 @@ async function applyModelAndThinking(
       await setModel(model.providerId, model.modelId, projectId);
     }
 
-    await setThinkingLevel(model.thinkingLevel || thinkingFallback || "medium", projectId);
+    await setThinkingLevel(explicitThinking || model.thinkingLevel || thinkingFallback || "medium", projectId);
   } catch (e: any) {
     console.error(`[session] Failed to apply model for ${model.providerId}/${model.modelId}:`, e.message);
     console.log("[session] Model switch FAILED, session model is now:", (session as any).model?.id || "unknown");

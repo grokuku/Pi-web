@@ -10,8 +10,10 @@ import {
   isRoutingActive,
   isRoutingEnabled,
   llmClassifier,
+  pickCategoryThinkingLevel,
   pickModel,
   pickRoutedModel,
+  pickRoutedThinkingLevel,
   resolveRoute,
 } from "./routing.js";
 import type { ModelLibrary, RegisteredModel } from "./model-library.js";
@@ -512,5 +514,71 @@ describe("pickRoutedModel (sélection par catégorie/risque/confiance)", () => {
   it("fail-safe : id configuré introuvable → null", () => {
     const cfg = makeConfig({ complex: { modelId: "id-fantôme" } });
     expect(pickRoutedModel(makeRoute({ category: "complex" }), cfg, lib)).toBeNull();
+  });
+});
+
+// ── pickCategoryThinkingLevel / pickRoutedThinkingLevel ──
+
+describe("pickCategoryThinkingLevel (niveau par catégorie)", () => {
+  it("retourne le niveau configuré pour la catégorie", () => {
+    const cfg = makeConfig({ standard: { modelId: null, thinkingLevel: "high" } });
+    expect(pickCategoryThinkingLevel("standard", cfg)).toBe("high");
+  });
+
+  it("retourne undefined quand la catégorie n'a PAS de thinkingLevel (rétro-compat)", () => {
+    expect(pickCategoryThinkingLevel("trivial", makeConfig())).toBeUndefined();
+  });
+
+  it("retourne undefined pour une catégorie absente de la config", () => {
+    const partial = { ...makeConfig(), complex: undefined } as unknown as RoutingConfig;
+    expect(pickCategoryThinkingLevel("complex", partial)).toBeUndefined();
+  });
+
+  it("ignore une valeur invalide (fail-safe → undefined)", () => {
+    const cfg = makeConfig({
+      standard: { modelId: null, thinkingLevel: "turbo" as any },
+    });
+    expect(pickCategoryThinkingLevel("standard", cfg)).toBeUndefined();
+  });
+
+  it.each(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)(
+    "accepte la valeur SDK %s",
+    (level) => {
+      const cfg = makeConfig({ standard: { modelId: null, thinkingLevel: level } });
+      expect(pickCategoryThinkingLevel("standard", cfg)).toBe(level);
+    },
+  );
+});
+
+describe("pickRoutedThinkingLevel (catégorie effective + biais)", () => {
+  it("suit la catégorie effective (gate review inclus)", () => {
+    const cfg = makeConfig({ complex: { modelId: null, thinkingLevel: "high" } });
+    expect(pickRoutedThinkingLevel(makeRoute({ category: "complex" }), cfg)).toBe("high");
+  });
+
+  it("gate review : riskScore >= seuil → niveau de la catégorie review", () => {
+    const cfg = makeConfig({ review: { modelId: null, thinkingLevel: "max" } });
+    const route = makeRoute({ category: "trivial", riskScore: 0.9 });
+    expect(pickRoutedThinkingLevel(route, cfg)).toBe("max");
+  });
+
+  it("biais conservateur : confiance < seuil → niveau de la catégorie SUPÉRIEURE", () => {
+    const cfg = makeConfig({
+      standard: { modelId: null, thinkingLevel: "low" },
+      complex: { modelId: null, thinkingLevel: "high" },
+      confidenceThreshold: 0.6,
+    });
+    const route = makeRoute({ category: "standard", confidence: 0.4 });
+    expect(pickRoutedThinkingLevel(route, cfg)).toBe("high");
+  });
+
+  it("review reste review même sous le seuil (niveau review conservé)", () => {
+    const cfg = makeConfig({ review: { modelId: null, thinkingLevel: "xhigh" } });
+    const route = makeRoute({ category: "review", confidence: 0.2 });
+    expect(pickRoutedThinkingLevel(route, cfg)).toBe("xhigh");
+  });
+
+  it("fail-safe : aucun thinkingLevel configuré → undefined (niveau du mode)", () => {
+    expect(pickRoutedThinkingLevel(makeRoute({ category: "complex" }), makeConfig())).toBeUndefined();
   });
 });

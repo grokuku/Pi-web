@@ -391,7 +391,7 @@ async function resolveProjectId(cwd: string): Promise<string> {
 async function resolveRoutingDecision(
   cwd: string,
   request: string,
-): Promise<{ function?: string; modelId?: string } | null> {
+): Promise<{ function?: string; modelId?: string; thinkingLevel?: string } | null> {
   try {
     const projectId = await resolveProjectId(cwd);
     const url = new URL(`${PI_WEB_URL}/api/routing/decision`);
@@ -418,6 +418,9 @@ async function resolveRoutingDecision(
     return {
       function: data.route.function,
       modelId: data?.modelId ?? data.route.modelId ?? undefined,
+      // Niveau de réflexion de la catégorie (peut être null/absent → le
+      // sous-agent garde le thinking par défaut du SDK, comportement actuel).
+      thinkingLevel: data?.thinkingLevel ?? undefined,
     };
   } catch (e: any) {
     console.warn(`[harness-orchestrator] Route /api/routing/decision indisponible : ${e?.message || e}`);
@@ -1164,6 +1167,17 @@ export default function (pi: ExtensionAPI) {
             await tempSession.setModel(routingModel);
           } else if (ctx.model) {
             await tempSession.setModel(ctx.model);
+          }
+          // Niveau de réflexion de la catégorie de routage : appliqué à la
+          // tempSession (le modèle l'est déjà ci-dessus). Absent → comportement
+          // actuel inchangé (thinking par défaut du SDK). En cas de kill switch,
+          // resolveRoutingDecision a déjà renvoyé null : rien n'est appliqué.
+          if (routing?.thinkingLevel) {
+            try {
+              tempSession.setThinkingLevel(routing.thinkingLevel as any);
+            } catch (e: any) {
+              console.warn(`[harness-orchestrator] Thinking level ignoré (${routing.thinkingLevel}) : ${e?.message || e}`);
+            }
           }
           // P0 : mémoriser le modèle/provider effectifs pour la meta d'archivage
           usedModelLabel = getSessionModelLabel(tempSession);

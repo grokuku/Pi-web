@@ -3,12 +3,15 @@ import { X } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import {
   DEFAULT_ROUTING_CONFIG,
+  THINKING_LEVELS,
   type CategoryConfig,
   type ProviderConfig,
   type RegisteredModel,
   type RoutingConfig,
   type TaskCategory,
+  type ThinkingLevel,
 } from "../../types";
+import { useTranslation, type TFunction } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
 
 interface Props {
@@ -97,13 +100,59 @@ function ModelSelect({
   );
 }
 
+/**
+ * Sélecteur de NIVEAU DE RÉFLEXION (reasoning effort) réutilisable.
+ * Option « défaut » incluse : signifie « garder le niveau de réflexion du mode ».
+ * Native <select> → navigable au clavier (flèches + Entrée).
+ */
+function ThinkingSelect({
+  value,
+  onChange,
+  defaultLabel,
+  ariaLabel,
+  t,
+}: {
+  value: ThinkingLevel | null;
+  onChange: (level: ThinkingLevel | null) => void;
+  defaultLabel: string;
+  ariaLabel: string;
+  t: TFunction;
+}) {
+  return (
+    <select
+      value={value || ""}
+      onChange={e => onChange((e.target.value || null) as ThinkingLevel | null)}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[11px] px-2 py-1.5 rounded focus:border-hacker-accent outline-none"
+    >
+      <option value="">{defaultLabel}</option>
+      {THINKING_LEVELS.map(level => (
+        <option key={level} value={level}>
+          {t(`routingModal.thinkingLevels.${level}`)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function RoutingConfigModal({ onClose, onSave, models, providers, config }: Props) {
+  const { t } = useTranslation();
+  // Conserve le thinkingLevel existant s'il est présent (rétro-compatibilité :
+  // une config historique sans thinkingLevel reste valide = défaut du mode).
+  const initCategory = (c: TaskCategory): CategoryConfig => {
+    const existing = config?.[c];
+    return {
+      modelId: existing?.modelId ?? DEFAULT_ROUTING_CONFIG[c].modelId,
+      ...(existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
+    };
+  };
   const [routing, setRouting] = useState<RoutingConfig>(() => ({
     enabled: config?.enabled ?? true,
-    trivial: { modelId: config?.trivial?.modelId ?? DEFAULT_ROUTING_CONFIG.trivial.modelId },
-    standard: { modelId: config?.standard?.modelId ?? DEFAULT_ROUTING_CONFIG.standard.modelId },
-    complex: { modelId: config?.complex?.modelId ?? DEFAULT_ROUTING_CONFIG.complex.modelId },
-    review: { modelId: config?.review?.modelId ?? DEFAULT_ROUTING_CONFIG.review.modelId },
+    trivial: initCategory("trivial"),
+    standard: initCategory("standard"),
+    complex: initCategory("complex"),
+    review: initCategory("review"),
     reviewRiskThreshold: config?.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
     confidenceThreshold: config?.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold,
     classifierModelId: config?.classifierModelId ?? DEFAULT_ROUTING_CONFIG.classifierModelId,
@@ -112,7 +161,31 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
   const [error, setError] = useState("");
 
   const updateCategoryModel = (category: TaskCategory, modelId: string | null) => {
-    setRouting(prev => ({ ...prev, [category]: { modelId } as CategoryConfig }));
+    setRouting(prev => ({ ...prev, [category]: { ...prev[category], modelId } as CategoryConfig }));
+  };
+
+  const updateCategoryThinking = (category: TaskCategory, level: ThinkingLevel | null) => {
+    setRouting(prev => {
+      const next: CategoryConfig = { ...prev[category] };
+      if (level) next.thinkingLevel = level;
+      else delete next.thinkingLevel;
+      return { ...prev, [category]: next };
+    });
+  };
+
+  /** Libellé du modèle de la catégorie (nom lisible ou « défaut »). */
+  const modelLabelFor = (category: TaskCategory): string => {
+    const id = routing[category].modelId;
+    if (!id) return t("routingModal.summaryModelDefault");
+    return models.find(m => m.id === id)?.name || id;
+  };
+
+  /** Résumé lisible de la catégorie : « <modèle> · réflexion <niveau> ». */
+  const categorySummary = (category: TaskCategory): string => {
+    const modelLabel = modelLabelFor(category);
+    const level = routing[category].thinkingLevel;
+    if (!level) return t("routingModal.summaryDefaultThinking", modelLabel);
+    return t("routingModal.summaryWithThinking", modelLabel, t(`routingModal.thinkingLevels.${level}`));
   };
 
   const handleSave = async () => {
@@ -145,8 +218,9 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
 
         <p className="text-[11px] text-hacker-text-dim">
           Le routage remplace l'ancienne équipe d'experts par 4 catégories de tâches.
-          Chaque catégorie peut utiliser un modèle spécifique ; laisse « défaut » pour
-          utiliser le modèle par défaut du projet.
+          Chaque catégorie peut utiliser un modèle spécifique et un niveau de réflexion
+          propre ; laisse « défaut » pour utiliser le modèle ou le niveau de réflexion du
+          mode.
         </p>
 
         <div>
@@ -161,15 +235,31 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
                 <span className="text-sm">{cat.emoji}</span>
                 <span className="text-xs font-bold text-hacker-text-bright">{cat.label}</span>
                 <span className="text-[10px] text-hacker-text-dim">{cat.description}</span>
+                {/* Résumé lisible : modèle · niveau de réflexion */}
+                <span
+                  className="ml-auto text-[10px] text-hacker-accent font-mono truncate max-w-[55%]"
+                  title={categorySummary(cat.id)}
+                >
+                  {categorySummary(cat.id)}
+                </span>
               </div>
-              <ModelSelect
-                value={routing[cat.id].modelId}
-                onChange={modelId => updateCategoryModel(cat.id, modelId)}
-                models={models}
-                providers={providers}
-                noneLabel="— Défaut (modèle par défaut) —"
-                disabled={false}
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <ModelSelect
+                  value={routing[cat.id].modelId}
+                  onChange={modelId => updateCategoryModel(cat.id, modelId)}
+                  models={models}
+                  providers={providers}
+                  noneLabel="— Défaut (modèle par défaut) —"
+                  disabled={false}
+                />
+                <ThinkingSelect
+                  value={routing[cat.id].thinkingLevel ?? null}
+                  onChange={level => updateCategoryThinking(cat.id, level)}
+                  defaultLabel={t("routingModal.thinkingDefaultOption")}
+                  ariaLabel={`${t("routingModal.thinkingLabel")} — ${cat.label}`}
+                  t={t}
+                />
+              </div>
               <p className="text-[10px] text-hacker-text-dim mt-1.5 leading-relaxed">{cat.hint}</p>
             </div>
           ))}

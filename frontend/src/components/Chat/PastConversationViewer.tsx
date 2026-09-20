@@ -64,9 +64,11 @@ export function PastConversationViewer({ projectId, session, onClose }: Props) {
     setViewerFile(f);
   }, []);
 
+  // ÉTANCHÉITÉ : les runs archivés de cette conversation passée sont marqués du
+  // projet consulté (projectId) — ils ne fuient jamais vers un autre projet.
   const displayMessages: DisplayMessage[] = useMemo(
-    () => convertHistoryToDisplayMessages(raw),
-    [raw],
+    () => convertHistoryToDisplayMessages(raw, projectId),
+    [raw, projectId],
   );
 
   // ── Chargement initial (dernière page) ──

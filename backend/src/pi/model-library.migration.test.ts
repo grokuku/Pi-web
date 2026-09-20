@@ -85,3 +85,64 @@ describe("migration du bloc concurrency", () => {
     expect(lib.concurrency).toEqual({ maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 } });
   });
 });
+// ── Migration du thinkingLevel par catégorie de routage ──
+// Une config historique (sans `thinkingLevel`) reste valide et signifie
+// « défaut du mode ». Un `thinkingLevel` valide est préservé ; une valeur
+// invalide est ignorée (→ défaut du mode).
+describe("migration du thinkingLevel de routage", () => {
+  const withRouting = (routing: any) =>
+    migrateLibrary({ models: [], projectModes: { p1: { harness: { routing } } } }).projectModes.p1.harness.routing!;
+
+  it("config legacy sans thinkingLevel → catégories sans thinkingLevel (défaut du mode)", () => {
+    const routing = withRouting({
+      enabled: true,
+      trivial: { modelId: "m1" },
+      standard: { modelId: "m2" },
+      complex: { modelId: "m3" },
+      review: { modelId: "m4" },
+    });
+    expect(routing.trivial).toEqual({ modelId: "m1" });
+    expect(routing.standard).toEqual({ modelId: "m2" });
+    expect(routing.complex).toEqual({ modelId: "m3" });
+    expect(routing.review).toEqual({ modelId: "m4" });
+    expect(routing.trivial.thinkingLevel).toBeUndefined();
+  });
+
+  it("thinkingLevel valide préservé pour chaque catégorie", () => {
+    const routing = withRouting({
+      enabled: true,
+      trivial: { modelId: "m1", thinkingLevel: "off" },
+      standard: { modelId: "m2", thinkingLevel: "low" },
+      complex: { modelId: "m3", thinkingLevel: "high" },
+      review: { modelId: "m4", thinkingLevel: "max" },
+    });
+    expect(routing.trivial.thinkingLevel).toBe("off");
+    expect(routing.standard.thinkingLevel).toBe("low");
+    expect(routing.complex.thinkingLevel).toBe("high");
+    expect(routing.review.thinkingLevel).toBe("max");
+  });
+
+  it("thinkingLevel invalide ignoré (→ défaut du mode), modelId conservé", () => {
+    const routing = withRouting({
+      enabled: true,
+      standard: { modelId: "m2", thinkingLevel: "turbo" },
+      complex: { modelId: "m3", thinkingLevel: 42 },
+    });
+    expect(routing.standard).toEqual({ modelId: "m2" });
+    expect(routing.complex).toEqual({ modelId: "m3" });
+  });
+
+  it("même modèle sur plusieurs catégories avec des thinkingLevel différents", () => {
+    const routing = withRouting({
+      enabled: true,
+      trivial: { modelId: "gemma", thinkingLevel: "off" },
+      standard: { modelId: "gemma", thinkingLevel: "medium" },
+      complex: { modelId: "gemma", thinkingLevel: "high" },
+      review: { modelId: "gemma", thinkingLevel: "xhigh" },
+    });
+    expect(routing.trivial).toEqual({ modelId: "gemma", thinkingLevel: "off" });
+    expect(routing.standard).toEqual({ modelId: "gemma", thinkingLevel: "medium" });
+    expect(routing.complex).toEqual({ modelId: "gemma", thinkingLevel: "high" });
+    expect(routing.review).toEqual({ modelId: "gemma", thinkingLevel: "xhigh" });
+  });
+});

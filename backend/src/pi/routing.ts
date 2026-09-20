@@ -11,12 +11,14 @@ import {
   COMPLEXITY_KEYWORDS,
   DEFAULT_ROUTING_CONFIG,
   functionForCategory,
+  isThinkingLevel,
   RISK_KEYWORDS,
   type Route,
   type RoutingConfig,
   type RoutingSignals,
   type SignalsInput,
   type TaskCategory,
+  type ThinkingLevel,
 } from "./routing-types.js";
 import { getDefaultModel, getModel, type ModelLibrary, type RegisteredModel } from "./model-library.js";
 
@@ -490,4 +492,33 @@ export function pickRoutedModel(
     if (configured) return configured;
   }
   return null;
+}
+
+/**
+ * Niveau de réflexion configuré pour une catégorie DONNÉE (sans biais).
+ * Retourne `undefined` si absent ou invalide → l'appelant conserve le niveau du
+ * MODE (fail-safe, jamais d'échec d'envoi).
+ */
+export function pickCategoryThinkingLevel(
+  category: TaskCategory,
+  config: RoutingConfig,
+): ThinkingLevel | undefined {
+  const configured = config?.[category]?.thinkingLevel;
+  return isThinkingLevel(configured) ? configured : undefined;
+}
+
+/**
+ * Résout le niveau de réflexion du ROUTAGE MESSAGE à partir de la catégorie
+ * EFFECTIVE — la même que celle qui choisit le modèle (`effectiveCategoryForModel` :
+ * gate review + biais conservateur). `undefined` quand la catégorie n'a pas de
+ * `thinkingLevel` configuré/valide : l'appelant retombe alors sur le niveau du
+ * MODE (comportement historique inchangé).
+ *
+ * Fonction pure (aucun I/O) → testable directement.
+ */
+export function pickRoutedThinkingLevel(
+  route: Route,
+  config: RoutingConfig,
+): ThinkingLevel | undefined {
+  return pickCategoryThinkingLevel(effectiveCategoryForModel(route, config), config);
 }

@@ -451,6 +451,23 @@ export const en = {
     integrate: "Integrating",
     tooltip: "The agent is processing your request (ROUTING mode)",
   },
+  // ── Routing configuration (RoutingConfigModal) ──
+  routingModal: {
+    thinkingLabel: "Thinking level",
+    thinkingDefaultOption: "— Default (mode thinking) —",
+    summaryModelDefault: "default model",
+    summaryWithThinking: (model: string, thinking: string) => `${model} · ${thinking} thinking`,
+    summaryDefaultThinking: (model: string) => `${model} · mode thinking`,
+    thinkingLevels: {
+      off: "off",
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "very high",
+      max: "max",
+    },
+  },
   fileAnalyzer: {
     title: "File Analysis",
     analyze: "Analyze",

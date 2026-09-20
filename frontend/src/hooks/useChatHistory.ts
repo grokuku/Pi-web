@@ -56,7 +56,18 @@ interface HistoryMessage {
  *   - Assistant messages: role "assistant" with text content + thinking + tool calls
  *   - Tool results are folded into the preceding assistant message's toolCalls[]
  */
-export function convertHistoryToDisplayMessages(history: HistoryMessage[]): DisplayMessage[] {
+/**
+ * ÉTANCHÉITÉ inter-projets : `projectId` est le projet auquel appartient
+ * l'historique converti. Il est marqué sur chaque run archivé (relecture) et
+ * borne leur rattachement — un run archivé relu ici ne peut jamais apparaître
+ * dans la conversation d'un autre projet (ni être rattaché à ses toolCalls).
+ * Optionnel pour compat (tests) : sans lui, les runs archivés restent sans
+ * projet et ne sont exposés qu'aux vues non filtrées.
+ */
+export function convertHistoryToDisplayMessages(
+  history: HistoryMessage[],
+  projectId?: string,
+): DisplayMessage[] {
   const displayMessages: DisplayMessage[] = [];
   let pendingToolResults: Map<string, ToolCallInfo> = new Map();
   // LOT 3 : ids des toolCall DÉCLARÉS par des messages assistant. Un
@@ -316,8 +327,9 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
   // LOT 2b : enregistre les runs archivés (relecture) dans le store isolé et
   // les rattache aux tool calls `delegate` de la liste convertie. Effet de bord
   // assumé : la conversion est appelée depuis les handlers d'events (jamais au
-  // render) — le store notifie les blocs concernés.
-  if (archivedRuns.length > 0) registerArchivedRuns(archivedRuns, displayMessages);
+  // render) — le store notifie les blocs concernés. ÉTANCHÉITÉ : les runs sont
+  // marqués du projet de l'historique (projectId) — voir ci-dessus.
+  if (archivedRuns.length > 0) registerArchivedRuns(archivedRuns, displayMessages, projectId);
   return displayMessages;
 }
 
@@ -379,7 +391,9 @@ export function useChatHistory(projectId: string) {
 
   // Handle pi_history from backend — converts and sets all messages
   const handleHistory = useCallback((rawMessages: any[]) => {
-    const displayMessages = convertHistoryToDisplayMessages(rawMessages);
+    // ÉTANCHÉITÉ : les runs archivés de cet historique sont marqués du projet
+    // courant (ce store est par projet) et ne fuiront pas ailleurs.
+    const displayMessages = convertHistoryToDisplayMessages(rawMessages, projectId);
     storeRef.current.set(projectId, displayMessages);
     return displayMessages;
   }, [projectId]);

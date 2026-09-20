@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { loadModelLibrary, getProjectRoutingConfig } from "../pi/model-library.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, llmClassifier } from "../pi/routing.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, pickCategoryThinkingLevel, llmClassifier } from "../pi/routing.js";
 import type { Route, SignalsInput } from "../pi/routing-types.js";
 
 const router = Router();
@@ -85,6 +85,7 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
       res.json({
         route: null,
         modelId: null,
+        thinkingLevel: null,
         reason: "routage désactivé (kill switch global ou config projet/mode)",
         reviewRiskThreshold: config.reviewRiskThreshold,
         routingEnabled: globalEnabled,
@@ -109,10 +110,14 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
 
     const route = resolveRoute(request, config, signals, llmRoute);
     const model = pickModel(route, config, library);
+    // Niveau de réflexion de la catégorie (chemin SOUS-AGENT : catégorie brute
+    // de la route, cohérente avec `pickModel`). `undefined` → niveau du mode.
+    const thinkingLevel = pickCategoryThinkingLevel(route.category, config);
 
     res.json({
       route,
       modelId: model?.id ?? null,
+      thinkingLevel: thinkingLevel ?? null,
       reason: route.reason,
       reviewRiskThreshold: config.reviewRiskThreshold,
       routingEnabled: globalEnabled,

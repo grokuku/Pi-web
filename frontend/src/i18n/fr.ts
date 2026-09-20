@@ -451,6 +451,23 @@ export const fr = {
     integrate: "Intégration",
     tooltip: "L'agent traite votre demande (mode ROUTING)",
   },
+  // ── Configuration du routage (RoutingConfigModal) ──
+  routingModal: {
+    thinkingLabel: "Niveau de réflexion",
+    thinkingDefaultOption: "— Défaut (réflexion du mode) —",
+    summaryModelDefault: "modèle par défaut",
+    summaryWithThinking: (model: string, thinking: string) => `${model} · réflexion ${thinking}`,
+    summaryDefaultThinking: (model: string) => `${model} · réflexion du mode`,
+    thinkingLevels: {
+      off: "désactivée",
+      minimal: "minimale",
+      low: "faible",
+      medium: "moyenne",
+      high: "élevée",
+      xhigh: "très élevée",
+      max: "maximale",
+    },
+  },
   fileAnalyzer: {
     title: "Analyse de fichier",
     analyze: "Analyser",

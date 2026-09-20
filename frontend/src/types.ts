@@ -313,6 +313,14 @@ export interface SubAgentRun {
   archived?: boolean;
   /** Tool call `delegate` rattaché (résolu par le store, absent = orphelin). */
   toolCallId?: string;
+  /**
+   * ÉTANCHÉITÉ inter-projets : projet auquel CE run appartient (UUID), porté
+   * par l'enveloppe (backend LOT 2a) ou assigné à l'enregistrement (runs
+   * archivés). Le store n'expose jamais un run à une conversation d'un autre
+   * projet : sans ce champ, le mur des sous-agents simultanés et les orphelins
+   * mélangeaient les runs de projets émettant en parallèle.
+   */
+  projectId?: string;
 }
 
 // ── Providers ─────────────────────────────────────────
@@ -440,8 +448,27 @@ export type RoutingFunction = "planning" | "execute" | "review" | "integrate";
 
 export type TaskCategory = "trivial" | "standard" | "complex" | "review";
 
+/**
+ * Niveau de réflexion (reasoning effort) — aligné sur le type EXACT
+ * `ThinkingLevel` du SDK pi-coding-agent 0.85.1
+ * (`@earendil-works/pi-agent-core`).
+ */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 export interface CategoryConfig {
   modelId: string | null;
+  /** Absent/undefined = « défaut » : niveau de réflexion du MODE conservé. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface RoutingConfig {

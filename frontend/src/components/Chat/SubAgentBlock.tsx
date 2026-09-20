@@ -223,7 +223,10 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
   // le verrait deux fois. Abonnement au store ISOLÉ : ce re-rendu ne touche PAS
   // le fil de messages. Dès que le groupe retombe à <2 actifs, `isRunConcurrent`
   // redevient faux et le bloc reprend sa place dans le fil (réversibilité).
-  const concurrentGroups = useConcurrentRuns();
+  // ÉTANCHÉITÉ : la détection est bornée au PROJET du run (porté par le store,
+  // cf. subagentRuns) — un run d'un autre projet émettant en parallèle ne doit
+  // ni masquer ce bloc, ni apparaître dans le mur de cette conversation.
+  const concurrentGroups = useConcurrentRuns(run?.projectId);
   if (run && isRunConcurrent(run.id, concurrentGroups)) return null;
   // Statut : le run (store) prime une fois connu ; sinon dérivé du toolCall.
   const running = run ? run.status === "running" : toolCall.isStreaming;
@@ -300,11 +303,18 @@ const OrphanSubAgentBlock = memo(function OrphanSubAgentBlock({ run }: { run: Su
  * Rend les runs de sous-agents ARCHIVÉS sans toolCall `delegate` rattachable.
  * Composant ISOLÉ : il s'abonne seul au store (version globale) → son re-rendu
  * ne provoque PAS celui du fil de messages.
+ * ÉTANCHÉITÉ inter-projets : `projectId` (projet affiché) borne la sélection —
+ * un run archivé d'un autre projet (persisté dans SA session) n'apparaît jamais
+ * ici.
  */
-export const OrphanSubAgentRuns = memo(function OrphanSubAgentRuns() {
+export const OrphanSubAgentRuns = memo(function OrphanSubAgentRuns({ projectId }: { projectId?: string }) {
   const version = useSyncExternalStore(subscribeRuns, getRunsVersion, getRunsVersion);
-  // useMemo sur la version : getOrphanRuns() reconstruit un tableau.
-  const orphans = useMemo(() => getOrphanRuns(), [version]);
+  // useMemo sur la version : getOrphanRuns(projectId) reconstruit un tableau.
+  const orphans = useMemo(
+    () => getOrphanRuns(projectId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version, projectId],
+  );
   if (orphans.length === 0) return null;
   return (
     <div className="flex flex-col gap-1.5 mt-1">

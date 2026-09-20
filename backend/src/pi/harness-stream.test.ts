@@ -119,6 +119,18 @@ describe("buildSubagentEnvelope", () => {
     expect(envelope.delegateFunction).toBe("unknown");
     expect(envelope.model).toBe("?");
   });
+
+  // Étanchéité inter-projets (BUG sous-agents d'un autre projet affichés) :
+  // l'enveloppe porte le projet d'appartenance du sous-agent — le frontend peut
+  // vérifier la cohérence avec la frame WS qui la transporte et filtrer de façon
+  // fiable (un socket peut être abonné à PLUSIEURS projets simultanément).
+  it("porte le projectId fourni (étanchéité inter-projets)", () => {
+    const envelope = buildSubagentEnvelope(base, { type: "subagent_start" }, "uuid-yuki");
+    expect(envelope.projectId).toBe("uuid-yuki");
+    // Sans projectId → champ absent (pas de valeur mensongère vide).
+    expect(buildSubagentEnvelope(base, {} as any).projectId).toBeUndefined();
+    expect(buildSubagentEnvelope(base, {} as any, "").projectId).toBeUndefined();
+  });
 });
 
 describe("emitSubagentEvent (pont globalThis)", () => {
@@ -134,6 +146,9 @@ describe("emitSubagentEvent (pont globalThis)", () => {
     expect(received[0].projectId).toBe("p-1");
     expect(received[0].event.type).toBe("subagent");
     expect(received[0].event.source).toBe("subagent");
+    // L'enveloppe est AUTONOME : le projet d'appartenance est DEDANS (et pas
+    // seulement sur la frame WS) → filtrage fiable côté frontend.
+    expect(received[0].event.projectId).toBe("p-1");
     expect(received[0].event.event.type).toBe("tool_execution_start");
   });
 

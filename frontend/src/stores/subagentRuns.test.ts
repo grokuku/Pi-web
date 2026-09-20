@@ -429,3 +429,141 @@ describe("getAllRuns / useConcurrentRuns — vue live du store", () => {
     expect(selectConcurrentRuns(getAllRuns(), 400)).toEqual([]);
   });
 });
+
+// ── ÉTANCHÉITÉ inter-projets (BUG : sous-agents d'un projet affichés dans la
+// conversation d'un AUTRE projet — deux projets déléguant en parallèle) ──────
+// Le store est désormais SCOPÉ par projectId : chaque run porte le projet de
+// son enveloppe (ou de la frame WS qui l'a livré), les sélecteurs filtrent par
+// projet, le rattachement FIFO ne franchit jamais les frontières et le reset
+// au changement de projet ne purge que le projet quitté.
+describe("étanchéité inter-projets du store (BUG sous-agents cross-project)", () => {
+  const PA = "uuid-projet-a";
+  const PB = "uuid-projet-b";
+  const messagesA = [msg("a", ["execute", "execute"])]; // 2 toolCalls dans Pi-A
+  const messagesB = [msg("b", ["execute"])];
+
+  it("deux projets émettant en parallèle : getAllRuns(pid) ne voit que SON projet", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra1", projectId: PA }), messagesA, 100, PA);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra2", projectId: PA }), messagesA, 110, PA);
+    // Pi-B émet EN MÊME TEMPS (sous-agent Yuki pendant que Pi-Web délègue).
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), messagesB, 120, PB);
+
+    const runsA = getAllRuns(PA);
+    expect(runsA.map((r) => r.id).sort()).toEqual(["ra1", "ra2"]);
+    expect(getAllRuns(PB).map((r) => r.id)).toEqual(["rb1"]);
+    // Compat : sans filtre, tout est visible (aucune perte de données).
+    expect(getAllRuns()).toHaveLength(3);
+  });
+
+  it("le mur des colonnes (selectConcurrentRuns) compte les runs concurrents d'UN SEUL projet", () => {
+    // Deux runs actifs dans Pi-A + un run actif dans Pi-B, tous simultanés :
+    // la vue de Pi-A doit montrer UN groupe de 2 (jamais 3 avec le run étranger).
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra1", projectId: PA }), messagesA, 100, PA);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra2", projectId: PA }), messagesA, 110, PA);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), messagesB, 120, PB);
+
+    const groupsA = selectConcurrentRuns(getAllRuns(PA), 200);
+    expect(groupsA).toHaveLength(1);
+    expect(groupsA[0].map((r) => r.id).sort()).toEqual(["ra1", "ra2"]);
+    // Vue de Pi-B : son propre run seul → pas de groupe (comportement fil).
+    expect(selectConcurrentRuns(getAllRuns(PB), 200)).toEqual([]);
+  });
+
+  it("le FIFO de secours ne rattachera JAMAIS un run étranger aux toolCalls locaux", () => {
+    // Le run de Pi-B arrive pendant que le fil affiché est celui de Pi-A
+    // (frame multi-projets) : les messages fournis sont ceux de Pi-A.
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), messagesA, 100, PA);
+    // Aucun toolCall de Pi-A consommé par le run étranger…
+    expect(getRun("rb1")?.toolCallId).toBeUndefined();
+    // …et le 1er toolCall de Pi-A reste LIBRE pour un run de Pi-A.
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra1", projectId: PA }), messagesA, 120, PA);
+    expect(getRun("ra1")?.toolCallId).toBe("a-tc0");
+  });
+
+  it("incohérence enveloppe ↔ frame (env.projectId ≠ frame pid) → event ignoré", () => {
+    // Défense en profondeur : l'enveloppe porte SON projet (backend) ; si la
+    // frame qui la transporte annonce un autre projet, on refuse.
+    const out = routeSubagentEnvelope(
+      env({ type: "subagent_start" }, { delegateRunId: "rx", projectId: PB }),
+      messagesA, 100, PA,
+    );
+    expect(out).toBeUndefined();
+    expect(getRun("rx")).toBeUndefined();
+    expect(getAllRuns()).toHaveLength(0);
+  });
+
+  it("frame sans projectId dans l'enveloppe (backend antérieur) : le run adopte le pid de la frame", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rl1" }), messagesA, 100, PA);
+    expect(getRun("rl1")?.projectId).toBe(PA);
+    // Il est bien rattaché aux toolCalls de SON projet (rattachement FIFO normal).
+    expect(getRun("rl1")?.toolCallId).toBe("a-tc0");
+  });
+
+  it("enveloppe avec projectId mais sans frame pid : run marqué, rattachement autorisé", () => {
+    // L'enveloppe est la source d'autorité ; sans frame pid, le run garde son
+    // projet et peut se rattacher (le FIFO refuse seulement les MISMATCH).
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rl2", projectId: PA }), messagesA, 100);
+    expect(getRun("rl2")?.projectId).toBe(PA);
+    expect(getRun("rl2")?.toolCallId).toBe("a-tc0");
+  });
+
+  it("orphelins archivés : getOrphanRuns(pid) ne montre que les orphelins du projet", () => {
+    registerArchivedRuns([
+      { ...runFromActivity({ delegateRunId: "oa", function: "execute", status: "success" }, 0)!, projectId: PA },
+      { ...runFromActivity({ delegateRunId: "ob", function: "execute", status: "success" }, 0)!, projectId: PB },
+    ], [], undefined);
+    // NB : sans 3e argument ici, les runs portent DÉJÀ leur projectId (fourni
+    // dans la liste — même comportement qu'un run marqué en amont).
+    expect(getOrphanRuns(PA).map((r) => r.id)).toEqual(["oa"]);
+    expect(getOrphanRuns(PB).map((r) => r.id)).toEqual(["ob"]);
+    expect(getOrphanRuns()).toHaveLength(2);
+  });
+
+  it("registerArchivedRuns marque le projectId de la conversation relecture", () => {
+    const run = runFromActivity({ delegateRunId: "oc", function: "execute", status: "success" }, 0)!;
+    expect(run.projectId).toBeUndefined(); // l'activité persistée ne porte pas le projet
+    registerArchivedRuns([run], messagesA, PA);
+    expect(getRun("oc")?.projectId).toBe(PA);
+    // Rattaché aux toolCalls du MÊME projet.
+    expect(getRun("oc")?.toolCallId).toBe("a-tc0");
+  });
+
+  it("resetSubagentRuns(pid) purge le projet quitté SAUF ses runs actifs ; les autres projets intacts", () => {
+    // Pi-A : un run actif + un run terminé. Pi-B : un run actif.
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra1", projectId: PA }), messagesA, 100, PA);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra2", projectId: PA }), messagesA, 105, PA);
+    routeSubagentEnvelope(env({ type: "subagent_end", status: "success" }, { delegateRunId: "ra2", projectId: PA }), messagesA, 130, PA);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), messagesB, 110, PB);
+    expect(getRun("rb1")?.toolCallId).toBe("b-tc0"); // rattaché à Pi-B
+
+    // L'utilisateur quitte Pi-A (changement de projet dans ChatView).
+    resetSubagentRuns(PA);
+    // Le run TERMINÉ de Pi-A est purgé (nettoyage — la relecture passera par
+    // l'activité archivée persistée dans SA session)…
+    expect(getRun("ra2")).toBeUndefined();
+    // …mais son run ENCORE ACTIF survit : le projet continue de déléguer en
+    // arrière-plan, et à son retour l'utilisateur retrouve son run en cours.
+    expect(getRun("ra1")?.toolCallId).toBe("a-tc0");
+    // Le run de Pi-B (autre projet, encore actif) survit AVEC son rattachement
+    // — il s'affichera dans SA conversation, jamais ailleurs.
+    expect(getRun("rb1")?.toolCallId).toBe("b-tc0");
+    // Sans argument : purge totale (comportement historique).
+    resetSubagentRuns();
+    expect(getRun("ra1")).toBeUndefined();
+    expect(getRun("rb1")).toBeUndefined();
+  });
+
+  it("rattachement EXACT par details.delegateRunId reste correct entre projets (aucun cross-attach)", () => {
+    // ToolCalls de Pi-A portant le retour du tool (details.delegateRunId).
+    const exactA: DisplayMessage[] = [{
+      id: "a", role: "assistant", content: "", thinking: "", timestamp: 0,
+      toolCalls: [{ id: "a-tc", name: "delegate", args: { function: "execute" }, output: "", isError: false, isStreaming: false, details: { delegateRunId: "ra1" } }],
+    }];
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra1", projectId: PA }), exactA, 100, PA);
+    expect(getRun("ra1")?.toolCallId).toBe("a-tc");
+    // Un run de Pi-B avec le même motif ne peut pas voler le toolCall de Pi-A :
+    // même si details portait (par erreur) ce runId, le mismatch projet bloque.
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), exactA, 110, PB);
+    expect(getRun("rb1")?.toolCallId).toBeUndefined();
+  });
+});

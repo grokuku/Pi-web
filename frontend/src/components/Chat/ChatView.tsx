@@ -28,6 +28,7 @@ import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHisto
 import { routeSubagentEnvelope, resetSubagentRuns, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { OrphanSubAgentRuns } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
+import { resolveScrollAction } from "../../utils/chat-scroll";
 
 // ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
 // Retarde la propagation d'une valeur qui change très souvent (contenu
@@ -358,11 +359,13 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       chatHistory.saveMessagesFor(messagesRef.current, prevId);
       // Also persist assistantId for the project we're leaving
       chatHistory.setAssistantIdFor(prevId, currentAssistantIdRef.current);
-      // LOT 2b : les runs de sous-agents sont propres au projet affiché — on
-      // vide le store isolé au changement (les runs archivés seront ré-enregistrés
-      // par la resync pi_history) ; évite toute fuite inter-projets (blocs live
-      // ou orphelins d'un autre projet).
-      resetSubagentRuns();
+      // LOT 2b (étanchéité) : on purge les runs TERMINÉS du projet QUITTÉ (les
+      // archivés reviendront par la resync pi_history) mais on PRÉSERVE ses runs
+      // encore actifs (le projet peut continuer à déléguer en arrière-plan —
+      // à son retour, l'utilisateur retrouve son sous-agent en cours). Les runs
+      // des autres projets ne sont jamais touchés : le store est scopé par
+      // projectId et chaque conversation n'expose que SES sous-agents.
+      resetSubagentRuns(prevId);
     }
     prevProjectIdRef.current = projectId;
 
@@ -519,7 +522,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         // If history has MORE finalized messages than our non-streaming count,
         // the streaming message is orphaned → apply the finalized history.
         const nonStreamingCount = existing.length - streamingMsgs.length;
-        const display = convertHistoryToDisplayMessages(msg.messages);
+        const display = convertHistoryToDisplayMessages(msg.messages, pid);
         if (display.length > nonStreamingCount) {
           // Agent likely finished while disconnected — apply finalized history.
           // (fix « récents manquants ») Les messages EN COURS de streaming ne
@@ -569,7 +572,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         return;
       }
 
-      const display = convertHistoryToDisplayMessages(msg.messages);
+      const display = convertHistoryToDisplayMessages(msg.messages, pid);
       // Préservation des messages user en vol (envoi NON confirmé dans
       // l'historique reçu, quel que soit l'âge — correctif « question
       // disparue », incident Yuki). windowFrom : l'historique reçu peut être
@@ -611,7 +614,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       if (loadingEarlierTimerRef.current) clearTimeout(loadingEarlierTimerRef.current);
       loadingEarlierRef.current = false;
       setLoadingEarlier(false);
-      const batch = convertHistoryToDisplayMessages(msg.messages);
+      const batch = convertHistoryToDisplayMessages(msg.messages, pid);
       if (batch.length > 0) {
         setMessages((prev) => prependHistoryBatch(prev, batch));
         // La vérité backend est affichée : le bandeau cache local tombe.
@@ -808,11 +811,20 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     setViewerFile(f);
   }, []);
 
-  // ── Scroll (ResizeObserver-based; frame-synchronous pinning) ──
-  /** Instant scroll (for streaming — ResizeObserver-compatible) */
+  // ── Scroll : suivi auto du bas (source de vérité UNIQUE : pinnedToBottomRef) ──
+  // La DÉCISION vit dans une fonction pure testable (utils/chat-scroll) ; ce
+  // composant ne fait qu'appliquer la décision au DOM (aucune règle métier ici).
+  /**
+   * Pin SYNCHRONE. `behavior:"instant"` est indispensable : le conteneur porte
+   * `.chat-messages { scroll-behavior: smooth }`, et une simple affectation de
+   * `scrollTop` hériterait de ce smooth (vérifié : directAssign=0 vs
+   * instantBehavior=500 en Chromium headless). L'ancien code croyait l'assignation
+   * instantanée — c'était FAUX : l'animation n'atteignait jamais le bas pendant le
+   * streaming rapide, d'où le décrochage.
+   */
   const scrollToBottomInstant = useCallback(() => {
     const el = chatContainerRef.current;
-    if (el) { el.scrollTop = el.scrollHeight; return; }
+    if (el) { el.scrollTo({ top: el.scrollHeight, behavior: "instant" }); return; }
     chatEndRef.current?.scrollIntoView(false);
   }, []);
   /** Smooth scroll (user-initiated only) */
@@ -821,59 +833,111 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     if (el) { el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); return; }
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
+  /** Distance courante au bas (px, clampée >= 0). */
+  const distanceFromBottom = useCallback((el: HTMLElement) =>
+    Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight), []);
+  /**
+   * Applique la décision de pin sur un ÉVÉNEMENT DE CROISSANCE (hauteur RÉELLE
+   * du contenu modifiée, quelle qu'en soit la source) : streaming du texte,
+   * blocs d'outils, sous-agents (store isolé + mur de colonnes), dépliages/
+   * replis automatiques, images, compactions passent TOUS par une variation de
+   * hauteur de la boîte observée.
+   */
+  const followBottomOnGrowth = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const decision = resolveScrollAction(
+      { distanceFromBottom: distanceFromBottom(el), scrollDelta: 0, wasPinned: pinnedToBottomRef.current },
+      "growth",
+    );
+    pinnedToBottomRef.current = decision.pinned;
+    if (decision.follow) scrollToBottomInstant();
+  }, [distanceFromBottom, scrollToBottomInstant]);
   const handleScroll = useCallback(() => {
     const el = chatContainerRef.current; if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-    // Only UNpin when the user scrolls UP (intentional) — not when new content
-    // pushes us slightly above the threshold (race condition with ResizeObserver).
-    // scrollDelta > 0 means scrollTop decreased → user scrolled UP.
-    if (!atBottom) {
-      const scrollDelta = lastScrollTopRef.current - el.scrollTop;
-      if (scrollDelta > 10) {
-        pinnedToBottomRef.current = false; // User intentionally scrolled up
-      }
-    } else {
-      pinnedToBottomRef.current = true;
-    }
+    const decision = resolveScrollAction(
+      { distanceFromBottom: distanceFromBottom(el), scrollDelta: lastScrollTopRef.current - el.scrollTop, wasPinned: pinnedToBottomRef.current },
+      "scroll",
+    );
+    pinnedToBottomRef.current = decision.pinned;
     lastScrollTopRef.current = el.scrollTop;
-    const shouldShow = !atBottom;
-    setShowScrollBtn(prev => prev === shouldShow ? prev : shouldShow);
-    if (atBottom) setUnreadCount(prev => prev === 0 ? prev : 0);
-  }, []);
+    setShowScrollBtn(prev => prev === decision.showButton ? prev : decision.showButton);
+    if (decision.clearUnread) setUnreadCount(prev => prev === 0 ? prev : 0);
+  }, [distanceFromBottom]);
   const prevMsgCountRef = useRef(messages.length);
   useEffect(() => { if (!pinnedToBottomRef.current && messages.length > prevMsgCountRef.current) setUnreadCount(p => p + messages.length - prevMsgCountRef.current); prevMsgCountRef.current = messages.length; }, [messages.length]);
 
-  // ResizeObserver: pins to bottom when content grows while user is at bottom.
-  // Depends on `hasContent` so it re-runs once the DOM refs are actually mounted.
-  // Also scrolls on MutationObserver fallback for fast streaming where ResizeObserver
-  // may batch multiple mutations into one observation.
+  // ── Suivi de croissance : on raisonne sur la BOÎTE RÉELLE, pas sur un event ──
+  // métier, pour couvrir uniformément toute source de croissance :
+  //  - wrapper  : contenu du fil (messages, murs de sous-agents isolés, images…) ;
+  //  - container: redimension fenêtre / bouton sticky / bannière WS.
+  // ResizeObserver → pin SYNCHRONE (avant le paint, pas de frame perdue).
+  // MutationObserver → filet pour les mutations de texte sans variation de boîte.
+  // Re-vérification rAF APRÈS observation → couvre les croissances asynchrones
+  // tardives (image décodée, coloration syntaxique, repli/dépli animé).
   useEffect(() => {
     const wrapper = messagesWrapperRef.current;
     const container = chatContainerRef.current;
     if (!wrapper || !container) return;
-    // ── ResizeObserver: fires when wrapper size changes ──
+    let recheckRaf: number | null = null;
+    const scheduleRecheck = () => {
+      if (recheckRaf !== null) return; // throttle to rAF
+      recheckRaf = requestAnimationFrame(() => {
+        recheckRaf = null;
+        followBottomOnGrowth();
+      });
+    };
     const ro = new ResizeObserver(() => {
-      if (pinnedToBottomRef.current) {
-        container.scrollTop = container.scrollHeight;
-      }
+      followBottomOnGrowth(); // synchrone : pin avant le paint
+      scheduleRecheck();      // + rAF : croissance tardive après le pin
     });
     ro.observe(wrapper);
-    // ── MutationObserver fallback: catches rapid text_delta that ResizeObserver may miss ──
-    let moTimer: ReturnType<typeof requestAnimationFrame> | null = null;
-    const mo = new MutationObserver(() => {
-      if (moTimer) return; // throttle to rAF
-      moTimer = requestAnimationFrame(() => {
-        moTimer = null;
-        if (pinnedToBottomRef.current) {
-          container.scrollTop = container.scrollHeight;
-        }
-      });
-    });
+    ro.observe(container);
+    const mo = new MutationObserver(scheduleRecheck);
     mo.observe(wrapper, { childList: true, subtree: true, characterData: true });
     return () => {
       ro.disconnect();
       mo.disconnect();
-      if (moTimer) cancelAnimationFrame(moTimer);
+      if (recheckRaf !== null) cancelAnimationFrame(recheckRaf);
+    };
+  }, [hasContent, followBottomOnGrowth]);
+
+  // ── Détection d'un geste UTILISATEUR vers le haut ──
+  // Les événements `scroll` sont dispatchés dans les « scroll steps », APRÈS les
+  // callbacks ResizeObserver : pendant un streaming, un pin de croissance peut
+  // s'intercaler avant que le scroll de l'utilisateur ne soit traité et « voler »
+  // le défilement. On décroche donc IMMÉDIATEMENT sur l'intention EXPLICITE
+  // (molette, geste tactile, clavier), sans attendre l'événement scroll.
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const unpin = () => { pinnedToBottomRef.current = false; };
+    // Molette vers le haut (deltaY < 0).
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) unpin(); };
+    // Geste tactile : le contenu suit le doigt, donc descendre le doigt =
+    // remonter dans le fil.
+    let touchStartY = 0;
+    const onTouchStart = (e: TouchEvent) => { touchStartY = e.touches[0]?.clientY ?? 0; };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? touchStartY;
+      if (y - touchStartY > 8) unpin(); // doigt vers le bas → fil vers le haut
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Uniquement hors champ de saisie (sinon on décrocherait le chat en
+      // tapant au clavier dans le composer).
+      const tgt = e.target as HTMLElement | null;
+      const inField = !!tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable);
+      if (!inField && (e.key === "PageUp" || e.key === "Home" || e.key === "ArrowUp")) unpin();
+    };
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("keydown", onKeyDown);
     };
   }, [hasContent]);
 
@@ -894,7 +958,12 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       if (evt.type === "subagent") {
         const env = evt as unknown as SubagentEnvelope;
         const msgs = pid === projectId ? messagesRef.current : chatHistory.getMessagesFor(pid);
-        routeSubagentEnvelope(env, msgs);
+        // ÉTANCHÉITÉ inter-projets : le pid de la frame borne le run — le store
+        // ignore les enveloppes incohérentes, marque chaque run de son projet
+        // et ne le rattachera qu'aux toolCalls `delegate` du même projet. Un
+        // socket abonné à plusieurs projets (arrière-plan) ne peut plus faire
+        // apparaître un sous-agent d'un autre projet dans cette conversation.
+        routeSubagentEnvelope(env, msgs, Date.now(), pid);
         return;
       }
 
@@ -1161,7 +1230,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         />
       )}
       {hasContent ? (
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages relative" onScroll={handleScroll}>
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-8 chat-messages chat-autoscroll relative" onScroll={handleScroll}>
           {/* Bannière WS déconnecté (Lot B) — sticky : reste visible pendant le scroll */}
           {!connected && <WsOfflineBanner pendingMessages={pendingMessages} />}
           {/* Bannière « cache local » : contenu affiché non confirmé par le backend */}
@@ -1175,6 +1244,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
               displayDetailExpanded={displayDetailExpanded}
               onFileClick={handleFileClick}
               scrollContainerRef={chatContainerRef}
+              // ÉTANCHÉITÉ : borné le mur des sous-agents simultanés et les
+              // orphelins aux runs du projet affiché (les projets émettant en
+              // parallèle sur le même socket restent invisibles ici).
+              projectId={projectId}
               // Chargement par lots : le backend n'envoie que les N derniers
               // messages (pi_history) — au-delà, le lot antérieur est demandé
               // via pi_history_page (curseur serverHistoryMeta).
@@ -1302,7 +1375,7 @@ const VISIBLE_GROUPS_STEP = 200;
 // `hideLiveExtras` : la vue « conversation passée » (LOT E1) réutilise ce
 // rendu mais ne doit PAS afficher les murs LIVE de sous-agents (ils
 // s'abonnent au store courant, sans rapport avec une session passée).
-export const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll, hideLiveExtras }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean; hideLiveExtras?: boolean }) {
+export const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll, hideLiveExtras, projectId }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean; hideLiveExtras?: boolean; projectId?: string }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -1474,11 +1547,12 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
     {/* LOT 4 : sous-agents simultanés — vue EN COLONNES (mur dédié en fin de
         fil, s'abonne seul au store isolé → aucun re-render du fil).
         Masqué en consultation d'une conversation passée (hideLiveExtras). */}
-    {!hideLiveExtras && <ParallelSubAgents />}
+    {!hideLiveExtras && <ParallelSubAgents projectId={projectId} />}
     {/* LOT 2b : runs de sous-agents ARCHIVÉS non rattachables à un tool `delegate`
         (dégradé propre en fin de fil). Composant isolé : il s'abonne seul au
-        store → son re-rendu ne provoque PAS celui du fil. */}
-    {!hideLiveExtras && <OrphanSubAgentRuns />}
+        store → son re-rendu ne provoque PAS celui du fil. ÉTANCHÉITÉ : borné
+        au projet affiché (projectId). */}
+    {!hideLiveExtras && <OrphanSubAgentRuns projectId={projectId} />}
     </>
   </CollapseProvider>
   );
