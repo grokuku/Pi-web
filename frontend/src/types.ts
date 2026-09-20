@@ -133,6 +133,115 @@ export interface ToolCallInfo {
   // Timestamp (ms) de début du tool call — sert au chrono de streaming
   // (ToolCallTimer) et à l'aperçu d'output dépliable dans ChatView.
   startedAt?: number;
+  // LOT 1 : timestamp (ms) de fin (tool_execution_end) — sert à figer la durée
+  // dans les résumés d'outils (en historique, absent → durée omise).
+  endedAt?: number;
+  // LOT 1 : details du toolResult (diff de l'edit, truncation read/bash…),
+  // utilisés par les résumés d'outils (utils/toolSummaries.ts).
+  details?: any;
+}
+
+// ── Sous-agent (LOT 2) ────────────────────────────────────────────────────
+// Décrit une exécution déléguée via le tool `delegate` (harness-orchestrator).
+// LOT 1 : le bloc dérivait du toolCall seul (args.function + aperçu
+// buildProgressText dans output). LOT 2 : les événements de streaming réels du
+// sous-agent (canal WS pi_event, enveloppes {type:"subagent", …}) alimentent
+// ce run via le store isolé frontend/src/stores/subagentRuns.ts — jamais le
+// tableau `messages` (sinon le fil re-rend à chaque event).
+
+/** Statut d'affichage d'un run (vue synthétique). */
+export type SubAgentRunStatus = "running" | "done" | "failed";
+
+/** Statut de fin de vie émis par subagent_end (spec LOT 2a). */
+export type SubAgentEndStatus =
+  | "success"
+  | "error"
+  | "timeout-inactivity"
+  | "timeout-global"
+  | "aborted";
+
+/** Action d'outil du sous-agent (live : alimentée par les events tool_*). */
+export interface SubAgentAction {
+  /** Numéro séquentiel (1..N) — ordre chronologique. */
+  seq: number;
+  /** Id du tool call du sous-agent (rattache les updates/ends). */
+  toolCallId?: string;
+  toolName: string;
+  /** Résumé court des arguments (chemin, commande, pattern…). */
+  argSummary: string;
+  /** Résumé final (« 42 lignes », « exit 0 »…) — vide tant que l'outil tourne. */
+  summary: string;
+  durationMs?: number;
+  isError: boolean;
+  outputChars?: number;
+  truncated?: boolean;
+  /** Output courant (live, déjà tronqué côté backend ≤2000 chars). */
+  output?: string;
+  /** Args bruts (live uniquement — sert au résumé final, non persisté). */
+  args?: any;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** Message assistant tronqué du sous-agent (subagent message_end). */
+export interface SubAgentRunMessage {
+  id?: string;
+  /** Texte de réponse (≤4000 chars). */
+  text?: string;
+  /** Réflexion (≤1000 chars). */
+  thinking?: string;
+  textTruncated?: boolean;
+  thinkingTruncated?: boolean;
+  usage?: { input: number; output: number; cost: { total: number } };
+  timestamp: number;
+}
+
+/** Résumé final d'un run (subagent_end / activité persistée). */
+export interface SubAgentEndInfo {
+  status: SubAgentEndStatus;
+  attemptsMade: number;
+  durationMs: number;
+  actionCount: number;
+  eventCount: number;
+  thinkingChars: number;
+  model: string;
+  cause: string | null;
+  errorMessage: string | null;
+  responsePreview: string;
+  droppedEvents: number;
+}
+
+export interface SubAgentRun {
+  id: string;
+  /** Fonction de routage déléguée (planning / execute / review / integrate). */
+  function: string;
+  /** Libellé humain (« Exécution », …). */
+  label: string;
+  /** Extrait de la tâche transmise au sous-agent. */
+  task: string;
+  /** Modèle résolu pour le sous-agent, si connu. */
+  modelId?: string;
+  /** Statut d'affichage. */
+  status: SubAgentRunStatus;
+  /** Timestamp de démarrage (live). */
+  startedAt?: number;
+  /** Timestamp de fin (live). */
+  endedAt?: number;
+  isError: boolean;
+  /** Tentative en cours (1..2). */
+  attempt: number;
+  /** Actions d'outils (live, ordre chronologique). */
+  actions: SubAgentAction[];
+  /** Messages assistant du sous-agent (texte/réflexion tronqués). */
+  messages: SubAgentRunMessage[];
+  /** Aperçu d'activité courant (dernier output d'outil, live). */
+  currentOutput?: string;
+  /** Résumé final (subagent_end) — absent tant que le run tourne. */
+  end?: SubAgentEndInfo;
+  /** Run reconstruit depuis une entrée persistée subagent_activity (historique). */
+  archived?: boolean;
+  /** Tool call `delegate` rattaché (résolu par le store, absent = orphelin). */
+  toolCallId?: string;
 }
 
 // ── Providers ─────────────────────────────────────────

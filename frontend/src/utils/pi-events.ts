@@ -216,7 +216,12 @@ export function applyPiEvent(
     }
     case "tool_execution_end": {
       const rt = evt.result?.content?.map((c: any) => c.text || "").join("") || "";
-      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: rt, isError: evt.isError, isStreaming: false } : tc) }));
+      // LOT 1 : on capture aussi endedAt (durée figée pour les résumés d'outils)
+      // et details (diff de l'edit, truncation read/bash…) s'ils sont exposés
+      // par le résultat du tool — sans changement backend : le champ est déjà
+      // présent dans l'event émis par le SDK.
+      const details = evt.result?.details ?? undefined;
+      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: rt, isError: evt.isError, isStreaming: false, endedAt: Date.now(), ...(details !== undefined ? { details } : {}) } : tc) }));
       break;
     }
     case "agent_end": {

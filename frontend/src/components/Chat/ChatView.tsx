@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef, type RefObject } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut, ChevronDown, ChevronRight } from "lucide-react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
@@ -7,6 +7,11 @@ import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { CollapsibleBlock, CollapseProvider, useCollapsible } from "./CollapsibleBlock";
+import { SubAgentBlock } from "./SubAgentBlock";
+import { ToolCallTimer } from "./ToolCallTimer";
+import { buildToolSummaryFromCall, formatToolDuration } from "../../utils/toolSummaries";
+import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
@@ -19,6 +24,8 @@ import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "../../utils/pi-events";
+import { routeSubagentEnvelope, resetSubagentRuns, type SubagentEnvelope } from "../../stores/subagentRuns";
+import { OrphanSubAgentRuns } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 
 // ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
@@ -249,10 +256,17 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
   // ── State ──
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  const [thinkDefaultExpanded, setThinkDefaultExpanded] = useState(() => {
-    const saved = localStorage.getItem("pi-web-thinking-expand");
-    return saved === null ? true : saved === "true";
-  });
+  // ── Réglage « détail d'affichage déplié par défaut » (LOT 1) ──
+  // Renommé depuis thinkDefaultExpanded (pi-web-thinking-expand →
+  // pi-web-display-detail, migration one-shot dans utils/display-detail).
+  // Pilote le repli de TOUS les blocs de détail (réflexion, sorties d'outils,
+  // sous-agent) via CollapseProvider — y compris les blocs DÉJÀ MONTÉS.
+  const [displayDetailExpanded, setDisplayDetailExpanded] = useState(() => readDisplayDetailExpanded());
+  // Synchronisation SettingsModal → chat : le modal écrit via
+  // writeDisplayDetailExpanded (localStorage + notification) → on suit ici.
+  // (Ctrl+T passe par le même canal : write notifie, setState fait doublon
+  // sans effet — React baille si la valeur est identique.)
+  useEffect(() => subscribeDisplayDetail(setDisplayDetailExpanded), []);
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -343,6 +357,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       chatHistory.saveMessagesFor(messagesRef.current, prevId);
       // Also persist assistantId for the project we're leaving
       chatHistory.setAssistantIdFor(prevId, currentAssistantIdRef.current);
+      // LOT 2b : les runs de sous-agents sont propres au projet affiché — on
+      // vide le store isolé au changement (les runs archivés seront ré-enregistrés
+      // par la resync pi_history) ; évite toute fuite inter-projets (blocs live
+      // ou orphelins d'un autre projet).
+      resetSubagentRuns();
     }
     prevProjectIdRef.current = projectId;
 
@@ -674,7 +693,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const mod = e.ctrlKey || e.metaKey; const shift = e.shiftKey;
       const tag = (e.target as HTMLElement).tagName;
       const inInput = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
-      if (mod && e.key === "t" && !shift) { e.preventDefault(); setThinkDefaultExpanded(p => { localStorage.setItem("pi-web-thinking-expand", String(!p)); return !p; }); return; }
+      // LOT 1 : Ctrl+T bascule le réglage « détail d'affichage » (blocs de
+      // détail : réflexion, sorties d'outils, sous-agent). NE PAS toucher
+      // Shift+Tab (niveau de raisonnement envoyé au LLM, réglage séparé).
+      if (mod && e.key === "t" && !shift) { e.preventDefault(); setDisplayDetailExpanded(p => { const next = !p; writeDisplayDetailExpanded(next); return next; }); return; }
       if (shift && e.key === "Tab" && !mod && !inInput) {
         e.preventDefault();
         fetch("/api/settings/thinking").then(r => r.json()).then(data => {
@@ -863,6 +885,17 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const evt: PiEvent = msg.event;
       const pid = msg.projectId;
       if (!pid) return;
+
+      // ── LOT 2b : activité des sous-agents (canal pi_event, enveloppe
+      // {type:"subagent", …}). Routée vers le store ISOLÉ (subagentRuns) —
+      // JAMAIS appliquée à `messages` (le fil ne doit pas re-rendre à chaque
+      // event). Le run est rattaché au toolCall `delegate` (FIFO + fonction).
+      if (evt.type === "subagent") {
+        const env = evt as unknown as SubagentEnvelope;
+        const msgs = pid === projectId ? messagesRef.current : chatHistory.getMessagesFor(pid);
+        routeSubagentEnvelope(env, msgs);
+        return;
+      }
 
       // ── Message content updates — route to the correct project's store ──
       if (pid === projectId) {
@@ -1138,7 +1171,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
             <GroupedMessages
               key={projectId}
               messages={deferredMessages}
-              thinkDefaultExpanded={thinkDefaultExpanded}
+              displayDetailExpanded={displayDetailExpanded}
               onFileClick={handleFileClick}
               scrollContainerRef={chatContainerRef}
               // Chargement par lots : le backend n'envoie que les N derniers
@@ -1265,7 +1298,7 @@ interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:T
 const INITIAL_VISIBLE_GROUPS = 200;
 const VISIBLE_GROUPS_STEP = 200;
 
-const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll }: { messages: DisplayMessage[]; thinkDefaultExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean }) {
+const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -1369,7 +1402,15 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
   const showServerLoad = hiddenCount === 0 && !!serverHasMore && !!onLoadEarlierFromServer;
   const showServerAll = showServerLoad && (serverRemaining ?? 0) > VISIBLE_GROUPS_STEP;
 
-  return <>
+  // ── CollapseProvider (LOT 1) ──
+  // Porte le réglage global « détail d'affichage déplié » et la Map d'overrides
+  // par bloc. Monté ICI (remonté par projet via key={projectId} → overrides
+  // resettés au changement de projet). Changer le réglage (Ctrl+T, Paramètres)
+  // change la valeur de contexte → les blocs DÉJÀ MONTÉS se re-rendent avec la
+  // nouvelle règle (correctif du bug « réglage sans effet sur l'affichage »).
+  return (
+  <CollapseProvider defaultDetailExpanded={displayDetailExpanded}>
+    <>
     {hiddenCount > 0 && (
       <div className="flex flex-col items-center gap-2 mb-3">
         <button
@@ -1415,9 +1456,15 @@ const GroupedMessages = memo(function GroupedMessages({ messages, thinkDefaultEx
     {visibleGroups.map((group) => {
       const first = group[0];
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
-      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} thinkDefaultExpanded={thinkDefaultExpanded} />;
+      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
     })}
-  </>;
+    {/* LOT 2b : runs de sous-agents ARCHIVÉS non rattachables à un tool `delegate`
+        (dégradé propre en fin de fil). Composant isolé : il s'abonne seul au
+        store → son re-rendu ne provoque PAS celui du fil. */}
+    <OrphanSubAgentRuns />
+    </>
+  </CollapseProvider>
+  );
 });
 
 // ── Vignettes d'attachments (partagé bulle user / messages système injectés) ──
@@ -1492,64 +1539,11 @@ function shortName(name: string): string {
   return s.length > 16 ? s.slice(0, 14) + "…" : s;
 }
 
-// Extract a short, single-line preview of the tool's arguments
-function argsPreview(tc: ToolCallInfo): string | null {
-  const a = tc.args;
-  if (!a || typeof a !== "object") return null;
-  // Try common arg names for each tool type
-  const base = TOOL_BASE_NAME[tc.name] || "";
-  let val: string | undefined;
-  if (base === "memory" || ["read", "write", "edit", "analyze_file"].includes(tc.name)) {
-    val = a.file_path || a.path || a.filePath || a.filepath;
-  } else if (tc.name === "bash") {
-    val = a.command;
-  } else if (tc.name === "grep") {
-    val = a.pattern;
-  } else if (tc.name === "glob" || tc.name === "find" || tc.name === "ls") {
-    val = a.pattern || a.path;
-  } else if (tc.name === "webfetch") {
-    val = a.url;
-  } else if (tc.name === "websearch") {
-    val = a.query;
-  } else if (tc.name === "firecrawl_scrape") {
-    val = a.url;
-  } else if (tc.name === "firecrawl_map") {
-    val = a.url || a.domain;
-  } else if (tc.name === "firecrawl_search") {
-    val = a.query;
-  } else if (tc.name === "memory_store" || tc.name === "memory_search") {
-    val = a.key || a.query || a.text;
-  } else {
-    // Fallback: take first string field
-    for (const k of Object.keys(a)) {
-      if (typeof a[k] === "string" && a[k].length > 0) { val = a[k]; break; }
-    }
-  }
-  if (!val) return null;
-  // Single-line, max 50 chars
-  val = String(val).replace(/\s+/g, " ").trim();
-  if (val.length > 50) val = val.slice(0, 47) + "…";
-  return val;
-}
+// ── (LOT 1) L'aperçu d'args de 50 chars (argsPreview) est remplacé par les
+// résumés d'outils de utils/toolSummaries.ts (formats par outil, ~100 chars,
+// sans LLM). TOOL_BASE_NAME/shortName restent pour le libellé court de l'outil.
 
 const toolName = (tc: ToolCallInfo) => shortName(tc.name || tc.id || "tool");
-
-// ── Chrono du tool call (perf) ────────────────────────────────────────
-// Composant isolé avec SON PROPRE setInterval de 1s : chaque tick ne
-// re-render QUE ce chrono, jamais le reste du chat (ToolCallRow est memoïsé
-// et ne dépend pas de cet état interne). Basé sur toolCall.startedAt.
-const ToolCallTimer = memo(function ToolCallTimer({ startedAt }: { startedAt?: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const elapsed = startedAt ? Math.max(0, now - startedAt) : 0;
-  const totalSecs = Math.floor(elapsed / 1000);
-  const m = Math.floor(totalSecs / 60);
-  const s = totalSecs % 60;
-  return <span className="text-hacker-text-dim/60 tabular-nums">{m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
-});
 
 // Formate un nombre de caractères en taille lisible (ex. 1234 → "1.2k").
 function formatChars(n: number): string {
@@ -1559,32 +1553,44 @@ function formatChars(n: number): string {
 }
 
 // ── Ligne compacte d'un tool call + aperçu d'output dépliable ──────────
-// Memoïsé : ne re-rend que si toolCall / isStreaming / isLastActiveTool
-// changent. Le chrono vit dans ToolCallTimer (état interne) → le tick 1s ne
-// re-render jamais cette ligne ni le reste de la liste.
-// - Défaut déplié si l'outil est EN COURS et est le dernier actif du message ;
-//   replié sinon (outils terminés). Le toggle manuel de l'utilisateur prime.
+// LOT 1 : le repli/dépli est piloté par CollapsibleBlock — précédence exacte
+// (cf. utils/collapse.ts) : override utilisateur > auto-dépli (outil en cours)
+// > auto-repli (réflexion consommée) > auto-dépli (erreur) > réglage global.
+// La ligne porte le RÉSUMÉ D'OUTIL (utils/toolSummaries) à la place de l'aperçu
+// d'args : read <path> · N lignes, bash <cmd> · exit N · N lignes, etc.
+// Memoïsé : ne re-rend que si toolCall / blockId / turnFailed / isLastRunning
+// changent.
+// - AUTO-DÉPLI rétabli (comportement perdu) : l'outil EN COURS d'exécution (pas
+//   encore de endedAt/résultat) et DERNIER ACTIF de son groupe s'affiche DÉPLIÉ
+//   pour montrer sa sortie en direct (tail -f). TRANSITOIRE : une fois l'outil
+//   terminé, retombe sur la règle normale (réglage global / erreur), sauf
+//   override utilisateur.
+// - Erreur → auto-dépli forcé (isError, exit≠0 bash, ou turn LLM échoué).
 // - Aperçu type tail -f : les 8 DERNIÈRES lignes de l'output, auto-scroll bas.
-const ToolCallRow = memo(function ToolCallRow({ toolCall, isStreaming, isLastActiveTool }: {
+const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, isLastRunning = false }: {
   toolCall: ToolCallInfo;
-  isStreaming: boolean;
-  isLastActiveTool: boolean;
+  blockId: string;
+  // Vrai si le turn LLM porteur a échoué (stopReason error / errorMessage).
+  turnFailed: boolean;
+  // Vrai si ce tool call est le DERNIER en cours de son groupe (message).
+  isLastRunning?: boolean;
 }) {
   const { t } = useTranslation();
-  const preview = argsPreview(toolCall);
   const hasOutput = !!toolCall.output && toolCall.output.trim().length > 0;
   const running = toolCall.isStreaming;
-  // Défaut : déplié si en cours ET dernier actif du message (et output présent).
-  const defaultExpanded = running && isLastActiveTool && hasOutput;
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [userToggled, setUserToggled] = useState(false);
-  const isOpen = userToggled ? expanded : defaultExpanded;
+  // Résumé d'outil (pur, sans LLM) : recalculé seulement quand le toolCall change.
+  const summary = useMemo(() => buildToolSummaryFromCall(toolCall), [toolCall]);
+  const failed = summary.failed;
   const preRef = useRef<HTMLPreElement>(null);
 
-  const toggle = useCallback(() => {
-    setUserToggled(true);
-    setExpanded(v => !v);
-  }, []);
+  // AUTO-DÉPLI (rétabli) : outil EN COURS (isStreaming, pas encore de
+  // endedAt/résultat) ET dernier actif du groupe ET output présent → déplié
+  // (sortie live tail -f). TRANSITOIRE : à la fin de l'outil, retombe sur la
+  // règle normale (réglage global / erreur), sauf override utilisateur.
+  const autoRunning = running && isLastRunning && hasOutput;
+
+  // Même règle de repli que le bloc (lecture doublée pour l'effet d'auto-scroll).
+  const { expanded } = useCollapsible(blockId, failed || turnFailed, autoRunning);
 
   // Dernières 8 lignes de l'output (les plus récentes).
   const lastLines = useMemo(() => {
@@ -1595,50 +1601,66 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall, isStreaming, isLastAct
 
   // Auto-scroll en bas à chaque update de l'output (comportement tail -f).
   useEffect(() => {
-    if (isOpen && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
-  }, [toolCall.output, isOpen]);
+    if (expanded && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+  }, [toolCall.output, expanded]);
 
   const descKey = `tools.${toolCall.name}`;
   const desc = t(descKey);
   const description = desc === descKey ? t('tools.fallback') : desc;
 
-  return (
-    <div className="min-w-0">
-      <button
-        type="button"
-        onClick={toggle}
-        title={hasOutput ? t('chat.collapseTool') : undefined}
-        className={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left ${
-          running ? "text-hacker-accent animate-pulse"
-          : toolCall.isError ? "text-red-400"
-          : "text-hacker-text-dim"
-        }`}
-      >
-        <span>{running ? "⏳" : toolCall.isError ? "❌" : "📝"}</span>
-        <span className="font-bold">{toolName(toolCall)}</span>
-        <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
-        <span className="text-hacker-text-dim">{description}</span>
-        {preview && (
-          <>
-            <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
-            <span className="text-hacker-text-bright/80 truncate max-w-[260px]" title={preview}>{preview}</span>
-          </>
-        )}
-        {isStreaming && running && <ToolCallTimer startedAt={toolCall.startedAt} />}
-        {hasOutput && (isOpen ? <ChevronDown size={10} className="shrink-0" /> : <ChevronRight size={10} className="shrink-0" />)}
-      </button>
+  // Durée : live (chrono qui tick) pendant le streaming, figée ensuite ;
+  // absente en historique (pas de startedAt/endedAt sérialisés).
+  const finishedDuration = running ? undefined : summary.durationMs;
 
-      {isOpen && hasOutput && (
-        <div className="mt-1.5">
+  return (
+    <CollapsibleBlock
+      blockId={blockId}
+      isError={failed || turnFailed}
+      isRunning={autoRunning}
+      contentClassName="mt-1.5"
+      title={hasOutput ? t('chat.collapseTool') : undefined}
+      headerClassName={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left min-w-0 ${
+        running ? "text-hacker-accent animate-pulse"
+        : failed ? "text-red-400"
+        : "text-hacker-text-dim"
+      }`}
+      chevronPosition="right"
+      header={
+        <>
+          <span>{running ? "⏳" : failed ? "❌" : "📝"}</span>
+          <span className="font-bold">{toolName(toolCall)}</span>
+          <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+          <span className="text-hacker-text-dim">{description}</span>
+          {/* Résumé d'outil (100 % frontend, ~100 chars ; title = texte complet) */}
+          {summary.text && (
+            <>
+              <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
+              <span
+                className={`${failed ? "text-red-300" : "text-hacker-text-bright/80"} truncate max-w-[380px]`}
+                title={summary.text}
+              >
+                {summary.text}
+              </span>
+            </>
+          )}
+          {running && <ToolCallTimer startedAt={toolCall.startedAt} />}
+          {finishedDuration !== undefined && (
+            <span className="text-hacker-text-dim/60 tabular-nums">{formatToolDuration(finishedDuration)}</span>
+          )}
+        </>
+      }
+    >
+      {hasOutput ? (
+        <>
           <div className="text-[0.625rem] text-hacker-text-dim/60 mb-0.5">
             {t('chat.toolOutput')} · {t('chat.toolOutputChars', formatChars(toolCall.output.length))}
           </div>
           <pre ref={preRef} className="font-mono text-xs max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-hacker-border/40 rounded bg-hacker-bg/40 p-2 text-hacker-text-bright/90">
             {lastLines}
           </pre>
-        </div>
-      )}
-    </div>
+        </>
+      ) : null}
+    </CollapsibleBlock>
   );
 });
 
@@ -1652,7 +1674,7 @@ const AssistantContent = memo(function AssistantContent({ content, isStreaming }
   return <MemoizedReactMarkdown>{display}</MemoizedReactMarkdown>;
 });
 
-const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpanded }: { messages: AssistantMsg[]; thinkDefaultExpanded: boolean }) {
+const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: AssistantMsg[] }) {
   const { t } = useTranslation();
   let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
@@ -1683,6 +1705,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
           // Only add a visual separator between messages that have substantial content
           // (thinking or response). Tool-only messages flow inline with the previous block.
           const hasSubstantialContent = showThinking || showContent || showThinkingPlaceholder;
+          // LOT 1 : turn LLM échoué (BUG-68) → auto-dépli forcé des blocs de
+          // détail portés par ce message (réflexion, sorties d'outils).
+          const turnFailed = msg.stopReason === "error" || !!msg.errorMessage;
 
           return (
             <div key={msg.id} className={hasMultiple && !isFirst && hasSubstantialContent ? "border-t border-hacker-border/30" : ""}>
@@ -1696,12 +1721,16 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                   </div>
                 </div>
               )}
-              {/* Thinking */}
+              {/* Thinking — repli piloté par CollapseProvider (précédence : override >
+                  auto-repli réflexion consommée > erreur > réglage global) ;
+                  textStarted = contenu non vide → auto-repli TRANSITOIRE tant que
+                  le message streame (l'en-tête garde « a réfléchi Xs »). */}
               {showThinking && (
                 <div className="px-3 py-2">
                   <ThinkingBlock
                     thinking={msg.thinking}
-                    defaultExpanded={thinkDefaultExpanded}
+                    blockId={`${msg.id}:thinking`}
+                    isError={turnFailed}
                     isStreaming={!!msg._streaming}
                     textStarted={!!msg.content}
                     thinkingDurationMs={msg.thinkingDurationMs}
@@ -1709,7 +1738,10 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                 </div>
               )}
 
-              {/* Tools — ligne compacte + aperçu d'output dépliable (ToolCallRow) */}
+              {/* Tools — ligne compacte + résumé + aperçu d'output dépliable ;
+                  le tool `delegate` est rendu en pseudo bloc sous-agent (LOT 1).
+                  AUTO-DÉPLI rétabli : seul le DERNIER tool call EN COURS du
+                  message streame déplié (sortie live tail -f). */}
               {showTools && (() => {
                 // Dernier tool call EN COURS du message (celui qui streame) :
                 // c'est lui qui est « dernier actif » → aperçu déplié par défaut.
@@ -1720,12 +1752,22 @@ const AssistantGroup = memo(function AssistantGroup({ messages, thinkDefaultExpa
                 return (
                   <div className={`px-3 flex flex-col gap-1.5 ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
                     {msg.toolCalls.map((tc, idx) => (
-                      <ToolCallRow
-                        key={tc.id}
-                        toolCall={tc}
-                        isStreaming={isStreaming}
-                        isLastActiveTool={idx === lastActiveIdx}
-                      />
+                      tc.name === "delegate" ? (
+                        <SubAgentBlock
+                          key={tc.id}
+                          toolCall={tc}
+                          blockId={`${msg.id}:delegate:${tc.id}`}
+                          isLastRunning={idx === lastActiveIdx}
+                        />
+                      ) : (
+                        <ToolCallRow
+                          key={tc.id}
+                          toolCall={tc}
+                          blockId={`${msg.id}:tool:${tc.id}`}
+                          turnFailed={turnFailed}
+                          isLastRunning={idx === lastActiveIdx}
+                        />
+                      )
                     ))}
                   </div>
                 );

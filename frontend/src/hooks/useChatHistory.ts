@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from "react";
-import type { DisplayMessage, ToolCallInfo } from "../types";
+import type { DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
+import { registerArchivedRuns, runFromActivity } from "../stores/subagentRuns";
 
 // ─────────────────────────────────────────────────────────────
 // Per-project chat history store
@@ -56,6 +57,10 @@ interface HistoryMessage {
 export function convertHistoryToDisplayMessages(history: HistoryMessage[]): DisplayMessage[] {
   const displayMessages: DisplayMessage[] = [];
   let pendingToolResults: Map<string, ToolCallInfo> = new Map();
+  // LOT 2b : runs de sous-agents archivés (entrées custom `subagent_activity`)
+  // collectés pour relecture après rechargement — enregistrés dans le store
+  // isolé en fin de conversion (jamais dans `messages`).
+  const archivedRuns: SubAgentRun[] = [];
 
   // First pass: collect tool results keyed by toolCallId
   for (const msg of history) {
@@ -68,6 +73,10 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         output: outputText,
         isError: msg.details?.isError ?? false,
         isStreaming: false,
+        // LOT 1 : details du toolResult (diff edit, truncation read/bash…)
+        // conservés pour les résumés d'outils. Pas de startedAt/endedAt en
+        // historique → la durée est omise (comportement attendu).
+        details: (msg as any).details ?? undefined,
       });
     }
   }
@@ -139,6 +148,8 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
             output: toolResult?.output || "",
             isError: toolResult?.isError || false,
             isStreaming: false,
+            // LOT 1 : details du toolResult → résumés d'outils (diff, truncation…).
+            ...(toolResult?.details !== undefined ? { details: toolResult.details } : {}),
           });
           totalToolCallsFound++;
         }
@@ -200,6 +211,15 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
     }
 
     // ── Custom messages ──
+    // LOT 2b : entrée custom `subagent_activity` (display:false) — résumé de la
+    // vie d'un sous-agent persisté pour l'UI. Non rendue dans le fil : on en
+    // fait un SubAgentRun archivé, rattaché au toolCall `delegate` correspondant
+    // (FIFO + fonction) → le SubAgentBlock relit le travail du sous-agent.
+    else if (msg.role === "custom" && (msg as any).customType === "subagent_activity") {
+      const run = runFromActivity((msg as any).details, msg.timestamp || Date.now());
+      if (run) archivedRuns.push(run);
+    }
+
     else if (msg.role === "custom" && (msg as any).display !== false) {
       const text = typeof msg.content === "string"
         ? msg.content
@@ -250,6 +270,8 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
             output: outputText,
             isError: (msg.details as any)?.isError ?? false,
             isStreaming: false,
+            // LOT 1 : details du toolResult orphelin → résumés d'outils.
+            ...(msg.details !== undefined ? { details: msg.details } : {}),
           }],
           timestamp: msg.timestamp || Date.now(),
         });
@@ -258,6 +280,11 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
   }
 
   console.log(`[history] Converted ${history.length} raw messages → ${displayMessages.length} display messages, ${totalToolCallsFound} tool calls found`);
+  // LOT 2b : enregistre les runs archivés (relecture) dans le store isolé et
+  // les rattache aux tool calls `delegate` de la liste convertie. Effet de bord
+  // assumé : la conversion est appelée depuis les handlers d'events (jamais au
+  // render) — le store notifie les blocs concernés.
+  if (archivedRuns.length > 0) registerArchivedRuns(archivedRuns, displayMessages);
   return displayMessages;
 }
 

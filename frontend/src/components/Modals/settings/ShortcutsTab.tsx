@@ -20,7 +20,7 @@ function ShortcutsTab() {
       name: "Chat",
       icon: <Send size={12} />,
       shortcuts: [
-        { keys: ["Ctrl", "T"], desc: "Expand/Collapse toutes les réflexions", scope: "chat" },
+        { keys: ["Ctrl", "T"], desc: "Déplier/Replier le détail d'affichage (blocs réflexion, sorties d'outils, sous-agents)", scope: "chat" },
         { keys: ["Shift", "Tab"], desc: "Cycle niveau de réflexion (off→high)", scope: "chat" },
         { keys: ["Enter"], desc: "Envoyer le message", scope: "chat" },
         { keys: ["Shift", "Enter"], desc: "Nouvelle ligne dans le message", scope: "chat" },

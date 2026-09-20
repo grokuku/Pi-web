@@ -68,10 +68,19 @@ export const fr = {
     // ── Aperçu d'output des tool calls (streaming) ──
     toolOutput: "Sortie de l'outil",
     toolOutputChars: (chars: string) => `${chars} caractères`,
+    // ── Pseudo bloc sous-agent (tool delegate, LOT 1) ──
+    subAgent: "sous-agent",
+    // ── LOT 2 : activité live du sous-agent ──
+    subAgentActions: (n: number) => `${n} action${n > 1 ? "s" : ""}`,
+    subAgentAttempt: (n: number) => `essai ${n}`,
+    subAgentExtract: "(extrait)",
+    subAgentCause: "cause",
     // ── Bouton « copier » sur les blocs de code markdown ──
     copyCode: "Copier le code",
     copied: "Copié ✓",
-    keyboardHints: "📎 Fichiers · Esc annuler · Ctrl+L Paramètres · Ctrl+T réflexion · Shift+Tab réfl.±",
+    // ── Aide clavier (LOT 1) : Ctrl+T bascule le DÉTAIL D'AFFICHAGE (blocs
+    // repliables), PAS la réflexion ; Shift+Tab = niveau de raisonnement (LLM).
+    keyboardHints: "📎 Fichiers · Esc annuler · Ctrl+L Paramètres · Ctrl+T détail aff. · Shift+Tab réfl.±",
     // ── Lot B : robustesse temps réel (file WS + visibilité déconnexion) ──
     wsOffline: "Connexion perdue — reconnexion en cours…",
     wsPendingMessages: (n: number) => `${n} message${n > 1 ? "s" : ""} en attente d'envoi`,
@@ -200,8 +209,11 @@ export const fr = {
       title: "Général",
       language: "Langue",
       systemDefault: "Langue du système",
-      thinkExpand: "Déplier la réflexion par défaut",
-      thinkExpandDesc: "Quand la réflexion est visible, déplier les blocs automatiquement",
+      // ── Réglage renommé (LOT 1) : ex-thinkExpand → displayDetail — pilote le
+      // repli de TOUS les blocs de détail (réflexion, sorties d'outils,
+      // sous-agents). Les échecs restent dépliés quelle que soit la valeur.
+      displayDetail: "Déplier le détail d'affichage par défaut",
+      displayDetailDesc: "Déplier automatiquement les blocs de détail (réflexion, sorties d'outils, sous-agents). Les échecs restent toujours dépliés.",
       auth: {
         title: "AUTHENTIFICATION DE L'INTERFACE WEB",
         description: "Définissez des identifiants pour protéger l'interface web avec l'authentification HTTP Basic. Laissez vide pour désactiver.",

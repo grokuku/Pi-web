@@ -68,10 +68,19 @@ export const en = {
     // ── Tool call output preview (streaming) ──
     toolOutput: "Tool output",
     toolOutputChars: (chars: string) => `${chars} chars`,
+    // ── Sub-agent pseudo block (delegate tool, LOT 1) ──
+    subAgent: "sub-agent",
+    // ── LOT 2: live sub-agent activity ──
+    subAgentActions: (n: number) => `${n} action${n > 1 ? "s" : ""}`,
+    subAgentAttempt: (n: number) => `attempt ${n}`,
+    subAgentExtract: "(excerpt)",
+    subAgentCause: "cause",
     // ── Bouton « copier » sur les blocs de code markdown ──
     copyCode: "Copy code",
     copied: "Copied ✓",
-    keyboardHints: "📎 Files · Esc abort · Ctrl+L Settings · Ctrl+T think · Shift+Tab think±",
+    // ── Keyboard hints (LOT 1): Ctrl+T toggles DISPLAY DETAILS (collapsible
+    // blocks), NOT thinking; Shift+Tab = reasoning level (sent to the LLM).
+    keyboardHints: "📎 Files · Esc abort · Ctrl+L Settings · Ctrl+T detail disp. · Shift+Tab think±",
     // ── Lot B: real-time robustness (WS queue + offline visibility) ──
     wsOffline: "Connection lost — reconnecting…",
     wsPendingMessages: (n: number) => `${n} message${n !== 1 ? "s" : ""} waiting to be sent`,
@@ -200,8 +209,11 @@ export const en = {
       title: "General",
       language: "Language",
       systemDefault: "System default",
-      thinkExpand: "Expand thinking by default",
-      thinkExpandDesc: "When thinking is visible, expand blocks automatically",
+      // ── Renamed setting (LOT 1): ex-thinkExpand → displayDetail — controls
+      // the collapse of ALL detail blocks (thinking, tool outputs, sub-agents).
+      // Failures always stay expanded regardless of the value.
+      displayDetail: "Expand display details by default",
+      displayDetailDesc: "Automatically expand detail blocks (thinking, tool outputs, sub-agents). Failures always stay expanded.",
       auth: {
         title: "WEB INTERFACE AUTHENTICATION",
         description: "Set credentials to protect the web interface with HTTP Basic Authentication. Leave empty to disable authentication.",

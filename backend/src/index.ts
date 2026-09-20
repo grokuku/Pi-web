@@ -32,6 +32,7 @@ import agentKeysRouter, { validateToken } from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
 import designRouter from "./routes/design.js";
 import librarianRouter from "./routes/librarian.js";
+import harnessRouter from "./routes/harness.js";
 import sharedMemoryRouter from "./routes/shared-memory.js";
 import memoryRouter from "./routes/memory.js";
 import previewRouter from "./routes/preview.js";
@@ -196,6 +197,7 @@ app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);
 app.use("/api/design", designRouter);
 app.use("/api/librarian", librarianRouter);
+app.use("/api/harness", harnessRouter);
 // Mémoire partagée externe (Lot M2) : auth dédiée dans le router
 // (localhost ∥ Bearer agent ∥ X-API-Key librarian).
 app.use("/api/shared-memory", sharedMemoryRouter);

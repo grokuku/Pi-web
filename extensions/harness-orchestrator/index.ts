@@ -24,6 +24,37 @@ import {
   classifyFailure,
 } from "../../backend/src/pi/harness-archive.js";
 
+// ── LOT 2a (refonte chat) : streaming de l'activité des sous-agents ──
+// Module backend (backend/src/pi/harness-stream.ts), résolu par jiti comme
+// harness-archive. Contient :
+// - emitSubagentEvent : enveloppe {type:"subagent", …} + émission DIRECTE via
+//   le pont globalThis publié par session.ts (rawEmitToSubscribers) — try/catch
+//   permanent, no-op si non résolvable (un échec de streaming ne doit JAMAIS
+//   faire échouer une délégation) ;
+// - makeDelegateRunId : identifiant `d-<epochMs>-<4 aléa>` par délégation ;
+// - createSubagentEventGate : quota de sécurité (≤20 événements enveloppés/s,
+//   fusion des tool_execution_update consécutifs d'un même toolCallId,
+//   compteur droppedEvents) ;
+// - résumés d'outils PURS partagés (summarizeToolAction/summarizeToolArgs,
+//   testés côté backend) pour la persistance du résumé d'activité.
+import {
+  createSubagentEventGate,
+  emitSubagentEvent,
+  makeDelegateRunId,
+  MAX_ACTIONS,
+  MESSAGE_TEXT_MAX,
+  MESSAGE_THINKING_MAX,
+  RESPONSE_PREVIEW_MAX,
+  summarizeToolAction,
+  summarizeToolArgs,
+  TASK_EXCERPT_MAX,
+  TOOL_OUTPUT_MAX,
+  truncateChars,
+  UPDATE_TEXT_MAX,
+  type SubagentActionRecord,
+  type SubagentEndStatus,
+} from "../../backend/src/pi/harness-stream.js";
+
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
 // directs (bash, edit, read…) — retirés de sa session en mode harness — puis
@@ -182,6 +213,19 @@ function getSessionModelLabel(tempSession: any): string {
     return `${model?.provider ?? "?"}/${model?.id ?? "?"}`;
   } catch {
     return "?";
+  }
+}
+
+/**
+ * Extrait le TEXTE joint d'une liste de blocs content SDK (résultat ou
+ * partialResult d'un tool). Les blocs non textuels (images…) sont ignorés.
+ */
+function extractTextFromContent(content: any): string {
+  try {
+    if (!Array.isArray(content)) return "";
+    return content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("");
+  } catch {
+    return "";
   }
 }
 
@@ -480,12 +524,381 @@ export default function (pi: ExtensionAPI) {
       let pendingSessionFile: string | null = null;
       const delegateStartedAt = Date.now();
 
+      // ── LOT 2a (refonte chat) : état du streaming sous-agent ──
+      // Déclaré AVANT le try externe : visible du finally interne ET du catch
+      // externe — subagent_end doit être émis dans TOUS les chemins de fin de
+      // vie (succès/échec/timeout/abort), y compris un échec survenu avant la
+      // création de la tempSession. Les compteurs eventCount/thinkingChars/
+      // attemptsMade/usedModelLabel, préalablement déclarés dans le try
+      // externe, sont remontés ici pour être partagés par les deux chemins.
+      const delegateRunId = makeDelegateRunId();
+      const taskExcerpt = truncateChars(task, TASK_EXCERPT_MAX);
+      // Throttle partagé : 1 update max toutes les ~2s — utilisé par l'aperçu
+      // texte existant (emitThrottled) ET par le forward structuré LOT 2a.
+      const EMIT_THROTTLE_MS = 2_000;
+      // Quota de sécurité : ≤20 événements enveloppés/s, fusion des
+      // tool_execution_update consécutifs d'un même toolCallId, droppedEvents.
+      const subagentGate = createSubagentEventGate();
+      // projectId du projet cible : ExtensionContext du SDK n'expose PAS de
+      // projectId (types 0.85.1) — fallback documenté = résolution HTTP
+      // /api/projects par cwd (resolveProjectId, déjà utilisée pour le
+      // routage). null → toutes les émissions LOT 2a deviennent des no-ops
+      // silencieux (une délégation ne dépend JAMAIS du streaming).
+      // Réglé au plus tôt (avant le try externe) pour que subagent_end — émis
+      // TOUJOURS, y compris en cas d'échec de création de la tempSession — et
+      // la persistance disposent du projectId dans TOUS les chemins.
+      const cwd = ctx?.cwd || process.cwd();
+      let subagentProjectId: string | null = null;
+      try {
+        subagentProjectId =
+          typeof ctx?.projectId === "string" && ctx.projectId
+            ? ctx.projectId
+            : await resolveProjectId(cwd);
+      } catch {
+        subagentProjectId = null;
+      }
+      // Fonction effective (peut être re-classée par le routeur backend).
+      let subagentFuncName = functionName || "unknown";
+      let subagentFuncLabel = requestedFunc.label;
+      // Modèle effectif (mis à jour après setModel ; "?" tant qu'inconnu).
+      let usedModelLabel = "?";
+      // Tentatives réellement jouées (1..2) — portée par chaque event enveloppé.
+      let attemptsMade = 0;
+      // Compteurs d'événements du sous-agent (aussi consommés par la meta
+      // d'archivage P0 du finally interne).
+      let eventCount = 0;   // nb total d'events reçus du sous-agent
+      let thinkingChars = 0; // chars de réflexion accumulés (text_delta)
+      let actionCount = 0;  // nb de tool_execution_start du sous-agent
+      // Actions d'outils résumées (persistance subagent_activity, ≤ MAX_ACTIONS,
+      // premiers conservés — ordre chronologique stable).
+      const subagentActions: SubagentActionRecord[] = [];
+      // Outils actuellement en cours (args capturés au start pour le résumé).
+      const openToolActions = new Map<string, {
+        seq: number;
+        toolName: string;
+        args: any;
+        startedAt: number;
+        output: string;
+      }>();
+      // tool_execution_update en attente de flush (throttle 2s — EMIT_THROTTLE_MS
+      // réutilisé ; fusion : le dernier snapshot d'un même toolCallId remplace
+      // le précédent — ce sont des captures progressives du même output).
+      const pendingUpdates = new Map<string, any>();
+      let updateFlushTimer: ReturnType<typeof setTimeout> | null = null;
+      // subagent_end émis UNE seule fois (helper commun finally + catch externe).
+      let subagentEndEmitted = false;
+
+      /** Construit les champs d'enveloppe communs de la délégation. */
+      const subagentBase = () => ({
+        delegateRunId,
+        attempt: attemptsMade || 1,
+        delegateFunction: subagentFuncName,
+        delegateLabel: subagentFuncLabel,
+        model: usedModelLabel,
+        taskExcerpt,
+      });
+
+      /**
+       * Émet un événement enveloppé {type:"subagent", …} vers le canal WS
+       * pi_event (émission DIRECTE, hors buffer 40 ms de session.ts).
+       * Hors quota → drop/fusion silencieux (compté par le gate) ; no-op si
+       * le projectId n'a pas pu être résolu. Ne JAMAIS laisser remonter.
+       */
+      const emitWrapped = (event: unknown): void => {
+        try {
+          if (!subagentProjectId) return;
+          if (!subagentGate.admit(event as any).admitted) return;
+          emitSubagentEvent(subagentProjectId, subagentBase(), event);
+        } catch {
+          // silencieux : le streaming est un plus, jamais une dépendance
+        }
+      };
+
+      /** Flush (trailing throttle 2s) des tool_execution_update en attente. */
+      const flushPendingUpdates = (): void => {
+        updateFlushTimer = null;
+        if (pendingUpdates.size === 0) return;
+        const updates = [...pendingUpdates.values()];
+        pendingUpdates.clear();
+        for (const upd of updates) {
+          const text = extractTextFromContent(upd?.partialResult?.content);
+          emitWrapped({
+            type: "tool_execution_update",
+            toolCallId: upd?.toolCallId,
+            toolName: upd?.toolName,
+            // Queue tronquée ~400 chars (UPDATE_TEXT_MAX) + longueur réelle.
+            partialResult: { content: [{ type: "text", text: truncateChars(text, UPDATE_TEXT_MAX) }] },
+            outputChars: text.length,
+          });
+        }
+      };
+
+      /** Enregistre un tool_execution_start (pour le résumé persisté). */
+      const recordToolStart = (event: any): void => {
+        openToolActions.set(event?.toolCallId, {
+          seq: ++actionCount,
+          toolName: event?.toolName || "outil",
+          args: event?.args,
+          startedAt: Date.now(),
+          output: "",
+        });
+      };
+
+      /** Clôture l'action ouverte correspondant à un tool_execution_end. */
+      const closeToolAction = (event: any): void => {
+        const open = openToolActions.get(event?.toolCallId);
+        if (!open) return;
+        openToolActions.delete(event.toolCallId);
+        // Cap ≤50 actions (premiers conservés, ordre chronologique).
+        if (subagentActions.length >= MAX_ACTIONS) return;
+        const output = extractTextFromContent(event?.result?.content);
+        subagentActions.push({
+          seq: open.seq,
+          toolName: open.toolName,
+          argSummary: summarizeToolArgs(open.toolName, open.args),
+          durationMs: Date.now() - open.startedAt,
+          isError: !!event?.isError,
+          summary: summarizeToolAction({
+            toolName: open.toolName,
+            args: open.args,
+            output,
+            isError: !!event?.isError,
+            details: event?.result?.details,
+          }),
+          outputChars: output.length,
+          truncated: output.length > TOOL_OUTPUT_MAX,
+        });
+      };
+
+      /**
+       * Forward STRUCTURÉ d'un event du sous-agent vers le chat (LOT 2a).
+       * Seuls : tool_execution_start (tel quel), tool_execution_update
+       * (throttlé 2s, queue ~400 chars), tool_execution_end (output ≤2000
+       * chars + longueur réelle), message_end assistant (texte ≤4000,
+       * thinking ≤1000, flags truncated + usage). JAMAIS les deltas
+       * (message_update/message_start) ni les events internes
+       * (agent_start/agent_end) — cf. spec LOT 2a.
+       */
+      const forwardStructuredEvent = (event: any): void => {
+        try {
+          switch (event?.type) {
+            case "tool_execution_start": {
+              recordToolStart(event);
+              emitWrapped(event); // tel quel (spec)
+              break;
+            }
+            case "tool_execution_update": {
+              // Fusion : le dernier snapshot d'un même toolCallId remplace
+              // l'attente (captures progressives d'un même output).
+              pendingUpdates.set(event.toolCallId, event);
+              const open = openToolActions.get(event.toolCallId);
+              if (open) open.output = extractTextFromContent(event.partialResult?.content);
+              // Trailing throttle 2s (EMIT_THROTTLE_MS réutilisé).
+              if (!updateFlushTimer) {
+                const timer = setTimeout(flushPendingUpdates, EMIT_THROTTLE_MS);
+                timer.unref?.();
+                updateFlushTimer = timer;
+              }
+              break;
+            }
+            case "tool_execution_end": {
+              // L'end remplace tout update en attente du même tool (snapshot
+              // final plus riche) et clôture l'action du résumé persisté.
+              pendingUpdates.delete(event.toolCallId);
+              closeToolAction(event);
+              emitWrapped(buildToolEndEvent(event));
+              break;
+            }
+            case "message_end": {
+              // Uniquement les messages ASSISTANT du sous-agent (réponse +
+              // réflexion) ; les autres rôles sont couverts par les events
+              // tool_* ou ignorés.
+              if (event?.message?.role === "assistant") {
+                emitWrapped(buildMessageEndEvent(event));
+              }
+              break;
+            }
+            default:
+              // message_update/message_start (deltas), agent_start/agent_end
+              // internes, turn_*/model_select… : JAMAIS forwardés (spec).
+              break;
+          }
+        } catch {
+          // Le forward structuré ne doit jamais casser l'aperçu existant.
+        }
+      };
+
+      /** Clone tronqué d'un tool_execution_end (output ≤2000 chars). */
+      const buildToolEndEvent = (event: any): any => {
+        const output = extractTextFromContent(event?.result?.content);
+        const clone: any = {
+          type: "tool_execution_end",
+          toolCallId: event?.toolCallId,
+          toolName: event?.toolName,
+          isError: !!event?.isError,
+          // shape SDK conservée (result.content[]) — texte tronqué à 2000 chars.
+          result: { content: [{ type: "text", text: truncateChars(output, TOOL_OUTPUT_MAX) }] },
+          // Longueur réelle + flag de troncature pour le frontend (LOT 2b).
+          outputChars: output.length,
+          outputTruncated: output.length > TOOL_OUTPUT_MAX,
+        };
+        // details (diff d'edit, truncation read/bash…) conservés si compacts —
+        // le résumé +A/−B de l'UI en dépend.
+        try {
+          const details = event?.result?.details;
+          if (details && JSON.stringify(details).length <= 4000) clone.details = details;
+        } catch {}
+        return clone;
+      };
+
+      /** Clone tronqué d'un message_end assistant (texte ≤4000, thinking ≤1000). */
+      const buildMessageEndEvent = (event: any): any => {
+        const m = event?.message || {};
+        let text = "";
+        let thinking = "";
+        try {
+          for (const block of m.content || []) {
+            if (block?.type === "text" && typeof block.text === "string") text += block.text;
+            else if (block?.type === "thinking" && typeof block.thinking === "string") thinking += block.thinking;
+          }
+        } catch {}
+        return {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            id: m.id,
+            stopReason: m.stopReason,
+            errorMessage: m.errorMessage,
+            ...(m.usage ? { usage: m.usage } : {}),
+            content: [
+              ...(text ? [{ type: "text", text: truncateChars(text, MESSAGE_TEXT_MAX) }] : []),
+              ...(thinking ? [{ type: "thinking", thinking: truncateChars(thinking, MESSAGE_THINKING_MAX) }] : []),
+            ],
+          },
+          textChars: text.length,
+          textTruncated: text.length > MESSAGE_TEXT_MAX,
+          thinkingChars: thinking.length,
+          thinkingTruncated: thinking.length > MESSAGE_THINKING_MAX,
+        };
+      };
+
+      /**
+       * Persiste le résumé d'activité dans la session PRINCIPALE (une seule
+       * entrée custom subagent_activity, display:false) via la route interne
+       * /api/harness/activity (précédent : inject-to-chat de web-screenshot).
+       * Fire-and-forget : un échec ne fait JAMAIS échouer la délégation.
+       */
+      const persistSubagentActivity = (info: {
+        status: SubagentEndStatus;
+        cause: string | null;
+        errorMessage: string | null;
+        responsePreview: string;
+      }): void => {
+        try {
+          const body = JSON.stringify({
+            // projectId peut être null → la route re-résout par cwd.
+            projectId: subagentProjectId,
+            cwd: ctx?.cwd || process.cwd(),
+            activity: {
+              delegateRunId,
+              function: subagentFuncName,
+              label: subagentFuncLabel,
+              model: usedModelLabel,
+              status: info.status,
+              attempts: attemptsMade,
+              durationMs: Date.now() - delegateStartedAt,
+              actionCount,
+              eventCount,
+              thinkingChars,
+              cause: info.cause,
+              errorMessage: info.errorMessage,
+              actions: subagentActions.slice(0, MAX_ACTIONS),
+              responsePreview: truncateChars(info.responsePreview, RESPONSE_PREVIEW_MAX),
+            },
+          });
+          void fetch(`${PI_WEB_URL}/api/harness/activity`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+            signal: AbortSignal.timeout(3000),
+          }).catch(() => {
+            // fire-and-forget : l'injection est un plus, jamais une nécessité
+          });
+        } catch {
+          // silencieux : ne JAMAIS casser la délégation
+        }
+      };
+
+      /**
+       * FIN DE VIE du sous-agent (LOT 2a) : subagent_end émis TOUJOURS
+       * (succès/échec/timeout/abort) — appelé depuis le finally interne ET le
+       * catch externe via ce helper commun, AVANT l'archivage/unlink (le
+       * fichier de session reste lisible). Idempotent. L'événement terminal
+       * est HORS quota (la fin de vie doit toujours passer) ; la persistance
+       * du résumé est fire-and-forget.
+       */
+      const emitSubagentEnd = (info: {
+        status: SubagentEndStatus;
+        cause: string | null;
+        errorMessage: string | null;
+        responsePreview: string;
+      }): void => {
+        if (subagentEndEmitted) return;
+        subagentEndEmitted = true;
+        try {
+          // Clôturer les actions restées ouvertes (tool interrompu par un
+          // timeout/abort — pas de tool_execution_end reçu).
+          const nowMs = Date.now();
+          for (const [toolCallId, open] of openToolActions) {
+            if (subagentActions.length >= MAX_ACTIONS) break;
+            subagentActions.push({
+              seq: open.seq,
+              toolName: open.toolName,
+              argSummary: summarizeToolArgs(open.toolName, open.args),
+              durationMs: nowMs - open.startedAt,
+              isError: info.status !== "success",
+              summary: "(interrompu)",
+              outputChars: open.output.length,
+              truncated: false,
+            });
+            openToolActions.delete(toolCallId);
+          }
+
+          const endEvent = {
+            type: "subagent_end" as const,
+            status: info.status,
+            attemptsMade,
+            durationMs: Date.now() - delegateStartedAt,
+            actionCount,
+            eventCount,
+            thinkingChars,
+            model: usedModelLabel,
+            cause: info.cause,
+            // Cap défensif : un timeoutError peut embarquer 2000 chars de
+            // travail partiel — on borne pour protéger la frame WS.
+            errorMessage: info.errorMessage ? truncateChars(info.errorMessage, 2000) : null,
+            // Aperçu de la réponse du sous-agent, tronqué à 500 chars.
+            responsePreview: truncateChars(info.responsePreview, RESPONSE_PREVIEW_MAX),
+            droppedEvents: subagentGate.droppedEvents,
+          };
+          try {
+            if (subagentProjectId) {
+              emitSubagentEvent(subagentProjectId, subagentBase(), endEvent);
+            }
+          } catch {}
+          persistSubagentActivity(info);
+        } catch (e: any) {
+          // Aucun échec de fin de vie ne peut se propager à la délégation.
+          console.warn(`[harness-orchestrator] subagent_end incomplet : ${e?.message || e}`);
+        }
+      };
+
       try {
         // Créer une session temporaire pour la fonction
         const { createAgentSession, SessionManager } = await import("@earendil-works/pi-coding-agent");
         const { existsSync, unlinkSync } = await import("fs");
 
-        const cwd = ctx.cwd || process.cwd();
+        // (cwd est résolu dans le bloc d'état LOT 2a, avant le try externe.)
 
         // Résolution de la route conseillée par le backend (fonction + modèle).
         // L'extension est autonome : toute logique partagée passe par l'API HTTP
@@ -508,6 +921,10 @@ export default function (pi: ExtensionAPI) {
         if (effectiveFunction !== functionName) {
           console.log(`[harness-orchestrator] Route backend : ${functionName} → ${effectiveFunction}`);
         }
+        // LOT 2a : la fonction effective (re-classée ou non par le routeur) est
+        // portée par chaque enveloppe {type:"subagent", …} et le résumé persisté.
+        subagentFuncName = effectiveFunction;
+        subagentFuncLabel = effectiveFunc.label;
 
         // Modèle conseillé par le routeur (sinon fallback ctx.model plus bas).
         const routingModel = await resolveRoutingModel(ctx, routing?.modelId);
@@ -528,6 +945,17 @@ export default function (pi: ExtensionAPI) {
           sessionManager: tempSessionManager,
         });
         const tempSession = result.session;
+
+        // ── LOT 2a : début du streaming (projectId déjà résolu avant le try
+        // externe — cf. bloc d'état LOT 2a) ──
+        // Modèle connu à la création (le setModel effectif, plus bas, mettra
+        // usedModelLabel à jour avant le premier event forwardé).
+        usedModelLabel = getSessionModelLabel(tempSession);
+        // subagent_start : le delegateFunction/delegateLabel/model/taskExcerpt
+        // sont portés par l'ENVELOPPE (cf. harness-stream.buildSubagentEnvelope) ;
+        // l'event interne ne porte que le marqueur de début de vie. Enveloppé
+        // dans le même try/catch permanent (no-op si projectId null).
+        emitWrapped({ type: "subagent_start" });
 
         // ── FIX A : les sous-agents doivent connaître les providers custom ──
         // La tempSession est créée avec un ModelRuntime par défaut qui charge
@@ -594,13 +1022,9 @@ export default function (pi: ExtensionAPI) {
         let success = false;
         let archiveCause: string | null = null;
         let archiveErrorMessage: string | undefined = undefined;
-        let attemptsMade = 0;
-        let usedModelLabel = "?";
-        // Compteurs d'événements du sous-agent : déclarés ICI (try externe) car
-        // un `let` d'un bloc try n'est pas visible du finally du même try —
-        // la meta d'archivage du finally en a besoin (portées de bloc séparées).
-        let eventCount = 0;               // nb total d'events reçus du sous-agent
-        let thinkingChars = 0;            // chars de réflexion accumulés (text_delta)
+        // attemptsMade / usedModelLabel / eventCount / thinkingChars : remontés
+        // au niveau execute() (LOT 2a) pour être partagés avec le catch externe
+        // (subagent_end) — visibles du finally interne comme avant.
         let lastEventAt = Date.now();     // horodatage du dernier event reçu
         let lastEventSummary: string | null = null; // extrait du dernier event (meta P0)
 
@@ -686,7 +1110,8 @@ export default function (pi: ExtensionAPI) {
           //   ligne 1 : "sous-agent X · N events · dernière activité il y a Ys"
           //   suivantes : les 8 derniers événements significatifs (tool calls,
           //   réflexion) avec leur âge relatif.
-          const EMIT_THROTTLE_MS = 2_000;   // 1 update max toutes les ~2s
+          // (EMIT_THROTTLE_MS est déclaré au niveau execute() — partagé avec
+          // le forward structuré LOT 2a.)
           const SILENCE_AFTER_MS = 30_000;  // sous-agent muet si >30s sans event
           const SILENCE_TICK_MS = 10_000;   // timer périodique de détection de silence
           let lastEmitAt = 0;               // horodatage du dernier update émis
@@ -766,6 +1191,12 @@ export default function (pi: ExtensionAPI) {
               } else {
                 emitThrottled(false);
               }
+              // ── LOT 2a : forward STRUCTURÉ vers le chat (canal pi_event) ──
+              // tool_execution_start/update/end + message_end assistant,
+              // enveloppés {type:"subagent", …} avec throttle/quota — les
+              // deltas et les events internes ne sont JAMAIS forwardés.
+              // L'aperçu texte existant ci-dessus est conservé tel quel.
+              forwardStructuredEvent(event);
             } catch {}
           });
 
@@ -982,6 +1413,30 @@ export default function (pi: ExtensionAPI) {
         } finally {
           // Cleanup session
           if (silenceTimer) clearInterval(silenceTimer); // arrêter le timer de détection de silence
+          // LOT 2a : arrêter le throttle des updates structurés (aucun flush
+          // ne doit passer après subagent_end).
+          if (updateFlushTimer) {
+            clearTimeout(updateFlushTimer);
+            updateFlushTimer = null;
+          }
+          // ── LOT 2a : subagent_end TOUJOURS (succès/échec/timeout/abort) ──
+          // Émis AVANT l'archivage/unlink (le fichier de session reste lisible)
+          // et pendant que tempSession est encore vivante (responsePreview).
+          // Helper commun idempotent : le catch externe ne ré-émettra pas.
+          emitSubagentEnd({
+            status: success
+              ? "success"
+              : archiveCause === "timeout-inactivite"
+                ? "timeout-inactivity"
+                : archiveCause === "timeout-global"
+                  ? "timeout-global"
+                  : archiveCause === "abort-utilisateur"
+                    ? "aborted"
+                    : "error",
+            cause: archiveCause || (success ? null : "erreur-exception"),
+            errorMessage: archiveErrorMessage ?? null,
+            responsePreview: collectExpertResponse(tempSession),
+          });
           if (tempUnsub) tempUnsub();
           try { (tempSession as any).dispose?.(); } catch {}
           // ── P0 volet 1/2 : boîte noire du délégué ──
@@ -1019,6 +1474,16 @@ export default function (pi: ExtensionAPI) {
         }
       } catch (err: any) {
         console.error(`[harness-orchestrator] Erreur ${functionName}:`, err.message);
+        // ── LOT 2a : subagent_end pour un échec AVANT le try interne (ex.
+        // createAgentSession, ré-enregistrement des providers) — le finally
+        // interne n'a pas tourné, donc rien n'a encore été émis (helper
+        // idempotent : sans effet si le finally interne a déjà émis).
+        emitSubagentEnd({
+          status: "error",
+          cause: "erreur-sdk",
+          errorMessage: err?.message || String(err),
+          responsePreview: "",
+        });
         // ── P0 volet 1/2 : échec AVANT le try interne (ex. createAgentSession,
         // ré-enregistrement des providers) → la boîte noire n'a pas encore été
         // traitée par le finally interne. On l'archive ici ; sinon c'est le

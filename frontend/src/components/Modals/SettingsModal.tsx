@@ -17,6 +17,7 @@ import {
   type ProviderLimitRow,
 } from "../../utils/concurrency";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "../../utils/preview-mode";
+import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import type { ResourceType } from "./settings/types";
 import ShortcutsTab from "./settings/ShortcutsTab";
 import SecurityTab from "./settings/SecurityTab";
@@ -255,9 +256,14 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [authUser, setAuthUser] = useState(() => localStorage.getItem("pi-web-auth-user") || "");
   const [authPass, setAuthPass] = useState(() => localStorage.getItem("pi-web-auth-pass") || "");
   const [showPass, setShowPass] = useState(false);
-  const [thinkExpand, setThinkExpand] = useState(() => {
-    return localStorage.getItem("pi-web-thinking-expand") !== "false";
-  });
+  // ── Réglage « détail d'affichage déplié par défaut » (LOT 1) ──
+  // Renommé depuis thinkExpand (pi-web-thinking-expand → pi-web-display-detail,
+  // migration one-shot dans utils/display-detail). L'écriture passe par
+  // writeDisplayDetailExpanded : elle notifie ChatView → le changement
+  // s'applique immédiatement aux blocs déjà montés (objectif clé du lot 1).
+  const [displayDetailExpanded, setDisplayDetailExpanded] = useState(() => readDisplayDetailExpanded());
+  // Synchronisation inverse Ctrl+T → modal (même source de vérité).
+  useEffect(() => subscribeDisplayDetail(setDisplayDetailExpanded), []);
 
   // ── Concurrency state ──
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
@@ -1024,27 +1030,27 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                 </div>
               </div>
 
-              {/* Think Expand Default */}
+              {/* Display Detail Expanded (LOT 1 — ex « Think Expand Default ») */}
               <div className="border border-hacker-border bg-hacker-surface/50">
                 <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
-                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🧠 {t('settings.general.thinkExpand')}</span>
+                  <span className="text-xs font-bold text-hacker-accent tracking-wider">🧠 {t('settings.general.displayDetail')}</span>
                 </div>
                 <div className="p-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-hacker-text-dim">{t('settings.general.thinkExpandDesc')}</span>
+                    <span className="text-[11px] text-hacker-text-dim">{t('settings.general.displayDetailDesc')}</span>
                     <button
                       onClick={() => {
-                        const next = !thinkExpand;
-                        setThinkExpand(next);
-                        localStorage.setItem("pi-web-thinking-expand", String(next));
+                        const next = !displayDetailExpanded;
+                        setDisplayDetailExpanded(next);
+                        writeDisplayDetailExpanded(next);
                       }}
                       className={`text-xs px-3 py-1 border transition-colors ${
-                        thinkExpand
+                        displayDetailExpanded
                           ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
                           : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
                       }`}
                     >
-                      {thinkExpand ? t('common.on') : t('common.off')}
+                      {displayDetailExpanded ? t('common.on') : t('common.off')}
                     </button>
                   </div>
                 </div>

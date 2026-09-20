@@ -26,6 +26,13 @@ import { librarianTools } from "./librarian-tools.js";
 import { memoryTools } from "./memory-tools.js";
 import { previewTools } from "./preview-tools.js";
 import { filterImagesForModel } from "./image-budget.js";
+// LOT 2a (refonte chat) : pont d'émission des événements sous-agents + filtre
+// du contexte LLM pour les entrées custom subagent_activity (persistées SANS
+// coût LLM). Voir harness-stream.ts pour la note sur le pont globalThis.
+import {
+  registerSubagentEmitter,
+  filterSubagentActivityFromContext,
+} from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject } from "../projects/manager.js";
@@ -239,11 +246,29 @@ function flushDeltaBuffer(projectId: string): void {
 }
 
 // Émission brute (sans throttle) vers tous les callbacks abonnés.
-function rawEmitToSubscribers(event: AgentSessionEvent, projectId: string) {
+// LOT 2a : EXPORTÉE — le module harness-stream.ts (via le tool delegate de
+// l'extension harness-orchestrator) émet les événements sous-agents enveloppés
+// {type:"subagent", …} en DIRECT, sans passer par le buffer 40 ms de
+// emitToSubscribers (qui fusionne les deltas par type — inadapté aux events
+// structurés hétérogènes). Le comportement existant est inchangé.
+export function rawEmitToSubscribers(event: AgentSessionEvent, projectId: string) {
   for (const cb of eventCallbacks) {
     try { cb(event, projectId); } catch (e) { console.error("Event callback error:", e); }
   }
 }
+
+// ── LOT 2a : pont d'émission vers harness-stream.ts ──────────
+// L'extension harness-orchestrator est chargée par le SDK via jiti
+// (moduleCache:false) : un import statique de session.ts depuis l'extension
+// créerait une DEUXIÈME instance de ce module (avec son propre Set
+// `eventCallbacks` vide) → les émissions partiraient dans le vide. On publie
+// donc l'émetteur RÉEL (cette instance ESM native) sur un symbole globalThis,
+// lu par harness-stream.resolveSubagentEmitter(). Aucun changement de
+// comportement pour les abonnés existants. Le cast englobe l'enveloppe
+// {type:"subagent", …}, qui n'est pas un AgentSessionEvent du SDK.
+registerSubagentEmitter((event, projectId) =>
+  rawEmitToSubscribers(event as AgentSessionEvent, projectId)
+);
 
 export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
   // Deltas de texte/thinking : bufferisés puis flushés toutes les 40 ms.
@@ -440,12 +465,16 @@ async function createPiSessionInternal(
     // (toolResult/assistant, ex. web_screenshot) ne repartent jamais au modèle,
     // et seules les images du DERNIER message user sont conservées. Rien n'est
     // supprimé de l'UI / de la session (cf. pi/image-budget.ts).
+    // LOT 2a : on en profite pour retirer du contexte LLM les entrées custom
+    // `subagent_activity` (résumés d'activité des sous-agents, persistés pour
+    // l'UI) — elles survivent au rechargement SANS coût LLM ; leur résumé
+    // structuré vit dans `details`, jamais envoyé au modèle.
     try {
       const agent = (session as any).agent;
       if (agent && typeof agent.convertToLlm === "function") {
         const origConvertToLlm = agent.convertToLlm.bind(agent);
         agent.convertToLlm = async (messages: unknown[]) =>
-          filterImagesForModel(await origConvertToLlm(messages));
+          filterImagesForModel(await origConvertToLlm(filterSubagentActivityFromContext(messages)));
         console.log(`[PiSession] Image budget filter installed for project ${projectId}`);
       }
     } catch (e: any) {
@@ -1474,6 +1503,71 @@ export async function injectAttachmentToChat(
     return true;
   } catch (e: any) {
     console.error(`[injectAttachment] Failed for ${projectId}:`, e.message);
+    return false;
+  }
+}
+
+/**
+ * LOT 2a (refonte chat) : injecte dans la session PRINCIPALE du projet une
+ * SEULE entrée `custom` courte résumant la vie d'un sous-agent (tool delegate
+ * de harness-orchestrator) à sa fin (subagent_end).
+ *
+ * Même mécanisme que injectAttachmentToChat (sendCustomMessage,
+ * triggerTurn:false) : le message est ajouté à la session (persisté via une
+ * CustomMessageEntry → survit au rechargement), émis au frontend via
+ * message_start/message_end, SANS déclencher de tour LLM.
+ *
+ * - `display:false` : l'entrée n'est pas rendue par le rendu générique de l'UI
+ *   (LOT 2b ajoutera un rendu dédié au customType "subagent_activity").
+ * - le résumé STRUCTURÉ vit dans `details` — champ free-form qui N'EST PAS
+ *   envoyé au LLM (cf. injectAttachmentToChat). En complément, session.ts
+ *   filtre les entrées customType "subagent_activity" du contexte LLM (wrapper
+ *   convertToLlm) : zéro coût LLM, comme les messages système.
+ * - `content` reste une ligne courte (fallback lisible si l'UI ne rend pas
+ *   encore le customType).
+ *
+ * Best-effort : un échec d'injection ne fait JAMAIS échouer la délégation
+ * (l'appelant — route interne /api/harness/activity — enveloppe déjà en
+ * try/catch ; cette fonction en plus ne jette pas).
+ */
+export async function injectSubagentActivity(
+  projectId: string,
+  activity: Record<string, unknown>
+): Promise<boolean> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) {
+    console.warn(`[injectSubagentActivity] No session for project ${projectId}`);
+    return false;
+  }
+  if (!activity || typeof activity !== "object") {
+    console.warn(`[injectSubagentActivity] Invalid activity payload for ${projectId}`);
+    return false;
+  }
+
+  try {
+    // Ligne courte lisible : fonction, libellé, statut, actions, durée.
+    const fn = typeof activity.function === "string" ? activity.function : "sous-agent";
+    const label = typeof activity.label === "string" && activity.label ? activity.label : fn;
+    const status = typeof activity.status === "string" ? activity.status : "unknown";
+    const actionCount = typeof activity.actionCount === "number" ? activity.actionCount : 0;
+    const durationMs = typeof activity.durationMs === "number" ? activity.durationMs : 0;
+    const duration = durationMs > 0 ? ` · ${(durationMs / 1000).toFixed(1)}s` : "";
+    const content = `🤖 Sous-agent ${label} (${fn}) — ${status} · ${actionCount} action(s)${duration}`;
+
+    await state.session.sendCustomMessage(
+      {
+        customType: "subagent_activity",
+        content,
+        display: false,
+        details: activity,
+      },
+      { triggerTurn: false }
+    );
+    console.log(`[injectSubagentActivity] Injected subagent_activity for ${projectId}: ${fn} (${status})`);
+    return true;
+  } catch (e: any) {
+    // L'échec de persistance ne doit jamais casser la délégation (best-effort).
+    console.error(`[injectSubagentActivity] Failed for ${projectId}:`, e?.message || e);
     return false;
   }
 }
