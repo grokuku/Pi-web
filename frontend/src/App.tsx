@@ -1129,6 +1129,8 @@ function App() {
             onProjectsChanged={loadProjects}
             session={session}
             projectSessions={projectSessionsRef.current}
+            on={on}
+            send={send}
             onSendCommand={(cmd: string) => {
               if (activeProject) {
                 send({ type: "pi_prompt", projectId: activeProject.id, message: cmd });

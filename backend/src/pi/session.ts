@@ -2,12 +2,13 @@ import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime, buildS
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
-import { unlinkSync, existsSync, mkdirSync, readdirSync, rmdirSync } from "fs";
+import { unlinkSync, existsSync, mkdirSync, readdirSync, rmdirSync, statSync } from "fs";
 import os from "os";
 import {
   loadModelLibrary,
   getModeModel,
   getProjectModeConfig,
+  getProjectRoutingConfig,
   getDefaultModel,
   getCommitModel,
   getModel,
@@ -15,7 +16,8 @@ import {
   resolveModelCapability,
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
-import type { Route } from "./routing-types.js";
+import type { Route, SignalsInput } from "./routing-types.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, resolveRoute } from "./routing.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
@@ -33,10 +35,13 @@ import {
   registerSubagentEmitter,
   filterSubagentActivityFromContext,
   normalizeLegacyDelegateToolNames,
+  neutralizeUnavailableToolErrors,
+  DELEGATE_TOOL_NAME,
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject, getAllProjects } from "../projects/manager.js";
+import { logger } from "../utils/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -510,15 +515,24 @@ async function createPiSessionInternal(
       const agent = (session as any).agent;
       if (agent && typeof agent.convertToLlm === "function") {
         const origConvertToLlm = agent.convertToLlm.bind(agent);
-        agent.convertToLlm = async (messages: unknown[]) =>
-          filterImagesForModel(
-            await origConvertToLlm(
-              // Normalise les appels HISTORIQUES au tool hérité `delegate_to_expert`
-              // → `delegate` (session reprise) : sans ça le modèle imite son propre
-              // passé et rappelle un tool inexistant (mode harness bloqué).
-              normalizeLegacyDelegateToolNames(filterSubagentActivityFromContext(messages)),
-            ),
+        // Le wrapper réécrit le contexte AVANT conversion provider :
+        //  1. filtre les entrées custom `subagent_activity` (résumés UI persistés) ;
+        //  2. normalise les appels HISTORIQUES `delegate_to_expert` → `delegate` ;
+        //  3. neutralise les erreurs « Tool X not found » des outils INDISPONIBLES
+        //     (bash/edit/read… en harness ; delegate en code) en message actionnable.
+        // Pourquoi convertToLlm : dans pi-agent-core le contrôle « not found »
+        // court-circuite AVANT beforeToolCall/afterToolCall — aucun hook d'exécution
+        // ne voit ces erreurs ; convertToLlm tourne avant CHAQUE requête provider et
+        // couvre donc l'erreur LIVE du tour courant comme les erreurs d'une session reprise.
+        agent.convertToLlm = async (messages: unknown[]) => {
+          // Outils RÉELLEMENT actifs au moment de l'envoi (source de vérité : SDK).
+          const activeTools = getActiveToolNamesForBanner(session);
+          const contextualized = neutralizeUnavailableToolErrors(
+            normalizeLegacyDelegateToolNames(filterSubagentActivityFromContext(messages)),
+            activeTools,
           );
+          return filterImagesForModel(await origConvertToLlm(contextualized));
+        };
         console.log(`[PiSession] Image budget filter installed for project ${projectId}`);
       }
     } catch (e: any) {
@@ -818,6 +832,136 @@ export function getCurrentSession(): PiSessionState | undefined {
   return undefined;
 }
 
+/**
+ * Assemble les signaux de routage disponibles côté backend au moment d'un
+ * message (contexte consommé, taux d'erreur des outils actifs). Best-effort :
+ * toute lecture qui échoue est ignorée (les champs absents sont normalisés par
+ * extractSignals).
+ */
+function buildRoutingSignals(state: PiSessionState): SignalsInput {
+  const input: SignalsInput = {};
+  try {
+    const session = state.session as any;
+    const used = session?.getContextUsage?.()?.tokens;
+    const window = session?.model?.contextWindow;
+    if (typeof used === "number" && typeof window === "number" && window > 0) {
+      input.contextUsage = used / window;
+    }
+  } catch { /* signaux optionnels : on continue sans */ }
+
+  try {
+    let total = 0;
+    let errors = 0;
+    for (const [, tc] of activeToolCalls) {
+      if (tc.projectId !== state.projectId) continue;
+      total++;
+      if (tc.isError) errors++;
+    }
+    if (total > 0) input.toolErrorRate = errors / total;
+  } catch { /* idem */ }
+
+  return input;
+}
+
+/**
+ * Routage du MESSAGE utilisateur (niveau a).
+ *
+ * Résout la route via la couche EXISTANTE de routing.ts (heuristique +
+ * classifieur LLM optionnel), puis applique le modèle de la catégorie sur la
+ * session via le helper factorisé applyModelAndThinking (sans toucher aux
+ * outils/prompt du mode) et renseigne `lastRoute` (traçabilité).
+ *
+ * Précédence : `isRoutingEnabled()` (kill switch global) ET `routing.enabled`
+ * (config projet/mode) doivent être vrais. Sinon → comportement actuel (modèle
+ * du mode).
+ *
+ * FAIL-SAFE : retourne `false` (repli sur le modèle du mode, aucun blocage ni
+ * échec d'envoi) pour tout cas non conclusif : routage désactivé, config
+ * incomplète (catégorie sans modèle), modèle introuvable, classifieur en panne
+ * ou exception. Ne lève JAMAIS.
+ *
+ * @returns true si un modèle routé a été appliqué à la session.
+ */
+async function applyMessageRouting(
+  message: string,
+  projectId: string,
+  state: PiSessionState,
+): Promise<boolean> {
+  try {
+    const library = loadModelLibrary();
+    const config = getProjectRoutingConfig(library, projectId);
+
+    // ── Kill switch : global ET config projet/mode (précédence centralisée) ──
+    if (!isRoutingActive(config)) {
+      logger.info("routing", "routage désactivé — modèle du mode conservé", {
+        projectId,
+        globalEnabled: isRoutingEnabled(),
+        configEnabled: config.enabled,
+      });
+      return false;
+    }
+
+    const signals = extractSignals(buildRoutingSignals(state));
+
+    // Classifieur LLM optionnel (uniquement si un modèle est configuré).
+    // llmClassifier ne lève pas : échec → null → repli heuristique.
+    let llmRoute: Route | null = null;
+    if (config.classifierModelId) {
+      llmRoute = await llmClassifier(message, getModelRuntime(), config.classifierModelId);
+    }
+
+    const route = resolveRoute(message, config, signals, llmRoute);
+    const model = pickRoutedModel(route, config, library);
+
+    // Trace de la décision (audit) — y compris catégorie/risque/confiance/modèle.
+    logger.info("routing", `route message → ${route.category}`, {
+      projectId,
+      category: route.category,
+      function: route.function,
+      riskScore: route.riskScore,
+      confidence: route.confidence,
+      reviewRiskThreshold: config.reviewRiskThreshold,
+      confidenceThreshold: config.confidenceThreshold,
+      modelId: model?.id ?? null,
+      model: model ? `${model.providerId}/${model.modelId}` : null,
+      llmClassifierUsed: llmRoute !== null,
+      reason: route.reason,
+    });
+
+    // Config incomplète (aucun modèle pour la catégorie effective) → fail-safe.
+    if (!model) {
+      logger.warn("routing", "aucun modèle configuré pour la catégorie — repli sur le modèle du mode", {
+        projectId,
+        category: route.category,
+      });
+      return false;
+    }
+
+    // Évite un setModel (et un refresh du registre) inutile à chaque message
+    // quand le modèle routé est déjà celui de la session.
+    const current = (state.session as any)?.model;
+    if (current && current.provider === model.providerId && current.id === model.modelId) {
+      state.lastRoute = route;
+      return true;
+    }
+
+    state.lastRoute = route;
+    await applyModelAndThinking(
+      model,
+      projectId,
+      DEFAULT_THINKING[state.activeMode || "code"] || "medium",
+    );
+    return true;
+  } catch (e: any) {
+    // Toute erreur (registre indisponible, config corrompue, …) → repli silencieux.
+    logger.warn("routing", "échec du routage message — repli sur le modèle du mode", {
+      projectId,
+      error: e?.message || String(e),
+    });
+    return false;
+  }
+}
+
 export async function sendPrompt(
   message: string,
   projectId: string,
@@ -835,28 +979,45 @@ export async function sendPrompt(
     throw new Error("No active Pi session for this project");
   }
 
+  // ── Routage au niveau MESSAGE (niveau a) ──
+  // Précédence : le routage n'agit QUE si le kill switch global ET la config
+  // projet/mode sont actifs ; dans ce cas la CATÉGORIE décide du modèle de
+  // l'orchestrateur. Sinon, comportement historique inchangé (modèle du mode).
+  // Le mode conserve la main sur les outils et le prompt système.
+  // Les slash-commands ne sont PAS routées (ce ne sont pas des messages de
+  // tâche ; on évite en plus un appel classifieur LLM inutile).
+  // Renvoie true si un modèle routé a été posé sur la session.
+  const isSlashCommand = message.trim().startsWith("/");
+  const routedModelApplied = isSlashCommand
+    ? false
+    : await applyMessageRouting(message, projectId, state);
+
   // ── Ensure model matches current mode config ──
-  try {
-    const library = loadModelLibrary();
-    const currentMode = state.activeMode || "code";
-    const desiredModel = getModeModel(library, projectId, currentMode);
-    const currentModel = state.session.model;
-    console.log(`[prompt] Session model: ${currentModel?.provider || "none"}/${currentModel?.id || "none"}, desired: ${desiredModel?.providerId || "none"}/${desiredModel?.modelId || "none"}`);
-    if (desiredModel && currentModel) {
-      const needsUpdate = currentModel.id !== desiredModel.modelId ||
-        currentModel.provider !== desiredModel.providerId;
-      if (needsUpdate) {
-        console.log(`[prompt] Model mismatch! Applying ${desiredModel.providerId}/${desiredModel.modelId}...`);
+  // Ignoré si le routage vient de poser un modèle : sinon on l'écraserait
+  // immédiatement par le modèle du mode (et la décision serait sans effet).
+  if (!routedModelApplied) {
+    try {
+      const library = loadModelLibrary();
+      const currentMode = state.activeMode || "code";
+      const desiredModel = getModeModel(library, projectId, currentMode);
+      const currentModel = state.session.model;
+      console.log(`[prompt] Session model: ${currentModel?.provider || "none"}/${currentModel?.id || "none"}, desired: ${desiredModel?.providerId || "none"}/${desiredModel?.modelId || "none"}`);
+      if (desiredModel && currentModel) {
+        const needsUpdate = currentModel.id !== desiredModel.modelId ||
+          currentModel.provider !== desiredModel.providerId;
+        if (needsUpdate) {
+          console.log(`[prompt] Model mismatch! Applying ${desiredModel.providerId}/${desiredModel.modelId}...`);
+          await applyModeToSession(currentMode, projectId);
+          console.log("[prompt] Model applied, continuing to send...");
+        }
+      } else if (desiredModel && !currentModel) {
+        console.log(`[prompt] No model on session, applying ${desiredModel.providerId}/${desiredModel.modelId}`);
         await applyModeToSession(currentMode, projectId);
-        console.log("[prompt] Model applied, continuing to send...");
+          console.log("[prompt] Model applied, continuing to send...");
       }
-    } else if (desiredModel && !currentModel) {
-      console.log(`[prompt] No model on session, applying ${desiredModel.providerId}/${desiredModel.modelId}`);
-      await applyModeToSession(currentMode, projectId);
-        console.log("[prompt] Model applied, continuing to send...");
+    } catch (e: any) {
+      console.warn(`[prompt] Failed to sync model:`, e.message);
     }
-  } catch (e: any) {
-    console.warn(`[prompt] Failed to sync model:`, e.message);
   }
 
   // ── Handle slash commands ──
@@ -1451,10 +1612,25 @@ function buildMechanicalSummary(messages: any[], customInstructions?: string): s
 /**
  * Liste toutes les sessions d'un projet, dans son répertoire de sessions
  * dédié (le même que celui utilisé par createPiSession).
+ *
+ * LOT E1 (navigation) : enrichissement ADDITIF des métadonnées du SDK — on
+ * ajoute `sizeBytes` (taille du fichier .jsonl) sans toucher aux champs
+ * existants (id, created, modified, messageCount, firstMessage, name…). Le
+ * format `pi_sessions_list` reste donc rétro-compatible.
  */
 export async function listSessions(cwd: string, projectId: string): Promise<any[]> {
   try {
-    return await SessionManager.list(cwd, getProjectSessionDir(projectId));
+    const sessions = await SessionManager.list(cwd, getProjectSessionDir(projectId));
+    return sessions.map((s: any) => {
+      let sizeBytes: number | undefined;
+      try {
+        if (typeof s?.path === "string") sizeBytes = statSync(s.path).size;
+      } catch {
+        // Fichier disparu/illisible entre le listing et le stat : on laisse
+        // simplement la métadonnée absente (dégradé propre, pas d'erreur).
+      }
+      return sizeBytes === undefined ? s : { ...s, sizeBytes };
+    });
   } catch {
     return [];
   }
@@ -1913,6 +2089,13 @@ When the project has been indexed by the knowledge graph (cbm_* tools are visibl
 - Use **cbm_arch** to understand the overall project structure
 - Use **cbm_diff** to analyze the impact of uncommitted changes
 
+Règles opérationnelles (déclencheurs concrets) :
+- AVANT toute 2e lecture du MÊME fichier → **cbm_code** sur le symbole visé.
+- AVANT toute recherche de symbole (définition/appelant/appelé) → **cbm_search** ou **cbm_trace**.
+- AVANT un grep structurel/récursif → **cbm_search_code**.
+- N'utilise read/grep/find/ls que si le graphe ne peut pas répondre (fichier hors
+  projet : Dockerfile, entrypoint.sh, config, script non indexé) ou si cbm_* est absent.
+
 These are 100x more token-efficient than file-by-file exploration. Use them when possible.
 grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
   harness: `## Mode HARNESS — Chef de Projet
@@ -2117,6 +2300,21 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     // Harness orchestrator: read-only + delegate (l'extension l'enregistre)
     // Pas d'exclusion : l'orchestrator DOIT garder delegate (BUG-71).
     (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, HARNESS_TOOLS)));
+    // ── Vérification runtime (audit usage outils, point 3) ──
+    // En mode harness, `delegate` DOIT être actif (sinon l'orchestrateur ne peut
+    // rien déléguer) et AUCUN tool d'exécution ne doit l'être (sinon le modèle
+    // les appelle et boucle sur « Tool … not found »). Warn-only : ne casse pas
+    // le mode si une extension n'a pas encore enregistré son tool.
+    try {
+      const active = getActiveToolNamesForBanner(session);
+      if (!active.includes(DELEGATE_TOOL_NAME)) {
+        console.warn(`[mode] harness: le tool '${DELEGATE_TOOL_NAME}' n'est PAS actif pour ${projectId} — délégation impossible. Outils: ${active.join(", ")}`);
+      }
+      const leaked = active.filter((t) => BASE_TOOLS.includes(t));
+      if (leaked.length > 0) {
+        console.warn(`[mode] harness: tools d'exécution encore actifs pour ${projectId}: ${leaked.join(", ")} (devraient être retirés)`);
+      }
+    } catch {}
   } else {
     // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
     (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));

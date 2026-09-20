@@ -1299,7 +1299,10 @@ interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:T
 const INITIAL_VISIBLE_GROUPS = 200;
 const VISIBLE_GROUPS_STEP = 200;
 
-const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean }) {
+// `hideLiveExtras` : la vue « conversation passée » (LOT E1) réutilise ce
+// rendu mais ne doit PAS afficher les murs LIVE de sous-agents (ils
+// s'abonnent au store courant, sans rapport avec une session passée).
+export const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll, hideLiveExtras }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean; hideLiveExtras?: boolean }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -1469,12 +1472,13 @@ const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailE
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
     })}
     {/* LOT 4 : sous-agents simultanés — vue EN COLONNES (mur dédié en fin de
-        fil, s'abonne seul au store isolé → aucun re-render du fil). */}
-    <ParallelSubAgents />
+        fil, s'abonne seul au store isolé → aucun re-render du fil).
+        Masqué en consultation d'une conversation passée (hideLiveExtras). */}
+    {!hideLiveExtras && <ParallelSubAgents />}
     {/* LOT 2b : runs de sous-agents ARCHIVÉS non rattachables à un tool `delegate`
         (dégradé propre en fin de fil). Composant isolé : il s'abonne seul au
         store → son re-rendu ne provoque PAS celui du fil. */}
-    <OrphanSubAgentRuns />
+    {!hideLiveExtras && <OrphanSubAgentRuns />}
     </>
   </CollapseProvider>
   );

@@ -17,6 +17,18 @@ export type TaskCategory = "trivial" | "standard" | "complex" | "review";
 /** Une décision de routage : (tâche, complexité, signaux) → (fonction, catégorie, modèle). */
 export interface Route {
   category: TaskCategory;
+  /**
+   * Fonction du process déduite de la catégorie (`functionForCategory`).
+   *
+   * NOTE (point c) : ce champ est INFORMATIF / RÉSERVÉ — il n'est PAS utilisé
+   * pour dispatcher :
+   *   - niveau MESSAGE : c'est le MODE qui garde la main sur les outils et le
+   *     prompt (le routage ne choisit que le modèle, via `category`) ;
+   *   - niveau SOUS-AGENT : l'orchestrateur fournit TOUJOURS une fonction
+   *     explicite au tool `delegate`, qui prime sur `route.function` (celui-ci
+   *     ne sert de repli que si l'orchestrateur n'en fournit aucune).
+   * Il reste néanmoins journalisé (catégorie dédiée `routing`) pour l'audit.
+   */
   function: RoutingFunction;
   /** null = fallback sur le modèle par défaut (résolu par pickModel). */
   modelId: string | null;

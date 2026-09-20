@@ -56,6 +56,28 @@ export type Activity =
   | { type: "tool"; toolName?: string }
   | { type: "generating" };
 
+// ── Conversation passée (navigation LECTURE SEULE — LOT E1) ───────────────
+// Métadonnées émises par le backend via `pi_sessions_list` (enrichies de
+// sizeBytes ; dates sérialisées en ISO). Aucune donnée de session active :
+// ces conversations sont consultables sans changer la session courante.
+export interface PastSession {
+  id: string;
+  /** Premier message utilisateur (aperçu) — "(no messages)" si vide. */
+  firstMessage: string;
+  /** Nombre d'entrées `message` de la session. */
+  messageCount: number;
+  /** Date de création (ISO 8601). */
+  created: string;
+  /** Date de dernière activité (ISO 8601). */
+  modified: string;
+  /** Nom d'affichage éventuel (entrée session_info). */
+  name?: string;
+  /** Répertoire de travail d'origine de la session. */
+  cwd?: string;
+  /** Taille du fichier .jsonl en octets (métadonnée additive côté backend). */
+  sizeBytes?: number;
+}
+
 export interface Attachment {
   id: string;
   name: string;

@@ -476,6 +476,16 @@ export const fr = {
     switchProject: "Changer de projet",
     searchProject: "Rechercher un projet…",
     noProjects: "Aucun projet",
+    // ── Conversations passées (LOT E1 — consultation lecture seule) ──
+    pastConversations: "Conversations",
+    pastConversationsHint: "Consulter les conversations passées de ce projet (lecture seule)",
+    searchConversation: "Rechercher une conversation…",
+    refreshConversations: "Actualiser la liste",
+    loadingConversations: "Chargement…",
+    noConversations: "Aucune conversation passée",
+    noConversationMatch: "Aucun résultat",
+    untitledConversation: "Conversation sans titre",
+    messageCount: (n: number) => `${n} message${n > 1 ? "s" : ""}`,
     // Menu contextuel du placeholder lié (projet storage "linked").
     linkedMenu: {
       menuHint: "Projet lié — cliquez pour gérer les sous-projets",
@@ -504,6 +514,18 @@ export const fr = {
     updatingTo: (v: string) => `Mise à jour vers ${v}... redémarrage en cours`,
     updateSuccess: (v: string) => `Mise à jour vers ${v} réussie — redémarrage en cours, reconnexion automatique.`,
     updateFailed: "Échec de la mise à jour",
+  },
+
+  // ── Conversation passée (LOT E1 — lecture seule) ──
+  pastConversation: {
+    title: "CONVERSATION PASSÉE",
+    bannerTitle: "Consultation — lecture seule",
+    bannerBody: "Conversation passée : le chat courant n'est pas modifié. Aucun message ne peut être envoyé ici.",
+    back: "Revenir au chat courant",
+    loading: "Chargement de la conversation…",
+    loadError: "Échec du chargement de la conversation",
+    retry: "Réessayer",
+    empty: "Cette conversation ne contient aucun message affichable.",
   },
 
   // ── Design ──

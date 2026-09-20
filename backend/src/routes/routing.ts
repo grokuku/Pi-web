@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { loadModelLibrary, getProjectRoutingConfig } from "../pi/model-library.js";
-import { extractSignals, resolveRoute, pickModel, llmClassifier, isRoutingEnabled } from "../pi/routing.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, llmClassifier } from "../pi/routing.js";
 import type { Route, SignalsInput } from "../pi/routing-types.js";
 
 const router = Router();
@@ -75,6 +75,26 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
     const config = getProjectRoutingConfig(library, projectId);
     const signals = extractSignals(buildSignalsInput(req));
 
+    // ── Kill switch : global (env) ET config projet/mode ──
+    // Coupe RÉELLEMENT le routage pour TOUS les consommateurs de cet endpoint
+    // (orchestrateur de sous-agents inclus) : aucune décision n'est renvoyée,
+    // l'appelant retombe sur son modèle par défaut (mode/bibliothèque).
+    const globalEnabled = isRoutingEnabled();
+    const configEnabled = config.enabled;
+    if (!isRoutingActive(config)) {
+      res.json({
+        route: null,
+        modelId: null,
+        reason: "routage désactivé (kill switch global ou config projet/mode)",
+        reviewRiskThreshold: config.reviewRiskThreshold,
+        routingEnabled: globalEnabled,
+        configEnabled,
+        llmClassifierUsed: false,
+        llmClassifierError: null,
+      });
+      return;
+    }
+
     let llmRoute: Route | null = null;
     let llmClassifierError: string | null = null;
     if (config.classifierModelId) {
@@ -95,8 +115,8 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
       modelId: model?.id ?? null,
       reason: route.reason,
       reviewRiskThreshold: config.reviewRiskThreshold,
-      routingEnabled: isRoutingEnabled(),
-      configEnabled: config.enabled,
+      routingEnabled: globalEnabled,
+      configEnabled,
       llmClassifierUsed: llmRoute !== null,
       llmClassifierError,
     });

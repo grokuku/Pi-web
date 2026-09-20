@@ -475,6 +475,16 @@ export const en = {
     switchProject: "Switch project",
     searchProject: "Search a project…",
     noProjects: "No projects",
+    // ── Past conversations (LOT E1 — read-only browsing) ──
+    pastConversations: "Conversations",
+    pastConversationsHint: "Browse this project's past conversations (read-only)",
+    searchConversation: "Search a conversation…",
+    refreshConversations: "Refresh list",
+    loadingConversations: "Loading…",
+    noConversations: "No past conversations",
+    noConversationMatch: "No match",
+    untitledConversation: "Untitled conversation",
+    messageCount: (n: number) => `${n} message${n > 1 ? "s" : ""}`,
     // Context menu of the linked placeholder (storage "linked" project).
     linkedMenu: {
       menuHint: "Linked project — click to manage sub-projects",
@@ -503,6 +513,18 @@ export const en = {
     updatingTo: (v: string) => `Updating to ${v}... restarting`,
     updateSuccess: (v: string) => `Update to ${v} successful — restarting, auto-reconnecting.`,
     updateFailed: "Update failed",
+  },
+
+  // ── Past conversation (LOT E1 — read-only) ──
+  pastConversation: {
+    title: "PAST CONVERSATION",
+    bannerTitle: "Browsing — read-only",
+    bannerBody: "Past conversation: the current chat is unchanged. No message can be sent here.",
+    back: "Back to current chat",
+    loading: "Loading conversation…",
+    loadError: "Failed to load the conversation",
+    retry: "Retry",
+    empty: "This conversation has no displayable messages.",
   },
 
   // ── Design ──

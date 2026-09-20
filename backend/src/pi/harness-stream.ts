@@ -321,6 +321,193 @@ export function normalizeLegacyDelegateToolNames(messages: unknown[]): unknown[]
   }
 }
 
+// ── Neutralisation des appels d'outils IMPOSSIBLES (fuite du mode harness) ──
+//
+// PROBLÈME (audit usage outils) : en mode harness l'orchestrateur n'a que
+// `delegate` (+ les cbm_*), les tools d'exécution (bash/edit/read/grep/write/
+// find/ls) sont retirés. Quand le modèle les appelle quand même (session
+// REPRISE où il a réellement codé par le passé → il imite son historique), le
+// SDK renvoie un toolResult d'erreur laconique « Tool bash not found » qui ne
+// dit PAS quoi faire à la place → le modèle réessaie en boucle (386 tentatives
+// mesurées). Symétriquement, en mode code `delegate` est retiré et son
+// « not found » n'oriente pas vers le travail direct.
+//
+// SOLUTION : au moment où le contexte part au LLM (convertToLlm), on réécrit
+// le RÉSULTAT de ces erreurs en message ACTIONNABLE (quel tool appeler à la
+// place). On ne touche NI l'historique persisté NI l'UI : seul le contexte LLM
+// est modifié — exactement le même mécanisme que
+// normalizeLegacyDelegateToolNames (session reprise), étendu à TOUS les outils
+// indisponibles.
+//
+// POURQUOI convertToLlm (et pas beforeToolCall / afterToolCall) : dans
+// pi-agent-core (agent-loop.js), le contrôle « Tool … not found » court-
+// circuite AVANT le hook beforeToolCall — et n'atteint donc jamais
+// afterToolCall. Aucun hook d'exécution ne voit ces erreurs. convertToLlm, lui,
+// est appelé avant CHAQUE requête provider : il couvre à la fois l'erreur LIVE
+// du tour en cours (le modèle la relit au tour suivant) et les erreurs
+// HISTORIQUES d'une session reprise.
+
+/** Tools d'exécution de base retirés en mode harness (sous-ensemble de BASE_TOOLS). */
+export const EXECUTION_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+
+/** Détecte l'erreur SDK « Tool X not found » (variantes avec guillemets / Error:). */
+export function isToolNotFoundError(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  return /tool\s+["'`]?[\w.-]+["'`]?\s+not found/i.test(text);
+}
+
+/** Texte joint d'un contenu de message (string, ou blocs {type:"text"}). */
+function joinMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  let out = "";
+  for (const c of content) {
+    const anyC = c as any;
+    if (anyC && typeof anyC === "object" && anyC.type === "text" && typeof anyC.text === "string") {
+      out += anyC.text;
+    }
+  }
+  return out;
+}
+
+/**
+ * Message ACTIONNABLE de remplacement pour un appel d'outil impossible.
+ * Trois cas : `delegate` retiré (mode code → travailler directement), tool
+ * d'exécution retiré (mode harness → déléguer), outil inconnu/halluciné.
+ * Pur — testé.
+ */
+export function buildUnavailableToolGuidance(toolName: string, activeTools: string[]): string {
+  const name = String(toolName ?? "outil");
+  const list = activeTools.slice(0, 30).join(", ");
+  if (name === DELEGATE_TOOL_NAME) {
+    return (
+      `⚠️ Le tool « ${name} » n'est PAS disponible dans ce mode (travail direct). ` +
+      `Fais le travail toi-même avec les outils actifs (${list}). NE rappelle PAS « ${name} ».`
+    );
+  }
+  if ((EXECUTION_TOOL_NAMES as readonly string[]).includes(name)) {
+    return (
+      `⚠️ Le tool « ${name} » n'est PAS disponible en mode harness : l'orchestrateur ne code pas. ` +
+      `Pour faire exécuter/modifier/explorer du code, appelle le tool \`delegate\` avec ` +
+      `function="execute" (implémentation), "planning" (exploration/plan), "review" (audit) ` +
+      `ou "integrate" (synthèse). NE rappelle PAS « ${name} ».`
+    );
+  }
+  return (
+    `⚠️ Le tool « ${name} » n'existe pas ou n'est pas disponible dans ce mode. ` +
+    `Choisis un tool de ta liste d'outils active (${list}). NE rappelle PAS « ${name} ».`
+  );
+}
+
+/**
+ * Réécrit le CONTENU des toolResult d'erreur « Tool X not found » dont l'outil
+ * n'est PAS actif, en message pédagogique orientant vers un tool valide. Ne
+ * renvoie une nouvelle liste QUE si au moins un message est modifié (sinon la
+ * liste d'origine est retournée telle quelle). Jamais de mutation ; ne jette
+ * jamais. Si `activeTools` est vide, on ne peut pas décider → aucun changement.
+ */
+export function neutralizeUnavailableToolErrors(
+  messages: unknown[],
+  activeTools: string[],
+): unknown[] {
+  try {
+    if (!Array.isArray(messages) || !Array.isArray(activeTools) || activeTools.length === 0) {
+      return messages;
+    }
+    const active = new Set(activeTools);
+    let changed = false;
+    const out = messages.map((m) => {
+      const anyM = m as any;
+      if (!anyM || typeof anyM !== "object" || anyM.role !== "toolResult") return m;
+      const toolName = String(anyM.toolName ?? "");
+      if (!toolName || active.has(toolName)) return m;
+      if (!anyM.isError) return m;
+      if (!isToolNotFoundError(joinMessageText(anyM.content))) return m;
+      changed = true;
+      return {
+        ...anyM,
+        content: [{ type: "text", text: buildUnavailableToolGuidance(toolName, activeTools) }],
+      };
+    });
+    return changed ? out : messages;
+  } catch {
+    return messages;
+  }
+}
+
+// ── Garde-fou anti-spam d'exploration (sous-agents) ──────
+// Un sous-agent « execute » a enchaîné jusqu'à 138 actions / 524 s avec 0 appel
+// cbm_* (audit usage outils) : relectures de fichiers tronqués, grep en chaîne,
+// alors que le graphe de code était disponible. La consigne prompt ne suffit
+// pas → garde-fou mécanique. On compte les lectures/recherches CONSÉCUTIVES
+// sans cbm_* et, au seuil, on injecte un rappel court dans le contexte LLM du
+// sous-agent (message custom non affiché, cf. extension harness-orchestrator).
+
+/** Tools d'exploration « ligne par ligne » surveillés par le garde-fou. */
+export const EXPLORATION_TOOL_NAMES = ["read", "grep", "ls", "find"] as const;
+/** Préfixe des tools du graphe de code (codebase-memory). */
+export const CBM_TOOL_PREFIX = "cbm_";
+/** Seuil : au-delà de N explorations consécutives sans cbm_*, on rappelle. */
+export const EXPLORATION_NUDGE_THRESHOLD = 6;
+/** Plafond de rappels injectés par sous-agent (évite le bruit si le modèle ignore). */
+export const EXPLORATION_MAX_NUDGES = 3;
+
+export interface ExplorationGuardState {
+  /** Appels d'exploration consécutifs sans cbm_*. */
+  streak: number;
+  /** Rappels déjà injectés (plafonné à EXPLORATION_MAX_NUDGES). */
+  nudgesSent: number;
+}
+
+export interface ExplorationGuardDecision {
+  nextStreak: number;
+  nudgesSent: number;
+  /** true → injecter le rappel CBM dans le contexte du sous-agent. */
+  nudge: boolean;
+}
+
+/**
+ * Décide s'il faut injecter le rappel CBM après l'appel `toolName`.
+ * - cbm_* ou tout autre tool (edit/write/bash/analyze_file…) → reset du streak :
+ *   une requête au graphe ou une action de fond casse la série d'exploration ;
+ * - read/grep/ls/find → streak+1 ; au seuil (et sous le plafond) → nudge + reset.
+ * Pur — testé.
+ */
+export function decideExplorationNudge(
+  toolName: unknown,
+  state: ExplorationGuardState,
+  opts?: { threshold?: number; maxNudges?: number },
+): ExplorationGuardDecision {
+  const threshold = Math.max(1, opts?.threshold ?? EXPLORATION_NUDGE_THRESHOLD);
+  const maxNudges = Math.max(0, opts?.maxNudges ?? EXPLORATION_MAX_NUDGES);
+  const streak = Math.max(0, Math.floor(state?.streak ?? 0));
+  const nudgesSent = Math.max(0, Math.floor(state?.nudgesSent ?? 0));
+  const name = typeof toolName === "string" ? toolName : "";
+
+  const isCbm = name.startsWith(CBM_TOOL_PREFIX);
+  const isExploration = (EXPLORATION_TOOL_NAMES as readonly string[]).includes(name);
+
+  if (isCbm || !isExploration) {
+    return { nextStreak: 0, nudgesSent, nudge: false };
+  }
+  const next = streak + 1;
+  if (next >= threshold && nudgesSent < maxNudges) {
+    return { nextStreak: 0, nudgesSent: nudgesSent + 1, nudge: true };
+  }
+  return { nextStreak: next, nudgesSent, nudge: false };
+}
+
+/** Rappel court injecté dans le contexte du sous-agent (custom, non affiché). */
+export function buildExplorationReminder(): string {
+  return (
+    "[rappel automatique] Tu enchaînes read/grep/ls/find sans utiliser le graphe de code, " +
+    "or ce projet est indexé. AVANT toute nouvelle lecture ou recherche, tente un tool CBM : " +
+    "cbm_search (symbole par nom/pattern/sens), cbm_code (code d'un symbole), " +
+    "cbm_trace (appelants/appelés), cbm_search_code (texte), cbm_arch (architecture). " +
+    "N'utilise read/grep que si le graphe ne peut pas répondre (fichier hors projet, config, script)."
+  );
+}
+
 // ── Quota de sécurité (pur, horloge injectable pour les tests) ──
 
 export interface SubagentGateAdmission {

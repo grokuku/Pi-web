@@ -4,11 +4,14 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  effectiveCategoryForModel,
   extractSignals,
   heuristicClassifier,
+  isRoutingActive,
   isRoutingEnabled,
   llmClassifier,
   pickModel,
+  pickRoutedModel,
   resolveRoute,
 } from "./routing.js";
 import type { ModelLibrary, RegisteredModel } from "./model-library.js";
@@ -92,6 +95,39 @@ describe("isRoutingEnabled (kill switch)", () => {
   ])("activé pour ROUTING_ENABLED=%s", (value, expected) => {
     process.env.ROUTING_ENABLED = value;
     expect(isRoutingEnabled()).toBe(expected);
+  });
+});
+
+// ── isRoutingActive (kill switch combiné) ────────────
+
+describe("isRoutingActive (kill switch combiné global + config projet)", () => {
+  const ORIGINAL = process.env.ROUTING_ENABLED;
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.ROUTING_ENABLED;
+    else process.env.ROUTING_ENABLED = ORIGINAL;
+  });
+
+  it("actif ssi flag global ET config projet sont vrais", () => {
+    delete process.env.ROUTING_ENABLED;
+    expect(isRoutingActive({ enabled: true })).toBe(true);
+    expect(isRoutingActive({ enabled: false })).toBe(false);
+  });
+
+  it("le flag global coupe même quand la config projet est activée", () => {
+    process.env.ROUTING_ENABLED = "0";
+    expect(isRoutingActive({ enabled: true })).toBe(false);
+  });
+
+  it("la config projet coupe même quand le flag global est activé", () => {
+    delete process.env.ROUTING_ENABLED;
+    expect(isRoutingActive({ enabled: false })).toBe(false);
+  });
+
+  it("config absente/nulle → inactif (fail-safe)", () => {
+    delete process.env.ROUTING_ENABLED;
+    expect(isRoutingActive(null)).toBe(false);
+    expect(isRoutingActive(undefined)).toBe(false);
   });
 });
 
@@ -387,5 +423,94 @@ describe("pickModel (résolution et fallbacks)", () => {
 
   it("bibliothèque vide → null (aucun modèle disponible)", () => {
     expect(pickModel(stdRoute, makeConfig(), makeLibrary([], null))).toBeNull();
+  });
+});
+
+// ── effectiveCategoryForModel (risque + biais conservateur) ──
+
+/** Route de test minimale (fonction recalculée par les helpers testés). */
+function makeRoute(overrides: Partial<Route>): Route {
+  return {
+    category: "standard",
+    function: "execute",
+    modelId: null,
+    confidence: 0.9,
+    riskScore: 0.1,
+    reason: "",
+    ...overrides,
+  };
+}
+
+describe("effectiveCategoryForModel (risque + biais conservateur)", () => {
+  it("conserve la catégorie quand risque et confiance sont dans les seuils", () => {
+    expect(effectiveCategoryForModel(makeRoute({ category: "complex" }), makeConfig())).toBe("complex");
+    expect(effectiveCategoryForModel(makeRoute({ category: "trivial" }), makeConfig())).toBe("trivial");
+  });
+
+  it("force review quand riskScore >= reviewRiskThreshold (prudence)", () => {
+    const route = makeRoute({ category: "trivial", riskScore: 0.8 });
+    expect(effectiveCategoryForModel(route, makeConfig({ reviewRiskThreshold: 0.5 }))).toBe("review");
+  });
+
+  it("biais conservateur : confiance < seuil → monte d'un cran, jamais en dessous", () => {
+    const cfg = makeConfig({ confidenceThreshold: 0.6 });
+    expect(effectiveCategoryForModel(makeRoute({ category: "trivial", confidence: 0.4 }), cfg)).toBe("standard");
+    expect(effectiveCategoryForModel(makeRoute({ category: "standard", confidence: 0.4 }), cfg)).toBe("complex");
+    expect(effectiveCategoryForModel(makeRoute({ category: "complex", confidence: 0.4 }), cfg)).toBe("review");
+  });
+
+  it("review reste review même sous le seuil de confiance (plafond)", () => {
+    const route = makeRoute({ category: "review", confidence: 0.2, riskScore: 0.9 });
+    expect(effectiveCategoryForModel(route, makeConfig({ confidenceThreshold: 0.6 }))).toBe("review");
+  });
+
+  it("le gate risque prime sur le biais de confiance", () => {
+    const route = makeRoute({ category: "standard", confidence: 0.2, riskScore: 0.9 });
+    expect(effectiveCategoryForModel(route, makeConfig({ confidenceThreshold: 0.6 }))).toBe("review");
+  });
+});
+
+// ── pickRoutedModel (sélection par catégorie/risque/confiance) ──
+
+describe("pickRoutedModel (sélection par catégorie/risque/confiance)", () => {
+  const lib = makeLibrary(
+    [
+      makeModel("m-trivial"),
+      makeModel("m-standard"),
+      makeModel("m-complex"),
+      makeModel("m-review"),
+      makeModel("m-default", { isDefault: true }),
+    ],
+    "m-default",
+  );
+
+  it("sélectionne le modèle de la catégorie classée", () => {
+    const cfg = makeConfig({ standard: { modelId: "m-standard" }, complex: { modelId: "m-complex" } });
+    expect(pickRoutedModel(makeRoute({ category: "standard" }), cfg, lib)?.id).toBe("m-standard");
+    expect(pickRoutedModel(makeRoute({ category: "complex" }), cfg, lib)?.id).toBe("m-complex");
+  });
+
+  it("le gate risque force le modèle review", () => {
+    const cfg = makeConfig({ trivial: { modelId: "m-trivial" }, review: { modelId: "m-review" } });
+    const route = makeRoute({ category: "trivial", riskScore: 0.9 });
+    expect(pickRoutedModel(route, cfg, lib)?.id).toBe("m-review");
+  });
+
+  it("le biais conservateur escalade le modèle (catégorie supérieure)", () => {
+    const cfg = makeConfig({ standard: { modelId: "m-standard" }, complex: { modelId: "m-complex" }, confidenceThreshold: 0.6 });
+    const route = makeRoute({ category: "standard", confidence: 0.4 });
+    expect(pickRoutedModel(route, cfg, lib)?.id).toBe("m-complex");
+  });
+
+  it("fail-safe : aucun modèle configuré pour la catégorie → null (PAS de repli bibliothèque)", () => {
+    // Config vide : pickModel retomberait sur m-default, pickRoutedModel doit renvoyer null
+    // pour que l'appelant conserve le modèle du MODE.
+    expect(pickRoutedModel(makeRoute({ category: "complex" }), makeConfig(), lib)).toBeNull();
+    expect(pickModel(makeRoute({ category: "complex" }), makeConfig(), lib)?.id).toBe("m-default");
+  });
+
+  it("fail-safe : id configuré introuvable → null", () => {
+    const cfg = makeConfig({ complex: { modelId: "id-fantôme" } });
+    expect(pickRoutedModel(makeRoute({ category: "complex" }), cfg, lib)).toBeNull();
   });
 });

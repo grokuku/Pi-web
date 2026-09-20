@@ -28,15 +28,31 @@ function clamp(value: number, min = 0, max = 1): number {
 }
 
 /**
- * Feature flag global (kill switch) : permet de revenir à l'ancien comportement
- * sans routing. Ne tient PAS compte du flag par projet `routing.enabled` :
- * celui-ci est géré côté appelant (session.ts) via `isRoutingEnabled() &&
- * routingConfig.enabled`.
+ * Feature flag global (kill switch) : coupe le routage (niveau message ET
+ * sous-agents) quand `ROUTING_ENABLED` vaut "0"/"false". Il est CONSOMMÉ par
+ * les deux points d'application : `sendPrompt` (session.ts) et l'endpoint
+ * `/api/routing/decision` (routes/routing.ts, utilisé par l'orchestrateur de
+ * sous-agents). Le flag par projet `routing.enabled` est combiné au même
+ * endroit sous la forme `isRoutingEnabled() && routingConfig.enabled`.
  */
 export function isRoutingEnabled(): boolean {
   const raw = process.env.ROUTING_ENABLED;
   if (raw === undefined || raw === "") return true;
   return raw !== "0" && raw.toLowerCase() !== "false";
+}
+
+/**
+ * Kill switch COMBINÉ : le routage n'est actif que si le flag global (env) ET
+ * la config par projet/mode sont activés. Point d'entrée UNIQUE de la
+ * précédence, consommé par `sendPrompt` (session.ts) et par l'endpoint de
+ * décision (routes/routing.ts, orchestrateur de sous-agents inclus).
+ *
+ * Fonction pure (hors lecture de l'env) → testable directement.
+ */
+export function isRoutingActive(
+  config: Pick<RoutingConfig, "enabled"> | null | undefined,
+): boolean {
+  return isRoutingEnabled() && !!config?.enabled;
 }
 
 /** Normalise les champs optionnels de `SignalsInput` en valeurs par défaut. */
@@ -404,6 +420,7 @@ export function resolveRoute(
  *
  * `route.category` → `config[category].modelId` ; si l'id est absent ou
  * introuvable, retombe sur le modèle par défaut de la bibliothèque.
+ * (Routage des SOUS-AGENTS : le modèle par défaut est le repli attendu.)
  */
 export function pickModel(
   route: Route,
@@ -418,4 +435,59 @@ export function pickModel(
 
   const fallback = getDefaultModel(library);
   return fallback ?? null;
+}
+
+/**
+ * Ordre de capacité CROISSANTE des catégories (utilisé par le biais
+ * conservateur : jamais on ne descend d'un cran, seulement on monte).
+ */
+const CATEGORY_ASCENDING: TaskCategory[] = ["trivial", "standard", "complex", "review"];
+
+/**
+ * Catégorie EFFECTIVE utilisée pour choisir le modèle d'un MESSAGE.
+ *
+ * - Un `riskScore` >= `reviewRiskThreshold` force `review` (prudence) ;
+ * - une `confidence` < `confidenceThreshold` déclenche le biais CONSERVATEUR :
+ *   on monte d'un cran de capacité (jamais vers le bas).
+ *
+ * Fonction pure (aucun I/O) → testable directement.
+ */
+export function effectiveCategoryForModel(route: Route, config: RoutingConfig): TaskCategory {
+  const reviewRiskThreshold = config.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold;
+  const confidenceThreshold = config.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold;
+
+  if (route.riskScore >= reviewRiskThreshold) return "review";
+
+  if (route.confidence < confidenceThreshold) {
+    const index = CATEGORY_ASCENDING.indexOf(route.category);
+    if (index < 0) return route.category; // catégorie inconnue : on ne devine pas
+    return CATEGORY_ASCENDING[Math.min(CATEGORY_ASCENDING.length - 1, index + 1)];
+  }
+
+  return route.category;
+}
+
+/**
+ * Résout le modèle cible du ROUTAGE MESSAGE à partir de la catégorie effective
+ * (review / biais conservateur inclus).
+ *
+ * Contrairement à `pickModel`, AUCUN repli sur le modèle par défaut de la
+ * bibliothèque : retourne `null` quand la catégorie n'a pas de `modelId`
+ * configuré/retrouvable. L'appelant (session.ts) retombe alors sur le modèle du
+ * MODE (comportement actuel) — c'est le fail-safe exigé.
+ *
+ * Fonction pure (aucun I/O) → testable directement.
+ */
+export function pickRoutedModel(
+  route: Route,
+  config: RoutingConfig,
+  library: ModelLibrary,
+): RegisteredModel | null {
+  const category = effectiveCategoryForModel(route, config);
+  const categoryConfig = config?.[category];
+  if (categoryConfig?.modelId) {
+    const configured = getModel(library, categoryConfig.modelId);
+    if (configured) return configured;
+  }
+  return null;
 }

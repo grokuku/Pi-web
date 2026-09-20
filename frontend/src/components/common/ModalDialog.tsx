@@ -64,6 +64,8 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "delete-project": { w: 800, h: 500 },
   "new-chat-confirm": { w: 480, h: 300 },
   "file-viewer": { w: 900, h: 700 },
+  "past-conversation": { w: 1100, h: 820 },
+  "past-file-viewer": { w: 900, h: 700 },
   "extensions": { w: 900, h: 700 },
   "settings": { w: 1200, h: 800 },
   "usage-stats": { w: 1200, h: 800 },

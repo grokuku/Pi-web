@@ -210,6 +210,23 @@ Défauts : `modelId` null → fallback default ; classifieur LLM off par défaut
 
 **Garde-fou** : feature flag `ROUTING_ENABLED` pour revenir à l'ancien comportement.
 
+> **État implémenté (raccordement réalisé)** :
+> - **Niveau message (étape 3)** : `sendPrompt` appelle `applyMessageRouting`
+>   (`session.ts`) → `resolveRoute` + `pickRoutedModel` (couche `routing.ts`),
+>   puis applique le modèle via `applyModelAndThinking` et renseigne
+>   `state.lastRoute`. Le mode garde la main sur les outils/prompt.
+> - **Kill switch EFFECTIF** : `isRoutingActive(config)` combine `ROUTING_ENABLED`
+>   (env) ET `routing.enabled` (config projet/mode). Il coupe le routage des deux
+>   points d'application : `sendPrompt` (session.ts) et l'endpoint
+>   `/api/routing/decision` (routes/routing.ts, donc l'orchestrateur de
+>   sous-agents). Coupé → modèle du mode / `ctx.model`, délégation intacte.
+> - **Sélection du modèle** : la catégorie décide (trivial/standard/complex),
+>   `riskScore ≥ reviewRiskThreshold` force `review`, `confidence <
+>   confidenceThreshold` applique le biais conservateur (catégorie supérieure).
+>   Un `modelId` de catégorie non configuré/introuvable → repli sur le modèle du
+>   **mode** (fail-safe, jamais d'échec d'envoi). Décisions tracées en logs
+>   (catégorie `routing`).
+
 ## 8. Limites et points de vigilance
 
 1. **Fiabilité du triage** — atténuation : `confidence_threshold` + fallback `standard` + asymétrie de coût (préférer sur-router vers `capable`).

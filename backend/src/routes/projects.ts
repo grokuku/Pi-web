@@ -12,7 +12,8 @@ import {
 } from "../projects/manager.js";
 import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
-import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification } from "../pi/session.js";
+import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification, listSessions } from "../pi/session.js";
+import { readSessionHistoryFile, selectSessionFile } from "../pi/session-history.js";
 import { getDraft, getCleanedCommit, saveCleanedCommit, clearDraft } from "../pi/commit-draft.js";
 import { buildPushNotification } from "../projects/push-notification.js";
 
@@ -703,6 +704,44 @@ router.get("/:id/smb/status", async (req: Request, res: Response) => {
       share: project.smb?.share,
       mountPoint,
       mounted,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET historique LECTURE-SEULE d'une session passée (LOT E1 — navigation).
+// Route dédiée plutôt qu'un paramètre sessionId greffé sur pi_history_request :
+// ces messages WS opèrent sur la session ACTIVE du projet et la (re)démarrent
+// au besoin (auto-guérison), ce qui changerait la session courante — interdit
+// par le périmètre E1. Ici, lecture passive du fichier .jsonl, pagination
+// identique au chat (from/total/hasMore), aucun impact sur la session active.
+router.get("/:id/sessions/:sessionId/history", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+    const sessions = await listSessions(project.cwd, project.id);
+    const file = selectSessionFile(sessions, req.params.sessionId);
+    if (!file) return res.status(404).json({ error: "Session not found" });
+    const win = await readSessionHistoryFile(file, {
+      before: req.query.before,
+      beforeId: req.query.beforeId,
+      count: req.query.count,
+      all: req.query.all === "true",
+    });
+    res.json({
+      sessionId: req.params.sessionId,
+      messages: win.messages,
+      from: win.from,
+      total: win.total,
+      hasMore: win.hasMore,
+      // `end` = index EXCLUSIF de fin de la fenêtre renvoyée (premier message
+      // NON envoyé), symétrique du champ interne UiHistoryWindow.end. Il ne
+      // faut PAS le nommer `before` : `before` désigne déjà le PARAMÈTRE
+      // D'ENTRÉE (index du premier message non chargé par le client), d'où
+      // l'asymétrie trompeuse. Le frontend pilote sa pagination avec
+      // `from`/`hasMore` ; `end` reste informatif.
+      end: win.end,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

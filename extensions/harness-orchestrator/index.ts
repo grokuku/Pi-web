@@ -38,8 +38,11 @@ import {
 // - résumés d'outils PURS partagés (summarizeToolAction/summarizeToolArgs,
 //   testés côté backend) pour la persistance du résumé d'activité.
 import {
+  buildExplorationReminder,
   createSubagentEventGate,
+  decideExplorationNudge,
   emitSubagentEvent,
+  EXPLORATION_NUDGE_THRESHOLD,
   makeDelegateRunId,
   MAX_ACTIONS,
   MESSAGE_TEXT_MAX,
@@ -51,6 +54,7 @@ import {
   TOOL_OUTPUT_MAX,
   truncateChars,
   UPDATE_TEXT_MAX,
+  type ExplorationGuardState,
   type SubagentActionRecord,
   type SubagentEndStatus,
 } from "../../backend/src/pi/harness-stream.js";
@@ -117,15 +121,27 @@ const CBM_TOOLS: string[] = [
 
 // Consigne commune d'exploration ajoutée au prompt de chaque rôle. Objectif :
 // faire basculer le réflexe « lire les fichiers un par un » vers le graphe.
+// 
+// RÈGLES OPÉRATIONNELLES (pas seulement « privilégie ») : l'audit usage outils
+// a montré 0 appel cbm_* sur 298 actions de sous-agents malgré la consigne
+// précédente. On formule donc des DÉCLENCHEURS concrets et vérifiables.
 const CBM_EXPLORATION_GUIDE = `
 
-## Exploration du code (IMPORTANT)
-- Pour explorer le code, privilégie les tools CBM (\`cbm_search\`, \`cbm_code\`,
-  \`cbm_trace\`, \`cbm_search_code\`) plutôt que de lire les fichiers un par un :
-  une requête au graphe remplace des dizaines de \`read\`/\`grep\` en chaîne.
-- \`cbm_search\` : trouver un symbole par nom, pattern ou description sémantique.
-- \`cbm_code\` : récupérer le code d'un symbole. \`cbm_trace\` : qui l'appelle / qu'appelle-t-il.
-- \`cbm_diff\` : impact d'un changement non commité. \`cbm_arch\` : vue d'architecture du projet.`;
+## Exploration du code : le graphe AVANT les fichiers (RÈGLE)
+Le projet est indexé dans un graphe de code exposé par les tools \`cbm_*\`. Ces tools
+répondent en une requête à ce que \`read\`/\`grep\` mettent des dizaines d'appels à trouver.
+Règles concrètes :
+1. AVANT toute 2e lecture du MÊME fichier : appelle \`cbm_code\` sur le symbole visé
+   (une relecture de fichier tronqué est presque toujours remplaçable par un ciblage).
+2. AVANT toute recherche de symbole (définition, appelant, appelé) : essaie d'abord
+   \`cbm_search\` (nom/pattern/sens) ou \`cbm_trace\` (qui appelle quoi).
+3. AVANT un \`grep\` structurel ou récursif : essaie \`cbm_search_code\`.
+4. \`cbm_arch\` (architecture), \`cbm_diff\` (impact d'un changement non commité),
+   \`cbm_schema\` (schéma du graphe) complètent le jeu.
+N'utilise \`read\`/\`grep\`/\`find\`/\`ls\` QUE si le graphe ne peut pas répondre
+(fichier hors projet comme Dockerfile/entrypoint.sh, config, script non indexé),
+ou si les tools cbm_* ne sont pas disponibles. Si plusieurs \`read\`/\`grep\`
+s'enchaînent sans cbm_*, un rappel automatique te sera injecté.`;
 
 const FUNCTIONS: FunctionDef[] = [
   {
@@ -389,9 +405,19 @@ async function resolveRoutingDecision(
     if (!res.ok) return null;
 
     const data = await res.json();
+
+    // ── Kill switch : le backend renvoie déjà `route: null` quand le routage
+    // est coupé (global ou config projet/mode). On défend en profondeur : même
+    // si un backend plus ancien renvoyait une route, on l'ignore et on retombe
+    // sur le modèle par défaut (ctx.model) sans casser la délégation.
+    if (data?.routingEnabled === false || data?.configEnabled === false) {
+      return null;
+    }
+    if (!data?.route) return null;
+
     return {
-      function: data?.route?.function,
-      modelId: data?.modelId ?? data?.route?.modelId ?? undefined,
+      function: data.route.function,
+      modelId: data?.modelId ?? data.route.modelId ?? undefined,
     };
   } catch (e: any) {
     console.warn(`[harness-orchestrator] Route /api/routing/decision indisponible : ${e?.message || e}`);
@@ -1148,6 +1174,30 @@ export default function (pi: ExtensionAPI) {
             (tempSession as any).setActiveToolsByName(effectiveFunc.tools);
           }
 
+          // ── Vérification d'allowlist (point B) : les tools cbm_* demandés par
+          // le rôle sont-ils RÉELLEMENT actifs dans la tempSession ? Le SDK
+          // ignore silencieusement un nom inconnu de setActiveToolsByName ; si
+          // l'extension codebase-memory n'était pas chargée ici, le sous-agent
+          // n'aurait AUCUN tool de graphe et ne pourrait pas respecter la
+          // consigne. On le loggue au lieu de le supposer.
+          try {
+            const activeNames: string[] =
+              (tempSession as any).getActiveToolNames?.() ?? [];
+            const requestedCbm = CBM_TOOLS.filter((t) => effectiveFunc.tools.includes(t));
+            const missingCbm = requestedCbm.filter((t) => !activeNames.includes(t));
+            if (missingCbm.length > 0) {
+              console.warn(
+                `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : tools CBM absents du registre ` +
+                `(${missingCbm.join(", ")}) — le graphe est indisponible dans la tempSession`,
+              );
+            } else if (requestedCbm.length > 0) {
+              console.log(
+                `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : ${requestedCbm.length} tools CBM actifs ` +
+                `(${requestedCbm.join(", ")})`,
+              );
+            }
+          } catch {}
+
           // Set le system prompt APRÈS setActiveToolsByName (sinon écrasé)
           // Préserver le "Current working directory:" du SDK en l'ajoutant après le prompt de la fonction
           const cwdLine = (tempSession as any)._baseSystemPrompt?.match(/Current working directory: (.+)/)?.[0] || "";
@@ -1205,6 +1255,40 @@ export default function (pi: ExtensionAPI) {
           const SILENCE_TICK_MS = 10_000;   // timer périodique de détection de silence
           let lastEmitAt = 0;               // horodatage du dernier update émis
           const recentEvents: { at: number; label: string }[] = []; // 8 derniers events
+
+          // ── Garde-fou anti-spam d'exploration (point B) ───────────────
+          // L'audit a montré des sous-agents enchaînant jusqu'à 138 actions
+          // read/grep/ls/find SANS jamais appeler un tool cbm_* alors que le
+          // graphe était disponible. Au-delà de N explorations consécutives
+          // (decideExplorationNudge), on injecte un rappel court dans le
+          // contexte LLM de la tempSession : message custom NON affiché
+          // (display:false) et sans déclencher de nouveau tour (triggerTurn:false)
+          // → il est déposé à la fin du tour courant (tool results déjà posés)
+          // et lu au tour suivant. Aucune interruption du streaming ni de la
+          // boucle de l'agent ; rien n'est affiché côté UI (le forward structuré
+          // ne transmet que les tool_* et les message_end ASSISTANT).
+          let explorationGuard: ExplorationGuardState = { streak: 0, nudgesSent: 0 };
+          const maybeNudgeCbmExploration = (toolName: unknown): void => {
+            const decision = decideExplorationNudge(toolName, explorationGuard);
+            explorationGuard = { streak: decision.nextStreak, nudgesSent: decision.nudgesSent };
+            if (!decision.nudge) return;
+            try {
+              void tempSession
+                .sendCustomMessage(
+                  {
+                    customType: "cbm_exploration_nudge",
+                    content: buildExplorationReminder(),
+                    display: false,
+                  },
+                  { triggerTurn: false },
+                )
+                .catch(() => {});
+              console.log(
+                `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : rappel CBM injecté ` +
+                `(${decision.nudgesSent}) après ${EXPLORATION_NUDGE_THRESHOLD} explorations sans cbm_*`,
+              );
+            } catch {}
+          };
 
           // Réduit un event à une ligne courte (ou null si non significatif).
           // text_delta est agrégé via thinkingChars plutôt que ligne par ligne.
@@ -1270,6 +1354,10 @@ export default function (pi: ExtensionAPI) {
             try {
               eventCount++;
               lastEventAt = Date.now();
+              // Point B : compteur d'exploration (read/grep/ls/find sans cbm_*).
+              if (event?.type === "tool_execution_start") {
+                maybeNudgeCbmExploration(event.toolName);
+              }
               const line = formatEventLine(event);
               // P0 : extrait court du dernier event pour la meta d'archivage
               lastEventSummary = line || event?.type || "inconnu";

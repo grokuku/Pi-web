@@ -6,10 +6,14 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { GitPanel } from "./GitPanel";
 import { LinkedProjectMenu } from "./LinkedProjectMenu";
 import { ProjectSwitcher, SessionDots, type ProjectSessionInfo } from "./ProjectSwitcher";
+import { PastConversations } from "./PastConversations";
+import { PastConversationViewer } from "../Chat/PastConversationViewer";
+import { usePastSessions } from "../../hooks/usePastSessions";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { UpdateAgentModal } from "../Modals/UpdateAgentModal";
 import type { Project } from "../../types";
+import type { PastSession } from "../../types";
 import { useTranslation } from "../../i18n";
 
 interface Props {
@@ -22,6 +26,11 @@ interface Props {
   projectSessions?: Map<string, ProjectSessionInfo>;
   onSendCommand: (cmd: string) => void;
   onRefreshGit?: () => void;
+  // LOT E1 : WS (liste + lecture REST des conversations passées). Fournis par
+  // App afin que l'état « conversations » vive ICI (Sidebar) et ne re-rende
+  // PAS le chat courant lors de ses mises à jour.
+  on: (type: string, cb: (msg: any) => void) => () => void;
+  send: (msg: any) => boolean;
   // Rechargement de la liste des projets (après link/unlink d'un sous-projet).
   onProjectsChanged: () => void | Promise<void>;
 }
@@ -37,7 +46,21 @@ export function Sidebar({
   onSendCommand,
   onRefreshGit,
   onProjectsChanged,
+  on,
+  send,
 }: Props) {
+  // ── Conversations passées (LOT E1) ──
+  // État local à la Sidebar : ouvrir/rafraîchir la liste ne re-rend que ce
+  // sous-arbre, jamais ChatView. Le viewer est une modale portée dans <body>.
+  const { sessions: pastSessions, loading: pastSessionsLoading, refresh: refreshPastSessions } = usePastSessions(
+    activeProject?.id || "",
+    on,
+    send,
+  );
+  const [openPastSession, setOpenPastSession] = useState<PastSession | null>(null);
+  // Changer de projet ferme la visionneuse (la session sélectionnée appartient
+  // au projet précédent — le sessionId n'a de sens que dans son projet).
+  useEffect(() => { setOpenPastSession(null); }, [activeProject?.id]);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [confirmNewChat, setConfirmNewChat] = useState(false);
   const [updateAvailable, setUpdataAvailable] = useState(false);
@@ -180,6 +203,16 @@ export function Sidebar({
             ))}
           </div>
         )}
+
+        {/* ── Conversations passées (LOT E1 — consultation lecture seule) ── */}
+        {activeProject && (
+          <PastConversations
+            sessions={pastSessions}
+            loading={pastSessionsLoading}
+            onRefresh={refreshPastSessions}
+            onOpen={setOpenPastSession}
+          />
+        )}
       </div>
 
       {/* ── Git panel ── */}
@@ -288,6 +321,15 @@ export function Sidebar({
         latestVersion={piAgentLatest}
         currentVersion={piAgentCurrent || piAgentVersion}
       />
+
+      {/* ── Conversation passée en lecture seule (LOT E1) ── */}
+      {openPastSession && activeProject && (
+        <PastConversationViewer
+          projectId={activeProject.id}
+          session={openPastSession}
+          onClose={() => setOpenPastSession(null)}
+        />
+      )}
     </aside>
   );
 }

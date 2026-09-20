@@ -18,15 +18,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildExplorationReminder,
   buildSubagentEnvelope,
+  buildUnavailableToolGuidance,
   countLines,
   createSubagentEventGate,
+  decideExplorationNudge,
   emitSubagentEvent,
   filterSubagentActivityFromContext,
   firstLine,
   isSubagentActivityMessage,
+  isToolNotFoundError,
   makeDelegateRunId,
   mapLegacyDelegateRoleToFunction,
+  neutralizeUnavailableToolErrors,
   normalizeLegacyDelegateToolNames,
   resolveSubagentEmitter,
   registerSubagentEmitter,
@@ -381,5 +386,126 @@ describe("summarizeToolAction (aligné sur la spec LOT 2a)", () => {
       "résultat utile",
     );
     expect(summarizeToolAction({ toolName: "cbm_search" })).toBe("cbm_search");
+  });
+});
+
+describe("neutralizeUnavailableToolErrors (fuite du mode harness)", () => {
+  const harnessActive = ["delegate", "cbm_search", "cbm_code"];
+  const codeActive = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+  it("détecte l'erreur SDK « Tool X not found » (variantes)", () => {
+    expect(isToolNotFoundError("Tool bash not found")).toBe(true);
+    expect(isToolNotFoundError("Error: Tool 'bash' not found")).toBe(true);
+    expect(isToolNotFoundError("bash: foo: command not found")).toBe(false);
+    expect(isToolNotFoundError(undefined)).toBe(false);
+  });
+
+  it("réécrit un toolResult bash en harness → oriente vers delegate", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: "t1", toolName: "bash", isError: true, content: [{ type: "text", text: "Tool bash not found" }] },
+    ];
+    const out = neutralizeUnavailableToolErrors(messages, harnessActive) as any[];
+    const text = out[1].content[0].text;
+    expect(text).toContain("bash");
+    expect(text).toContain("delegate");
+    expect(text).toContain("execute");
+    // Assistant non modifié (pas de mutation du toolCall).
+    expect(out[0]).toEqual(messages[0]);
+  });
+
+  it("réécrit delegate en mode code → oriente vers le travail direct", () => {
+    const messages = [
+      { role: "toolResult", toolCallId: "t1", toolName: "delegate", isError: true, content: [{ type: "text", text: "Tool delegate not found" }] },
+    ];
+    const out = neutralizeUnavailableToolErrors(messages, codeActive) as any[];
+    expect(out[0].content[0].text).toContain("travail direct");
+    expect(out[0].content[0].text).toContain("bash");
+  });
+
+  it("neutre un outil halluciné inconnu (générique, liste des outils actifs)", () => {
+    const messages = [
+      { role: "toolResult", toolCallId: "t1", toolName: "write_file", isError: true, content: [{ type: "text", text: "Tool write_file not found" }] },
+    ];
+    const out = neutralizeUnavailableToolErrors(messages, harnessActive) as any[];
+    expect(out[0].content[0].text).toContain("n'existe pas ou n'est pas disponible");
+    expect(out[0].content[0].text).toContain("delegate");
+  });
+
+  it("ne touche PAS un outil actif, un succès, ou une erreur non 'not found'", () => {
+    const messages = [
+      { role: "toolResult", toolCallId: "t1", toolName: "bash", isError: false, content: [{ type: "text", text: "Tool bash not found" }] },
+      { role: "toolResult", toolCallId: "t2", toolName: "edit", isError: true, content: [{ type: "text", text: "oldText must match exactly" }] },
+      { role: "toolResult", toolCallId: "t3", toolName: "cbm_code", isError: true, content: [{ type: "text", text: "Tool cbm_code not found" }] },
+    ];
+    expect(neutralizeUnavailableToolErrors(messages, harnessActive)).toBe(messages);
+  });
+
+  it("no-op si aucune liste d'outils active (impossible de décider)", () => {
+    const messages = [
+      { role: "toolResult", toolCallId: "t1", toolName: "bash", isError: true, content: [{ type: "text", text: "Tool bash not found" }] },
+    ];
+    expect(neutralizeUnavailableToolErrors(messages, [])).toBe(messages);
+    expect(neutralizeUnavailableToolErrors(messages, undefined as any)).toBe(messages);
+  });
+
+  it("est idempotent et tolérant (ne jette jamais)", () => {
+    const messages = [
+      { role: "toolResult", toolCallId: "t1", toolName: "bash", isError: true, content: [{ type: "text", text: "Tool bash not found" }] },
+    ];
+    const once = neutralizeUnavailableToolErrors(messages, harnessActive);
+    const twice = neutralizeUnavailableToolErrors(once, harnessActive);
+    expect(twice).toEqual(once);
+    expect(neutralizeUnavailableToolErrors([null, "str", 42] as any, harnessActive)).toHaveLength(3);
+  });
+
+  it("buildUnavailableToolGuidance : 3 cas distincts", () => {
+    expect(buildUnavailableToolGuidance("bash", harnessActive)).toContain("mode harness");
+    expect(buildUnavailableToolGuidance("delegate", codeActive)).toContain("mode");
+    expect(buildUnavailableToolGuidance("file", harnessActive)).toContain("n'existe pas");
+  });
+});
+
+describe("decideExplorationNudge (garde-fou anti-spam CBM)", () => {
+  it("compte les explorations consécutives et nudge au seuil", () => {
+    let state = { streak: 0, nudgesSent: 0 };
+    for (let i = 1; i < 6; i++) {
+      const d = decideExplorationNudge("read", state, { threshold: 6 });
+      expect(d.nudge).toBe(false);
+      state = { streak: d.nextStreak, nudgesSent: d.nudgesSent };
+      expect(state.streak).toBe(i);
+    }
+    const d = decideExplorationNudge("read", state, { threshold: 6 });
+    expect(d.nudge).toBe(true);
+    expect(d.nextStreak).toBe(0);
+    expect(d.nudgesSent).toBe(1);
+  });
+
+  it("reset du streak sur un tool cbm_* ou un autre tool (edit/bash)", () => {
+    expect(decideExplorationNudge("cbm_code", { streak: 5, nudgesSent: 0 }, { threshold: 6 })).toEqual({
+      nextStreak: 0,
+      nudgesSent: 0,
+      nudge: false,
+    });
+    expect(decideExplorationNudge("edit", { streak: 5, nudgesSent: 0 }, { threshold: 6 }).nextStreak).toBe(0);
+    expect(decideExplorationNudge("bash", { streak: 5, nudgesSent: 0 }, { threshold: 6 }).nextStreak).toBe(0);
+  });
+
+  it("plafonne le nombre de rappels (maxNudges)", () => {
+    let state = { streak: 5, nudgesSent: 2 };
+    const d = decideExplorationNudge("grep", state, { threshold: 6, maxNudges: 2 });
+    expect(d.nudge).toBe(false);
+    expect(d.nudgesSent).toBe(2);
+  });
+
+  it("tolère un nom de tool inattendu (reset, pas de jet)", () => {
+    expect(decideExplorationNudge(undefined as any, { streak: 3, nudgesSent: 0 }).nextStreak).toBe(0);
+  });
+
+  it("buildExplorationReminder mentionne les tools du graphe", () => {
+    const r = buildExplorationReminder();
+    for (const tool of ["cbm_search", "cbm_code", "cbm_trace", "cbm_search_code", "cbm_arch"]) {
+      expect(r).toContain(tool);
+    }
   });
 });
