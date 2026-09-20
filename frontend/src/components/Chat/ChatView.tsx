@@ -9,6 +9,7 @@ import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { CollapsibleBlock, CollapseProvider, useCollapsible } from "./CollapsibleBlock";
 import { SubAgentBlock } from "./SubAgentBlock";
+import { ParallelSubAgents } from "./ParallelSubAgents";
 import { ToolCallTimer } from "./ToolCallTimer";
 import { buildToolSummaryFromCall, formatToolDuration } from "../../utils/toolSummaries";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
@@ -1467,6 +1468,9 @@ const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailE
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
     })}
+    {/* LOT 4 : sous-agents simultanés — vue EN COLONNES (mur dédié en fin de
+        fil, s'abonne seul au store isolé → aucun re-render du fil). */}
+    <ParallelSubAgents />
     {/* LOT 2b : runs de sous-agents ARCHIVÉS non rattachables à un tool `delegate`
         (dégradé propre en fin de fil). Composant isolé : il s'abonne seul au
         store → son re-rendu ne provoque PAS celui du fil. */}

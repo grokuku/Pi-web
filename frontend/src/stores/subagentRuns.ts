@@ -17,7 +17,7 @@
 // - `runFromActivity` reconstruit un run « archivé » depuis l'entrée custom
 //   `subagent_activity` persistée (relecture après rechargement).
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type {
   DisplayMessage,
   SubAgentAction,
@@ -516,6 +516,120 @@ export function subscribeRuns(cb: () => void): () => void {
 export function getOrphanRuns(): SubAgentRun[] {
   const attached = new Set(attachment.values());
   return [...runs.values()].filter((r) => r.archived && !attached.has(r.id));
+}
+
+// ── Détection de CONCURRENCE (LOT 4 : vue en colonnes) ───────────────────────
+// Objectif : repérer les sous-agents qui tournent EN MÊME TEMPS pour les
+// afficher côte à côte (split horizontal) au lieu de les empiler dans le fil.
+// Tout est PUR ici (aucun accès React/store) → testable unitairement ; le
+// composant ne fait que consommer le résultat via `useConcurrentRuns`.
+
+/**
+ * Vrai si le run est ENCORE ACTIF (n'a pas émis subagent_end). Seuls les runs
+ * actifs peuvent figurer dans une vue parallèle : un run terminé « rejoint le
+ * fil » (cf. spéc. §4).
+ */
+export function isRunActive(run: SubAgentRun): boolean {
+  return run.status === "running";
+}
+
+/**
+ * Intervalle temporel d'un run : [startedAt, endedAt ?? now]. Un run actif est
+ * ouvert jusqu'à `now` (il grandit à chaque rendu) ; un run terminé sans
+ * `endedAt` est réduit à un point (startedAt). `startedAt` absent → `now`.
+ */
+export function runTimeInterval(run: SubAgentRun, now: number): { start: number; end: number } {
+  const rawStart = typeof run.startedAt === "number" ? run.startedAt : now;
+  const end =
+    typeof run.endedAt === "number" ? run.endedAt : isRunActive(run) ? now : rawStart;
+  return { start: Math.min(rawStart, end), end: Math.max(rawStart, end) };
+}
+
+/**
+ * Sélectionne les GROUPES de runs dont les intervalles [startedAt, endedAt ??
+ * now] se CHEVAUCHENT et qui comptent ≥2 runs ENCORE ACTIFS à l'instant `now`.
+ * Ces groupes sont ceux à afficher en colonnes côte à côte.
+ *
+ * Algorithme (balayage glouton, O(n log n)) :
+ *  1. intervalle temporel de chaque run non archivé ;
+ *  2. tri par date de début + regroupement des intervalles qui se chevauchent
+ *     (composantes connexes — un run terminé peut faire le lien entre deux
+ *     actifs, d'où le balayage et non un simple « tous actifs ») ;
+ *  3. dans chaque composante, on ne CONSERVE que les runs actifs ; le groupe
+ *     n'est retenu que s'il reste ≥2 actifs (sinon comportement normal : un run
+ *     seul reste dans le fil). Tri chronologique dans le groupe.
+ *
+ * NB volontaire : deux runs actifs se chevauchent TOUJOURS (leurs deux
+ * intervalles contiennent `now`), donc en pratique il n'y a qu'un seul groupe =
+ * l'ensemble des runs actifs. La logique d'intervalles rend malgré tout la
+ * détection exacte pour tout mélange terminés/actifs (ex. : un run terminé qui
+ * n'était pas contemporain d'un run actif ne doit pas créer de colonne).
+ */
+export function selectConcurrentRuns(runs: SubAgentRun[], now: number = Date.now()): SubAgentRun[][] {
+  const items = runs
+    .filter((r): r is SubAgentRun => !!r && !r.archived && typeof r.id === "string")
+    .map((run) => ({ run, ...runTimeInterval(run, now) }))
+    .sort(
+      (a, b) =>
+        a.start - b.start || (a.run.id < b.run.id ? -1 : a.run.id > b.run.id ? 1 : 0),
+    );
+
+  const groups: SubAgentRun[][] = [];
+  let current: SubAgentRun[] = [];
+  let currentMaxEnd = -Infinity;
+
+  const flush = () => {
+    if (current.length > 0) {
+      const active = current
+        .filter(isRunActive)
+        .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
+      if (active.length >= 2) groups.push(active);
+    }
+    current = [];
+  };
+
+  for (const item of items) {
+    if (current.length === 0) {
+      current = [item.run];
+      currentMaxEnd = item.end;
+      continue;
+    }
+    // Chevauchement (bornes incluses) : le prochain début reste ≤ à la fin
+    // courante maximale → même composante.
+    if (item.start <= currentMaxEnd) {
+      current.push(item.run);
+      if (item.end > currentMaxEnd) currentMaxEnd = item.end;
+    } else {
+      flush();
+      current = [item.run];
+      currentMaxEnd = item.end;
+    }
+  }
+  flush();
+  return groups;
+}
+
+/** Tous les runs connus (actifs + archivés), dans l'ordre d'insertion. */
+export function getAllRuns(): SubAgentRun[] {
+  return [...runs.values()];
+}
+
+/**
+ * Hook : groupes de runs simultanés ACTIFS à afficher côte à côte. S'abonne au
+ * store ISOLÉ (version globale) → son re-rendu ne touche PAS le tableau
+ * `messages` (aucun re-render du fil).
+ */
+export function useConcurrentRuns(): SubAgentRun[][] {
+  const version = useSyncExternalStore(subscribeRuns, getRunsVersion, getRunsVersion);
+  // `version` change à chaque notification → recalcul (getAllRuns renvoie un
+  // nouveau tableau à chaque appel).
+  return useMemo(() => selectConcurrentRuns(getAllRuns()), [version]);
+}
+
+/** Vrai si le run appartient à un groupe concurrent (donc affiché en colonne). */
+export function isRunConcurrent(runId: string | undefined, groups: SubAgentRun[][]): boolean {
+  if (!runId) return false;
+  return groups.some((g) => g.some((r) => r.id === runId));
 }
 
 // ── Hooks React ──────────────────────────────────────────────────────────────

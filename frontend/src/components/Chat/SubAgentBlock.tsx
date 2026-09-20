@@ -24,7 +24,9 @@ import { computeDurationMs, formatToolDuration } from "../../utils/toolSummaries
 import {
   getOrphanRuns,
   getRunsVersion,
+  isRunConcurrent,
   subscribeRuns,
+  useConcurrentRuns,
   useSubAgentRun,
 } from "../../stores/subagentRuns";
 
@@ -82,7 +84,9 @@ interface HeaderProps {
   liveStartedAt?: number;
 }
 
-function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStartedAt }: HeaderProps) {
+/** En-tête commun d'un run (live, colonne parallèle, orphelin). Exporté pour
+ *  être réutilisé tel quel par la vue en colonnes (LOT 4). */
+export function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStartedAt }: HeaderProps) {
   const { t } = useTranslation();
   const { meta, roleLabel, model, task } = computeHeaderInfo(run, toolCall);
   const status = running ? "⟳" : failed ? "❌" : "✓";
@@ -125,7 +129,9 @@ function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStarte
 
 // ── Contenu commun (mini-fil du sous-agent) ──────────────────────────────────
 
-function SubAgentRunBody({ run, blockId, fallback }: { run?: SubAgentRun; blockId: string; fallback?: string }) {
+/** Contenu commun du mini-fil d'un run (messages, actions, résumé final).
+ *  Exporté pour être réutilisé par la vue en colonnes (LOT 4). */
+export function SubAgentRunBody({ run, blockId, fallback }: { run?: SubAgentRun; blockId: string; fallback?: string }) {
   const { t } = useTranslation();
   const hasStructured = !!run && (run.messages.length > 0 || run.actions.length > 0 || !!run.end);
   return (
@@ -212,6 +218,13 @@ interface Props {
 
 export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: Props) {
   const run = useSubAgentRun(toolCall);
+  // LOT 4 : si ce run fait partie d'un groupe de sous-agents SIMULTANÉS, il est
+  // affiché dans la vue EN COLONNES (ParallelSubAgents) et non ici — sinon on
+  // le verrait deux fois. Abonnement au store ISOLÉ : ce re-rendu ne touche PAS
+  // le fil de messages. Dès que le groupe retombe à <2 actifs, `isRunConcurrent`
+  // redevient faux et le bloc reprend sa place dans le fil (réversibilité).
+  const concurrentGroups = useConcurrentRuns();
+  if (run && isRunConcurrent(run.id, concurrentGroups)) return null;
   // Statut : le run (store) prime une fois connu ; sinon dérivé du toolCall.
   const running = run ? run.status === "running" : toolCall.isStreaming;
   const failed = run ? run.isError : isSubAgentFailed(toolCall);

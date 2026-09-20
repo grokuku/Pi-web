@@ -93,6 +93,38 @@ interface FunctionDef {
   tools: string[];
 }
 
+// ── Exploration du code par le graphe CBM ─────────────
+// Les tools cbm_* sont enregistrés par l'extension extensions/codebase-memory,
+// chargée par le DefaultResourceLoader PAR DÉFAUT du SDK — y compris dans la
+// tempSession des délégués (createAgentSession sans resourceLoader). Vérifié
+// par expérience : les 8 tools cbm_* sont bien dans le registre de la tempSession.
+// Les exposer à TOUS les rôles évite les chaînes coûteuses read/grep : une
+// requête au graphe répond à des questions structurelles (qui appelle quoi,
+// code d'un symbole, impact d'un diff). setActiveToolsByName ignore
+// silencieusement un nom inconnu → aucun risque si l'extension est absente.
+const CBM_TOOLS: string[] = [
+  "cbm_search",
+  "cbm_trace",
+  "cbm_code",
+  "cbm_search_code",
+  "cbm_diff",
+  "cbm_arch",
+  "cbm_cypher",
+  "cbm_schema",
+];
+
+// Consigne commune d'exploration ajoutée au prompt de chaque rôle. Objectif :
+// faire basculer le réflexe « lire les fichiers un par un » vers le graphe.
+const CBM_EXPLORATION_GUIDE = `
+
+## Exploration du code (IMPORTANT)
+- Pour explorer le code, privilégie les tools CBM (\`cbm_search\`, \`cbm_code\`,
+  \`cbm_trace\`, \`cbm_search_code\`) plutôt que de lire les fichiers un par un :
+  une requête au graphe remplace des dizaines de \`read\`/\`grep\` en chaîne.
+- \`cbm_search\` : trouver un symbole par nom, pattern ou description sémantique.
+- \`cbm_code\` : récupérer le code d'un symbole. \`cbm_trace\` : qui l'appelle / qu'appelle-t-il.
+- \`cbm_diff\` : impact d'un changement non commité. \`cbm_arch\` : vue d'architecture du projet.`;
+
 const FUNCTIONS: FunctionDef[] = [
   {
     name: "planning",
@@ -102,7 +134,7 @@ const FUNCTIONS: FunctionDef[] = [
     systemPrompt: `## RÔLE : PLANIFICATION
 
 Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu dois :
-1. Explorer le codebase existant (read, grep, find, ls, cbm_*)
+1. Explorer le codebase existant (CBM en priorité, puis read/grep/find/ls)
 2. Prendre les décisions techniques clés
 3. Produire un plan d'exécution clair et structuré
 
@@ -110,8 +142,9 @@ Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu 
 - Sois précis et concis
 - Liste les fichiers à créer/modifier
 - Décris l'approche technique et les dépendances
-- N'écris pas de code — c'est le job de la fonction execute`,
-    tools: ["read", "grep", "find", "ls", "cbm_search", "cbm_trace", "cbm_arch", "cbm_code", "cbm_search_code", "cbm_schema"],
+- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE,
+    // read-only : exploration (CBM + fichiers) + analyse de fichiers.
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS],
   },
   {
     name: "execute",
@@ -123,13 +156,15 @@ Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu 
 Tu implémentes les changements demandés.
 
 Règles :
-- Lis les fichiers concernés avant de commencer
+- Explore d'abord via les tools CBM (cbm_search/cbm_code/cbm_trace) plutôt que lire les fichiers un par un
+- Lis ensuite uniquement les fichiers concernés avant de commencer
 - Écris du code de qualité production
 - Suis les conventions existantes du projet
 - Fais des changements atomiques, un fichier à la fois
 - Gère les erreurs et edge cases
-- Teste tes changements avec bash si applicable`,
-    tools: ["read", "edit", "write", "bash", "grep", "find", "ls"],
+- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE,
+    // écriture/édition + bash + exploration (CBM + fichiers) + analyse + capture UI.
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS],
   },
   {
     name: "review",
@@ -141,12 +176,14 @@ Règles :
 Tu analyses le code pour trouver les problèmes.
 
 Règles :
+- Explore d'abord via les tools CBM (cbm_search/cbm_code/cbm_trace/cbm_diff) plutôt que lire les fichiers un par un
 - Vérifie la logique, la sécurité, les performances
 - Vérifie les edge cases non gérés
 - Signale les bugs avec fichier:ligne
 - Suggère des corrections concrètes
-- Ne modifie PAS le code toi-même`,
-    tools: ["read", "grep", "find", "ls"],
+- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE,
+    // read-only STRICT (pas d'edit/write/bash) : exploration, analyse, capture UI.
+    tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS],
   },
   {
     name: "integrate",
@@ -161,8 +198,9 @@ Règles :
 - Agrège les plans, implémentations et relectures
 - Rédige un rapport final clair et actionnable
 - Mets en évidence les décisions, les changements et les risques restants
-- Ne modifie PAS le code toi-même — c'est une synthèse`,
-    tools: ["read", "grep", "find", "ls"],
+- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE,
+    // read-only : exploration CBM + fichiers + analyse pour vérifier la synthèse.
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS],
   },
 ];
 

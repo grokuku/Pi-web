@@ -75,6 +75,9 @@ export const en = {
     subAgentAttempt: (n: number) => `attempt ${n}`,
     subAgentExtract: "(excerpt)",
     subAgentCause: "cause",
+    // ── LOT 4: side-by-side columns for simultaneous sub-agents ──
+    parallelSubAgents: (n: number) => `${n} sub-agents in parallel`,
+    parallelSubAgentsOverflow: (n: number) => `horizontal scroll beyond ${n}`,
     // ── Bouton « copier » sur les blocs de code markdown ──
     copyCode: "Copy code",
     copied: "Copied ✓",

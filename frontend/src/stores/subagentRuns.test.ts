@@ -3,17 +3,22 @@
 // testable sans React ni timer. On couvre aussi le rattachement FIFO + fonction
 // (routeSubagentEnvelope) et la reconstruction d'un run archivé (historique).
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { DisplayMessage } from "../types";
+import type { DisplayMessage, SubAgentRun } from "../types";
 import {
   applySubagentEvent,
   extractDelegateCalls,
   flushSubagentNotifications,
+  getAllRuns,
   getOrphanRuns,
   getRun,
+  isRunActive,
+  isRunConcurrent,
   registerArchivedRuns,
   resetSubagentRuns,
   routeSubagentEnvelope,
   runFromActivity,
+  runTimeInterval,
+  selectConcurrentRuns,
   subscribeRun,
   type SubagentEnvelope,
 } from "./subagentRuns";
@@ -311,5 +316,116 @@ describe("coalescing ~100 ms par run", () => {
     // L'état exposé est bien le plus récent (action présente).
     expect(getRun("r1")?.actions).toHaveLength(1);
     unsub();
+  });
+});
+
+// ── LOT 4 : détection de concurrence (vue en colonnes) ──────────────────────
+// `selectConcurrentRuns` est PURE (runs + now → groupes) : on la teste sans
+// React ni store. Aide : construit un run minimal actif/terminé.
+function makeRun(
+  id: string,
+  over: Partial<SubAgentRun> = {},
+): SubAgentRun {
+  return {
+    id,
+    function: "execute",
+    label: "Exécution",
+    task: "",
+    status: "running",
+    isError: false,
+    attempt: 1,
+    actions: [],
+    messages: [],
+    ...over,
+  };
+}
+
+describe("selectConcurrentRuns — groupes de sous-agents simultanés ACTIFS", () => {
+  it("deux runs ACTIFS qui se chevauchent → un groupe de deux", () => {
+    const a = makeRun("a", { startedAt: 0 });
+    const b = makeRun("b", { startedAt: 500 });
+    const groups = selectConcurrentRuns([a, b], 1000);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map((r) => r.id)).toEqual(["a", "b"]); // chronologique
+  });
+
+  it("un seul run actif → aucun groupe (fil normal)", () => {
+    expect(selectConcurrentRuns([makeRun("a", { startedAt: 0 })], 1000)).toEqual([]);
+    expect(selectConcurrentRuns([], 1000)).toEqual([]);
+  });
+
+  it("deux runs TERMINÉS non contemporains → aucun groupe", () => {
+    const a = makeRun("a", { status: "done", startedAt: 0, endedAt: 100 });
+    const b = makeRun("b", { status: "done", startedAt: 300, endedAt: 400 });
+    expect(selectConcurrentRuns([a, b], 1000)).toEqual([]);
+  });
+
+  it("un run TERMINÉ + un run ACTIF → aucun groupe (il ne reste qu'un actif)", () => {
+    const done = makeRun("done", { status: "done", startedAt: 0, endedAt: 900 });
+    const live = makeRun("live", { startedAt: 500 });
+    expect(selectConcurrentRuns([done, live], 1000)).toEqual([]);
+  });
+
+  it("un run terminé contemporain + deux actifs → le groupe ne contient que les actifs", () => {
+    const done = makeRun("done", { status: "done", startedAt: 0, endedAt: 800 });
+    const a = makeRun("a", { startedAt: 100 });
+    const b = makeRun("b", { startedAt: 200 });
+    const groups = selectConcurrentRuns([done, a, b], 1000);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("trois actifs → un seul groupe de trois, trié chronologiquement", () => {
+    const a = makeRun("a", { startedAt: 0 });
+    const b = makeRun("b", { startedAt: 10 });
+    const c = makeRun("c", { startedAt: 5 });
+    const groups = selectConcurrentRuns([a, b, c], 1000);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map((r) => r.id)).toEqual(["a", "c", "b"]);
+  });
+
+  it("les runs ARCHIVÉS (historique) sont ignorés", () => {
+    const a = makeRun("a", { startedAt: 0 });
+    const b = makeRun("b", { startedAt: 10, archived: true });
+    expect(selectConcurrentRuns([a, b], 1000)).toEqual([]);
+  });
+
+  it("runTimeInterval : ouvert jusqu'à now si actif, figé si terminé", () => {
+    expect(runTimeInterval(makeRun("a", { startedAt: 100 }), 500)).toEqual({ start: 100, end: 500 });
+    expect(runTimeInterval(makeRun("a", { status: "done", startedAt: 100, endedAt: 300 }), 500)).toEqual({ start: 100, end: 300 });
+    // Terminé sans endedAt → réduit à un point.
+    expect(runTimeInterval(makeRun("a", { status: "done", startedAt: 100 }), 500)).toEqual({ start: 100, end: 100 });
+    expect(isRunActive(makeRun("a"))).toBe(true);
+    expect(isRunActive(makeRun("a", { status: "failed" }))).toBe(false);
+  });
+
+  it("isRunConcurrent : appartenance à un groupe", () => {
+    const a = makeRun("a", { startedAt: 0 });
+    const b = makeRun("b", { startedAt: 10 });
+    const groups = selectConcurrentRuns([a, b], 1000);
+    expect(isRunConcurrent("a", groups)).toBe(true);
+    expect(isRunConcurrent("z", groups)).toBe(false);
+    expect(isRunConcurrent(undefined, groups)).toBe(false);
+  });
+});
+
+describe("getAllRuns / useConcurrentRuns — vue live du store", () => {
+  it("getAllRuns expose les runs vivants et les groupes se déduisent", () => {
+    const messages: DisplayMessage[] = [msg("a", ["execute", "execute"])];
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r1" }), messages, 100);
+    expect(selectConcurrentRuns(getAllRuns(), 200)).toEqual([]); // 1 seul actif
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r2" }), messages, 150);
+    const groups = selectConcurrentRuns(getAllRuns(), 200);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("un run terminé ne bloque pas : dès qu'il ne reste qu'un actif, plus de groupe", () => {
+    const messages: DisplayMessage[] = [msg("a", ["execute", "execute"])];
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r1" }), messages, 100);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r2" }), messages, 150);
+    expect(selectConcurrentRuns(getAllRuns(), 200)).toHaveLength(1);
+    routeSubagentEnvelope(env({ type: "subagent_end", status: "success" }, { delegateRunId: "r2" }), messages, 300);
+    expect(selectConcurrentRuns(getAllRuns(), 400)).toEqual([]);
   });
 });
