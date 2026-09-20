@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMem
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage } from "../../types";
+import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
@@ -1287,7 +1287,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 }
 
 // ── Grouped Messages ──
-interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; thinkingDurationMs?:number; }
+interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; blocks?:AssistantBlock[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; thinkingDurationMs?:number; }
 
 // Fenêtre d'affichage paginée des messages : on ne rend que les N derniers
 // groupes au départ, puis « charger les messages antérieurs » étend la fenêtre
@@ -1315,9 +1315,14 @@ const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailE
     // Mêmes références de messages → le cache est renvoyé tel quel (identité stable).
     if (prev.src === messages) return prev.groups;
     const next: DisplayMessage[][] = [];
+    // LOT 3 : un bloc de timeline (résultat d'outil orphelin, commande bash,
+    // compaction) est TOUJOURS un groupe autonome — il est rendu À SA DATE,
+    // jamais fusionné dans le groupe assistant voisin.
+    const isStandalone = (m: DisplayMessage) => !!m.kind;
     for (const msg of messages) {
-      if (msg.role === "user" || next.length === 0 || next[next.length - 1][0].role === "user") next.push([msg]);
-      else next[next.length - 1].push(msg);
+      const last = next[next.length - 1];
+      if (msg.role === "user" || isStandalone(msg) || next.length === 0 || last[0].role === "user" || isStandalone(last[0])) next.push([msg]);
+      else last.push(msg);
     }
     // Réutilisation d'identité : contenu identique (refs) → même tableau.
     for (let i = 0; i < next.length; i++) {
@@ -1455,6 +1460,10 @@ const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailE
     )}
     {visibleGroups.map((group) => {
       const first = group[0];
+      // LOT 3 : dispatch des blocs de timeline historique à leur place.
+      if (first.kind === "toolResult") return <ToolResultRow key={first.id} message={first} />;
+      if (first.kind === "bashExecution") return <BashExecutionRow key={first.id} message={first} />;
+      if (first.kind === "compaction") return <CompactionRow key={first.id} message={first} />;
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
     })}
@@ -1664,6 +1673,161 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, i
   );
 });
 
+// ── LOT 3 : blocs de timeline de l'historique ────────────────────────────────
+// Ces trois composants rendent À LEUR DATE des éléments autrefois mal placés ou
+// fusionnés. Ils suivent la même règle de repli que ToolCallRow (lot 1) :
+// réglage global + override utilisateur + auto-dépli des erreurs, via
+// CollapsibleBlock/useCollapsible.
+
+// Résultat d'outil ORPHELIN (toolCall absent de l'historique, ex. antérieur à
+// une compaction). Réutilise les résumés d'outils (lot 1) sur les details
+// historiques (isError, diff… ; durées absentes → omises).
+const ToolResultRow = memo(function ToolResultRow({ message }: { message: DisplayMessage }) {
+  const { t } = useTranslation();
+  const tr = message.toolResult!;
+  const summary = useMemo(() => buildToolSummaryFromCall(tr), [tr]);
+  const hasOutput = !!tr.output && tr.output.trim().length > 0;
+  const failed = summary.failed;
+  const blockId = `${message.id}:toolresult`;
+  const { expanded } = useCollapsible(blockId, failed);
+  const preRef = useRef<HTMLPreElement>(null);
+  // Aperçu : les 8 dernières lignes (tail -f) ; auto-scroll bas à l'ouverture.
+  const lastLines = useMemo(() => {
+    if (!hasOutput) return "";
+    return tr.output.split("\n").slice(-8).join("\n");
+  }, [tr.output, hasOutput]);
+  useEffect(() => {
+    if (expanded && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+  }, [tr.output, expanded]);
+
+  return (
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[95%] border border-dashed border-hacker-border rounded bg-hacker-surface/40 px-3 py-1.5">
+        <CollapsibleBlock
+          blockId={blockId}
+          isError={failed}
+          contentClassName="mt-1.5"
+          title={hasOutput ? t('chat.collapseTool') : undefined}
+          headerClassName={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left min-w-0 ${failed ? "text-red-400" : "text-hacker-text-dim"}`}
+          chevronPosition="right"
+          header={
+            <>
+              <span>{failed ? "❌" : "🧩"}</span>
+              <span className="font-bold">{shortName(tr.name)}</span>
+              <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+              <span className="text-hacker-text-dim">{t('chat.toolResultLabel')}</span>
+              {summary.text && (
+                <>
+                  <span className="text-hacker-text-dim/40" aria-hidden="true">·</span>
+                  <span className={`${failed ? "text-red-300" : "text-hacker-text-bright/80"} truncate max-w-[380px]`} title={summary.text}>
+                    {summary.text}
+                  </span>
+                </>
+              )}
+            </>
+          }
+        >
+          {hasOutput ? (
+            <pre ref={preRef} className="font-mono text-xs max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-hacker-border/40 rounded bg-hacker-bg/40 p-2 text-hacker-text-bright/90">
+              {lastLines}
+            </pre>
+          ) : null}
+        </CollapsibleBlock>
+      </div>
+    </div>
+  );
+});
+
+// Exécution bash (commande, sortie complète repliable, exitCode, cancelled).
+const BashExecutionRow = memo(function BashExecutionRow({ message }: { message: DisplayMessage }) {
+  const { t } = useTranslation();
+  const bash = message.bashExecution!;
+  const failed = bash.cancelled === true || (typeof bash.exitCode === "number" && bash.exitCode !== 0);
+  const hasOutput = !!bash.output && bash.output.trim().length > 0;
+  const blockId = `${message.id}:bash`;
+  const { expanded } = useCollapsible(blockId, failed);
+  const preRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (expanded && preRef.current) preRef.current.scrollTop = 0;
+  }, [expanded]);
+
+  return (
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[95%] border border-hacker-border rounded bg-hacker-bg/40 px-3 py-1.5">
+        <CollapsibleBlock
+          blockId={blockId}
+          isError={failed}
+          contentClassName="mt-1.5"
+          title={hasOutput ? t('chat.collapseTool') : undefined}
+          headerClassName={`inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left min-w-0 ${failed ? "text-red-400" : "text-hacker-text-dim"}`}
+          chevronPosition="right"
+          header={
+            <>
+              <span>{failed ? "❌" : "$ "}</span>
+              <span className="text-hacker-text-dim">{t('chat.bashExecutionLabel')}</span>
+              <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+              <span className="text-hacker-text-bright/80 truncate max-w-[420px]" title={bash.command}>{bash.command}</span>
+              {bash.cancelled && (
+                <span className="text-hacker-warn">· {t('chat.bashCancelled')}</span>
+              )}
+              {typeof bash.exitCode === "number" && (
+                <span className="text-hacker-text-dim/60 tabular-nums">· {t('chat.bashExit', bash.exitCode)}</span>
+              )}
+            </>
+          }
+        >
+          {hasOutput ? (
+            <pre ref={preRef} className="font-mono text-xs max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-hacker-border/40 rounded bg-hacker-bg/40 p-2 text-hacker-text-bright/90">
+              {bash.output}
+            </pre>
+          ) : null}
+        </CollapsibleBlock>
+      </div>
+    </div>
+  );
+});
+
+// Compaction de conversation : en-tête lisible (tokens libérés) + résumé dans
+// un bloc repliable, À SA DATE (remplace « *Conversation compacted* »).
+const CompactionRow = memo(function CompactionRow({ message }: { message: DisplayMessage }) {
+  const { t } = useTranslation();
+  const comp = message.compaction!;
+  const hasSummary = !!comp.summary && comp.summary.trim().length > 0;
+  const blockId = `${message.id}:compaction`;
+
+  return (
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[95%] border border-hacker-accent/30 rounded bg-hacker-accent/5 px-3 py-1.5">
+        <CollapsibleBlock
+          blockId={blockId}
+          contentClassName="mt-1.5"
+          title={hasSummary ? t('chat.compactionSummaryLabel') : undefined}
+          headerClassName="inline-flex items-center gap-1 text-[0.6875rem] font-mono leading-tight text-left min-w-0 text-hacker-accent/90"
+          chevronPosition="right"
+          header={
+            <>
+              <span>🗜</span>
+              <span className="font-bold">{t('chat.compactionLabel')}</span>
+              {typeof comp.tokensBefore === "number" && (
+                <>
+                  <span className="text-hacker-text-dim/40" aria-hidden="true">—</span>
+                  <span className="text-hacker-text-dim">{t('chat.compactionFreed', comp.tokensBefore)}</span>
+                </>
+              )}
+            </>
+          }
+        >
+          {hasSummary ? (
+            <div className="text-xs text-hacker-text-bright/90 whitespace-pre-wrap break-words border border-hacker-border/40 rounded bg-hacker-bg/40 p-2">
+              {comp.summary}
+            </div>
+          ) : null}
+        </CollapsibleBlock>
+      </div>
+    </div>
+  );
+});
+
 // ── Contenu markdown d'un message assistant (perf) ───────────────────────
 // Isolé pour pouvoir appeler useThrottledValue (hook) sans violer les règles
 // des hooks dans le map de messages. Le contenu du message EN STREAMING est
@@ -1673,6 +1837,34 @@ const AssistantContent = memo(function AssistantContent({ content, isStreaming }
   const display = isStreaming ? useThrottledValue(content, 45) : content;
   return <MemoizedReactMarkdown>{display}</MemoizedReactMarkdown>;
 });
+
+// ── (chronologie) Segments d'affichage d'un message assistant ─────────────
+// Si le message porte `blocks` (ordre réel d'écriture capturé au streaming ou
+// reconstruit depuis content[] en historique), on rend DANS CET ORDRE : texte →
+// outil → texte → réflexion… C'est LE correctif « fil chronologique » (avant,
+// le rendu regroupait par type et affichait un appel d'outil AVANT le texte qui
+// l'avait précédé). Repli sur l'ancien regroupement par type si `blocks` est
+// absent (messages en cache antérieurs au correctif).
+function assistantSegments(msg: AssistantMsg): AssistantBlock[] {
+  if (msg.blocks && msg.blocks.length > 0) {
+    // Sécurité : tout toolCall non référencé par un bloc est ajouté en fin
+    // (on ne perd jamais silencieusement une action).
+    const referenced = new Set(
+      msg.blocks
+        .filter((b): b is Extract<AssistantBlock, { kind: "toolCall" }> => b.kind === "toolCall")
+        .map((b) => b.toolCallId),
+    );
+    const extras: AssistantBlock[] = msg.toolCalls
+      .filter((tc) => !referenced.has(tc.id))
+      .map((tc) => ({ kind: "toolCall" as const, toolCallId: tc.id }));
+    return extras.length > 0 ? [...msg.blocks, ...extras] : msg.blocks;
+  }
+  const segs: AssistantBlock[] = [];
+  if (msg.thinking) segs.push({ kind: "thinking", text: msg.thinking });
+  for (const tc of msg.toolCalls) segs.push({ kind: "toolCall", toolCallId: tc.id });
+  if (msg.content) segs.push({ kind: "text", text: msg.content });
+  return segs;
+}
 
 const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: AssistantMsg[] }) {
   const { t } = useTranslation();
@@ -1699,15 +1891,23 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
         {messages.map((msg, i) => {
           const isFirst = i === 0;
           const showThinking = !!msg.thinking;
-          const showTools = msg.toolCalls.length > 0;
           const showContent = !!msg.content;
-          const showThinkingPlaceholder = msg._streaming && !showContent && !showTools && !showThinking;
           // Only add a visual separator between messages that have substantial content
           // (thinking or response). Tool-only messages flow inline with the previous block.
-          const hasSubstantialContent = showThinking || showContent || showThinkingPlaceholder;
+          const hasSubstantialContent = showThinking || showContent;
           // LOT 1 : turn LLM échoué (BUG-68) → auto-dépli forcé des blocs de
           // détail portés par ce message (réflexion, sorties d'outils).
           const turnFailed = msg.stopReason === "error" || !!msg.errorMessage;
+          // Segments DANS L'ORDRE du tableau content[] (chronologie réelle).
+          const segs = assistantSegments(msg);
+          // Dernier tool call EN COURS du message (celui qui streame) :
+          // c'est lui qui est « dernier actif » → aperçu déplié par défaut.
+          let lastActiveIdx = -1;
+          for (let k = 0; k < msg.toolCalls.length; k++) {
+            if (msg.toolCalls[k].isStreaming) lastActiveIdx = k;
+          }
+          const tcById = new Map(msg.toolCalls.map((tc, idx) => [tc.id, { tc, idx }]));
+          const showThinkingPlaceholder = msg._streaming && segs.length === 0;
 
           return (
             <div key={msg.id} className={hasMultiple && !isFirst && hasSubstantialContent ? "border-t border-hacker-border/30" : ""}>
@@ -1721,64 +1921,67 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
                   </div>
                 </div>
               )}
-              {/* Thinking — repli piloté par CollapseProvider (précédence : override >
-                  auto-repli réflexion consommée > erreur > réglage global) ;
-                  textStarted = contenu non vide → auto-repli TRANSITOIRE tant que
-                  le message streame (l'en-tête garde « a réfléchi Xs »). */}
-              {showThinking && (
-                <div className="px-3 py-2">
-                  <ThinkingBlock
-                    thinking={msg.thinking}
-                    blockId={`${msg.id}:thinking`}
-                    isError={turnFailed}
-                    isStreaming={!!msg._streaming}
-                    textStarted={!!msg.content}
-                    thinkingDurationMs={msg.thinkingDurationMs}
-                  />
-                </div>
-              )}
-
-              {/* Tools — ligne compacte + résumé + aperçu d'output dépliable ;
-                  le tool `delegate` est rendu en pseudo bloc sous-agent (LOT 1).
-                  AUTO-DÉPLI rétabli : seul le DERNIER tool call EN COURS du
-                  message streame déplié (sortie live tail -f). */}
-              {showTools && (() => {
-                // Dernier tool call EN COURS du message (celui qui streame) :
-                // c'est lui qui est « dernier actif » → aperçu déplié par défaut.
-                let lastActiveIdx = -1;
-                for (let i = 0; i < msg.toolCalls.length; i++) {
-                  if (msg.toolCalls[i].isStreaming) lastActiveIdx = i;
+              {/* ── Blocs rendus DANS L'ORDRE CHRONOLOGIQUE du message ──
+                  (texte → réflexion → outil → texte…). Un bloc `delegate` est
+                  rendu en pseudo bloc sous-agent (LOT 1). AUTO-DÉPLI : le
+                  DERNIER outil EN COURS du message streame déplié (tail -f). */}
+              {segs.map((seg, si) => {
+                if (seg.kind === "thinking") {
+                  // Bloc de réflexion vide en historique → rien à montrer.
+                  if (!seg.text.trim() && !msg._streaming) return null;
+                  // Thinking — repli piloté par CollapseProvider (précédence :
+                  // override > auto-repli réflexion consommée > erreur > réglage) ;
+                  // textStarted = contenu non vide → auto-repli TRANSITOIRE.
+                  return (
+                    <div key={`th-${si}`} className="px-3 py-2">
+                      <ThinkingBlock
+                        thinking={seg.text}
+                        blockId={`${msg.id}:thinking:${si}`}
+                        isError={turnFailed}
+                        isStreaming={!!msg._streaming}
+                        textStarted={!!msg.content}
+                        thinkingDurationMs={msg.thinkingDurationMs}
+                      />
+                    </div>
+                  );
                 }
+                if (seg.kind === "text") {
+                  if (!seg.text.trim() && !msg._streaming) return null;
+                  const isLastSegment = si === segs.length - 1;
+                  return (
+                    <div key={`tx-${si}`} className="px-3 py-2 prose-hacker">
+                      <AssistantContent content={seg.text} isStreaming={!!msg._streaming} />
+                      {msg._streaming && isLastSegment && <span className="cursor-blink" />}
+                    </div>
+                  );
+                }
+                // toolCall — retrouve le toolCall réel par id (ordre du bloc).
+                const entry = tcById.get(seg.toolCallId);
+                if (!entry) return null;
+                const { tc, idx } = entry;
                 return (
-                  <div className={`px-3 flex flex-col gap-1.5 ${showThinking || showContent ? 'pb-1.5' : 'py-1.5'}`}>
-                    {msg.toolCalls.map((tc, idx) => (
-                      tc.name === "delegate" ? (
-                        <SubAgentBlock
-                          key={tc.id}
-                          toolCall={tc}
-                          blockId={`${msg.id}:delegate:${tc.id}`}
-                          isLastRunning={idx === lastActiveIdx}
-                        />
-                      ) : (
-                        <ToolCallRow
-                          key={tc.id}
-                          toolCall={tc}
-                          blockId={`${msg.id}:tool:${tc.id}`}
-                          turnFailed={turnFailed}
-                          isLastRunning={idx === lastActiveIdx}
-                        />
-                      )
-                    ))}
+                  <div key={`tc-${seg.toolCallId}`} className="px-3 flex flex-col gap-1.5 py-1.5">
+                    {tc.name === "delegate" ? (
+                      <SubAgentBlock
+                        toolCall={tc}
+                        blockId={`${msg.id}:delegate:${tc.id}`}
+                      />
+                    ) : (
+                      <ToolCallRow
+                        toolCall={tc}
+                        blockId={`${msg.id}:tool:${tc.id}`}
+                        turnFailed={turnFailed}
+                        isLastRunning={idx === lastActiveIdx}
+                      />
+                    )}
                   </div>
                 );
-              })()}
+              })}
 
-              {/* Content */}
-              {(showContent || showThinkingPlaceholder) && (
+              {/* Placeholder de streaming tant qu'aucun bloc n'existe. */}
+              {showThinkingPlaceholder && (
                 <div className="px-3 py-2 prose-hacker">
-                  {showContent ? <AssistantContent content={msg.content} isStreaming={!!msg._streaming} /> : null}
-                  {showThinkingPlaceholder && <span className="text-hacker-text-dim italic text-sm">{t('chat.thinking')}</span>}
-                  {msg._streaming && showContent && <span className="cursor-blink" />}
+                  <span className="text-hacker-text-dim italic text-sm">{t('chat.thinking')}</span>
                 </div>
               )}
             </div>

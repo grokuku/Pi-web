@@ -9,7 +9,8 @@
 // - `applySubagentEvent` est PUR (run précédent + enveloppe → nouveau run) :
 //   testable unitairement, sans React ni timer.
 // - `routeSubagentEnvelope` applique l'event au store + rattache le run au
-//   toolCall `delegate` correspondant (FIFO + args.function) puis notifie.
+//   toolCall `delegate` correspondant (EXACT via details.delegateRunId, sinon
+//   FIFO + args.function en secours) puis notifie.
 // - Coalescing ~100 ms PAR RUN : les events arrivent en rafale (tool deltas
 //   forwardés), l'état interne est mis à jour immédiatement mais les abonnés ne
 //   sont réveillés qu'au plus toutes les 100 ms.
@@ -363,13 +364,27 @@ function bumpAttachment(): void {
   for (const cb of attachmentListeners) cb();
 }
 
-/** Extrait les tool calls `delegate` (ordre chronologique) d'une liste de messages. */
-export function extractDelegateCalls(messages: DisplayMessage[]): { id: string; fn: string }[] {
-  const calls: { id: string; fn: string }[] = [];
+/**
+ * Extrait les tool calls `delegate` (ordre chronologique) d'une liste de
+ * messages. `runId` = delegateRunId porté par le RETOUR du tool (details du
+ * toolCall — priorité — ou, à défaut, args) : sert au rattachement EXACT.
+ */
+export function extractDelegateCalls(
+  messages: DisplayMessage[],
+): { id: string; fn: string; runId?: string }[] {
+  const calls: { id: string; fn: string; runId?: string }[] = [];
   for (const m of messages) {
     for (const tc of m.toolCalls || []) {
       if (tc.name === "delegate") {
-        calls.push({ id: tc.id, fn: typeof tc.args?.function === "string" ? tc.args.function : "" });
+        const runId =
+          (typeof tc.details?.delegateRunId === "string" && tc.details.delegateRunId) ||
+          (typeof tc.args?.delegateRunId === "string" && tc.args.delegateRunId) ||
+          undefined;
+        calls.push({
+          id: tc.id,
+          fn: typeof tc.args?.function === "string" ? tc.args.function : "",
+          ...(runId ? { runId } : {}),
+        });
       }
     }
   }
@@ -377,14 +392,32 @@ export function extractDelegateCalls(messages: DisplayMessage[]): { id: string; 
 }
 
 /**
- * Rattache un run à un toolCall `delegate` non encore revendiqué :
- *  1. FIFO + args.function (match exact) ;
- *  2. sinon premier toolCall `delegate` libre (fonction re-classée par le
+ * Rattache un run à un toolCall `delegate` NON encore rattaché :
+ *  1. EXACT — un toolCall porte `details.delegateRunId` (retour du tool, LOT 2a) :
+ *     rattachement fiable même si deux délégations tournent en parallèle ;
+ *  2. FIFO + args.function (match exact) ;
+ *  3. sinon premier toolCall `delegate` libre (fonction re-classée par le
  *     routeur backend → l'args.function demandé peut différer de l'effective).
+ * Le FIFO ne sert que de SECOURS quand `details` n'est pas encore disponible
+ * (live : le tool_execution_end du delegate le porte) ou pour l'historique
+ * ancien sans details. Le rendu de SubAgentBlock, lui, lit directement
+ * toolCall.details.delegateRunId (useSubAgentRun) → il est EXACT dès que le
+ * toolCall commité porte le retour du tool, sans dépendre de cette table.
  */
 function attachRun(runId: string, fn: string, messages: DisplayMessage[]): void {
-  if ([...attachment.values()].includes(runId)) return;
   const calls = extractDelegateCalls(messages);
+
+  // 1) Rattachement EXACT par details.delegateRunId (autoritaire).
+  const exact = calls.find((c) => c.runId === runId);
+  if (exact) {
+    attachment.set(exact.id, runId);
+    const r = runs.get(runId);
+    if (r && r.toolCallId !== exact.id) runs.set(runId, { ...r, toolCallId: exact.id });
+    bumpAttachment();
+    return;
+  }
+
+  // 2) FIFO + args.function (secours).
   const claimed = (id: string) => attachment.has(id);
   const chosen =
     calls.find((c) => !claimed(c.id) && c.fn === fn) || calls.find((c) => !claimed(c.id));
@@ -400,6 +433,8 @@ function attachRun(runId: string, fn: string, messages: DisplayMessage[]): void 
 /**
  * Applique un événement sous-agent et rattache le run (au premier event) au
  * toolCall `delegate` visé. Retourne le run à jour. Ne touche JAMAIS `messages`.
+ * Le rattachement privilégie details.delegateRunId (LOT 2a) ; le FIFO par
+ * args.function reste le secours tant que le retour du tool n'est pas commité.
  */
 export function routeSubagentEnvelope(
   env: SubagentEnvelope,
@@ -485,7 +520,12 @@ export function getOrphanRuns(): SubAgentRun[] {
 
 // ── Hooks React ──────────────────────────────────────────────────────────────
 
-/** Run rattaché à un toolCall `delegate` (ou `directRunId` si porté par le toolCall). */
+/**
+ * Run rattaché à un toolCall `delegate`. PRIORITÉ au delegateRunId porté par
+ * le RETOUR du tool (details.delegateRunId — rattachement EXACT, y compris
+ * pour des délégations parallèles) ; repli sur le FIFO de la table de
+ * rattachement si le toolCall ne porte pas encore details.
+ */
 export function useSubAgentRun(toolCall: {
   id: string;
   args?: any;

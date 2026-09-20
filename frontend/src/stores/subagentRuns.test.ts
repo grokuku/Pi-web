@@ -248,11 +248,51 @@ describe("routeSubagentEnvelope — rattachement FIFO + args.function", () => {
     expect(extractDelegateCalls(messages)).toEqual([{ id: "y", fn: "review" }]);
   });
 
+  it("extractDelegateCalls remonte details.delegateRunId (retour du tool)", () => {
+    const messages: DisplayMessage[] = [{
+      id: "a", role: "assistant", content: "", thinking: "", timestamp: 0,
+      toolCalls: [{ id: "y", name: "delegate", args: { function: "review" }, output: "", isError: false, isStreaming: false, details: { delegateRunId: "d-1" } }],
+    }];
+    expect(extractDelegateCalls(messages)).toEqual([{ id: "y", fn: "review", runId: "d-1" }]);
+  });
+
   it("runs archivés non rattachables → orphelins (fin de fil)", () => {
     const run = runFromActivity({ delegateRunId: "d-orphan", function: "execute", status: "success" }, 0)!;
     // Aucun tool call `delegate` fourni → pas de rattachement.
     registerArchivedRuns([run], []);
     expect(getOrphanRuns().some((r) => r.id === "d-orphan")).toBe(true);
+  });
+
+  describe("rattachement EXACT par details.delegateRunId (LOT 2a)", () => {
+    // Tool call `delegate` portant le retour du tool (details.delegateRunId).
+    function msgWithRun(id: string, fn: string, runId: string): DisplayMessage {
+      return {
+        id, role: "assistant", content: "", thinking: "", timestamp: 0,
+        toolCalls: [{
+          id: `${id}-tc`, name: "delegate", args: { function: fn },
+          output: "", isError: false, isStreaming: false,
+          details: { delegateRunId: runId },
+        }],
+      };
+    }
+
+    it("routeSubagentEnvelope rattache via details même si l'ordre FIFO diffère", () => {
+      // Tool calls dans l'ordre b (r2) puis a (r1) : le FIFO attacherait r1 au
+      // premier libre (b) ; details impose le rattachement exact.
+      const messages = [msgWithRun("b", "execute", "r2"), msgWithRun("a", "execute", "r1")];
+      routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r1" }), messages);
+      routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r2" }), messages);
+      expect(getRun("r1")?.toolCallId).toBe("a-tc");
+      expect(getRun("r2")?.toolCallId).toBe("b-tc");
+    });
+
+    it("runs archivés rattachés exactement par details (avant le FIFO)", () => {
+      const run = runFromActivity({ delegateRunId: "r2", function: "execute", status: "success" }, 0)!;
+      const messages = [msgWithRun("b", "execute", "r2"), msgWithRun("a", "execute", "r1")];
+      registerArchivedRuns([run], messages);
+      expect(getRun("r2")?.toolCallId).toBe("b-tc");
+      expect(getOrphanRuns().some((r) => r.id === "r2")).toBe(false);
+    });
   });
 });
 

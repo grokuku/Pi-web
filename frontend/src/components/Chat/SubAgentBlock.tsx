@@ -88,9 +88,13 @@ function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStarte
   const status = running ? "⟳" : failed ? "❌" : "✓";
   const actionCount = run?.actions.length ?? 0;
   const attempt = run?.attempt ?? 1;
-  // Aperçu replié : dernier résumé d'action ou dernière capture d'output.
+  // Aperçu replié : dernier résumé d'action, sinon dernier output connu — du
+  // run (events structurés) OU du toolCall delegate (aperçu buildProgressText,
+  // filet de secours si les events sous-agent n'arrivent pas). Toujours visible
+  // (même replié), pour ne jamais laisser un run muet.
   const lastAction = run?.actions.length ? run.actions[run.actions.length - 1] : undefined;
-  const preview = lastAction?.summary || (run?.currentOutput || "").split("\n").filter(Boolean).slice(-1)[0] || "";
+  const lastLine = (s: string | undefined) => (s || "").split("\n").filter(Boolean).slice(-1)[0] || "";
+  const preview = lastAction?.summary || lastLine(run?.currentOutput) || lastLine(toolCall?.output) || "";
   return (
     <>
       <span>{status}</span>
@@ -108,8 +112,12 @@ function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStarte
       ) : durationMs !== undefined ? (
         <span className="text-hacker-text-dim/60 tabular-nums">{formatToolDuration(durationMs)}</span>
       ) : null}
-      {!running && preview && (
-        <span className="text-hacker-text-dim/50 truncate max-w-[220px]">{preview}</span>
+      {/* Indicateur d'activité TOUJOURS visible (même replié) : dernière action
+          résumée ou dernier output — évite le « silence total » pendant un run. */}
+      {preview && (
+        <span className={`truncate max-w-[220px] ${running ? "text-hacker-accent/70" : "text-hacker-text-dim/50"}`} title={preview}>
+          {running ? "· " : ""}{preview}
+        </span>
       )}
     </>
   );
@@ -200,19 +208,21 @@ interface Props {
   toolCall: ToolCallInfo;
   /** Clé d'override par bloc (CollapsibleBlock). */
   blockId: string;
-  /** Vrai si ce tool call est le DERNIER en cours de son groupe (message). */
-  isLastRunning?: boolean;
 }
 
-export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId, isLastRunning = false }: Props) {
+export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: Props) {
   const run = useSubAgentRun(toolCall);
   // Statut : le run (store) prime une fois connu ; sinon dérivé du toolCall.
   const running = run ? run.status === "running" : toolCall.isStreaming;
   const failed = run ? run.isError : isSubAgentFailed(toolCall);
-  const hasOutput = !!toolCall.output && toolCall.output.trim().length > 0;
-  const hasStructured = !!run && (run.actions.length > 0 || run.messages.length > 0 || !!run.end);
-  // AUTO-DÉPLI : sous-agent EN COURS et dernier actif du groupe → déplié (tail).
-  const autoRunning = running && isLastRunning && (hasOutput || hasStructured);
+  // AUTO-DÉPLI : un sous-agent EN COURS est DÉPLIÉ par défaut pour montrer son
+  // activité (exigence « plus de silence »). Contrairement aux outils simples,
+  // on n'exige NI « dernier actif » NI output présent : une délégation
+  // long-running est l'activité principale du tour. TRANSITOIRE : une fois
+  // terminé, la règle normale (réglage global / erreur) reprend, sauf override.
+  // NB : l'en-tête porte aussi un indicateur d'activité visible même replié
+  // (cf. SubAgentHeader.preview).
+  const autoRunning = running;
 
   // Durée : live pendant le run (chrono) ; figée (end.durationMs ou
   // startedAt→endedAt du toolCall) une fois terminé ; absente en historique.

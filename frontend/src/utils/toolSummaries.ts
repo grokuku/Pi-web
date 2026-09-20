@@ -114,12 +114,18 @@ function isTruncated(details: any): boolean {
   return details?.truncation?.truncated === true || details?.linesTruncated === true;
 }
 
-/** Premier compte ± d'un diff de type « +N ligne / -N ligne / N contexte ». */
+/**
+ * Premier compte ± d'un diff unifié de type « +N ligne / -N ligne / N contexte ».
+ * Aligné sur la version backend (backend/src/pi/harness-stream.ts) : les lignes
+ * d'en-tête de fichier (`+++`/`---`) sont IGNORÉES (elles ne comptent ni en
+ * ajout ni en suppression).
+ */
 function countDiffLines(diff: string | undefined): { added: number; removed: number } {
   if (!diff || typeof diff !== "string") return { added: 0, removed: 0 };
   let added = 0;
   let removed = 0;
   for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
     if (line.startsWith("+")) added++;
     else if (line.startsWith("-")) removed++;
   }

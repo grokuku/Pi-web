@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect } from "react";
-import type { DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
+import type { AssistantBlock, DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
 import { registerArchivedRuns, runFromActivity } from "../stores/subagentRuns";
 
 // ─────────────────────────────────────────────────────────────
@@ -30,6 +30,8 @@ interface HistoryMessage {
   cancelled?: boolean;
   // CompactionSummary fields
   summary?: string;
+  // LOT 3 : tokens présents dans le contexte avant la compaction.
+  tokensBefore?: number;
   // Custom/BashExecution fields
   display?: boolean;
   timestamp?: number;
@@ -57,12 +59,17 @@ interface HistoryMessage {
 export function convertHistoryToDisplayMessages(history: HistoryMessage[]): DisplayMessage[] {
   const displayMessages: DisplayMessage[] = [];
   let pendingToolResults: Map<string, ToolCallInfo> = new Map();
+  // LOT 3 : ids des toolCall DÉCLARÉS par des messages assistant. Un
+  // `toolResult` dont l'id n'y figure pas est ORPHELIN (toolCall absent de
+  // l'historique — ex. antérieur à une compaction) : il est alors rendu À
+  // SA DATE comme bloc autonome au lieu d'être silencieusement jeté.
+  const declaredToolCallIds = new Set<string>();
   // LOT 2b : runs de sous-agents archivés (entrées custom `subagent_activity`)
   // collectés pour relecture après rechargement — enregistrés dans le store
   // isolé en fin de conversion (jamais dans `messages`).
   const archivedRuns: SubAgentRun[] = [];
 
-  // First pass: collect tool results keyed by toolCallId
+  // First pass: collect tool results keyed by toolCallId + ids déclarés.
   for (const msg of history) {
     if (msg.role === "toolResult") {
       const outputText = extractTextContent(msg.content);
@@ -78,6 +85,13 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         // historique → la durée est omise (comportement attendu).
         details: (msg as any).details ?? undefined,
       });
+    } else if (msg.role === "assistant") {
+      const blocks = Array.isArray(msg.content) ? msg.content : [];
+      for (const block of blocks) {
+        if (block?.type === "toolCall" || block?.type === "tool_use" || block?.type === "function") {
+          if (block.id) declaredToolCallIds.add(block.id);
+        }
+      }
     }
   }
 
@@ -123,37 +137,46 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
 
       const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
 
-      // Extract text content
-      const text = contentBlocks
-        .filter((b: any) => b.type === "text")
-        .map((b: any) => b.text || "")
-        .join("\n");
-
-      // Extract thinking content
-      const thinking = contentBlocks
-        .filter((b: any) => b.type === "thinking")
-        .map((b: any) => b.thinking || "")
-        .join("\n");
-
-      // Extract tool calls, merging with their results from pendingToolResults
-      // Accept multiple block type names (SDK might store as "toolCall", "tool_use", or "function")
+      // ── Ordre chronologique réel ──
+      // On itère content[] UNE fois, dans l'ordre, et on construit À LA FOIS
+      // les agrégats (text/thinking/toolCalls) et le tableau ordonné `blocks`.
+      // C'est ce tableau qui pilote le rendu : un texte écrit AVANT un appel
+      // d'outil s'affiche AVANT lui (avant, le rendu regroupait par type →
+      // l'outil apparaissait toujours au-dessus du texte).
+      const textParts: string[] = [];
+      const thinkParts: string[] = [];
       const toolCalls: ToolCallInfo[] = [];
+      const blocks: AssistantBlock[] = [];
       for (const block of contentBlocks) {
-        if (block.type === "toolCall" || block.type === "tool_use" || block.type === "function") {
-          const toolResult = pendingToolResults.get(block.id);
+        const b: any = block;
+        if (!b) continue;
+        if (b.type === "text") {
+          const txt = b.text || "";
+          textParts.push(txt);
+          blocks.push({ kind: "text", text: txt });
+        } else if (b.type === "thinking") {
+          const txt = b.thinking || "";
+          thinkParts.push(txt);
+          blocks.push({ kind: "thinking", text: txt });
+        } else if (b.type === "toolCall" || b.type === "tool_use" || b.type === "function") {
+          const toolResult = pendingToolResults.get(b.id);
           toolCalls.push({
-            id: block.id,
-            name: block.name || block.toolName || "unknown",
-            args: block.arguments || block.input || block.args || {},
+            id: b.id,
+            name: b.name || b.toolName || "unknown",
+            args: b.arguments || b.input || b.args || {},
             output: toolResult?.output || "",
             isError: toolResult?.isError || false,
             isStreaming: false,
             // LOT 1 : details du toolResult → résumés d'outils (diff, truncation…).
             ...(toolResult?.details !== undefined ? { details: toolResult.details } : {}),
           });
+          blocks.push({ kind: "toolCall", toolCallId: b.id });
           totalToolCallsFound++;
         }
       }
+
+      const text = textParts.join("\n");
+      const thinking = thinkParts.join("\n");
 
       // Debug: log block types when no tool calls found but we have content blocks
       if (toolCalls.length === 0 && contentBlocks.length > 0) {
@@ -173,6 +196,7 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
         content: text,
         thinking,
         toolCalls,
+        blocks: blocks.length > 0 ? blocks : undefined,
         timestamp: msg.timestamp || Date.now(),
         usage: msg.usage ? {
           input: msg.usage.input || 0,
@@ -185,28 +209,45 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
       });
     }
 
-    // ── Bash execution messages ──
-    // These show up as user-like messages in the UI with the command
+    // ── Bash execution messages (LOT 3) ──
+    // Rendu À LEUR DATE en bloc autonome (BashExecutionRow) : commande, sortie
+    // complète repliable, exitCode visible, statut cancelled. Auparavant
+    // convertie en bulle `user` avec un unique fence ```bash (sortie perdue).
     else if (msg.role === "bashExecution") {
       displayMessages.push({
         id: msg.id || `bash-${msg.timestamp || Date.now()}`,
-        role: "user",
-        content: `\`\`\`bash\n${msg.command || ""}\n\`\`\``,
+        role: "assistant",
+        content: "",
         thinking: "",
         toolCalls: [],
         timestamp: msg.timestamp || Date.now(),
+        kind: "bashExecution",
+        bashExecution: {
+          command: msg.command || "",
+          output: msg.output || "",
+          exitCode: typeof msg.exitCode === "number" ? msg.exitCode : undefined,
+          cancelled: msg.cancelled === true ? true : undefined,
+        },
       });
     }
 
-    // ── Compaction summary ──
+    // ── Compaction summary (LOT 3) ──
+    // Rendu À SA DATE en bloc autonome (CompactionRow) : résumé lisible +
+    // tokensBefore (contexte libéré). Auparavant : « *Conversation compacted* »
+    // + résumé fourré dans le ThinkingBlock, sans montrer tokensBefore.
     else if (msg.role === "compactionSummary") {
       displayMessages.push({
         id: msg.id || `compact-${msg.timestamp || Date.now()}`,
         role: "assistant",
-        content: `*Conversation compacted. Summary available.*`,
-        thinking: msg.summary || "",
+        content: "",
+        thinking: "",
         toolCalls: [],
         timestamp: msg.timestamp || Date.now(),
+        kind: "compaction",
+        compaction: {
+          summary: msg.summary || "",
+          tokensBefore: typeof msg.tokensBefore === "number" ? msg.tokensBefore : undefined,
+        },
       });
     }
 
@@ -245,37 +286,29 @@ export function convertHistoryToDisplayMessages(history: HistoryMessage[]): Disp
       }
     }
 
-    // ── ToolResult messages (standalone) ──
-    // These are handled above via pendingToolResults, so we skip them here.
-    // If a tool result has no associated assistant message (orphan), we show it inline.
+    // ── ToolResult messages (standalone, LOT 3) ──
+    // Rattachement EXACT par toolCallId : si le toolCall est DÉCLARÉ par un
+    // message assistant, le résultat est déjà foldé dans ce toolCall (rendu
+    // par ToolCallRow) → skip. Sinon ORPHELIN → rendu À SA DATE comme bloc
+    // autonome (ToolResultRow), au lieu d'être jeté (l'ancien test
+    // `pendingToolResults.has(...)` était toujours vrai → branche morte).
     else if (msg.role === "toolResult") {
-      // Orphan tool result (no matching toolCall in any assistant message)
-      // Check if we already processed it via pendingToolResults
-      if (pendingToolResults.has(msg.toolCallId!)) {
-        // Already folded into an assistant message's toolCalls — skip
+      if (msg.toolCallId && declaredToolCallIds.has(msg.toolCallId)) {
+        // Déjà foldé dans le toolCall d'un message assistant — skip.
         continue;
       }
-      // Otherwise, it's an orphan — show as assistant message
-      const outputText = extractTextContent(msg.content);
-      if (outputText.trim()) {
-        displayMessages.push({
-          id: msg.id || `tool-${msg.timestamp || Date.now()}`,
-          role: "assistant",
-          content: outputText,
-          thinking: "",
-          toolCalls: [{
-            id: msg.toolCallId || "unknown",
-            name: msg.toolName || "unknown",
-            args: {},
-            output: outputText,
-            isError: (msg.details as any)?.isError ?? false,
-            isStreaming: false,
-            // LOT 1 : details du toolResult orphelin → résumés d'outils.
-            ...(msg.details !== undefined ? { details: msg.details } : {}),
-          }],
-          timestamp: msg.timestamp || Date.now(),
-        });
-      }
+      const orphan = pendingToolResults.get(msg.toolCallId!);
+      if (!orphan) continue;
+      displayMessages.push({
+        id: msg.id || `tool-${msg.timestamp || Date.now()}`,
+        role: "assistant",
+        content: "",
+        thinking: "",
+        toolCalls: [],
+        timestamp: msg.timestamp || Date.now(),
+        kind: "toolResult",
+        toolResult: orphan,
+      });
     }
   }
 

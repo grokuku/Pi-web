@@ -7,7 +7,56 @@
 // Ne MUTE PAS le tableau d'entrée.
 //
 // Fonction pure (hors `t` optionnel pour l'i18n) : testable unitairement.
-import type { DisplayMessage, PiEvent } from "../types";
+import type { AssistantBlock, DisplayMessage, PiEvent, ToolCallInfo } from "../types";
+
+// ── (chronologie) Helpers purs de construction des blocs ordonnés ───────
+// Un message assistant conserve, en plus de ses agrégats (content/thinking/
+// toolCalls), un tableau ORDONNÉ de blocs (`blocks`) : c'est le cœur du
+// correctif « fil chronologique ». Les deltas de même type consécutifs sont
+// CONCATÉNÉS dans le bloc courant ; un changement de type (ou un tool call)
+// ouvre un NOUVEAU bloc — l'ordre texte → outil → texte est ainsi préservé.
+function appendDeltaBlock(
+  blocks: AssistantBlock[] | undefined,
+  kind: "text" | "thinking",
+  delta: string,
+): AssistantBlock[] {
+  const list = blocks ?? [];
+  const last = list[list.length - 1];
+  if (last && last.kind === kind) {
+    return [...list.slice(0, -1), { kind, text: last.text + delta }];
+  }
+  return [...list, { kind, text: delta }];
+}
+
+function appendToolCallBlock(
+  blocks: AssistantBlock[] | undefined,
+  toolCallId: string,
+): AssistantBlock[] {
+  const list = blocks ?? [];
+  if (list.some((b) => b.kind === "toolCall" && b.toolCallId === toolCallId)) return list;
+  return [...list, { kind: "toolCall", toolCallId }];
+}
+
+/**
+ * Dérive l'ordre des blocs depuis le `content[]` final d'un message assistant
+ * (SDK Pi). Utilisé à `message_end` quand aucun delta n'a été capturé (provider
+ * non streamé, deltas manqués pendant une coupure) : sans cela le message
+ * resterait vide à l'écran.
+ */
+function blocksFromContent(content: unknown): AssistantBlock[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const blocks: AssistantBlock[] = [];
+  for (const block of content) {
+    const b = block as any;
+    if (!b) continue;
+    if (b.type === "text") blocks.push({ kind: "text", text: b.text || "" });
+    else if (b.type === "thinking") blocks.push({ kind: "thinking", text: b.thinking || "" });
+    else if (b.type === "toolCall" || b.type === "tool_use" || b.type === "function") {
+      if (b.id) blocks.push({ kind: "toolCall", toolCallId: b.id });
+    }
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
 
 // ── (dédup) Append de message avec déduplication par id ──────────────
 // Même sémantique que useChatHistory.appendMessage (dédup par id) : si un
@@ -163,12 +212,56 @@ export function applyPiEvent(
     msgs[idx] = fn(msgs[idx]);
   };
 
+  // ── (fix silence) Recherche du message porteur d'un tool call par ID ──
+  // Le SDK clôture le message assistant (message_end → asstId devient null)
+  // AVANT d'exécuter les outils : les events tool_execution_* arrivent donc
+  // APRÈS que l'assistantId courant soit perdu. L'ancien `updateLast` (qui
+  // exige `id === asstId`) les JETAIT tous — la sortie live, le flag isStreaming
+  // et les durées d'outil n'étaient jamais appliqués (seule la relecture
+  // pi_history les faisait apparaître). On retrouve donc le message par
+  // l'ID de tool call, quel que soit l'état de streaming.
+  const findToolCallMsgIdx = (toolCallId: string): number => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant" || !m.toolCalls) continue;
+      if (m.toolCalls.some((tc) => tc.id === toolCallId)) return i;
+    }
+    return -1;
+  };
+
+  // Applique une mise à jour au tool call identifié. `create` permet de
+  // (re)créer l'entrée sur le dernier message assistant si l'event de départ
+  // (toolcall_start) a été manqué (coupure WS), avec ajout du bloc ordonné.
+  const applyToolCall = (
+    toolCallId: string,
+    fn: (tc: ToolCallInfo) => ToolCallInfo,
+    create?: () => ToolCallInfo,
+  ) => {
+    const idx = findToolCallMsgIdx(toolCallId);
+    if (idx === -1) {
+      if (!create) return;
+      const lastIdx = msgs.length - 1;
+      if (lastIdx < 0 || msgs[lastIdx].role !== "assistant") return;
+      msgs = [...msgs];
+      const m = msgs[lastIdx];
+      msgs[lastIdx] = {
+        ...m,
+        toolCalls: [...m.toolCalls, create()],
+        blocks: appendToolCallBlock(m.blocks, toolCallId),
+      };
+      return;
+    }
+    msgs = [...msgs];
+    const m = msgs[idx];
+    msgs[idx] = { ...m, toolCalls: m.toolCalls.map((tc) => (tc.id === toolCallId ? fn(tc) : tc)) };
+  };
+
   switch (evt.type) {
     case "message_start": {
       if (evt.message?.role === "assistant") {
         const newId: string = evt.message.id || `s-${Date.now()}`;
         asstId = newId;
-        msgs = [...msgs, { id: newId, role: "assistant", content: "", thinking: "", toolCalls: [], timestamp: Date.now(), _streaming: true }];
+        msgs = [...msgs, { id: newId, role: "assistant", content: "", thinking: "", toolCalls: [], blocks: [], timestamp: Date.now(), _streaming: true }];
       }
       break;
     }
@@ -180,11 +273,12 @@ export function applyPiEvent(
         const thinkingDurationMs = last.thinkingStartedAt !== undefined && last.thinkingDurationMs === undefined
           ? Date.now() - last.thinkingStartedAt
           : last.thinkingDurationMs;
-        return { ...last, content: last.content + d.delta, thinkingDurationMs };
+        return { ...last, content: last.content + d.delta, blocks: appendDeltaBlock(last.blocks, "text", d.delta), thinkingDurationMs };
       });
       if (d.type === "thinking_delta") updateLast(last => ({
         ...last,
         thinking: last.thinking + d.delta,
+        blocks: appendDeltaBlock(last.blocks, "thinking", d.delta),
         // Lot C : horodate le début de la réflexion au premier thinking_delta.
         thinkingStartedAt: last.thinkingStartedAt ?? Date.now(),
       }));
@@ -192,26 +286,34 @@ export function applyPiEvent(
         const a = d.args?.arguments ?? d.args?.input ?? d.args ?? {};
         updateLast(last => {
           if (last.toolCalls.some(tc => tc.id === d.toolCallId)) return last;
-          return { ...last, toolCalls: [...last.toolCalls, { id: d.toolCallId, name: d.toolName, args: a, output: "", isError: false, isStreaming: true, startedAt: Date.now() }] };
+          return {
+            ...last,
+            toolCalls: [...last.toolCalls, { id: d.toolCallId, name: d.toolName, args: a, output: "", isError: false, isStreaming: true, startedAt: Date.now() }],
+            blocks: appendToolCallBlock(last.blocks, d.toolCallId),
+          };
         });
       }
       if (d.type === "toolcall_delta") {
         const da = d.argsDelta?.arguments ?? d.argsDelta?.input ?? d.argsDelta ?? {};
-        updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === d.toolCallId ? { ...tc, args: { ...tc.args, ...da } } : tc) }));
+        applyToolCall(d.toolCallId, tc => ({ ...tc, args: { ...tc.args, ...da } }));
       }
       if (d.type === "toolcall_end") {
         const ea = d.toolCall?.arguments ?? d.toolCall?.input ?? d.toolCall ?? {};
         const en = d.toolCall?.name || d.toolName;
-        updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === d.toolCallId ? { ...tc, args: ea, isStreaming: false, ...(en ? { name: en } : {}) } : tc) }));
+        applyToolCall(d.toolCallId, tc => ({ ...tc, args: ea, isStreaming: false, ...(en ? { name: en } : {}) }));
       }
       break;
     }
     case "tool_execution_start":
-      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, isStreaming: true, startTime: tc.startTime || Date.now(), ...(evt.toolName && !tc.name ? { name: evt.toolName } : {}) } : tc) }));
+      applyToolCall(
+        evt.toolCallId,
+        tc => ({ ...tc, isStreaming: true, startTime: tc.startTime || Date.now(), ...(evt.toolName && !tc.name ? { name: evt.toolName } : {}) }),
+        () => ({ id: evt.toolCallId, name: evt.toolName || "unknown", args: evt.args || {}, output: "", isError: false, isStreaming: true, startedAt: Date.now(), startTime: Date.now() }),
+      );
       break;
     case "tool_execution_update": {
       const pt = evt.partialResult?.content?.map((c: any) => c.text || "").join("") || "";
-      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: pt, isStreaming: true } : tc) }));
+      applyToolCall(evt.toolCallId, tc => ({ ...tc, output: pt, isStreaming: true }));
       break;
     }
     case "tool_execution_end": {
@@ -221,7 +323,11 @@ export function applyPiEvent(
       // par le résultat du tool — sans changement backend : le champ est déjà
       // présent dans l'event émis par le SDK.
       const details = evt.result?.details ?? undefined;
-      updateLast(last => ({ ...last, toolCalls: last.toolCalls.map(tc => tc.id === evt.toolCallId ? { ...tc, output: rt, isError: evt.isError, isStreaming: false, endedAt: Date.now(), ...(details !== undefined ? { details } : {}) } : tc) }));
+      applyToolCall(
+        evt.toolCallId,
+        tc => ({ ...tc, output: rt, isError: evt.isError, isStreaming: false, endedAt: Date.now(), ...(details !== undefined ? { details } : {}) }),
+        () => ({ id: evt.toolCallId, name: evt.toolName || "unknown", args: {}, output: rt, isError: evt.isError, isStreaming: false, endedAt: Date.now(), ...(details !== undefined ? { details } : {}) }),
+      );
       break;
     }
     case "agent_end": {
@@ -252,10 +358,50 @@ export function applyPiEvent(
         if (targetIdx >= 0) {
           msgs = [...msgs];
           const ex = msgs[targetIdx];
+          // ── (chronologie) content[] final = ordre réel d'écriture ──
+          // Si aucun bloc n'a été capturé (provider non streamé / deltas
+          // manqués pendant une coupure), on reconstruit le contenu ET l'ordre
+          // depuis le content[] final, sinon le message resterait vide.
+          const content = evt.message?.content;
+          let contentText = ex.content;
+          let thinkingText = ex.thinking;
+          let toolCalls = ex.toolCalls;
+          let blocks = ex.blocks;
+          if (Array.isArray(content) && content.length > 0) {
+            const hasStreamed = !!ex.content.trim() || !!ex.thinking.trim() || ex.toolCalls.length > 0;
+            if (!hasStreamed) {
+              const textParts: string[] = [];
+              const thinkParts: string[] = [];
+              const tcs: ToolCallInfo[] = [];
+              for (const block of content) {
+                const b = block as any;
+                if (!b) continue;
+                if (b.type === "text") textParts.push(b.text || "");
+                else if (b.type === "thinking") thinkParts.push(b.thinking || "");
+                else if (b.type === "toolCall" || b.type === "tool_use" || b.type === "function") {
+                  tcs.push({
+                    id: b.id,
+                    name: b.name || b.toolName || "unknown",
+                    args: b.arguments || b.input || b.args || {},
+                    output: "",
+                    isError: false,
+                    isStreaming: false,
+                  });
+                }
+              }
+              contentText = textParts.join("\n");
+              thinkingText = thinkParts.join("\n");
+              toolCalls = tcs;
+            }
+            if (!blocks || blocks.length === 0) blocks = blocksFromContent(content);
+          }
           msgs[targetIdx] = {
             ...ex,
+            content: contentText,
+            thinking: thinkingText,
+            blocks,
+            toolCalls: toolCalls.map(tc => ({ ...tc, isStreaming: false })),
             _streaming: false,
-            toolCalls: ex.toolCalls.map(tc => ({ ...tc, isStreaming: false })),
             usage: evt.message?.usage
               ? { input: evt.message.usage.input || 0, output: evt.message.usage.output || 0, cost: { total: evt.message.usage.cost?.total || 0 } }
               : ex.usage,

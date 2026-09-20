@@ -81,6 +81,12 @@ describe("buildToolSummary — edit", () => {
     expect(s.text).toBe("edit f.ts · +2/−2");
   });
 
+  it("ignore les en-têtes de fichier +++/--- (aligné sur le backend)", () => {
+    const diff = ["--- a/f", "+++ b/f", "contexte", "+ajout1", "+ajout2", "-supp"].join("\n");
+    const s = buildToolSummary({ name: "edit", args: { path: "f.ts" }, details: { diff }, output: "ok" });
+    expect(s.text).toBe("edit f.ts · +2/−1");
+  });
+
   it("fallback N lignes d'output sans details.diff (historique ancien)", () => {
     const s = buildToolSummary({ name: "edit", args: { path: "f.ts" }, output: "Successfully replaced 3 block(s) in f.ts." });
     expect(s.text).toBe("edit f.ts · 1 lignes");

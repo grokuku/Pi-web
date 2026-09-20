@@ -200,6 +200,101 @@ describe("applyPiEvent — cycle complet du streaming", () => {
   });
 });
 
+describe("applyPiEvent — ordre chronologique des blocs (fil chronologique)", () => {
+  it("préserve l'ordre réel texte → outil → texte dans `blocks`", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      textDelta("Parfait, je fais le nettoyage. "),
+      toolcallStart("tc-1", "delegate", { function: "execute" }),
+      toolcallEnd("tc-1", { name: "delegate", arguments: { function: "execute" } }),
+      textDelta("Terminé."),
+    ]);
+    // Le bloc du sous-agent est APRÈS le texte qui l'a introduit (et avant le
+    // texte suivant) : c'est exactement ce que regroupait à tort l'ancien rendu
+    // par type (outils toujours au-dessus du texte).
+    expect(msgs[0].blocks).toEqual([
+      { kind: "text", text: "Parfait, je fais le nettoyage. " },
+      { kind: "toolCall", toolCallId: "tc-1" },
+      { kind: "text", text: "Terminé." },
+    ]);
+    // Les agrégats restent inchangés (rétro-compatibilité).
+    expect(msgs[0].content).toBe("Parfait, je fais le nettoyage. Terminé.");
+    expect(msgs[0].toolCalls).toHaveLength(1);
+  });
+
+  it("un toolcall_start ne duplique pas un bloc déjà présent pour le même id", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      toolcallStart("tc-1", "delegate", {}),
+      toolcallStart("tc-1", "delegate", {}),
+    ]);
+    expect(msgs[0].blocks?.filter((b) => b.kind === "toolCall")).toHaveLength(1);
+  });
+});
+
+describe("applyPiEvent — tool_execution après message_end (correctif silence sous-agent)", () => {
+  // Le SDK clôture le message assistant (message_end) AVANT d'exécuter ses
+  // outils : `assistantId` devient null quand tool_execution_start arrive.
+  // L'ancien updateLast (gardé par `id === assistantId`) jetait alors TOUS les
+  // events d'exécution → sortie live, flag isStreaming et durées perdus (seul
+  // la relecture pi_history les faisait apparaître).
+  it("applique tool_execution_start/update au message porteur, même après message_end", () => {
+    const { msgs, asstId } = run([
+      messageStart("asst-1"),
+      toolcallStart("tc-1", "delegate", { function: "execute" }),
+      toolcallEnd("tc-1", { name: "delegate", arguments: { function: "execute" } }),
+      messageEnd("asst-1"),
+      { type: "tool_execution_start", toolCallId: "tc-1", toolName: "delegate", args: { function: "execute" } },
+      toolExecUpdate("tc-1", "sous-agent Exécution lancé..."),
+    ]);
+    expect(asstId).toBeNull();
+    const tc = msgs[0].toolCalls[0];
+    expect(tc.output).toBe("sous-agent Exécution lancé...");
+    expect(tc.isStreaming).toBe(true);
+  });
+
+  it("finalise l'outil après message_end (output + isError + endedAt)", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      toolcallStart("tc-1", "bash", { command: "false" }),
+      messageEnd("asst-1"),
+      { type: "tool_execution_start", toolCallId: "tc-1", toolName: "bash", args: { command: "false" } },
+      toolExecEnd("tc-1", "boom", true),
+    ]);
+    const tc = msgs[0].toolCalls[0];
+    expect(tc.output).toBe("boom");
+    expect(tc.isError).toBe(true);
+    expect(tc.isStreaming).toBe(false);
+    expect(tc.endedAt).toBeDefined();
+  });
+
+  it("message_end reconstruit contenu et ordre depuis content[] si aucun delta (provider non streamé)", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          id: "asst-1",
+          content: [
+            { type: "text", text: "avant" },
+            { type: "toolCall", id: "tc-9", name: "delegate", arguments: { function: "execute" } },
+            { type: "text", text: "après" },
+          ],
+        },
+      },
+    ]);
+    expect(msgs[0].content).toBe("avant\naprès");
+    expect(msgs[0].toolCalls[0]).toMatchObject({ id: "tc-9", name: "delegate" });
+    expect(msgs[0].blocks).toEqual([
+      { kind: "text", text: "avant" },
+      { kind: "toolCall", toolCallId: "tc-9" },
+      { kind: "text", text: "après" },
+    ]);
+    expect(msgs[0]._streaming).toBe(false);
+  });
+});
+
 // ── Tests unitaires : findPendingUserMessages (filet de secours 6210d1c) ──
 // Un pi_history construit AVANT le commit du message de l'utilisateur ne doit
 // pas faire disparaître le message tout juste tapé de l'affichage.

@@ -89,6 +89,14 @@ export const en = {
     historyResynced: (n: number) => `History resynced: ${n} message${n !== 1 ? "s" : ""}`,
     // ── Safety net 6210d1c: displayed content from local cache ──
     localCache: "Displaying from local cache — waiting for sync…",
+    // ── LOT 3: history timeline blocks ──
+    toolResultLabel: "Tool result",
+    bashExecutionLabel: "Command",
+    bashExit: (code: number) => `exit ${code}`,
+    bashCancelled: "cancelled",
+    compactionLabel: "Compaction",
+    compactionFreed: (n: number) => `${n} tokens of context freed`,
+    compactionSummaryLabel: "Summary",
   },
   // ── Tool descriptions (C1) ──
   tools: {

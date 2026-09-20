@@ -86,13 +86,62 @@ export interface ChatMessage {
   };
 }
 
+// ── LOT 3 : blocs de timeline de l'historique ─────────────────────────────
+// Certaines entrées de l'historique pi étaient auparavant mal placées ou
+// fusionnées (résultats d'outils orphelins, exécutions bash rendues en bulle
+// utilisateur, compactions rendues en message assistant avec résumé dans la
+// réflexion). Elles deviennent des DisplayMessage autonomes, rendus À LEUR
+// DATE via un `kind` dédié (le regroupement des assistants reste inchangé).
+// `role` reste "assistant" (ce ne sont pas des messages utilisateur) mais le
+// `kind` les isole en groupes propres dans GroupedMessages.
+export type DisplayMessageKind = "toolResult" | "bashExecution" | "compaction";
+
+/** Exécution bash (entrée d'historique `bashExecution`). */
+export interface BashExecutionInfo {
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+}
+
+/** Compaction de conversation (entrée d'historique `compactionSummary`). */
+export interface CompactionInfo {
+  summary: string;
+  /** Tokens présents dans le contexte AVANT compaction (libérés par celle-ci). */
+  tokensBefore?: number;
+}
+
+// ── Ordre chronologique réel des blocs d'un message assistant ─────────────
+// Le SDK Pi expose le contenu d'un message assistant comme un tableau ORDONNÉ
+// de blocs (text / thinking / toolCall) : c'est l'ordre réel d'écriture (ex.
+// texte → appel d'outil → texte). Le DisplayMessage historiquement APLATIT ces
+// blocs (content: string, thinking: string, toolCalls[]) — l'ordre inter-types
+// était donc perdu et le rendu regroupait par TYPE (réflexion → outils →
+// texte), ce qui affichait un appel d'outil AVANT le texte qui l'a précédé.
+// `blocks` préserve cette chronologie ; il est optionnel (les caches/historiques
+// antérieurs en sont dépourvus → repli sur le rendu par type).
+export type AssistantBlock =
+  | { kind: "thinking"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "toolCall"; toolCallId: string };
+
 export interface DisplayMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   thinking: string;
   toolCalls: ToolCallInfo[];
+  /** Ordre chronologique réel des blocs (assistant uniquement, si connu). */
+  blocks?: AssistantBlock[];
   timestamp: number;
+  // ── LOT 3 : timeline historique (bloc autonome si `kind` est défini) ──
+  kind?: DisplayMessageKind;
+  /** Résultat d'outil orphelin (non rattaché à un toolCall de groupe). */
+  toolResult?: ToolCallInfo;
+  /** Exécution bash hors groupe (commande + sortie complète + statut). */
+  bashExecution?: BashExecutionInfo;
+  /** Compaction de conversation (résumé + tokens libérés). */
+  compaction?: CompactionInfo;
   _streaming?: boolean;
   usage?: {
     input: number;

@@ -237,6 +237,25 @@ function formatModelErrorMessage(errorMessage: string, modelLabel: string, funcL
 }
 
 /**
+ * Statut de fin de vie (LOT 2a) dérivé de la cause d'archivage P0.
+ * Factorisé : le finally interne et les retours du catch externe doivent
+ * annoncer le MÊME statut pour une même cause.
+ */
+function statusFromCause(cause: string | null, success: boolean): SubagentEndStatus {
+  if (success) return "success";
+  switch (cause) {
+    case "timeout-inactivite":
+      return "timeout-inactivity";
+    case "timeout-global":
+      return "timeout-global";
+    case "abort-utilisateur":
+      return "aborted";
+    default:
+      return "error";
+  }
+}
+
+/**
  * Collecte la réponse partielle d'une session d'expert (messages assistant déjà produits).
  * Utilisée pour récupérer le travail d'un expert interrompu par un abort (BUG-67)
  * ou par un timeout (inactivité / global) — le travail partiel n'est pas perdu.
@@ -269,11 +288,28 @@ const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
 
 /**
  * Résout l'identifiant projet Pi-Web à partir du cwd courant.
- * Le routeur attend un projectId (UUID) ; on le retrouve via /api/projects.
- * En cas d'échec (backend hors-ligne), on retombe sur le nom du dossier.
+ *
+ * 1. Pont GLOBAL `__piWebResolveProjectIdByCwd__` publié par le backend
+ *    (session.ts) : l'extension tourne dans le MÊME process que le backend
+ *    (chargée par jiti) → résolution SYNCHRONE et fiable, indépendante d'un
+ *    match de cwd exact par HTTP. C'est ce qui garantit que les events
+ *    sous-agents sont routés vers les sockets abonnés au VRAI projectId (UUID)
+ *    — sans ce pont, un cwd non strictement égal retombait sur le NOM DE
+ *    DOSSIER (aucun socket abonné → streaming invisible).
+ * 2. Repli HTTP /api/projects (même logique qu'avant).
+ * 3. Dernier recours : nom du dossier.
  */
 async function resolveProjectId(cwd: string): Promise<string> {
   const fallback = cwd.split("/").pop() || "";
+  // 1. Pont global (même process que le backend) — prioritaire.
+  try {
+    const bridge = (globalThis as any).__piWebResolveProjectIdByCwd__;
+    if (typeof bridge === "function") {
+      const pid = bridge(cwd);
+      if (typeof pid === "string" && pid) return pid;
+    }
+  } catch {}
+  // 2. HTTP /api/projects.
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
@@ -472,13 +508,34 @@ export default function (pi: ExtensionAPI) {
       const task = typeof params.task === "string" ? params.task : "";
       const context = typeof params.context === "string" ? params.context : undefined;
 
+      // ── Identité + horodatage de la délégation (LOT 2a) ──
+      // Générés au PLUS TÔT pour que TOUS les retours du tool — y compris les
+      // erreurs de validation — portent un `details` structuré rattachable :
+      // le frontend relie le run de sous-agent EXACTEMENT via
+      // details.delegateRunId (le FIFO par args.function reste un secours).
+      const delegateRunId = makeDelegateRunId();
+      const delegateStartedAt = Date.now();
+
+      /** Détails structurés du RETOUR du tool `delegate` (portés par le toolCall). */
+      const buildDetails = (
+        status: SubagentEndStatus,
+        delegateFunction: string,
+        actions: number = 0,
+      ) => ({
+        delegateRunId,
+        delegateFunction,
+        status,
+        durationMs: Date.now() - delegateStartedAt,
+        actionCount: actions,
+      });
+
       if (!task.trim()) {
         return {
           content: [{
             type: "text" as const,
             text: "❌ Tâche manquante. Fournissez une tâche précise à déléguer.",
           }],
-          details: undefined,
+          details: buildDetails("error", typeof params.function === "string" ? params.function : ""),
         };
       }
 
@@ -492,7 +549,7 @@ export default function (pi: ExtensionAPI) {
               type: "text" as const,
               text: `❌ Fonction inconnue : "${params.function}". Fonctions valides : ${validFunctions}`,
             }],
-            details: undefined,
+            details: buildDetails("error", typeof params.function === "string" ? params.function : ""),
           };
         }
         functionName = params.function;
@@ -508,7 +565,7 @@ export default function (pi: ExtensionAPI) {
             text: `❌ Fonction manquante. Utilisez ` +
               `"function" avec l'une des valeurs suivantes : ${validFunctions}`,
           }],
-          details: undefined,
+          details: buildDetails("error", ""),
         };
       }
 
@@ -520,9 +577,8 @@ export default function (pi: ExtensionAPI) {
       // été traité (archivé en échec / supprimé en succès). Permet au catch
       // externe d'archiver la boîte noire si l'échec survient AVANT le try
       // interne (ex. createAgentSession) — le finally interne le met à null.
-      // delegateStartedAt : début de la délégation (durée totale dans la meta).
+      // (delegateRunId et delegateStartedAt sont déclarés au plus tôt, ci-dessus.)
       let pendingSessionFile: string | null = null;
-      const delegateStartedAt = Date.now();
 
       // ── LOT 2a (refonte chat) : état du streaming sous-agent ──
       // Déclaré AVANT le try externe : visible du finally interne ET du catch
@@ -531,7 +587,7 @@ export default function (pi: ExtensionAPI) {
       // création de la tempSession. Les compteurs eventCount/thinkingChars/
       // attemptsMade/usedModelLabel, préalablement déclarés dans le try
       // externe, sont remontés ici pour être partagés par les deux chemins.
-      const delegateRunId = makeDelegateRunId();
+      // (delegateRunId est déclaré au plus tôt, ci-dessus.)
       const taskExcerpt = truncateChars(task, TASK_EXCERPT_MAX);
       // Throttle partagé : 1 update max toutes les ~2s — utilisé par l'aperçu
       // texte existant (emitThrottled) ET par le forward structuré LOT 2a.
@@ -893,6 +949,15 @@ export default function (pi: ExtensionAPI) {
         }
       };
 
+      // ── P0 observabilité (volet 1/2) : suivi de l'issue, déclaré AVANT le
+      // try externe pour rester visible de son catch (le statut exact est porté
+      // par les `details` du retour du tool). success = réponse valide retournée
+      // au tool (fichier de session supprimé) ; tout autre chemin = ÉCHEC →
+      // archivage boîte noire (.data/logs/harness/).
+      let success = false;
+      let archiveCause: string | null = null;
+      let archiveErrorMessage: string | undefined = undefined;
+
       try {
         // Créer une session temporaire pour la fonction
         const { createAgentSession, SessionManager } = await import("@earendil-works/pi-coding-agent");
@@ -928,8 +993,6 @@ export default function (pi: ExtensionAPI) {
 
         // Modèle conseillé par le routeur (sinon fallback ctx.model plus bas).
         const routingModel = await resolveRoutingModel(ctx, routing?.modelId);
-        // [harness-debug] TEMPORAIRE — à retirer après diagnostic
-        console.log(`[harness-debug] routingModel résolu : ${routingModel ?? "(aucun)"}`);
 
         const tempSessionManager = SessionManager.create(cwd);
         const tempSessionFile = tempSessionManager.getSessionFile();
@@ -1015,13 +1078,9 @@ export default function (pi: ExtensionAPI) {
         // raison que tempUnsub : visible depuis le finally de cleanup.
         let silenceTimer: ReturnType<typeof setInterval> | null = null;
 
-        // ── P0 observabilité (volet 1/2) : suivi de l'issue, visible du finally
-        // de cleanup. success = réponse valide retournée au tool (fichier de
-        // session supprimé) ; tout autre chemin = ÉCHEC → archivage boîte noire
-        // (.data/logs/harness/) avec cause/tentatives/événements/modèle/durée.
-        let success = false;
-        let archiveCause: string | null = null;
-        let archiveErrorMessage: string | undefined = undefined;
+        // ── P0 observabilité (volet 1/2) : success/archiveCause/archiveErrorMessage
+        // sont déclarés AVANT le try externe (visibles de son catch) ; ici, les
+        // compteurs d'événements et la dernière activité du sous-agent.
         // attemptsMade / usedModelLabel / eventCount / thinkingChars : remontés
         // au niveau execute() (LOT 2a) pour être partagés avec le catch externe
         // (subagent_end) — visibles du finally interne comme avant.
@@ -1030,29 +1089,18 @@ export default function (pi: ExtensionAPI) {
 
         try {
           // Set le modèle — priorité au modèle conseillé par le routeur,
-          // puis héritage de la session principale.
-          // [harness-debug] TEMPORAIRE — à retirer après diagnostic
+          // puis héritage de la session principale. Les logs de debug
+          // temporaires (diagnostic de la chaîne qwen/deepseek, résolu) ont été
+          // retirés ; le modèle effectif est tracé une seule fois ci-dessous,
+          // au niveau info — pas de bruit à chaque tour.
           if (routingModel) {
-            try {
-              await tempSession.setModel(routingModel);
-              console.log(`[harness-debug] setModel OK (routingModel) : ${routingModel}`);
-            } catch (e: any) {
-              console.log(`[harness-debug] setModel ERREUR (routingModel) : ${e?.message || e}`);
-              throw e;
-            }
+            await tempSession.setModel(routingModel);
           } else if (ctx.model) {
-            try {
-              await tempSession.setModel(ctx.model);
-              console.log(`[harness-debug] setModel OK (ctx.model) : ${ctx.model}`);
-            } catch (e: any) {
-              console.log(`[harness-debug] setModel ERREUR (ctx.model) : ${e?.message || e}`);
-              throw e;
-            }
+            await tempSession.setModel(ctx.model);
           }
-          // [harness-debug] TEMPORAIRE — à retirer après diagnostic
-          console.log(`[harness-debug] modèle actif de tempSession après setModel : ${(tempSession as any).model?.provider ?? "?"}/${(tempSession as any).model?.id ?? "aucun"}`);
           // P0 : mémoriser le modèle/provider effectifs pour la meta d'archivage
           usedModelLabel = getSessionModelLabel(tempSession);
+          console.log(`[harness-orchestrator] Modèle effectif ${effectiveFunc.label} : ${usedModelLabel}`);
 
           // Restreindre les outils de la fonction
           if (effectiveFunc.tools.length > 0) {
@@ -1367,7 +1415,7 @@ export default function (pi: ExtensionAPI) {
                 type: "text" as const,
                 text: formatModelErrorMessage(modelError, usedModelLabel, effectiveFunc.label) + partialNote,
               }],
-              details: undefined,
+              details: buildDetails("error", subagentFuncName, actionCount),
             };
           }
 
@@ -1384,7 +1432,7 @@ export default function (pi: ExtensionAPI) {
                 text: `❌ ${effectiveFunc.label} n'a produit aucune réponse. ` +
                   `Session archivée dans .data/logs/harness/ (cause : réponse vide).`,
               }],
-              details: undefined,
+              details: buildDetails("error", subagentFuncName, actionCount),
             };
           }
 
@@ -1397,7 +1445,7 @@ export default function (pi: ExtensionAPI) {
               type: "text" as const,
               text: fullResponse,
             }],
-            details: undefined,
+            details: buildDetails("success", subagentFuncName, actionCount),
           };
         } catch (e: any) {
           // P0 volet 1/2 : annoter la cause d'échec AVANT le finally (le catch
@@ -1424,15 +1472,7 @@ export default function (pi: ExtensionAPI) {
           // et pendant que tempSession est encore vivante (responsePreview).
           // Helper commun idempotent : le catch externe ne ré-émettra pas.
           emitSubagentEnd({
-            status: success
-              ? "success"
-              : archiveCause === "timeout-inactivite"
-                ? "timeout-inactivity"
-                : archiveCause === "timeout-global"
-                  ? "timeout-global"
-                  : archiveCause === "abort-utilisateur"
-                    ? "aborted"
-                    : "error",
+            status: statusFromCause(archiveCause, success),
             cause: archiveCause || (success ? null : "erreur-exception"),
             errorMessage: archiveErrorMessage ?? null,
             responsePreview: collectExpertResponse(tempSession),
@@ -1515,7 +1555,7 @@ export default function (pi: ExtensionAPI) {
               type: "text" as const,
               text: err.message,
             }],
-            details: undefined,
+            details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
           };
         }
         return {
@@ -1523,7 +1563,7 @@ export default function (pi: ExtensionAPI) {
             type: "text" as const,
             text: `❌ ${requestedFunc.label} a échoué : ${err.message}`,
           }],
-          details: undefined,
+          details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
         };
       }
     },

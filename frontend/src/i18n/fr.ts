@@ -89,6 +89,14 @@ export const fr = {
     historyResynced: (n: number) => `Historique resynchronisé : ${n} message${n > 1 ? "s" : ""}`,
     // ── Filet de secours 6210d1c : contenu affiché issu du cache local ──
     localCache: "Affichage depuis un cache local — en attente de synchronisation…",
+    // ── LOT 3 : blocs de timeline de l'historique ──
+    toolResultLabel: "Résultat d'outil",
+    bashExecutionLabel: "Commande",
+    bashExit: (code: number) => `exit ${code}`,
+    bashCancelled: "annulée",
+    compactionLabel: "Compaction",
+    compactionFreed: (n: number) => `${n} tokens de contexte libérés`,
+    compactionSummaryLabel: "Résumé",
   },
   // ── Descriptions d'outils (C1) ──
   tools: {

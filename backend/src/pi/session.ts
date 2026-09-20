@@ -35,7 +35,7 @@ import {
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
-import { getProject } from "../projects/manager.js";
+import { getProject, getAllProjects } from "../projects/manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
@@ -269,6 +269,42 @@ export function rawEmitToSubscribers(event: AgentSessionEvent, projectId: string
 registerSubagentEmitter((event, projectId) =>
   rawEmitToSubscribers(event as AgentSessionEvent, projectId)
 );
+
+// ── LOT 2a (renfort) : pont global de résolution cwd → projectId ──────────
+// L'extension harness-orchestrator (chargée par jiti, MÊME process) a besoin
+// du projectId pour router les events sous-agents vers les sockets ABONNÉS au
+// projet. Son fallback HTTP (/api/projects) échoue EN SILENCE si le cwd ne
+// matche pas exactement (symlink, slash final, chemin normalisé différemment) :
+// elle retombe alors sur le NOM DE DOSSIER, qu'aucun socket n'a souscrit →
+// « silence total » du streaming. Ce pont SYNCHRONE s'appuie sur les sessions
+// en mémoire (source de vérité) et normalise les chemins. L'extension le lit
+// en priorité via globalThis (cf. resolveProjectId de l'extension).
+const RESOLVE_PROJECT_ID_KEY = "__piWebResolveProjectIdByCwd__";
+
+export function resolveProjectIdByCwd(cwd: string): string | null {
+  if (!cwd) return null;
+  let target = cwd;
+  try { target = path.resolve(cwd); } catch {}
+  for (const [pid, state] of sessionsByProject) {
+    if (!state.cwd) continue;
+    let sc = state.cwd;
+    try { sc = path.resolve(state.cwd); } catch {}
+    if (sc === target) return pid;
+  }
+  // Repli : projet déclaré dont la session n'est pas (encore) en mémoire.
+  try {
+    const p = getAllProjects().find((proj) => {
+      let pc = proj.cwd;
+      try { pc = path.resolve(proj.cwd); } catch {}
+      return pc === target;
+    });
+    return p?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+(globalThis as any)[RESOLVE_PROJECT_ID_KEY] = resolveProjectIdByCwd;
 
 export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
   // Deltas de texte/thinking : bufferisés puis flushés toutes les 40 ms.
