@@ -132,12 +132,12 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **Description :** Sur timeout d'inactivité d'un expert, le retry lançait le 2e `prompt()` alors que l'abort du 1er attempt était encore en cours → « Agent is already processing a prompt ».
 - **Fix :** `await tempSession.waitForIdle()` entre les attempts (résout quand la run et tous les event listeners ont fini).
 
-#### BUG-71: Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler
+#### BUG-71: Mode CODE contaminé par le tool de délégation (alors nommé `delegate_to_expert`, renommé `delegate` depuis) — le LLM délègue aux experts au lieu de travailler
 - **Fichier :** `backend/src/pi/session.ts`
 - **Sévérité :** 🔴 Haute (mode CODE inopérant : le LLM ne code jamais)
 - **Statut :** ✅ Corrigé (2026-08-01)
-- **Description :** `getExtensionToolNames()` renvoyait **tous** les tools d'extension sans exclusion → `delegate_to_expert` (enregistré par l'extension harness-orchestrator) était exposé dans TOUS les modes, y compris CODE/PLAN/REVIEW. En mode CODE, le LLM utilisait naturellement ce tool → il délégnait aux experts au lieu de coder directement.
-- **Fix :** nouvelle constante `HARNESS_EXCLUDE = ["delegate_to_expert"]` passée comme 3e argument de `toolsForMode()` dans les branches plan/review/code de `applyModeToSession`, ainsi que dans `restoreCodeMode` (retour mode CODE) et l'auto-review (tempSession REVIEW). La branche harness garde volontairement l'exclusion **non appliquée** : l'orchestrator DOIT conserver `delegate_to_expert` pour déléguer aux experts.
+- **Description :** `getExtensionToolNames()` renvoyait **tous** les tools d'extension sans exclusion → le tool de délégation (alors nommé `delegate_to_expert`, renommé `delegate` depuis) était exposé dans TOUS les modes, y compris CODE/PLAN/REVIEW. En mode CODE, le LLM utilisait naturellement ce tool → il délégnait aux experts au lieu de coder directement.
+- **Fix :** nouvelle constante `HARNESS_EXCLUDE = ["delegate"]` passée comme 3e argument de `toolsForMode()` dans les branches plan/review/code de `applyModeToSession`, ainsi que dans `restoreCodeMode` (retour mode CODE) et l'auto-review (tempSession REVIEW). La branche harness garde volontairement l'exclusion **non appliquée** : l'orchestrator DOIT conserver `delegate` pour déléguer aux experts.
 
 #### BUG-72: Faux « stalled » pendant les runs + erreur « Agent is already processing » (heartbeat applicatif + SDK comme source de vérité)
 - **Fichier :** `backend/src/pi/session.ts`, `backend/src/routes/agent.ts`, `frontend/src/App.tsx`, `frontend/src/components/Sidebar/Sidebar.tsx`
@@ -205,7 +205,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 68 | 🔴 | Erreurs LLM invisibles (avalées à 3 niveaux) — le process s'arrête sans message visible | 2026-08-01 |
 | 69 | 🟡 | steer() perdu silencieusement quand l'agent est idle (flags désynchronisés) | 2026-08-01 |
 | 70 | 🟡 | Race retry expert harness — 2e prompt() avant la fin de l'abort du 1er | 2026-08-01 |
-| 71 | 🔴 | Mode CODE contaminé par `delegate_to_expert` — le LLM délègue aux experts au lieu de travailler | 2026-08-01 |
+| 71 | 🔴 | Mode CODE contaminé par le tool de délégation (`delegate`) — le LLM délègue aux experts au lieu de travailler | 2026-08-01 |
 | 72 | 🔴 | Faux « stalled » pendant les runs + erreur « Agent is already processing » (heartbeat applicatif + SDK comme source de vérité) | 2026-08-01 |
 | 73 | 🔴 | Module Design cassé — contrat frontend/backend `pages[]` réaligné | 2026-08-01 |
 | 74 | 🟡 | `render_design`/`get_design` projectId toujours `unknown` — projectId capturé par `createDesignTools` | 2026-08-01 |
@@ -604,7 +604,7 @@ Backend (Express + WebSocket + node-pty + Pi SDK)
   └── pi/session.ts → orchestration sessions, modes, harness, auto-review
 
 Extensions Pi
-  ├── harness-orchestrator/ → delegate_to_expert (harness v3 conversationnel)
+  ├── harness-orchestrator/ → delegate (harness v3 conversationnel)
   ├── codebase-memory/ → cbm_* tools (graph-based code intelligence)
   ├── web-screenshot/ → web_screenshot tool
   ├── file-analyzer/ → analyze_file tool

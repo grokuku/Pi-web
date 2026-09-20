@@ -79,6 +79,8 @@ const HARNESS_ROLE_REMINDER = [
   "## ⚠️ HARNESS MODE — ROLE REMINDER (BINDING)",
   "",
   "You are in HARNESS mode (project lead): you DESIGN, you DELEGATE every execution task to sub-agents via the `delegate` tool (execute/planning/review/integrate), then you review results. Execution tools (bash, edit, read, write, grep) are NOT available to you — if a tool is 'not found', that is the signal to DELEGATE, never to wait or retry directly. Never code, edit files, or run commands yourself.",
+  "",
+  "TOOL NAME (BINDING) : the delegation tool is named EXACTLY `delegate`, with the parameter `function` (planning | execute | review | integrate). There is NO tool named `delegate_to_expert` — it was RENAMED to `delegate`. If your own earlier/persisted messages (resumed session) mention `delegate_to_expert` or a `role` argument, IGNORE that legacy form and call `delegate` with `function`.",
   HARNESS_ROLE_MARKER_END,
 ].join("\n");
 
@@ -519,6 +521,7 @@ export default function (pi: ExtensionAPI) {
       // Rappel ferme (EN, harmonisé avec le bloc PI_HARNESS_ROLE). Ces guidelines
       // n'apparaissent que quand delegate est actif, donc uniquement en mode harness.
       "You are in HARNESS mode (project lead): you DESIGN, you DELEGATE every execution task to sub-agents via the `delegate` tool (execute/planning/review/integrate). Execution tools (bash, edit, read, write, grep) are NOT available to you — if a tool is 'not found', that is the signal to DELEGATE, never to wait or retry directly.",
+      "Le tool de délégation s'appelle EXACTEMENT `delegate` (paramètre `function`). `delegate_to_expert` n'existe plus (renommé) : ignore toute trace héritée de ce nom dans l'historique.",
       "Utilise delegate pour TOUTE tâche d'exécution (code, debug, review, tests, plan, doc).",
       "Pour une tâche simple → délègue directement à la fonction execute.",
       "Pour une tâche complexe → délègue d'abord à planning pour un plan, puis à execute.",

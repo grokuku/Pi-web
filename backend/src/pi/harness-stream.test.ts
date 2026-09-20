@@ -26,6 +26,8 @@ import {
   firstLine,
   isSubagentActivityMessage,
   makeDelegateRunId,
+  mapLegacyDelegateRoleToFunction,
+  normalizeLegacyDelegateToolNames,
   resolveSubagentEmitter,
   registerSubagentEmitter,
   summarizeToolAction,
@@ -175,6 +177,80 @@ describe("isSubagentActivityMessage / filterSubagentActivityFromContext", () => 
     expect(filtered.some((m) => m.customType === "subagent_activity")).toBe(false);
     // L'original n'est pas muté.
     expect(messages).toHaveLength(4);
+  });
+});
+
+describe("normalizeLegacyDelegateToolNames / mapLegacyDelegateRoleToFunction", () => {
+  it("mappe les anciens rôles d'expert vers les fonctions de routage v3", () => {
+    expect(mapLegacyDelegateRoleToFunction("architect")).toBe("planning");
+    expect(mapLegacyDelegateRoleToFunction("code-reviewer")).toBe("review");
+    expect(mapLegacyDelegateRoleToFunction("security-reviewer")).toBe("review");
+    expect(mapLegacyDelegateRoleToFunction("backend-dev")).toBe("execute");
+    expect(mapLegacyDelegateRoleToFunction(undefined)).toBe("execute");
+  });
+
+  it("renomme delegate_to_expert → delegate et migre role → function", () => {
+    const messages = [
+      { role: "user", content: "fais X" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "t1", name: "delegate_to_expert", arguments: { role: "backend-dev", task: "fix" } },
+        ],
+      },
+      { role: "toolResult", toolCallId: "t1", toolName: "delegate_to_expert", content: [{ type: "text", text: "ok" }] },
+    ];
+    const out = normalizeLegacyDelegateToolNames(messages) as any[];
+    expect(out[1].content[0].name).toBe("delegate");
+    expect(out[1].content[0].arguments).toEqual({ function: "execute", task: "fix" });
+    expect(out[1].content[0].arguments.role).toBeUndefined();
+    expect(out[2].toolName).toBe("delegate");
+    // La liste et les objets d'origine ne sont pas mutés.
+    expect((messages[1] as any).content[0].name).toBe("delegate_to_expert");
+    expect((messages[2] as any).toolName).toBe("delegate_to_expert");
+  });
+
+  it("préserve un function déjà présent et ne touche pas les autres tools", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "t1", name: "delegate", arguments: { function: "review", task: "x" } },
+          { type: "toolCall", id: "t2", name: "read", arguments: { path: "a.ts" } },
+        ],
+      },
+    ];
+    const out = normalizeLegacyDelegateToolNames(messages) as any[];
+    expect(out[0].content[0]).toEqual(messages[0].content[0]);
+    expect(out[0].content[1]).toEqual({ type: "toolCall", id: "t2", name: "read", arguments: { path: "a.ts" } });
+  });
+
+  it("est idempotent et tolerant aux formes inattendues (ne jette jamais)", () => {
+    const out1 = normalizeLegacyDelegateToolNames([null, "str", 42, { role: "toolResult" }]);
+    expect(out1).toHaveLength(4);
+    const once = normalizeLegacyDelegateToolNames([
+      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "delegate_to_expert", arguments: { role: "architect" } }] },
+    ]);
+    const twice = normalizeLegacyDelegateToolNames(once) as any[];
+    expect(twice[0].content[0].name).toBe("delegate");
+    expect(twice[0].content[0].arguments).toEqual({ function: "planning" });
+  });
+
+  it("retire l'ancre du nom dans les textes/thinking et les toolResult", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "text", text: "Le tool delegate_to_expert semble indisponible." },
+        { type: "thinking", thinking: "Plus tôt j'ai utilisé delegate_to_expert avec succès." },
+      ] },
+      { role: "toolResult", toolName: "delegate_to_expert", content: [{ type: "text", text: "Tool delegate_to_expert not found" }] },
+      { role: "user", content: "pas de changement ici" },
+    ];
+    const out = normalizeLegacyDelegateToolNames(messages) as any[];
+    expect(JSON.stringify(out)).not.toContain("delegate_to_expert");
+    expect(out[0].content[0].text).toBe("Le tool delegate semble indisponible.");
+    expect(out[0].content[1].thinking).toBe("Plus tôt j'ai utilisé delegate avec succès.");
+    expect(out[1].content[0].text).toBe("Tool delegate not found");
+    expect(out[2]).toEqual({ role: "user", content: "pas de changement ici" });
   });
 });
 

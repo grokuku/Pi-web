@@ -32,6 +32,7 @@ import { filterImagesForModel } from "./image-budget.js";
 import {
   registerSubagentEmitter,
   filterSubagentActivityFromContext,
+  normalizeLegacyDelegateToolNames,
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
@@ -510,7 +511,14 @@ async function createPiSessionInternal(
       if (agent && typeof agent.convertToLlm === "function") {
         const origConvertToLlm = agent.convertToLlm.bind(agent);
         agent.convertToLlm = async (messages: unknown[]) =>
-          filterImagesForModel(await origConvertToLlm(filterSubagentActivityFromContext(messages)));
+          filterImagesForModel(
+            await origConvertToLlm(
+              // Normalise les appels HISTORIQUES au tool hérité `delegate_to_expert`
+              // → `delegate` (session reprise) : sans ça le modèle imite son propre
+              // passé et rappelle un tool inexistant (mode harness bloqué).
+              normalizeLegacyDelegateToolNames(filterSubagentActivityFromContext(messages)),
+            ),
+          );
         console.log(`[PiSession] Image budget filter installed for project ${projectId}`);
       }
     } catch (e: any) {
@@ -1947,6 +1955,8 @@ Utilise le tool delegate avec :
 - function : la fonction à appeler, parmi planning, execute, review, integrate
 - task : la tâche précise et auto-contenue
 - context : résumé concis et actionnable du contexte pertinent (2-5 phrases) : décisions clés, contraintes, fichiers concernés, ce qui a déjà été fait. Obligatoire dès que la conversation contient du contexte utile.
+
+⚠️ Le tool s'appelle EXACTEMENT \`delegate\` (paramètre \`function\`). \`delegate_to_expert\` n'existe plus : ce nom a été renommé. Si l'historique de la conversation (session reprise) contient d'anciens appels \`delegate_to_expert\`, ignore-les et appelle \`delegate\`.
 
 ⚠ La fonction déléguée ne voit PAS la conversation — elle ne lit QUE task + context (+ le code du projet). Rédige TOUJOURS un résumé du contexte dans \`context\` avant de déléguer, même bref (2-3 phrases). Sans cela, la fonction travaille à l'aveugle sur ce qui s'est dit.
 

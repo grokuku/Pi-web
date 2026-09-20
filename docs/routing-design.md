@@ -176,7 +176,7 @@ routing.ts
    `ProjectModeConfig.harness` passe de `{ config: HarnessConfig }` à `{ routing: RoutingConfig }` (avec migration).
 2. **`session.ts`** — `sendPrompt` appelle `resolveRoute()` avant `session.prompt()`, puis applique la route (généralisation de `applyModeToSession`). `MODE_IDENTITIES`/`MODE_INSTRUCTIONS` deviennent des instructions de **fonctions**. `triggerAutoReviewIfNeeded` se déclenche sur `route.riskScore ≥ threshold`.
 3. **`harness-engine.ts`** — `runArchitect` assigne des **fonctions** (`plan`/`execute`/`review`) avec une **catégorie** déduite. `runAgentTask` remplace `agentConfig.role` par `functionName` + `category`. `runSingleAgent` utilise `pickModel(route)`.
-4. **`extensions/harness-orchestrator/index.ts`** — supprimer `EXPERTS` (12 personas) au profit d'une table `FUNCTIONS` (4 entrées). Le tool `delegate_to_expert` devient `delegate` avec `{ function, task, context }`.
+4. **`extensions/harness-orchestrator/index.ts`** — supprimer `EXPERTS` (12 personas) au profit d'une table `FUNCTIONS` (4 entrées). Le tool de délégation est `delegate` avec `{ function, task, context }` (anciennement `delegate_to_expert` avec `{ role, … }`, renommé).
 5. **Routes API** (`model-library.ts`) — `PUT /projects/:projectId/mode` accepte `{ mode: "harness", routing: RoutingConfig }`. Ajouter `GET /api/routing/decision` (debug).
 6. **Frontend** — `HarnessConfigModal.tsx` remplacé par `RoutingConfigModal.tsx` (4 catégories + seuils + classifieur optionnel).
 
@@ -202,7 +202,7 @@ Défauts : `modelId` null → fallback default ; classifieur LLM off par défaut
 |---|---|---|---|
 | 0. Préparation | Créer `routing.ts` (types + extractSignals + heuristique), sans branchement | Nul | Signaux corrects sur sessions de test |
 | 1. Config rétro-compatible | Ajouter `RoutingConfig` sans supprimer `HarnessConfig`, migration auto | Faible | Anciens fichiers se migrent sans erreur |
-| 2. Routage orchestrator v3 | `delegate_to_expert` route en interne par fonction+catégorie | Moyen | Tâche complexe → modèle capable, triviale → efficient |
+| 2. Routage orchestrator v3 | `delegate` route en interne par fonction+catégorie | Moyen | Tâche complexe → modèle capable, triviale → efficient |
 | 3. Routage sendPrompt | `resolveRoute` avant chaque prompt ; gate review sur `riskScore` | Moyen | Comportement identique cas nominaux |
 | 4. Remplacement UI | `RoutingConfigModal` remplace `HarnessConfigModal` | Moyen | L'utilisateur configure 4 modèles max |
 | 5. Nettoyage | Supprimer `DEFAULT_AGENT_POOL`, `EXPERTS`, `DEFAULT_HARNESS_AGENTS` | Faible | Grep : plus aucune référence aux rôles |

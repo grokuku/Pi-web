@@ -212,6 +212,115 @@ export function filterSubagentActivityFromContext(messages: unknown[]): unknown[
   }
 }
 
+// ── Normalisation des appels LEGACY au tool de délégation ─────
+// Le tool de délégation s'appelait autrefois `delegate_to_expert` (paramètre
+// `role`) ; il a été renommé `delegate` (paramètre `function`).
+//
+// PROBLÈME (mode harness) : une session REPRISE dont l'historique contient
+// d'anciens appels `delegate_to_expert` voit le modèle IMITER son propre passé —
+// il rappelle `delegate_to_expert` (obsolete) → « Tool delegate_to_expert not
+// found », en boucle, et se croit bloqué alors que `delegate` est bien actif.
+// Le system prompt ne suffit pas : l'ancrage par l'historique est plus fort.
+//
+// SOLUTION : au moment où le contexte est envoyé au LLM (wrapper convertToLlm
+// de session.ts), on RÉÉCRIT les appels/résultats `delegate_to_expert` en
+// `delegate` et on migre `role` → `function`. Pure, sans mutation de l'historique
+// persisté ni de l'UI : seul ce que voit le modèle est normalisé.
+/** Ancien nom du tool de délégation (avant renommage en `delegate`). */
+export const LEGACY_DELEGATE_TOOL_NAME = "delegate_to_expert";
+/** Nom courant du tool de délégation (extensions/harness-orchestrator). */
+export const DELEGATE_TOOL_NAME = "delegate";
+
+/**
+ * Mappe un ancien rôle d'expert vers la fonction de routage v3 correspondante.
+ * Aligné sur mapRoleToFunction de l'extension harness-orchestrator.
+ */
+export function mapLegacyDelegateRoleToFunction(role: unknown): string {
+  switch (role) {
+    case "architect":
+      return "planning";
+    case "code-reviewer":
+    case "security-reviewer":
+      return "review";
+    default:
+      return "execute";
+  }
+}
+
+/**
+ * Réécrit, dans une liste de messages AgentMessage, toute trace du tool hérité
+ * `delegate_to_expert` vers `delegate` :
+ *  - appels (content toolCall) : renomme + migre `role`→`function` ;
+ *  - résultats (toolResult) : renomme `toolName` + le texte « Tool … not found » ;
+ *  - textes/thinking historiques : remplace le nom (l'ancre par imitation).
+ *
+ * Retourne une NOUVELLE liste (copies superficielles ciblées) — la liste et les
+ * objets d'origine ne sont jamais mutés. Idempotent et tolérant aux formes
+ * inattendues (ne jette jamais). Le terme est univoque (nom de tool) → le
+ * remplacement textuel ne peut pas casser un identifiant métier.
+ */
+export function normalizeLegacyDelegateToolNames(messages: unknown[]): unknown[] {
+  const sub = (s: string) => s.split(LEGACY_DELEGATE_TOOL_NAME).join(DELEGATE_TOOL_NAME);
+  try {
+    return messages.map((m) => {
+      const anyM = m as any;
+      if (!anyM || typeof anyM !== "object") return m;
+      let next = anyM;
+
+      // toolResult : renommer toolName.
+      if (anyM.toolName === LEGACY_DELEGATE_TOOL_NAME) {
+        next = { ...next, toolName: DELEGATE_TOOL_NAME };
+      }
+
+      // content sous forme de chaîne (rare) : remplacement direct.
+      if (typeof anyM.content === "string") {
+        if (anyM.content.includes(LEGACY_DELEGATE_TOOL_NAME)) {
+          next = { ...next, content: sub(anyM.content) };
+        }
+        return next;
+      }
+
+      if (Array.isArray(anyM.content)) {
+        let changed = false;
+        const content = anyM.content.map((c: any) => {
+          if (!c || typeof c !== "object") return c;
+
+          // toolCall : renommer + migrer role→function.
+          if (c.type === "toolCall" && c.name === LEGACY_DELEGATE_TOOL_NAME) {
+            changed = true;
+            let args = c.arguments;
+            if (args && typeof args === "object") {
+              args = { ...args };
+              if (args.function === undefined && args.role !== undefined) {
+                args.function = mapLegacyDelegateRoleToFunction(args.role);
+              }
+              delete args.role;
+            }
+            return { ...c, name: DELEGATE_TOOL_NAME, arguments: args };
+          }
+
+          // textes / thinking : retirer l'ancre par imitation.
+          if (c.type === "text" && typeof c.text === "string" && c.text.includes(LEGACY_DELEGATE_TOOL_NAME)) {
+            changed = true;
+            return { ...c, text: sub(c.text) };
+          }
+          if (c.type === "thinking" && typeof c.thinking === "string" && c.thinking.includes(LEGACY_DELEGATE_TOOL_NAME)) {
+            changed = true;
+            return { ...c, thinking: sub(c.thinking) };
+          }
+
+          return c;
+        });
+        if (changed) next = { ...next, content };
+      }
+
+      return next;
+    });
+  } catch {
+    return messages;
+  }
+}
+
 // ── Quota de sécurité (pur, horloge injectable pour les tests) ──
 
 export interface SubagentGateAdmission {
