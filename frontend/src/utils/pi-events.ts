@@ -100,6 +100,49 @@ export const PENDING_USER_WINDOW_MS = 15_000;
 /** Marge d'horloge client/serveur pour la borne « hors fenêtre serveur ». */
 export const PENDING_WINDOW_SKEW_MS = 120_000;
 
+// ── (fix chronologie) Messages user porteurs de pièce jointe ───────────────
+// Le message est COMMITÉ par le backend avec le bloc de refs d'attachement en
+// TÊTE du texte (« 🖼️ **image.png** (id: <uuid>, 7.7 KB)\n\n<texte saisi> ») :
+// c'est exactement `fullMessage` envoyé par ChatView.handleSend. Le message
+// OPTIMISTE affiché, lui, ne porte que le texte saisi (ou « 📎 nom » s'il n'y a
+// pas de texte). Une comparaison BRUTE des contenus échoue donc TOUJOURS pour un
+// message à pièce jointe : le message déjà commité est cru « en vol » et
+// ré-appendé EN FIN de fil par le merge pi_history — « le dernier message avec
+// pièce jointe réapparaît tout en bas de la conversation ».
+// Deux signaux le ré-identifient sans ambiguïté : le texte normalisé (refs
+// retirées) et les ids d'attachement (UUID uniques présents dans l'historique).
+const ATTACHMENT_REF_LINE_RE =
+  /^(?:🖼️|📄|🎵|🎬|📎|📝)\s+\*\*.+\*\*\s+\(id:\s*[^)]+\)$/;
+
+/**
+ * Neutralise le préfixe de refs d'attachement pour comparer un message user
+ * optimiste à sa version COMMITÉE : retire les lignes de refs en tête puis
+ * normalise les blancs. Fonction PURE (exportée pour les tests).
+ */
+export function normalizeUserContentForMatch(content: string): string {
+  const lines = String(content ?? "").split("\n");
+  let i = 0;
+  while (i < lines.length && ATTACHMENT_REF_LINE_RE.test(lines[i].trim())) i++;
+  return lines.slice(i).join("\n").trim();
+}
+
+/** Ids d'attachement portés par un message user optimiste (images inline + refs). */
+function collectAttachmentIds(m: DisplayMessage): string[] {
+  const ids: string[] = [];
+  for (const img of m.images || []) if (img?.attachmentId) ids.push(img.attachmentId);
+  for (const ref of m.attachmentRefs || []) if (ref?.id) ids.push(ref.id);
+  return ids;
+}
+
+/** Ids d'attachement inscrits dans le texte commité (« (id: <uuid>, …) »). */
+function extractAttachmentIdsFromContent(content: string): string[] {
+  const out: string[] = [];
+  const re = /\(id:\s*([0-9a-fA-F-]{8,})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) out.push(m[1]);
+  return out;
+}
+
 export interface PendingUserOptions {
   /**
    * Index (dans la liste complète backend) du PREMIER message de l'historique
@@ -138,17 +181,35 @@ export function findPendingUserMessages(
     if (stamps.length > 0) windowFloorTs = Math.min(...stamps) - PENDING_WINDOW_SKEW_MS;
   }
 
-  const lastUser = [...history].reverse().find((m) => m.role === "user");
+  const userHistory = history.filter((m) => m.role === "user");
+  const lastUser = [...userHistory].reverse()[0];
+  // Comparaison sur contenu NORMALISÉ (refs d'attachement neutralisées) : sans
+  // cela, tout message à pièce jointe paraîtrait absent de l'historique.
+  const lastUserContent = lastUser ? normalizeUserContentForMatch(lastUser.content || "") : null;
   const historyUserContents = new Set(
-    history.filter((m) => m.role === "user").map((m) => (m.content || "").trim())
+    userHistory.map((m) => normalizeUserContentForMatch(m.content || "")),
   );
+  // Ids d'attachement déjà commités (toutes entrées user de l'historique reçu).
+  const historyAttachmentIds = new Set<string>();
+  for (const m of userHistory) {
+    if (typeof m.content === "string") {
+      for (const id of extractAttachmentIdsFromContent(m.content)) historyAttachmentIds.add(id);
+    }
+  }
 
   return candidates.filter((c) => {
     const ts = c.timestamp as number;
     if (ts <= windowFloorTs) return false; // antérieur à la fenêtre serveur → hors périmètre
-    const content = (c.content || "").trim();
+
+    // Message à pièce jointe : si TOUS ses ids d'attachement (UUID uniques)
+    // figurent déjà dans l'historique reçu, la version COMMITÉE est présente
+    // (même si le texte affiché diffère) → pas de ré-attache (fix chronologie).
+    const attIds = collectAttachmentIds(c);
+    if (attIds.length > 0 && attIds.every((id) => historyAttachmentIds.has(id))) return false;
+
+    const content = normalizeUserContentForMatch(c.content || "");
     if (!content) return true; // non identifiable (ex. image seule) → conservé
-    if (lastUser && (lastUser.content || "").trim() === content) return false; // commité en dernier user (flux normal)
+    if (lastUserContent !== null && lastUserContent === content) return false; // commité en dernier user (flux normal)
     if (!historyUserContents.has(content)) return true; // absent de l'historique reçu → NON confirmé → préservé, quel que soit l'âge
     // Présent mais PAS en dernier user (doublon ancien) : récent → nouvel
     // envoi à contenu identique (préservé) ; ancien → déjà commité (jeté).

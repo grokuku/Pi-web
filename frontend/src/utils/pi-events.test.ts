@@ -3,7 +3,7 @@
 // du message _streaming, concaténation des deltas, timing de la réflexion,
 // tool calls, finalisation, timeout et dédup par id.
 import { describe, it, expect, vi } from "vitest";
-import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "./pi-events";
+import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch, normalizeUserContentForMatch } from "./pi-events";
 import type { DisplayMessage, PiEvent } from "../types";
 
 // ── Helpers de construction d'événements ─────────────────────────────
@@ -399,6 +399,91 @@ describe("findPendingUserMessages — messages user en vol", () => {
 
   it("aucun candidat → tableau vide (l'appelant ne modifie rien)", () => {
     expect(findPendingUserMessages([], [], NOW)).toHaveLength(0);
+  });
+});
+
+// ── Tests unitaires : messages user à PIÈCE JOINTE (bug « message en bas de fil ») ──
+// Séquences extraites de la session persistée réelle
+// dd5e824c-bc11-41fa-9b81-c2914774a954 : l'entrée 47e095b2 (user, text+image,
+// index 1414) est suivie de 11 entrées assistant/toolResult. Le backend committe
+// le contenu AVEC le bloc de refs d'attachement en tête (« 🖼️ **image.png**
+// (id: …, 7.7 KB)\n\n<texte> ») alors que le message OPTIMISTE affiché ne porte
+// que le texte saisi : la comparaison de contenu brute échouait → le message
+// déjà commité était ré-appendé EN FIN de fil au rechargement.
+describe("findPendingUserMessages — messages à pièce jointe (fix chronologie)", () => {
+  const NOW = 2_000_000;
+  const IMG_ID = "a8a4a584-8004-46f7-b48b-f84f5e96adf6";
+  // Contenu COMMITÉ réel (entrée 47e095b2) : refs préfixées + texte saisi.
+  const COMMITTED_TEXT =
+    `🖼️ **image.png** (id: ${IMG_ID}, 7.7 KB)\n\n` +
+    "concernant INFRA-02, j'ai l'impression que le mode harness n'a pas été correctement restauré apres le redémarrage.";
+  // Contenu OPTIMISTE affiché : le texte saisi, SANS le bloc de refs.
+  const TYPED_TEXT =
+    "concernant INFRA-02, j'ai l'impression que le mode harness n'a pas été correctement restauré apres le redémarrage.";
+
+  function assistantMsg(id: string, content: string, timestamp: number): DisplayMessage {
+    return { id, role: "assistant", content, thinking: "", toolCalls: [], timestamp };
+  }
+  function plainUser(id: string, content: string, timestamp: number): DisplayMessage {
+    return { id, role: "user", content, thinking: "", toolCalls: [], timestamp };
+  }
+  function attachmentUser(id: string, content: string, timestamp: number): DisplayMessage {
+    return {
+      id, role: "user", content, thinking: "", toolCalls: [], timestamp,
+      images: [{ attachmentId: IMG_ID, name: "image.png", mimeType: "image/png" }],
+      attachmentRefs: [{ id: IMG_ID, name: "image.png", category: "image", size: 7885 }],
+    };
+  }
+
+  it("(a) un message user avec pièce jointe suivi de 2 réponses reste à sa place (pas de ré-append en fin de fil)", () => {
+    const committed = plainUser("h-attach", COMMITTED_TEXT, NOW - 90);
+    const display = [
+      committed,
+      assistantMsg("a1", "réponse 1", NOW - 80),
+      assistantMsg("a2", "réponse 2", NOW - 70),
+    ];
+    const optimistic = attachmentUser("opti", TYPED_TEXT, NOW - 100);
+    const pending = findPendingUserMessages([optimistic], display, NOW);
+    expect(pending).toHaveLength(0);
+    const merged = pending.length > 0 ? [...display, ...pending] : display;
+    expect(merged.map(m => m.id)).toEqual(["h-attach", "a1", "a2"]);
+  });
+
+  it("(a-bis) pièce jointe SANS texte (contenu optimiste « 📎 nom ») n'est pas ré-appendée", () => {
+    const committed = plainUser("h", `🖼️ **image.png** (id: ${IMG_ID}, 7.7 KB)`, NOW - 90);
+    const optimistic = attachmentUser("opti", "📎 image.png", NOW - 100);
+    expect(findPendingUserMessages([optimistic], [committed], NOW)).toHaveLength(0);
+  });
+
+  it("(b) un message user simple suivi d'outils/compaction reste à sa place", () => {
+    const display: DisplayMessage[] = [
+      plainUser("h-user", "ma question", NOW - 90),
+      assistantMsg("a1", "", NOW - 80),
+      { id: "c1", role: "assistant", content: "", thinking: "", toolCalls: [], timestamp: NOW - 70, kind: "compaction", compaction: { summary: "résumé", tokensBefore: 1000 } },
+    ];
+    const pending = findPendingUserMessages([plainUser("opti", "ma question", NOW - 100)], display, NOW);
+    expect(pending).toHaveLength(0);
+  });
+
+  it("(c) cohérence live vs rechargement : l'ordre reconstruit = l'ordre réel (user avant sa réponse)", () => {
+    // Live : message optimiste (pièce jointe) puis réponse assistant.
+    const live = [attachmentUser("opti", TYPED_TEXT, NOW - 100), assistantMsg("a1", "ok", NOW - 90)];
+    // Rechargement : version COMMITÉE (refs préfixées) + même réponse.
+    const display = [plainUser("h-attach", COMMITTED_TEXT, NOW - 99), assistantMsg("a1", "ok", NOW - 90)];
+    const pending = findPendingUserMessages(live, display, NOW);
+    expect(pending).toHaveLength(0);
+    const merged = pending.length > 0 ? [...display, ...pending] : display;
+    expect(merged.map(m => m.id)).toEqual(["h-attach", "a1"]);
+  });
+
+  it("normalise le préfixe de refs d'attachement (helper pur)", () => {
+    expect(normalizeUserContentForMatch(COMMITTED_TEXT)).toBe(TYPED_TEXT);
+    expect(normalizeUserContentForMatch(TYPED_TEXT)).toBe(TYPED_TEXT);
+    expect(
+      normalizeUserContentForMatch(
+        `🖼️ **a.png** (id: ${IMG_ID}, 1 KB)\n📄 **b.pdf** (id: ffff-2222, 2 KB)\n\ntexte utile`,
+      ),
+    ).toBe("texte utile");
   });
 });
 
