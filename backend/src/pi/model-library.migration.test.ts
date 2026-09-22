@@ -146,3 +146,33 @@ describe("migration du thinkingLevel de routage", () => {
     expect(routing.review).toEqual({ modelId: "gemma", thinkingLevel: "xhigh" });
   });
 });
+
+// ── Migration du thinkingLevel par MODÈLE ──
+// `RegisteredModel.thinkingLevel` est optionnel : absent/invalide = « défaut »
+// (le niveau de réflexion du mode s'applique). Un niveau valide est préservé.
+describe("migration du thinkingLevel par modèle", () => {
+  const modelFrom = (rawThinking: unknown) =>
+    migrateLibrary({
+      models: [{
+        id: "m1", providerId: "ollama", modelId: "llama3", name: "Llama 3",
+        ...(rawThinking !== undefined ? { thinkingLevel: rawThinking } : {}),
+      }],
+    }).models[0];
+
+  it("modèle sans thinkingLevel → undefined (défaut du mode)", () => {
+    expect(modelFrom(undefined).thinkingLevel).toBeUndefined();
+    expect("thinkingLevel" in (modelFrom(undefined) as any)).toBe(false);
+  });
+
+  it("thinkingLevel valide préservé", () => {
+    for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+      expect(modelFrom(level).thinkingLevel).toBe(level);
+    }
+  });
+
+  it("thinkingLevel invalide (type/ valeur) → undefined", () => {
+    expect(modelFrom("turbo").thinkingLevel).toBeUndefined();
+    expect(modelFrom(42).thinkingLevel).toBeUndefined();
+    expect(modelFrom(null).thinkingLevel).toBeUndefined();
+  });
+});

@@ -18,6 +18,7 @@ import {
 import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
+import { resolveThinkingLevel } from "./thinking.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
@@ -2284,7 +2285,10 @@ async function applyModelAndThinking(
       await setModel(model.providerId, model.modelId, projectId);
     }
 
-    await setThinkingLevel(explicitThinking || model.thinkingLevel || thinkingFallback || "medium", projectId);
+    await setThinkingLevel(
+      resolveThinkingLevel(explicitThinking, model.thinkingLevel, thinkingFallback),
+      projectId,
+    );
   } catch (e: any) {
     console.error(`[session] Failed to apply model for ${model.providerId}/${model.modelId}:`, e.message);
     console.log("[session] Model switch FAILED, session model is now:", (session as any).model?.id || "unknown");
@@ -2595,7 +2599,7 @@ export async function getCommitModelInfo(): Promise<{
       provider: defaultModel.providerId,
       modelId: defaultModel.modelId,
       source: "default-model",
-      thinkingLevel: defaultModel.thinkingLevel || "off",
+      thinkingLevel: defaultModel.thinkingLevel || "medium",
     };
   }
 

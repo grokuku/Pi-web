@@ -60,7 +60,6 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "commit-push": { w: 900, h: 700 },
   "git-auth": { w: 800, h: 600 },
   "git-identity": { w: 800, h: 600 },
-  "project-switch": { w: 800, h: 700 },
   "delete-project": { w: 800, h: 500 },
   "new-chat-confirm": { w: 480, h: 300 },
   "file-viewer": { w: 900, h: 700 },

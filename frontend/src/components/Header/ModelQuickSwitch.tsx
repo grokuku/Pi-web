@@ -6,6 +6,7 @@ import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
+import { THINKING_LEVELS } from "../../types";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -121,6 +122,23 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
       await loadLibrary();
       onModelApplied?.();
     } catch (e) { console.error("[ModelQuickSwitch] Failed to switch model:", e); }
+  };
+
+  /**
+   * Persiste le niveau de réflexion DÉFAUT d'un modèle (RegisteredModel.thinkingLevel).
+   * Chemin d'API existant des réglages de modèles (PUT /api/model-library/models/:id).
+   * `level === null` = option « défaut » → suppression de la clé (niveau du mode).
+   */
+  const handleSetModelThinking = async (modelId: string, level: string | null) => {
+    try {
+      await fetch(`/api/model-library/models/${encodeURIComponent(modelId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thinkingLevel: level }),
+      });
+      await loadLibrary();
+      onModelApplied?.();
+    } catch (e) { console.error("[ModelQuickSwitch] Failed to set model thinking:", e); }
   };
 
   const handleToggleMode = async (e: React.MouseEvent, mode: "harness") => {
@@ -274,20 +292,41 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
                       const isDefault = m.id === library.defaultModelId;
                       return (
-                        <button
+                        <div
                           key={m.id}
-                          onClick={() => handleSelectModel(mode, m.id)}
-                          className={`w-full text-left px-3 py-1 text-xs flex items-center gap-1.5 ${
-                            isModelSelected
-                              ? `bg-hacker-accent/10 ${cfg.color}`
-                              : "text-hacker-text-dim hover:bg-hacker-border/30 hover:text-hacker-text"
-                          }`}>
-                          <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
-                          <span className="truncate flex-1">{m.name}</span>
-                          {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0">({getProviderName(m.providerId)})</span>}
-                          <span className="flex items-center gap-1 shrink-0">{m.vision && <span className="text-[10px]" title="Vision">👁️</span>}{m.reasoning && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
-                          {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
-                        </button>
+                          className={`flex items-center gap-1 pr-2 ${isModelSelected ? "bg-hacker-accent/10" : "hover:bg-hacker-border/30"}`}
+                        >
+                          <button
+                            onClick={() => handleSelectModel(mode, m.id)}
+                            className={`flex-1 min-w-0 text-left pl-3 py-1 text-xs flex items-center gap-1.5 ${
+                              isModelSelected
+                                ? cfg.color
+                                : "text-hacker-text-dim hover:text-hacker-text"
+                            }`}>
+                            <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
+                            <span className="truncate flex-1">{m.name}</span>
+                            {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0 hidden sm:inline">({getProviderName(m.providerId)})</span>}
+                            <span className="flex items-center gap-1 shrink-0">{m.vision && <span className="text-[10px]" title="Vision">👁️</span>}{m.reasoning && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
+                            {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
+                          </button>
+                          {/* Niveau de réflexion DÉFAUT du modèle (mode harness uniquement —
+                              les catégories de routage peuvent le surcharger). */}
+                          {mode === "harness" && (
+                            <select
+                              value={m.thinkingLevel || ""}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => handleSetModelThinking(m.id, e.target.value || null)}
+                              aria-label={`${t('modelSwitch.thinkingByModel')} — ${m.name}`}
+                              title={t('modelSwitch.thinkingByModel')}
+                              className="w-[86px] shrink-0 bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[10px] px-1 py-0.5 rounded focus:border-hacker-accent outline-none"
+                            >
+                              <option value="">{t('modelSwitch.thinkingDefault')}</option>
+                              {THINKING_LEVELS.map(level => (
+                                <option key={level} value={level}>{t(`routingModal.thinkingLevels.${level}`)}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                       );
                     })}
                   </div>

@@ -261,7 +261,7 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 - **Pieces jointes multiples** — À vérifier côté frontend.
 - ✅ **Timestamps absolus sur les messages** — Fait.
 - ✅ **Onglet Analysis Models dans Settings** — Fait (vision, audio, commit).
-- ✅ **Refonte du rendu Thinking + Tools** — Fait (ThinkingBlock, ToolTimeline).
+- ✅ **Refonte du rendu Thinking + Tools** — Fait (ThinkingBlock, ToolCallRow dans ChatView).
 - ✅ **ModelQuickSwitch : tri alphabetique** — Fait.
 - ✅ **Thinking : titre sticky au scroll** — Fait.
 - ✅ **Paramètre global "Think expand"** — Fait.
@@ -356,7 +356,7 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | `backend/src/pi/concurrency.ts` | Concurrence | ✅ (BUG-59 corrigé) |
 | `backend/src/pi/model-library.ts` | Types, pool, persistance | ✅ |
 | `backend/src/pi/session.ts` | Intégration /harness | ✅ |
-| `frontend/src/components/Modals/HarnessConfigModal.tsx` | UI config | ✅ |
+| ~~`frontend/src/components/Modals/HarnessConfigModal.tsx`~~ | UI config (ancienne version) | 🗑 supprimé (remplacé par RoutingConfigModal) |
 | `frontend/src/components/Header/ModelQuickSwitch.tsx` | Toggle harness | ✅ |
 | `extensions/harness-orchestrator/index.ts` | Extension v3 (orchestrator conversationnel) | ✅ (BUG-59 porté : timeout à activité + timeout global + retry) |
 | `extensions/codebase-memory/index.ts` | Extension CBM (cbm_* tools) | ✅ (BUG-59 cbm_code : envoi `qualified_name`) |
@@ -589,7 +589,7 @@ Frontend (React, TypeScript, Tailwind, Vite)
   ├── ChatView.tsx → WebSocket → pi_prompt / pi_event
   ├── SettingsModal.tsx → onglets : Models, Analysis, Extensions, General, Security (origines autorisées), Layout, API Keys
   ├── ModelQuickSwitch.tsx → boutons CODE/PLAN/REVIEW + dropdowns
-  ├── ThinkingBlock.tsx + ToolTimeline.tsx → streaming
+  ├── ThinkingBlock.tsx + ToolCallRow (ChatView) → streaming
   ├── UsageStatsModal.tsx → stats tokens
   └── FileExplorer.tsx → arbre + prévisualisation + édition
 

@@ -393,7 +393,7 @@ export interface RegisteredModel {
   audio?: boolean;             // supports audio input (inféré)
   contextWindow: number;       // tokens
   maxTokens: number;           // max output tokens
-  thinkingLevel: string;       // off, minimal, low, medium, high
+  thinkingLevel?: string;      // absent = « défaut » (niveau de réflexion du mode)
 
   // Overrides manuels (UI) : prime sur la détection "auto"
   visionOverride?: "auto" | "yes" | "no";

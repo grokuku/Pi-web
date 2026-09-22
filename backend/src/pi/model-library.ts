@@ -29,7 +29,9 @@ export interface RegisteredModel {
   maxTokens: number;           // max output tokens
 
   // Thinking
-  thinkingLevel: string;       // off, minimal, low, medium, high
+  // Absent/undefined = « défaut » : le niveau de réflexion du mode s'applique.
+  // Sinon : off, minimal, low, medium, high, xhigh, max (niveaux du SDK).
+  thinkingLevel?: string;
 
   // Overrides manuels des capacités (UI Model Library)
   // "auto" = détection existante (provider + inférence) ; "yes"/"no" = forcé par l'utilisateur,
@@ -324,7 +326,7 @@ function migrateFromOldFormat(data: any): ModelLibrary {
 }
 
 function migrateModel(m: any): RegisteredModel {
-  return {
+  const model: RegisteredModel = {
     id: m.id || makeModelId(m.providerId || m.provider || "unknown", m.modelId || ""),
     providerId: m.providerId || m.provider || "unknown",
     modelId: m.modelId || m.name || "",
@@ -335,11 +337,15 @@ function migrateModel(m: any): RegisteredModel {
     audio: m.audio ?? inferAudio(m.modelId || m.name || "", m.family),
     contextWindow: m.contextWindow || inferContextWindow(m.modelId || m.name || "", m.family),
     maxTokens: m.maxTokens || 16384,
-    thinkingLevel: m.thinkingLevel || "medium",
     // Overrides manuels : "auto" par défaut pour rester sur l'inférence existante
     visionOverride: m.visionOverride || "auto",
     audioOverride: m.audioOverride || "auto",
   };
+  // `thinkingLevel` conservé SEULEMENT s'il est valide ; absent/invalide → clé
+  // OMISE = « défaut » (le niveau de réflexion du MODE s'applique). Rétro-compatible :
+  // une config historique sans thinkingLevel reste valide.
+  if (isThinkingLevel(m.thinkingLevel)) model.thinkingLevel = m.thinkingLevel;
+  return model;
 }
 
 /** Inférence « prudente » des modèles audio (la plupart des LLM n'ont pas d'entrée audio). */
@@ -531,7 +537,11 @@ export function updateModel(id: string, updates: Partial<RegisteredModel>): Mode
   const idx = library.models.findIndex((m) => m.id === id);
   if (idx < 0) throw new Error(`Model not found: ${id}`);
 
-  library.models[idx] = { ...library.models[idx], ...updates };
+  const next = { ...library.models[idx], ...updates } as RegisteredModel;
+  // `thinkingLevel` : valeur invalide ou `null` (option « défaut » de l'UI) →
+  // la clé est supprimée pour laisser le niveau de réflexion du MODE s'appliquer.
+  if (!isThinkingLevel((next as any).thinkingLevel)) delete (next as any).thinkingLevel;
+  library.models[idx] = next;
 
   // If setting as default, unset others
   if (updates.isDefault) {
