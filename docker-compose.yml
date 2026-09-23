@@ -19,6 +19,10 @@ services:
       # http://localhost:5173,http://localhost:3005 (et/ou PUBLIC_BASE_URL).
       - ALLOWED_ORIGINS=*
       - WS_ALLOWED_ORIGINS=*
+      # P3 (prompt caching) : rétention longue du cache de prompt provider
+      # (Anthropic 1h / OpenAI 24h là où supporté ; repli "short" sinon).
+      # Aucun marqueur de cache forcé — piloté par le SDK, pas de risque 400.
+      - PI_CACHE_RETENTION=long
     privileged: true
     stdin_open: true
     tty: true

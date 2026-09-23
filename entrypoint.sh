@@ -265,6 +265,14 @@ if [ -f "$CBM_BIN" ]; then
 fi
 
 # ─── Start ────────────────────────────────────
+# ── P3 (prompt caching) : rétention LONGUE du cache de prompt provider ──
+# Le SDK pi-ai lit PI_CACHE_RETENTION : "long" active la rétention étendue
+# (Anthropic 1h, OpenAI 24h) LÀ OÙ le provider le supporte, sinon repli
+# automatique sur "short". On ne force AUCUN marqueur de cache (breakpoints) :
+# c'est le SDK qui décide, donc aucun risque de 400 provider non compatible.
+export PI_CACHE_RETENTION="${PI_CACHE_RETENTION:-long}"
+echo "[PI-WEB] PI_CACHE_RETENTION=${PI_CACHE_RETENTION}"
+
 echo "[PI-WEB] Starting server..."
 cd /app
 export PI_WEB_VERSION

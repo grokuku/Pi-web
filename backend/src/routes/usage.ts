@@ -13,6 +13,11 @@ interface UsageRecord {
   mode: string; // "code" | "harness"
   inputTokens: number;
   outputTokens: number;
+  // P3 (prompt caching) : tokens lus/écrits dans le cache de prompt du provider.
+  // Optionnels pour rester compatibles avec les enregistrements historiques
+  // (fichiers JSON déjà sur disque, antérieurs au tracking) — lus avec ?? 0.
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   projectId: string;
 }
 
@@ -21,6 +26,8 @@ interface AggregatedBucket {
   label: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 // ── Storage ──────────────────────────────────────────
@@ -95,7 +102,13 @@ function aggregateBy(
   records: UsageRecord[],
   groupBy: "hour" | "day" | "week" | "month" | "model"
 ): AggregatedBucket[] {
-  const buckets = new Map<string, { input: number; output: number; label: string }>();
+  const buckets = new Map<string, {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    label: string;
+  }>();
 
   for (const r of records) {
     const ts = new Date(r.timestamp);
@@ -156,8 +169,16 @@ function aggregateBy(
     if (existing) {
       existing.input += r.inputTokens;
       existing.output += r.outputTokens;
+      existing.cacheRead += r.cacheReadTokens || 0;
+      existing.cacheWrite += r.cacheWriteTokens || 0;
     } else {
-      buckets.set(key, { input: r.inputTokens, output: r.outputTokens, label });
+      buckets.set(key, {
+        input: r.inputTokens,
+        output: r.outputTokens,
+        cacheRead: r.cacheReadTokens || 0,
+        cacheWrite: r.cacheWriteTokens || 0,
+        label,
+      });
     }
   }
 
@@ -169,6 +190,8 @@ function aggregateBy(
       label: val.label,
       inputTokens: val.input,
       outputTokens: val.output,
+      cacheReadTokens: val.cacheRead,
+      cacheWriteTokens: val.cacheWrite,
     }));
 }
 
@@ -212,6 +235,9 @@ usageRouter.get("/", (req: Request, res: Response) => {
     const aggregated = aggregateBy(filtered, groupBy as any);
     const totalInput = aggregated.reduce((s, b) => s + b.inputTokens, 0);
     const totalOutput = aggregated.reduce((s, b) => s + b.outputTokens, 0);
+    // P3 : totaux des tokens de cache (lecture = discount, écriture = surcoût).
+    const totalCacheRead = aggregated.reduce((s, b) => s + b.cacheReadTokens, 0);
+    const totalCacheWrite = aggregated.reduce((s, b) => s + b.cacheWriteTokens, 0);
 
     res.json({
       from: from.toISOString(),
@@ -219,6 +245,8 @@ usageRouter.get("/", (req: Request, res: Response) => {
       groupBy,
       totalInput,
       totalOutput,
+      totalCacheRead,
+      totalCacheWrite,
       totalTokens: totalInput + totalOutput,
       buckets: aggregated,
     });

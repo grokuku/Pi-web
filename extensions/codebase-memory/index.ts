@@ -35,6 +35,19 @@ import { execSync, spawn, type ChildProcess } from "child_process";
 import { homedir, tmpdir } from "os";
 import { dirname } from "path";
 
+// ── Carte du Repo (P1) : helper PUR de rendu + types ──
+// Même pattern que harness-stream.ts/harness-archive.ts côté harness-orchestrator :
+// le module backend est importé par jiti via un chemin relatif. Il est PUR
+// (aucun état, aucun I/O) → une éventuelle seconde instance jiti est sans
+// conséquence. Le rendu/ budget/ dégradation vivent là-bas (testés par vitest) ;
+// ici ne vivent que l'extraction agrégée du graphe et le pont globalThis.
+import {
+  buildRepoMap,
+  type RepoMapData,
+  type RepoMapRoute,
+  type RepoMapSymbol,
+} from "../../backend/src/pi/repo-map.js";
+
 /**
  * Les projets LIÉS de Pi-Web (placeholder avec symlinks vers plusieurs dépôts)
  * sont marqués par un fichier .pi-web-linked : on ne les indexe PAS (l'index
@@ -599,6 +612,182 @@ async function mcpCallForProject(
     throw e;
   }
 }
+
+// ── Carte du Repo (P1) : extraction agrégée + pont globalThis ──
+// Objectif : les sous-agents (harness-orchestrator) démarrent à contexte VIDE et
+// re-paient l'exploration. On leur injecte d'office une vue compacte du graphe
+// (fichiers + hubs + routes) construite ici, via le pont globalThis (même
+// process, chargement par jiti).
+//
+// MINIMISATION DES APPELS MCP : le moteur Cypher de CBM ne supporte qu'UN seul
+// WITH et PAS d'UNION → on ne peut pas tout obtenir en une requête. On fait donc
+// TROIS requêtes agrégées (hubs / fichiers / routes) et on les CACHE 5 min
+// (même fraîcheur que l'index). Le coût est amorti sur toutes les délégations de
+// la fenêtre, au lieu d'une exploration par sous-agent.
+const REPO_MAP_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Hubs : fonctions les plus appelées (CALLS entrants) + fichier + signature.
+// P3 : ORDER BY rendu DÉTERMINISTE (inbound DESC, puis nom asc) — indispensable
+// pour que le prompt système "stable" soit identique au fil des extractions.
+const REPO_MAP_HUBS_CYPHER =
+  "MATCH (f:Function)<-[:CALLS]-(c:Function) " +
+  "RETURN f.name AS symbol, f.file_path AS file, f.signature AS sig, count(c) AS inbound " +
+  "ORDER BY inbound DESC, f.name ASC LIMIT 60";
+
+// Fichiers : liste des nœuds File (alimente l'arborescence du palier dégradé).
+const REPO_MAP_FILES_CYPHER =
+  "MATCH (file:File) RETURN file.path AS path ORDER BY path LIMIT 300";
+
+// Routes : méthode + chemin (peu liées aux fichiers dans le graphe, on borne).
+// P3 : ORDER BY explicite (sans lui, l'ordre du moteur n'est pas garanti).
+const REPO_MAP_ROUTES_CYPHER =
+  "MATCH (r:Route) RETURN r.method AS method, r.name AS path ORDER BY r.method, r.name LIMIT 80";
+
+/** Résultat brut d'un query_graph en format JSON : { columns, rows }. */
+function parseQueryRows(result: string): unknown[][] {
+  try {
+    const parsed = JSON.parse(result);
+    return Array.isArray(parsed?.rows) ? (parsed.rows as unknown[][]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Cache par cwd (extraction brute, avant rendu — le boost dépend de la tâche). */
+interface RepoMapCacheEntry {
+  data: RepoMapData;
+  at: number;
+}
+const repoMapCache = new Map<string, RepoMapCacheEntry>();
+
+/**
+ * Extrait les données de la carte via des requêtes Cypher AGRÉGÉES.
+ * Tolérant aux pannes : une requête qui échoue ne prive pas des deux autres
+ * (allSettled) — une carte partielle vaut mieux que pas de carte.
+ */
+async function extractRepoMapData(cwd: string): Promise<RepoMapData> {
+  // Garantir le nom CBM du projet : au démarrage (ou si session_start n'a pas
+  // encore fini) la Map mémoire est vide et getProjectName retomberait sur le
+  // nom de dossier, que CBM ne connaît pas (préfixe « projects- »). Idempotent
+  // et no-op si déjà résolu récemment.
+  try {
+    await discoverProjectName(cwd);
+  } catch {}
+  const [hubsRes, filesRes, routesRes] = await Promise.allSettled([
+    mcpCallForProject("query_graph", cwd, { query: REPO_MAP_HUBS_CYPHER, format: "json", max_rows: 80 }),
+    mcpCallForProject("query_graph", cwd, { query: REPO_MAP_FILES_CYPHER, format: "json", max_rows: 320 }),
+    mcpCallForProject("query_graph", cwd, { query: REPO_MAP_ROUTES_CYPHER, format: "json", max_rows: 100 }),
+  ]);
+
+  const hubs: RepoMapSymbol[] = [];
+  if (hubsRes.status === "fulfilled") {
+    for (const r of parseQueryRows(hubsRes.value)) {
+      const name = String(r?.[0] ?? "");
+      if (!name) continue;
+      const sig = r?.[2] != null && String(r[2]).length > 0 ? String(r[2]) : undefined;
+      hubs.push({
+        name,
+        file: String(r?.[1] ?? ""),
+        inbound: Number(r?.[3]) || 0,
+        ...(sig ? { signature: sig } : {}),
+      });
+    }
+  }
+
+  const files: string[] = [];
+  if (filesRes.status === "fulfilled") {
+    for (const r of parseQueryRows(filesRes.value)) {
+      const p = String(r?.[0] ?? "");
+      if (p) files.push(p);
+    }
+  }
+
+  const routes: RepoMapRoute[] = [];
+  const seenRoutes = new Set<string>();
+  if (routesRes.status === "fulfilled") {
+    for (const r of parseQueryRows(routesRes.value)) {
+      const path = String(r?.[1] ?? "");
+      if (!path) continue;
+      const method = String(r?.[0] ?? "").toUpperCase();
+      const key = `${method} ${path}`;
+      if (seenRoutes.has(key)) continue;
+      seenRoutes.add(key);
+      routes.push({ method, path });
+    }
+  }
+
+  return { files, hubs, routes };
+}
+
+/**
+ * Récupère les données brutes de la carte, depuis le cache 5 min si frais,
+ * sinon via extraction Cypher. Factorisé pour que les deux ponts P3 (stable
+ * et annexe) partagent EXACTEMENT les mêmes données (et donc le même cache).
+ */
+async function getRepoMapData(cwd: string): Promise<RepoMapData> {
+  const cached = repoMapCache.get(cwd);
+  if (cached && Date.now() - cached.at < REPO_MAP_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const data = await extractRepoMapData(cwd);
+  repoMapCache.set(cwd, { data, at: Date.now() });
+  return data;
+}
+
+/**
+ * Construit la carte du repo STABLE (P3) pour un cwd : classement par
+ * centralité seule, SANS hint de tâche (`rank: "stable"`). Le texte ne dépend
+ * donc QUE du projet — condition du prompt caching cross-délégation.
+ *
+ * Publique et exposée aux sous-agents via le pont globalThis
+ * (`__cbmRepoMap`) ; destinée au PROMPT SYSTÈME du sous-agent. NE JETTE JAMAIS :
+ * toute erreur (graphe non indexé, binaire absent, MCP indisponible…) → null.
+ */
+export async function buildRepoMapCached(cwd: string): Promise<string | null> {
+  try {
+    if (!cwd) return null;
+    const data = await getRepoMapData(cwd);
+    const text = buildRepoMap(data, { rank: "stable" });
+    return text ? text : null;
+  } catch (e: any) {
+    console.warn(`[cbm] carte du repo (stable) indisponible pour ${cwd} : ${e?.message || e}`);
+    return null;
+  }
+}
+
+/**
+ * Construit l'ANNEXE de pertinence (P3) : mêmes données que la carte stable
+ * (cache PARTAGÉ via getRepoMapData), mais classement BOOSTÉ par la tâche
+ * (`rank: "task"`).
+ *
+ * Exposée via le pont globalThis `__cbmRepoMapAnnex` ; destinée au PREMIER
+ * MESSAGE USER du sous-agent — jamais au prompt système (le contenu variant
+ * par tâche y invaliderait le cache du préfixe). NE JETTE JAMAIS → null.
+ */
+export async function buildRepoMapAnnexCached(
+  cwd: string,
+  task?: string,
+  context?: string,
+): Promise<string | null> {
+  try {
+    if (!cwd) return null;
+    const data = await getRepoMapData(cwd);
+    const text = buildRepoMap(data, { task, context, rank: "task" });
+    return text ? text : null;
+  } catch (e: any) {
+    console.warn(`[cbm] annexe de carte indisponible pour ${cwd} : ${e?.message || e}`);
+    return null;
+  }
+}
+
+// Ponts globalThis lus par l'extension harness-orchestrator (même process).
+// Publiés au chargement du module pour être disponibles dès la 1re délégation.
+// Deux entrées distinctes (P3) : `__cbmRepoMap` = préfixe système STABLE,
+// `__cbmRepoMapAnnex` = annexe de pertinence boostée par la tâche (message user).
+const REPO_MAP_BRIDGE_KEY = "__cbmRepoMap";
+(globalThis as any)[REPO_MAP_BRIDGE_KEY] = buildRepoMapCached;
+const REPO_MAP_ANNEX_BRIDGE_KEY = "__cbmRepoMapAnnex";
+(globalThis as any)[REPO_MAP_ANNEX_BRIDGE_KEY] = buildRepoMapAnnexCached;
 
 // ── Project mapping ─────────────────────────────────────
 // Maps cwd → { projectName: string, lastIndexedAt: number }

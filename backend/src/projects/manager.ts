@@ -7,6 +7,7 @@ import { Mutex } from "../utils/mutex.js";
 import { isCwdAllowed } from "../utils/path-security.js";
 import { encryptSmbPassword } from "./smb.js";
 import { deleteAttachmentsForProject } from "../routes/attachments.js";
+import { purgeProjectNotes } from "../pi/exploration-notes.js";
 import { sanitizeRemoteUrl } from "./remote-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -467,6 +468,17 @@ export async function deleteProject(id: string, deleteFiles: boolean = false): P
 
     // Delete associated attachments
     deleteAttachmentsForProject(id);
+
+    // Purge du Carnet d'exploration (P2) : les notes sont un stockage hors repo
+    // indexé par projectId (.data/harness-notes/<projectId>/). Best-effort : une
+    // purge ratée ne doit JAMAIS faire échouer la suppression du projet.
+    try {
+      if (purgeProjectNotes(id)) {
+        console.log(`[Projects] Carnet d'exploration purgé pour le projet ${project.name}`);
+      }
+    } catch (e: any) {
+      console.error(`[Projects] Purge du carnet d'exploration impossible pour ${project.name}:`, e?.message || e);
+    }
 
     // Delete files only if requested AND it's a local project
     if (deleteFiles && storage === "local" && cwd) {

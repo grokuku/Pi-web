@@ -361,6 +361,19 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | `extensions/harness-orchestrator/index.ts` | Extension v3 (orchestrator conversationnel) | ✅ (BUG-59 porté : timeout à activité + timeout global + retry) |
 | `extensions/codebase-memory/index.ts` | Extension CBM (cbm_* tools) | ✅ (BUG-59 cbm_code : envoi `qualified_name`) |
 
+### Réduction des tokens / contexte des sous-agents (étude `docs/etude-tokens-contexte-sous-agents.md`)
+
+Objectif : ne plus re-payer l'exploration à chaque sous-agent (tempSession à contexte vide).
+
+| Piste | Statut | Détail |
+|-------|--------|--------|
+| **P0** — AGENTS.md global corrigé | ✅ | Noms de tools obsolètes (`search_graph`…) remplacés par les vrais `cbm_*`. |
+| **P1** — Carte du repo CBM injectée d'office | ✅ | `backend/src/pi/repo-map.ts` (helper pur) + pont `__cbmRepoMap` (extension `codebase-memory`) ; bloc `<!-- PI_REPO_MAP -->` borné à ~4000 chars dans le prompt système du sous-agent. |
+| **P2** — Carnet d'exploration (scratchpad) par projet | ✅ | `backend/src/pi/exploration-notes.ts` : JSONL append-only `.data/harness-notes/<projectId>/notes.jsonl`, digest borné ~2000 chars, compaction paresseuse (TTL 90 j / 300 notes). Tools `exploration_note`/`exploration_notes` exposés aux 4 rôles ; bloc `<!-- PI_EXPLORATION_NOTES -->` injecté au démarrage ; purge à la suppression du projet (`projects/manager.ts`). |
+| **P3** — Prompt caching (DeepSeek/Gemini) | 💡 | À faire : verrouiller un préfixe système stable. |
+| **P4** — Mémoire par rôle | 💡 | Dépend de P2 (même infrastructure). |
+| **P5** — Compression supplémentaire des sorties | 💡 | À faire (formats terses, structure-first reads). |
+
 ### Fonctionnalités futures
 
 | Fonctionnalité | Priorité |

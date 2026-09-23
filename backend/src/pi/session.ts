@@ -647,7 +647,10 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
       } else if (event.type === "turn_end") {
         // Record usage for statistics
         const usage = (event as any).message?.usage;
-        if (usage?.input || usage?.output) {
+        // P3 (prompt caching) : un tour peut être majoritairement servi par le
+        // cache (input "frais" faible) — on déclenche aussi sur cacheRead/Write
+        // pour ne pas perdre ces tours dans les statistiques.
+        if (usage?.input || usage?.output || usage?.cacheRead || usage?.cacheWrite) {
           const state = sessionsByProject.get(projectId);
           const model = (state?.session as any)?.model || {};
           try {
@@ -659,6 +662,10 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
               mode: state?.activeMode || "code",
               inputTokens: usage.input || 0,
               outputTokens: usage.output || 0,
+              // Fournis par le SDK (pi-ai Usage) : cacheRead = préfixe servi par
+              // le cache (discount ~0,1×), cacheWrite = mise en cache (surcoût).
+              cacheReadTokens: usage.cacheRead || 0,
+              cacheWriteTokens: usage.cacheWrite || 0,
               projectId,
             });
           } catch (e: any) {

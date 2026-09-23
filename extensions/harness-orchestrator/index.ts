@@ -59,6 +59,40 @@ import {
   type SubagentEndStatus,
 } from "../../backend/src/pi/harness-stream.js";
 
+// ── Carte du Repo (P1, étude tokens sous-agents) : marqueurs du bloc --------
+// Le texte de la carte est produit par le pont globalThis `__cbmRepoMap`
+// (publié par l'extension codebase-memory) et enveloppé par ces marqueurs dans
+// le prompt système du sous-agent. Le helper pur (backend/src/pi/repo-map.ts)
+// expose les mêmes constantes → source unique de vérité.
+import {
+  REPO_MAP_MARKER_START,
+  REPO_MAP_MARKER_END,
+} from "../../backend/src/pi/repo-map.js";
+
+// ── Carnet d'exploration (P2, étude tokens sous-agents) ──────────────────────
+// Les découvertes des sous-agents (faits/pièges/décisions) sont persistées dans
+// un stockage JSONL hors repo (backend/src/pi/exploration-notes.ts) et
+// réinjectées d'office au démarrage sous-agent (bloc digest borné ~2000 chars),
+// comme la carte P1. Deux tools permettent à l'agent d'écrire et de relire.
+import {
+  appendExplorationNote,
+  buildNotesDigest,
+  readExplorationNotes,
+  renderNotesList,
+  searchExplorationNotes,
+  EXPLORATION_NOTES_MARKER_START,
+  EXPLORATION_NOTES_MARKER_END,
+  NOTE_KIND_LABELS,
+} from "../../backend/src/pi/exploration-notes.js";
+
+// ── Annexe de pertinence (P3, prompt caching) : marqueurs du bloc ────────────
+// Les éléments VARIABLES par tâche (carte CBM boostée P1 + carnet boosté P2) ne
+// doivent PAS vivre dans le prompt système (ils casseraient le cache du préfixe
+// cross-délégation). Ils sont regroupés dans une « annexe de pertinence »
+// déposée en fin du PREMIER MESSAGE USER, sous ces marqueurs.
+const TASK_RELEVANCE_MARKER_START = "<!-- PI_TASK_RELEVANCE -->";
+const TASK_RELEVANCE_MARKER_END = "<!-- /PI_TASK_RELEVANCE -->";
+
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
 // directs (bash, edit, read…) — retirés de sa session en mode harness — puis
@@ -119,6 +153,11 @@ const CBM_TOOLS: string[] = [
   "cbm_schema",
 ];
 
+// Tools du Carnet d'exploration (P2), exposés à TOUS les rôles. Enregistrés par
+// CETTE extension (donc présents dans le registre des tempSessions, comme les
+// cbm_*) ; setActiveToolsByName ignore silencieusement un nom inconnu.
+const EXPLORATION_TOOLS: string[] = ["exploration_note", "exploration_notes"];
+
 // Consigne commune d'exploration ajoutée au prompt de chaque rôle. Objectif :
 // faire basculer le réflexe « lire les fichiers un par un » vers le graphe.
 // 
@@ -143,6 +182,23 @@ N'utilise \`read\`/\`grep\`/\`find\`/\`ls\` QUE si le graphe ne peut pas répond
 ou si les tools cbm_* ne sont pas disponibles. Si plusieurs \`read\`/\`grep\`
 s'enchaînent sans cbm_*, un rappel automatique te sera injecté.`;
 
+// Consigne du Carnet d'exploration (P2), ajoutée au prompt de chaque rôle. Le
+// pattern « mémoire hors fenêtre » : écrire les découvertes au fil de l'eau pour
+// qu'elles survivent à la session et servent aux sous-agents suivants.
+const SCRATCHPAD_GUIDE = `
+
+## Carnet d'exploration : persister les découvertes durables
+Tes découvertes vivent au-delà de ta session — écrites dans le carnet du projet
+(hors repo), elles sont RÉINJECTÉES aux sous-agents suivants.
+- \`exploration_note\` (écriture) : UNE découverte par appel, une ligne, jamais de
+dump de code. Natures : \`fact\` (fait confirmé), \`pitfall\` (piège rencontré),
+\`decision\` (choix acté). Renseigne \`file\` (fichier:symbole) si pertinent.
+- \`exploration_notes\` (lecture/recherche) : relis le carnet AVANT de re-explorer
+un sujet déjà traité (« que sait-on déjà ? »).
+Écris tôt : commande de build/test qui marche, localisation de symboles,
+contraintes non évidentes, pièges. N'écris JAMAIS ce qui est déjà visible dans
+les fichiers du repo ni des informations temporaires.`;
+
 const FUNCTIONS: FunctionDef[] = [
   {
     name: "planning",
@@ -160,9 +216,9 @@ Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu 
 - Sois précis et concis
 - Liste les fichiers à créer/modifier
 - Décris l'approche technique et les dépendances
-- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE,
+- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
     // read-only : exploration (CBM + fichiers) + analyse de fichiers.
-    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS],
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "execute",
@@ -180,9 +236,9 @@ Règles :
 - Suis les conventions existantes du projet
 - Fais des changements atomiques, un fichier à la fois
 - Gère les erreurs et edge cases
-- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE,
+- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
     // écriture/édition + bash + exploration (CBM + fichiers) + analyse + capture UI.
-    tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS],
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "review",
@@ -199,9 +255,9 @@ Règles :
 - Vérifie les edge cases non gérés
 - Signale les bugs avec fichier:ligne
 - Suggère des corrections concrètes
-- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE,
+- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
     // read-only STRICT (pas d'edit/write/bash) : exploration, analyse, capture UI.
-    tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS],
+    tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "integrate",
@@ -216,9 +272,9 @@ Règles :
 - Agrège les plans, implémentations et relectures
 - Rédige un rapport final clair et actionnable
 - Mets en évidence les décisions, les changements et les risques restants
-- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE,
+- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
     // read-only : exploration CBM + fichiers + analyse pour vérifier la synthèse.
-    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS],
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
 ];
 
@@ -506,6 +562,50 @@ const delegateParams = {
     },
   },
   required: ["function", "task"],
+};
+
+// ── Schémas des tools du Carnet d'exploration (P2) ─────
+
+const explorationNoteParams = {
+  type: "object" as const,
+  properties: {
+    kind: {
+      type: "string",
+      enum: ["fact", "pitfall", "decision"],
+      description:
+        "Nature de la note : 'fact' (fait confirmé), 'pitfall' (piège rencontré), 'decision' (choix technique acté).",
+    },
+    text: {
+      type: "string",
+      description:
+        "La découverte en UNE ligne, factuelle et concise (jamais de dump de code ni de contenu déjà visible dans les fichiers).",
+    },
+    file: {
+      type: "string",
+      description: "Localisation optionnelle 'fichier' ou 'fichier:symbole' concernée par la note.",
+    },
+    task: {
+      type: "string",
+      description: "Extrait court de la tâche qui a produit la note (contexte). Optionnel.",
+    },
+  },
+  required: ["kind", "text"],
+};
+
+const explorationNotesParams = {
+  type: "object" as const,
+  properties: {
+    query: {
+      type: "string",
+      description:
+        "Filtre plein texte optionnel (insensible à la casse) sur le texte et le fichier des notes. Omis = toutes les notes.",
+    },
+    limit: {
+      type: "number",
+      description: "Nombre maximum de notes renvoyées (défaut : 20).",
+    },
+  },
+  required: [],
 };
 
 // ── Extension ───────────────────────────────────────────
@@ -1215,15 +1315,102 @@ export default function (pi: ExtensionAPI) {
           // Set le system prompt APRÈS setActiveToolsByName (sinon écrasé)
           // Préserver le "Current working directory:" du SDK en l'ajoutant après le prompt de la fonction
           const cwdLine = (tempSession as any)._baseSystemPrompt?.match(/Current working directory: (.+)/)?.[0] || "";
-          const systemPromptWithCwd = effectiveFunc.systemPrompt + (cwdLine ? `\n\n${cwdLine}` : "");
+
+          // ── Carte du Repo automatique (P1, étude tokens sous-agents) ──
+          // Le sous-agent démarre à contexte VIDE : on lui injecte d'office une
+          // vue compacte du graphe CBM (fichiers + hubs + routes) pour qu'il VOIE
+          // la structure sans avoir à décider d'appeler cbm_*. Le texte est rendu
+          // et borné (~4000 chars) par le helper pur backend/src/pi/repo-map.ts ;
+          // l'extraction du graphe est cachée 5 min côté extension codebase-memory.
+          //
+          // P3 (prompt caching) : le bloc est désormais rendu en mode "stable"
+          // (rank stable) → il ne dépend PAS de la tâche, donc le préfixe système
+          // reste identique pour un couple (projet, rôle) et passe au cache
+          // cross-délégation. La version boostée par la tâche vit dans l'annexe
+          // du premier message user (cf. plus bas).
+          // try/catch PERMANENT : l'absence de carte (graphe non indexé, binaire
+          // absent, pont non publié…) ne doit JAMAIS empêcher le démarrage du
+          // sous-agent — au pire il démarre comme avant.
+          let repoMapBlock = "";
+          try {
+            const buildRepoMapStable = (globalThis as any).__cbmRepoMap;
+            if (typeof buildRepoMapStable === "function") {
+              const mapText = await buildRepoMapStable(cwd);
+              if (typeof mapText === "string" && mapText.trim()) {
+                repoMapBlock = `\n\n${REPO_MAP_MARKER_START}\n${mapText.trim()}\n${REPO_MAP_MARKER_END}`;
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Carte du repo indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
+          }
+
+          // ── Carnet d'exploration (P2) : préfixe STABLE + annexe boostée (P3) ──
+          // Même logique que la carte P1 : on réinjecte d'office les découvertes
+          // durables des sessions précédentes (faits/pièges/décisions), bornées à
+          // ~2000 chars par le helper backend/src/pi/exploration-notes.ts.
+          //  - préfixe système : classement "stable" (récence seule) → identique
+          //    pour un même (projet, rôle) quelle que soit la tâche ;
+          //  - annexe boostée par la tâche : recalculée en "task" pour l'annexe du
+          //    premier message user (les notes citées passent devant).
+          // try/catch PERMANENT : un carnet illisible ne doit JAMAIS bloquer le
+          // démarrage du sous-agent.
+          let explorationNotesBlock = "";
+          let notesAnnex = ""; // partie boostée par la tâche → message user
+          try {
+            if (subagentProjectId) {
+              const notes = readExplorationNotes(subagentProjectId);
+              const digestStable = buildNotesDigest(notes, { rank: "stable" });
+              if (digestStable.trim()) {
+                explorationNotesBlock = `\n\n${EXPLORATION_NOTES_MARKER_START}\n${digestStable.trim()}\n${EXPLORATION_NOTES_MARKER_END}`;
+              }
+              const digestBoosted = buildNotesDigest(notes, { task, context: context || "", rank: "task" });
+              if (digestBoosted.trim()) notesAnnex = digestBoosted.trim();
+            }
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Carnet d'exploration indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
+          }
+
+          // Préfixe SYSTÈME stable (P3) : rôle + carte stable + carnet stable + cwd.
+          // Ces quatre blocs n'ont AUCUNE dépendance à la tâche → la totalité du
+          // prompt système est identique pour un couple (projet, rôle) et reste
+          // cachable entre deux délégations du même rôle.
+          const systemPromptWithCwd =
+            effectiveFunc.systemPrompt + repoMapBlock + explorationNotesBlock + (cwdLine ? `\n\n${cwdLine}` : "");
           (tempSession as any)._baseSystemPrompt = systemPromptWithCwd;
           (tempSession as any).agent.state.systemPrompt = systemPromptWithCwd;
 
-          // Construire le prompt de la fonction
+          // ── Annexe de pertinence (P3) → PREMIER MESSAGE USER ──────────────
+          // Les éléments VARIABLES par tâche (carte CBM boostée P1 + carnet
+          // boosté P2) sont sortis du prompt système : ils vivent dans une
+          // « annexe de pertinence » en fin du premier message user. Ils
+          // n'invalident donc jamais le préfixe système cachable.
+          let taskRelevance = "";
+          try {
+            const annexParts: string[] = [];
+            const buildRepoMapAnnex = (globalThis as any).__cbmRepoMapAnnex;
+            if (typeof buildRepoMapAnnex === "function") {
+              const annexMap = await buildRepoMapAnnex(cwd, task, context || "");
+              if (typeof annexMap === "string" && annexMap.trim()) {
+                annexParts.push(`### Carte du repo — pertinence pour la tâche\n${annexMap.trim()}`);
+              }
+            }
+            if (notesAnnex) {
+              annexParts.push(`### Carnet d'exploration — pertinence pour la tâche\n${notesAnnex}`);
+            }
+            if (annexParts.length > 0) {
+              taskRelevance = `\n\n${TASK_RELEVANCE_MARKER_START}\n${annexParts.join("\n\n")}\n${TASK_RELEVANCE_MARKER_END}`;
+            }
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Annexe de pertinence indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
+          }
+
+          // Construire le prompt de la fonction (premier message user) : la tâche
+          // d'abord, puis l'annexe de pertinence variable.
           let functionPrompt = task;
           if (context) {
             functionPrompt = `## Contexte\n\n${context}\n\n## Tâche\n\n${task}`;
           }
+          functionPrompt += taskRelevance;
 
           // ── BUG-59 (porté de la v2 vers la v3) : timeout à activité + retry ──
           // L'ancien timeout FIXE de 300s couvrait TOUT le cycle prompt() (boucle agent
@@ -1707,6 +1894,121 @@ export default function (pi: ExtensionAPI) {
             text: `❌ ${requestedFunc.label} a échoué : ${err.message}`,
           }],
           details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
+        };
+      }
+    },
+  });
+
+  // ── Tools du Carnet d'exploration (P2) ─────────────────────────────────────
+  // Enregistrés dans CETTE extension : présents dans le registre des sessions
+  // principales ET des tempSessions (mêmes règles que delegate/cbm_*). Le
+  // projectId est résolu depuis ctx.cwd (repli nom de dossier) — le stockage
+  // reste INDEXÉ PAR PROJET sous .data/harness-notes/<projectId>/.
+
+  // exploration_note : écrit une découverte durable dans le carnet du projet.
+  pi.registerTool({
+    name: "exploration_note",
+    label: "Exploration Note",
+    description:
+      "Écrit une découverte DURABLE dans le carnet d'exploration du projet (stockage hors repo, " +
+      "réinjecté aux sous-agents suivants). Utilise ce tool pour un fait confirmé, un piège " +
+      "rencontré ou une décision actée que la prochaine session ne devrait pas avoir à redécouvrir " +
+      "(commande de build/test qui marche, localisation d'un symbole, contrainte non évidente). " +
+      "UNE découverte par appel, une ligne, sans dump de code.",
+    promptSnippet: "Persister une découverte durable (fait, piège, décision) hors session",
+    promptGuidelines: [
+      "Use exploration_note as soon as you confirm a durable fact, hit a pitfall, or settle a decision — do not wait until the end of the task.",
+      "One discovery per call, one line, no code dumps and nothing already visible in the repository files.",
+      "Prefer exploration_notes to the same discovery re-explored next session.",
+    ],
+    parameters: explorationNoteParams,
+    async execute(
+      _toolCallId: string,
+      params: any,
+      _signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      try {
+        const cwd = ctx?.cwd || process.cwd();
+        const projectId = await resolveProjectId(cwd);
+        const note = appendExplorationNote(projectId, {
+          kind: typeof params?.kind === "string" ? params.kind : "fact",
+          text: typeof params?.text === "string" ? params.text : "",
+          file: typeof params?.file === "string" ? params.file : undefined,
+          task: typeof params?.task === "string" ? params.task : undefined,
+        });
+        if (!note) {
+          return {
+            content: [{ type: "text" as const, text: "❌ Note ignorée : le texte est vide." }],
+            details: {},
+          };
+        }
+        const loc = note.file ? ` (${note.file})` : "";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✅ Note [${NOTE_KIND_LABELS[note.kind]}] enregistrée dans le carnet du projet${loc} : ${note.text}`,
+            },
+          ],
+          details: {},
+        };
+      } catch (e: any) {
+        return {
+          content: [
+            { type: "text" as const, text: `❌ Échec de l'écriture de la note : ${e?.message || e}` },
+          ],
+          details: {},
+        };
+      }
+    },
+  });
+
+  // exploration_notes : relit/recherche les découvertes persistées du projet.
+  pi.registerTool({
+    name: "exploration_notes",
+    label: "Exploration Notes",
+    description:
+      "Relit ou recherche le carnet d'exploration du projet (découvertes persistées hors session). " +
+      "Utilise ce tool AVANT de ré-explorer un sujet déjà traité par une session précédente " +
+      "(« que sait-on déjà ? »), ou pour retrouver une commande/contrainte non évidente.",
+    promptSnippet: "Relire/rechercher les découvertes persistées du projet",
+    promptGuidelines: [
+      "Use exploration_notes before re-exploring a topic a previous session may already have covered.",
+      "Pass a 'query' to search by keyword, or omit it to list the most recent notes.",
+    ],
+    parameters: explorationNotesParams,
+    async execute(
+      _toolCallId: string,
+      params: any,
+      _signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      try {
+        const cwd = ctx?.cwd || process.cwd();
+        const projectId = await resolveProjectId(cwd);
+        const query = typeof params?.query === "string" ? params.query : "";
+        const limit = typeof params?.limit === "number" ? params.limit : undefined;
+        const notes = query
+          ? searchExplorationNotes(projectId, query)
+          : readExplorationNotes(projectId);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: renderNotesList(notes, { query: query || undefined, limit }),
+            },
+          ],
+          details: {},
+        };
+      } catch (e: any) {
+        return {
+          content: [
+            { type: "text" as const, text: `❌ Échec de la lecture du carnet : ${e?.message || e}` },
+          ],
+          details: {},
         };
       }
     },
