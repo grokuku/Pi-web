@@ -5,7 +5,7 @@ import { copyToClipboard } from "../../../utils/clipboard";
 // (déplacée depuis l'onglet « Modèles d'analyse » : toutes les clés API de
 // l'application doivent être gérées au même endroit)
 function LibrarianKeysSection() {
-  const [libKeys, setLibKeys] = useState<Array<{ key: string; name: string; createdAt: string }>>([]);
+  const [libKeys, setLibKeys] = useState<Array<{ id: string; key: string; name: string; createdAt: string }>>([]);
   const [libNewKeyName, setLibNewKeyName] = useState("");
   const [libCreatedKey, setLibCreatedKey] = useState<string | null>(null);
   const [libKeyError, setLibKeyError] = useState("");
@@ -40,10 +40,13 @@ function LibrarianKeysSection() {
     }
   };
 
-  const deleteLibKey = async (key: string) => {
+  const deleteLibKey = async (id: string) => {
     setLibKeyError("");
     try {
-      const res = await fetch(`/api/librarian/keys/${encodeURIComponent(key)}`, { method: "DELETE" });
+      // BUG-01 : la suppression passe par l'identifiant NON secret exposé par
+      // l'API (l'ancien envoi de la valeur masquée ne pouvait jamais matcher
+      // le secret complet côté serveur → 404 systématique).
+      const res = await fetch(`/api/librarian/keys/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json()).error || "Failed");
       await loadLibKeys();
     } catch (e: any) {
@@ -129,11 +132,11 @@ function LibrarianKeysSection() {
       ) : (
         <div className="space-y-1.5">
           {libKeys.map(k => (
-            <div key={k.key} className="border border-hacker-border bg-hacker-bg/30 px-3 py-2">
+            <div key={k.id} className="border border-hacker-border bg-hacker-bg/30 px-3 py-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-hacker-accent text-xs font-bold">{k.name}</span>
                 <button
-                  onClick={() => deleteLibKey(k.key)}
+                  onClick={() => deleteLibKey(k.id)}
                   className="text-hacker-text-dim hover:text-hacker-error text-xs"
                   title="Revoke key"
                 >

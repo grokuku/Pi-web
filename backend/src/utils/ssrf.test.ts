@@ -32,12 +32,33 @@ describe("validateHttpUrl — protection SSRF", () => {
       );
     });
 
-    it("limitation connue : IPv4-mapped IPv6 en forme hexadécimale non détectée", async () => {
-      // URL normalise [::ffff:127.0.0.1] en [::ffff:7f00:1] (hex) ; toIpv4 ne
-      // reconnaît que la forme pointée, donc ce cas n'est pas bloqué.
-      await expect(validateHttpUrl("http://[::ffff:127.0.0.1]/")).resolves.toBe(
-        "http://[::ffff:7f00:1]/"
-      );
+    // SEC-04 (Lot A) : formes IPv4-mapped IPv6 normalisées en hexadécimal par
+    // Node (l'ancien code ne reconnaissait que la forme pointée → contournement).
+    describe("contournement IPv4-mapped IPv6 (SEC-04)", () => {
+      it.each([
+        "http://[::ffff:169.254.169.254]/", // forme pointée
+        "http://[::ffff:127.0.0.1]/", // loopback — normalisé ::ffff:7f00:1
+        "http://[::ffff:a9fe:a9fe]/", // forme hexadécimale de 169.254.169.254
+        "http://[::ffff:10.0.0.1]/", // privé via mapped
+        "http://[::ffff:7f00:1]/", // forme hexadécimale de 127.0.0.1
+      ])("bloque %s (IPv4-mapped)", async (url) => {
+        await expect(validateHttpUrl(url)).rejects.toThrow(/Blocked/);
+      });
+
+      it.each([
+        "http://[2002:a9fe:a9fe::1]/", // 6to4 → 169.254.169.254
+        "http://[2001:0:0:0:0:0:5601:5601]/", // Teredo → 169.254.169.254 (XOR 0xFFFF)
+        "http://[64:ff9b::a9fe:a9fe]/", // NAT64 well-known → 169.254.169.254
+        "http://[64:ff9b:1::a9fe:a9fe]/", // NAT64 local-use (RFC 8215)
+      ])("bloque %s (plage de transition)", async (url) => {
+        await expect(validateHttpUrl(url)).rejects.toThrow(/Blocked/);
+      });
+
+      it("autorise une IPv4-mapped publique si elle est explicitement permise", async () => {
+        await expect(
+          validateHttpUrl("http://[::ffff:127.0.0.1]/", { allowLoopback: true })
+        ).resolves.toBe("http://[::ffff:7f00:1]/");
+      });
     });
   });
 
@@ -48,6 +69,14 @@ describe("validateHttpUrl — protection SSRF", () => {
         await expect(validateHttpUrl(url)).resolves.toBe(url);
       }
     );
+
+    it.each([
+      "http://[2606:4700:4700::1111]/", // IPv6 publique (Cloudflare)
+      "http://[2001:4860:4860::8888]/", // IPv6 publique (Google)
+      "http://[2002:808:808::]/", // 6to4 embarquant une IPv4 publique (8.8.8.8)
+    ])("autorise l'IPv6 publique %s", async (url) => {
+      await expect(validateHttpUrl(url)).resolves.toBe(url);
+    });
   });
 
   describe("options d'autorisation explicites", () => {

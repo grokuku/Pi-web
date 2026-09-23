@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { getDocContent, listLibrary, getLibraryStatus, searchAndArchive, archiveDoc, sanitizeDocPathComponent, type DocEntry, type DocContent } from "../pi/librarian-service.js";
-import { librarianAuth, librarianAdminOnly, loadKeys, createKey, revokeKey } from "../pi/librarian-auth.js";
+import { librarianAuth, librarianAdminOnly, loadKeys, createKey, revokeKey, keyIdOf, maskSecret } from "../pi/librarian-auth.js";
 import { getAllProjects } from "../projects/manager.js";
 
 const router = Router();
@@ -11,8 +11,17 @@ const router = Router();
 // GET /api/librarian/keys — list all keys (localhost only)
 router.get("/keys", librarianAdminOnly, (_req: Request, res: Response) => {
   const keys = loadKeys();
-  // Mask the key value in the list response
-  res.json({ keys: keys.map(k => ({ ...k, key: k.key.slice(0, 12) + "…" })) });
+  // BUG-01 : expose l'identifiant NON secret (id) utilisé par l'UI pour la
+  // suppression. Champs listés en liste blanche : le hash (keyHash) et le
+  // secret ne quittent JAMAIS le serveur via cette route.
+  res.json({
+    keys: keys.map(k => ({
+      id: keyIdOf(k),
+      name: k.name,
+      createdAt: k.createdAt,
+      key: k.keyPreview ?? (k.key ? maskSecret(k.key) : ""),
+    })),
+  });
 });
 
 // POST /api/librarian/keys — create a new key (localhost only)
@@ -30,11 +39,11 @@ router.post("/keys", librarianAdminOnly, (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/librarian/keys/:key — revoke a key (localhost only)
-router.delete("/keys/:key", librarianAdminOnly, (req: Request, res: Response) => {
+// DELETE /api/librarian/keys/:id — revoke a key by its NON-secret id (localhost only)
+router.delete("/keys/:id", librarianAdminOnly, (req: Request, res: Response) => {
   try {
-    const { key } = req.params;
-    const deleted = revokeKey(key);
+    const { id } = req.params;
+    const deleted = revokeKey(id);
     if (!deleted) return res.status(404).json({ error: "Key not found" });
     res.json({ success: true });
   } catch (e: any) {

@@ -1,6 +1,7 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { validateToken, isAgentEnabled } from "../routes/agent-keys.js";
 import { resolveEffectiveAllowedOrigins, isAllowedOrigin } from "../utils/origins.js";
+import { isTrustedLocalRequest } from "../utils/request-identity.js";
 
 /**
  * Middleware d'authentification globale de l'API.
@@ -56,11 +57,6 @@ function hasValidToken(req: Request): boolean {
   return token !== null && validateToken(token) !== null;
 }
 
-function isLocalhost(req: Request): boolean {
-  const remoteIp = req.ip || req.socket.remoteAddress;
-  return remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1";
-}
-
 /**
  * Détecte une requête navigateur légitime.
  *
@@ -111,7 +107,9 @@ export function apiAuth(req: Request, res: Response, next: NextFunction): void {
   // Appels internes serveur-à-serveur (extensions appelant l'API en localhost).
   // Le file-analyzer fait un fetch HTTP interne pour analyser les fichiers,
   // et le proxy Vite de dev arrive également depuis 127.0.0.1.
-  if (isLocalhost(req)) {
+  // SEC-02 : on se base sur l'adresse RÉELLE de la socket (non forgeable),
+  // jamais sur req.ip (dérivé de X-Forwarded-For sous trust proxy).
+  if (isTrustedLocalRequest(req)) {
     next();
     return;
   }

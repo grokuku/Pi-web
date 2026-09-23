@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit, type LogResult } from "simple-git";
-import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync } from "fs";
+import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync, readFileSync, readlinkSync, realpathSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
@@ -16,27 +16,99 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 process.env.GIT_TERMINAL_PROMPT = "0";
 
 // ── Lock file cleanup ──────────────────────────
-// If a git process crashes, it leaves a stale .git/index.lock.
-// This blocks all subsequent git operations. We detect and remove stale locks.
-const LOCK_MAX_AGE_MS = 30_000; // 30 seconds — if older, considered stale
+// BUG-04 (Lot A) : on ne supprime plus un verrou sur le seul critère d'ÂGE.
+// Un .git/index.lock n'est détenu que par un processus git : tant qu'un
+// processus git est actif sur ce dépôt (scan /proc, Linux), le verrou est
+// légitime. Sinon, et uniquement si l'âge dépasse un seuil TRÈS conservateur,
+// on considère le verrou orphelin (git planté) et on le retire en dernier recours.
+const LOCK_STALE_MS = 5 * 60_000; // 5 minutes — seuil conservateur (dernier recours)
+export { LOCK_STALE_MS };
 
-function cleanupGitLock(cwd: string): boolean {
+/**
+ * Y a-t-il un processus git actif dont le répertoire courant est ce dépôt ?
+ * Scan /proc (Linux) : comm du processus + readlink du cwd. Si /proc est
+ * indisponible (non-Linux), on ne détecte rien et le nettoyage retombe sur
+ * le seul critère d'âge (comportement antérieur, conservateur).
+ */
+export function hasActiveGitProcessInRepo(cwd: string): boolean {
+  let pids: string[] = [];
+  try {
+    pids = readdirSync("/proc");
+  } catch {
+    return false; // /proc indisponible (macOS, CI minimaliste) → pas d'info
+  }
+  let repoRoot = "";
+  try {
+    repoRoot = realpathSync(cwd); // /proc/<pid>/cwd expose le chemin RÉEL
+  } catch {
+    return false; // dépôt disparu ou inaccessible → pas de processus détectable
+  }
+  for (const entry of pids) {
+    if (!/^\d+$/.test(entry)) continue;
+    let comm = "";
+    try {
+      comm = readFileSync(`/proc/${entry}/comm`, "utf-8").trim();
+    } catch {
+      continue; // processus disparu ou illisible
+    }
+    // "git", "git-remote-https", "git-credential-…" (comm tronqué à 15 chars)
+    if (!comm.startsWith("git")) continue;
+    let procCwd = "";
+    try {
+      procCwd = readlinkSync(`/proc/${entry}/cwd`);
+    } catch {
+      continue; // processus terminé entre-temps ou sans droit de lecture
+    }
+    if (procCwd === repoRoot || procCwd.startsWith(repoRoot + "/")) return true;
+  }
+  return false;
+}
+
+/**
+ * Nettoie un verrou git orphelin. Retourne true si un verrou a été supprimé.
+ * Ne supprime JAMAIS sans preuve raisonnable qu'il est orphelin : aucun
+ * processus git actif sur le dépôt ET âge au-delà du seuil conservateur.
+ * En cas d'échec du stat (état du verrou inconnu), lève une erreur explicite
+ * au lieu de supprimer à l'aveugle (ancien comportement, BUG-04).
+ */
+export function cleanupGitLock(cwd: string): boolean {
   const lockFile = path.join(cwd, ".git", "index.lock");
   if (!existsSync(lockFile)) return false;
+  let stat;
   try {
-    const stat = statSync(lockFile);
-    const age = Date.now() - stat.mtimeMs;
-    if (age > LOCK_MAX_AGE_MS) {
-      unlinkSync(lockFile);
-      console.log(`[git] Removed stale lock file (${Math.round(age / 1000)}s old): ${lockFile}`);
-      return true;
-    }
-    // Lock is recent — another git process might be genuinely running
-    console.log(`[git] Lock file is recent (${Math.round(age / 1000)}s), leaving it`);
-  } catch {
-    // If we can't even stat it, it's probably corrupted
-    try { unlinkSync(lockFile); console.log(`[git] Removed corrupt lock file: ${lockFile}`); return true; } catch {}
+    stat = statSync(lockFile);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return false; // verrou disparu entre-temps (course)
+    // Stat impossible (permissions, FS corrompu) : état inconnu → on ne
+    // supprime JAMAIS à l'aveugle ; on remonte une erreur explicite.
+    throw new Error(
+      `[git] Impossible de statuer sur le verrou ${lockFile} (${e?.message || e}) — verrou conservé, opération annulée.`
+    );
   }
+  const age = Date.now() - stat.mtimeMs;
+  // 1) Un processus git est-il actif sur ce dépôt ? Si oui, le verrou est
+  //    possiblement légitime — on n'y touche pas.
+  if (hasActiveGitProcessInRepo(cwd)) {
+    console.log(`[git] Lock file present but a git process is active in ${cwd}, leaving it`);
+    return false;
+  }
+  // 2) Dernier recours : aucun processus git actif + âge très conservateur.
+  if (age > LOCK_STALE_MS) {
+    try {
+      unlinkSync(lockFile);
+      console.log(
+        `[git] Removed orphaned lock file (${Math.round(age / 1000)}s old, no active git process): ${lockFile}`
+      );
+      return true;
+    } catch (e: any) {
+      // Échec de suppression : on NE masque pas — l'opération git échouera avec
+      // son propre message explicite sur le verrou.
+      console.error(`[git] Failed to remove lock file ${lockFile}: ${e?.message || e}`);
+      return false;
+    }
+  }
+  // Verrou récent — un autre processus git pourrait avoir besoin du dépôt.
+  console.log(`[git] Lock file is recent (${Math.round(age / 1000)}s), leaving it`);
   return false;
 }
 
@@ -360,11 +432,15 @@ function generateCommitMessage(status: GitStatusFull): { subject: string; body: 
 }
 
 export async function gitAddAll(cwd: string): Promise<number> {
-  cleanupGitLock(cwd);
-  const git: SimpleGit = simpleGit(cwd);
-  await git.add("-A");
-  const status = await git.status();
-  return status.staged.length || status.files.length;
+  // Audit mutex (Lot A/BUG-04) : gitAddAll écrit l'index → même mutex par projet.
+  // Appelé par gitCommitAndPush SANS détenir le mutex → pas de deadlock.
+  return getGitMutex(cwd).run(async () => {
+    cleanupGitLock(cwd);
+    const git: SimpleGit = simpleGit(cwd);
+    await git.add("-A");
+    const status = await git.status();
+    return status.staged.length || status.files.length;
+  });
 }
 
 export class GitIdentityError extends Error {
@@ -600,42 +676,47 @@ export async function gitCommit(
   subject: string,
   body?: string
 ): Promise<string> {
-  cleanupGitLock(cwd);
-  const git: SimpleGit = simpleGit(cwd);
-  const message = body ? `${subject}\n\n${body}` : subject;
-  try {
-    const result = await git.commit(message);
-    if (result.commit === null || result.summary.changes === 0) {
-      return "Nothing to commit";
-    }
-    return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
-  } catch (error: any) {
-    const msg = error.message || "";
-    if (isLockError(msg)) {
-      cleanupGitLock(cwd);
-      try {
-        const result = await git.commit(message);
-        if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
-        return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)} (lock cleared)`;
-      } catch (e2: any) {
-        throw new Error(`Git commit failed (lock persisted): ${e2.message || e2}`);
+  // Audit mutex (Lot A/BUG-04) : gitCommit écrit l'index → même mutex par projet.
+  return getGitMutex(cwd).run(async () => {
+    cleanupGitLock(cwd);
+    const git: SimpleGit = simpleGit(cwd);
+    const message = body ? `${subject}\n\n${body}` : subject;
+    try {
+      const result = await git.commit(message);
+      if (result.commit === null || result.summary.changes === 0) {
+        return "Nothing to commit";
       }
-    }
-    if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
-      // Try to inherit identity from global git config
-      try {
-        const globalIdentity = await getGitIdentity(cwd);
-        if (globalIdentity) {
-          await setGitIdentity(cwd, globalIdentity.name, globalIdentity.email);
+      return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
+    } catch (error: any) {
+      const msg = error.message || "";
+      if (isLockError(msg)) {
+        // BUG-04 : cleanupGitLock peut désormais échouer explicitement (stat
+        // impossible) — on ne masque pas, le retry échouera avec le message git.
+        try { cleanupGitLock(cwd); } catch { /* verrou conservé, cf. message ci-dessus */ }
+        try {
           const result = await git.commit(message);
           if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
-          return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
+          return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)} (lock cleared)`;
+        } catch (e2: any) {
+          throw new Error(`Git commit failed (lock persisted): ${e2.message || e2}`);
         }
-      } catch {}
-      throw new GitIdentityError(msg);
+      }
+      if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
+        // Try to inherit identity from global git config
+        try {
+          const globalIdentity = await getGitIdentity(cwd);
+          if (globalIdentity) {
+            await setGitIdentity(cwd, globalIdentity.name, globalIdentity.email);
+            const result = await git.commit(message);
+            if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
+            return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)}`;
+          }
+        } catch {}
+        throw new GitIdentityError(msg);
+      }
+      throw new Error(`Git commit failed: ${msg}`);
     }
-    throw new Error(`Git commit failed: ${msg}`);
-  }
+  });
 }
 
 export interface CommitPushResult {
@@ -811,13 +892,16 @@ export async function gitCheckout(
   cwd: string,
   ref: string
 ): Promise<string> {
-  const git: SimpleGit = simpleGit(cwd);
-  try {
-    await git.checkout(ref);
-    return `Checked out ${ref}`;
-  } catch (error: any) {
-    throw new Error(`Git checkout failed: ${error.message}`);
-  }
+  // Audit mutex (Lot A/BUG-04) : checkout écrit l'index → même mutex par projet.
+  return getGitMutex(cwd).run(async () => {
+    const git: SimpleGit = simpleGit(cwd);
+    try {
+      await git.checkout(ref);
+      return `Checked out ${ref}`;
+    } catch (error: any) {
+      throw new Error(`Git checkout failed: ${error.message}`);
+    }
+  });
 }
 
 export async function gitClone(
@@ -925,26 +1009,30 @@ async function gitRefExists(git: SimpleGit, ref: string): Promise<boolean> {
 }
 
 export async function gitInit(cwd: string, remote: string, branch: string = "main"): Promise<string> {
-  const git: SimpleGit = simpleGit(cwd);
-  try {
-    await git.init();
-    // Sécurité : ne jamais persister de credentials dans le remote.
-    await git.addRemote("origin", sanitizeRemoteUrl(remote));
-    await git.checkoutLocalBranch(branch);
+  // Audit mutex (Lot A/BUG-04) : init + checkoutLocalBranch écrivent l'index
+  // → même mutex par projet que les autres opérations sensibles.
+  return getGitMutex(cwd).run(async () => {
+    const git: SimpleGit = simpleGit(cwd);
+    try {
+      await git.init();
+      // Sécurité : ne jamais persister de credentials dans le remote.
+      await git.addRemote("origin", sanitizeRemoteUrl(remote));
+      await git.checkoutLocalBranch(branch);
 
-    // Fix gitInit : ne configurer l'upstream que si le dépôt a au moins un commit
-    // ET que la ref distante existe. Sinon `git branch --set-upstream-to` échoue
-    // sur un dépôt fraîchement initialisé (aucun commit) ou sans ref distante.
-    const hasCommit = await gitRefExists(git, "HEAD");
-    const hasRemoteRef = await gitRefExists(git, `origin/${branch}`);
-    if (hasCommit && hasRemoteRef) {
-      await git.raw(["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+      // Fix gitInit : ne configurer l'upstream que si le dépôt a au moins un commit
+      // ET que la ref distante existe. Sinon `git branch --set-upstream-to` échoue
+      // sur un dépôt fraîchement initialisé (aucun commit) ou sans ref distante.
+      const hasCommit = await gitRefExists(git, "HEAD");
+      const hasRemoteRef = await gitRefExists(git, `origin/${branch}`);
+      if (hasCommit && hasRemoteRef) {
+        await git.raw(["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+      }
+
+      return `Initialized repo, remote set to ${remote}`;
+    } catch (error: any) {
+      throw new Error(`Git init failed: ${error.message}`);
     }
-
-    return `Initialized repo, remote set to ${remote}`;
-  } catch (error: any) {
-    throw new Error(`Git init failed: ${error.message}`);
-  }
+  });
 }
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResult> {

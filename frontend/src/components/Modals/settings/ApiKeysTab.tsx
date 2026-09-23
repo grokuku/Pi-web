@@ -11,6 +11,9 @@ interface ApiKey {
   tokenPreview: string;
   createdAt: string;
   lastUsedAt: string | null;
+  // SEC-08 : true uniquement pour une clé héritée encore stockée en clair.
+  // Les clés hachées ne peuvent plus être révélées (affichées une fois à la création).
+  canReveal?: boolean;
 }
 
 // copyToClipboard est extrait dans src/utils/clipboard.ts (helper robuste
@@ -145,12 +148,16 @@ function ApiKeysTab() {
                     <code className="text-hacker-text-dim text-xs bg-hacker-bg px-2 py-0.5 flex-1 select-text">
                       {k.tokenPreview}
                     </code>
-                    <button
-                      onClick={() => handleReveal(k.id)}
-                      className="text-xs text-hacker-text-dim hover:text-hacker-accent shrink-0"
-                    >
-                      👁 Reveal
-                    </button>
+                    {/* SEC-08 : révélable uniquement si le backend conserve
+                        encore le token hérité en clair (non migré). */}
+                    {k.canReveal && (
+                      <button
+                        onClick={() => handleReveal(k.id)}
+                        className="text-xs text-hacker-text-dim hover:text-hacker-accent shrink-0"
+                      >
+                        👁 Reveal
+                      </button>
+                    )}
                   </>
                 )}
               </div>

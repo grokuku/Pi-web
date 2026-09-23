@@ -8,7 +8,8 @@
  * private — cf. ROADMAP.md « Mémoire partagée »).
  *
  * Authentification dédiée (sharedMemoryAuth), accepte si :
- *   (a) requête locale — même logique isLocalhost que api-auth / librarian ;
+ *   (a) requête réellement locale — isTrustedLocalRequest (socket réelle,
+ *       non forgeable via X-Forwarded-For), partagé avec api-auth / librarian ;
  *   (b) Authorization: Bearer <agent-token> valide (validateToken d'agent-keys) ;
  *   (c) X-API-Key <clé librarian> valide (validateKey de librarian-auth).
  * Sinon 401.
@@ -29,6 +30,7 @@ import {
 import { validateToken } from "./agent-keys.js";
 import { validateKey, findKeyName } from "../pi/librarian-auth.js";
 import { sanitizeContent } from "../pi/librarian-service.js";
+import { isTrustedLocalRequest } from "../utils/request-identity.js";
 
 const router = Router();
 
@@ -48,25 +50,13 @@ interface SharedMemoryRequest extends Request {
 // ── Authentification ─────────────────────────────────────
 
 /**
- * Détection localhost — copie conforme de api-auth.ts / librarian-auth.ts
- * (les deux la dupliquent déjà entre eux ; elle est privée chez chacun).
- */
-function isLocalhost(req: Request): boolean {
-  const remoteIp = req.ip || req.socket.remoteAddress;
-  return (
-    remoteIp === "127.0.0.1" ||
-    remoteIp === "::1" ||
-    remoteIp === "::ffff:127.0.0.1"
-  );
-}
-
-/**
  * Middleware d'auth de la mémoire partagée : localhost ∥ Bearer agent ∥ X-API-Key librarian.
  * Résout et attache l'identité de l'appelant sur req.memoryCaller (utilisé pour le tag external:*).
  */
 export function sharedMemoryAuth(req: SharedMemoryRequest, res: Response, next: NextFunction): void {
-  // (a) Requête locale (Pi-Web interne) → bypass, comme api-auth / librarianAuth.
-  if (isLocalhost(req)) {
+  // (a) Requête réellement locale (Pi-Web interne) → bypass, comme api-auth /
+  // librarianAuth. SEC-02 : adresse RÉELLE de la socket, jamais req.ip.
+  if (isTrustedLocalRequest(req)) {
     req.memoryCaller = { source: "localhost" };
     next();
     return;
