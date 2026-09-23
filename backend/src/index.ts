@@ -45,6 +45,7 @@ import type { Project } from "./projects/manager.js";
 // pi/ui-history.test.ts. sliceUiHistoryWindow = chargement par lots (fix de
 // fond du bug « messages récents manquants » : payload WS borné).
 import { buildFullUiHistory, sliceUiHistoryWindow, type UiHistoryWindowMeta } from "./pi/ui-history.js";
+import { runMemoryMigration } from "./pi/memory-migration.js";
 
 // ── Logger fichier (P0 observabilité 2/2) ──
 // Chaque erreur/crash est dupliqué dans .data/logs/ (persistant, lisible via
@@ -1272,6 +1273,37 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   const message = err?.message || (typeof err === "string" ? err : "Internal server error");
   res.status(500).json({ error: message });
 });
+
+// ─── Migration mémoire BUG-02 (best-effort, AVANT le listen) ───
+// Nouvelle clé de dossier mémoire (slug + empreinte sha256) : migre les dossiers
+// existants une seule fois. Fire-and-forget totalement isolé : un échec de
+// migration (ex. sauvegarde non vérifiable) ne bloque JAMAIS le démarrage — le
+// serveur écoute quoi qu'il arrive. Détail du comportement et restauration :
+// pi/memory-migration.ts.
+void runMemoryMigration()
+  .then((result) => {
+    if (result.skipped || result.aborted) {
+      logger.info("memory-migration", "migration mémoire ignorée/abandonnée", {
+        skipped: result.skipped,
+        aborted: result.aborted,
+        reason: result.reason ?? null,
+      });
+      return;
+    }
+    logger.info("memory-migration", "migration mémoire terminée", {
+      moved: result.moved,
+      skippedMoves: result.skippedMoves,
+      conflicts: result.conflicts,
+      orphans: result.orphans,
+      backupPath: result.backupPath,
+      durationMs: result.durationMs,
+    });
+  })
+  .catch((err) => {
+    logger.error("memory-migration", "migration mémoire en échec (démarrage non bloqué)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
 // ─── Start Server ──────────────────────────────────────
 httpServer.listen(PORT, async () => {

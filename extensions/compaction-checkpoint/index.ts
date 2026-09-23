@@ -19,6 +19,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import path from "path";
 import os from "os";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 // ─── Config ──────────────────────────────────────────────
@@ -28,8 +29,20 @@ const MAX_USER_MESSAGES = 15; // Max individual user messages to extract
 const MAX_USER_MSG_LENGTH = 500; // Truncate individual messages
 const MAX_SUMMARY_LENGTH = 12000;
 
-function getProjectName(cwd: string): string {
-  return path.basename(cwd).replace(/[^a-zA-Z0-9_]/g, "_");
+// DOIT rester synchronisée avec memory-service.getProjectDirName (même entrée →
+// même sortie) : les deux écrivent le MÊME dossier ~/.unipi/memory/<clé>/.
+// Clé = "<slug>-<12 hex sha256(chemin absolu résolu)>". Le suffixe d'empreinte
+// garantit qu'aucun dossier projet ne collisionne (BUG-02), notamment avec la
+// mémoire globale "_global_" (sans suffixe).
+const PROJECT_SLUG_MAX = 40;
+const PROJECT_HASH_LENGTH = 12;
+
+export function getProjectName(cwd: string): string {
+  const resolved = path.resolve(cwd || "");
+  const slug =
+    path.basename(resolved).replace(/[^a-zA-Z0-9_]/g, "_").slice(0, PROJECT_SLUG_MAX) || "project";
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, PROJECT_HASH_LENGTH);
+  return `${slug}-${hash}`;
 }
 
 // ─── Stockage des checkpoints ───────────────────────────

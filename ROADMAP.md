@@ -221,6 +221,43 @@ Issues remontées lors de l'analyse du log de démarrage post-rebuild. À traite
 | 84 | 🔴 | « ❌ No active Pi session for this project » TOUJOURS, quel que soit le projet (régression du fix BUG-83) — `pi_start` rejoué depuis la file WS arrive juste avant le `pi_prompt` mis en file ; les handlers WS n'étant pas sérialisés, `sendPrompt` lisait `sessionsByProject` **avant** la fin de `createPiSession` → session absente. Fix : `createPiSession` déduplique les créations en vol (`pendingSessionCreations`), `sendPrompt`/`steerPrompt`/`compactSession`/`cycleModel` attendent la création en vol via `getReadySession()`, et `pi_prompt` crée la session à la demande + pousse `pi_history` complet si `pi_start` a été perdu | 2026-09-19 |
 | 85 | 🟡 | Historique de conversation incomplet après un `pi_start` perdu/court-circuité — `GET /api/sessions/:id/history` renvoyait le contexte LLM compaction-aware (`getSessionMessages`, pré-compaction tronqué) et l'UI ne recevait l'historique COMPLET que via `pi_start` ; endpoint aligné sur `buildFullUiHistory` + `pi_prompt` pousse l'historique complet quand il crée la session | 2026-09-19 |
 
+### BUG-02 (mémoires) : collisions de dossiers mémoire projet + migration idempotente (2026-09-19)
+
+> Numérotation du lot mémoire — sans rapport avec la ligne historique « 02 » du tableau ci-dessus.
+
+- **Cause :** la clé de dossier mémoire d'un projet était
+  `path.basename(cwd).replace(/[^a-zA-Z0-9_]/g, "_")`
+  (`backend/src/pi/memory-service.ts:getProjectDirName`, **dupliquée** dans
+  l'extension `extensions/compaction-checkpoint/index.ts:getProjectName`). Deux
+  projets distincts pouvaient donc partager le MÊME dossier : `/projects/a-b` et
+  `/projects/a_b` → `a_b` (mémoires mélangées), et un projet nommé `_global_`
+  collisionnait avec la mémoire globale `_global_`.
+- **Correctif :** clé hybride `"<slug>-<12 hex sha256(path.resolve(cwd))>"` —
+  `slug` = ancien basename nettoyé (borné à 40 chars, repli `project`),
+  `empreinte` = sha256 du chemin absolu résolu. L'empreinte porte l'unicité ; la
+  mémoire globale reste `_global_` (sans suffixe), donc tout dossier projet finit
+  par `-<hex>` et un projet `_global_` donne `_global_-<hex>` → **collision
+  éliminée par construction**. Règle appliquée à l'IDENTIQUE côté service et
+  côté extension (les deux DOIVENT rester synchronisées).
+- **Migration (jamais destructive, réversible) :** au boot backend (best-effort,
+  AVANT `httpServer.listen`, sous try/catch total — un échec ne bloque jamais le
+  démarrage), via `backend/src/pi/memory-migration.ts` :
+  1. sauvegarde COMPLÈTE de `~/.unipi/memory` → `~/.unipi/memory-backup-<ISO>`
+     avec vérification stricte (nombre de fichiers + somme des tailles, source
+     vs copie) ; toute divergence ⇒ **abandon total** (rien n'est modifié) ;
+  2. copie de chaque ancien dossier vers le(s) nouveau(x) dossier(s) ;
+  3. ancien dossier **RENOMMÉ** `<ancien>.migrated-<ts>` (jamais supprimé) ;
+  4. orphelins (dossiers liés à aucun projet) et mémoire globale **laissés
+     intacts**.
+  - **Conflit indémêlable** (`a-b`/`a_b` partagent l'ancien dossier `a_b`) : le
+    contenu commun est copié vers les DEUX nouveaux dossiers (zéro perte,
+    attribution possiblement imparfaite) + WARNING dans les logs.
+  - **Idempotent** : marqueur `~/.unipi/.memory-migration-v2.json` (2e run = 0 move).
+  - **Fallback manuel** : `cd backend && npm run migrate:memory`.
+  - **Restaurer** : arrêter le backend, renommer chaque `<ancien>.migrated-<ts>`
+    en `<ancien>` ; au besoin, recopier `~/.unipi/memory-backup-<ISO>` par-dessus
+    `~/.unipi/memory`.
+
 ---
 
 ### 🔒 Correctifs de sécurité (2026-08-01)

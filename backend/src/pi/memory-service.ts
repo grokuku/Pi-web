@@ -2,7 +2,13 @@
  * Memory Service — store unique du système de mémoire à deux niveaux.
  *
  * Niveau global  : ~/.unipi/memory/_global_/  (préférences utilisateur, choix transverses)
- * Niveau projet  : ~/.unipi/memory/<projet>/  (décisions, patterns, résumés de compaction)
+ * Niveau projet  : ~/.unipi/memory/<slug>-<empreinte>/  (décisions, patterns, résumés) où
+ *   l'empreinte = 12 hex de sha256(chemin absolu du cwd). Deux chemins distincts
+ *   ne partagent JAMAIS un dossier (BUG-02) et un projet dont le basename vaut
+ *   "_global_" donne "_global_-<hex>" : aucune collision possible avec la mémoire
+ *   globale "_global_" (sans suffixe d'empreinte).
+ *   La règle est DUPLIQUÉE à l'identique dans l'extension compaction-checkpoint
+ *   (getProjectName) : toute évolution doit être répercutée des deux côtés.
  *
  * Format de stockage : IDENTIQUE à l'extension compaction-checkpoint
  * (extensions/compaction-checkpoint/index.ts) pour cohabiter sur les mêmes
@@ -24,6 +30,7 @@
 
 import path from "path";
 import os from "os";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 // ─── Config ──────────────────────────────────────────────
@@ -97,14 +104,33 @@ interface RawMemoryRecord {
 
 // ─── Chemins ─────────────────────────────────────────────
 
+// Borne du slug lisible : garde des noms de dossier manipulables ; les chemins
+// très longs restent couverts par l'empreinte, seule partie garantissant l'unicité.
+const PROJECT_SLUG_MAX = 40;
+// Longueur d'empreinte : 12 hex = 48 bits, largement suffisant pour écarter
+// toute collision fortuite entre projets d'un même utilisateur.
+const PROJECT_HASH_LENGTH = 12;
+
 /**
- * Règle de nommage du dossier projet — doit rester synchronisée avec
- * getProjectName() de l'extension compaction-checkpoint :
- * path.basename(cwd).replace(/[^a-zA-Z0-9_]/g, "_").
- * Les deux composants lisent/écrivent le même dossier ~/.unipi/memory/<nom>/.
+ * Règle de nommage du dossier projet — DOIT rester synchronisée avec
+ * getProjectName() de l'extension compaction-checkpoint (même entrée → même
+ * sortie) : les deux composants lisent/écrivent le même dossier
+ * ~/.unipi/memory/<slug>-<empreinte>/.
+ *
+ * Clé = "<slug>-<12 hex de sha256(chemin absolu du cwd)>" :
+ *   - slug = ancien basename nettoyé ([^a-zA-Z0-9_] → _), borné à 40 chars,
+ *     repli "project" si le basename est vide → reste humainement lisible ;
+ *   - l'empreinte porte toute l'unicité (fonction pure du chemin absolu résolu),
+ *     ce qui supprime la collision historique /projects/a-b vs /projects/a_b ;
+ *   - la mémoire globale vaut "_global_" (sans suffixe) alors que TOUT dossier
+ *     projet finit par "-<hex>" : collision éliminée par construction.
  */
-function getProjectDirName(cwd: string): string {
-  return path.basename(cwd).replace(/[^a-zA-Z0-9_]/g, "_");
+export function getProjectDirName(cwd: string): string {
+  const resolved = path.resolve(cwd || "");
+  const slug =
+    path.basename(resolved).replace(/[^a-zA-Z0-9_]/g, "_").slice(0, PROJECT_SLUG_MAX) || "project";
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, PROJECT_HASH_LENGTH);
+  return `${slug}-${hash}`;
 }
 
 /** Dossier mémoire du projet correspondant à un cwd. */
@@ -115,14 +141,10 @@ export function getProjectMemoryDir(cwd: string): string {
 /**
  * Dossier mémoire global (préférences utilisateur transverses).
  *
- * Le nom "_global_" (et non "global") est RÉSERVÉ : un projet dont
- * basename(cwd) === "global" aurait sinon exactement le même dossier que la
- * mémoire globale (collision dossier projet/global).
- * Risque résiduel ACCEPTÉ : la sanitization partagée [^a-zA-Z0-9_]→_ conserve
- * le caractère "_", donc un répertoire de projet nommé littéralement
- * "_global_" entrerait encore en collision — cas jugé improbable.
- * Aucune migration : les mémoires globales viennent d'être introduites sous
- * l'ancien nom "global", rien n'existe encore en prod.
+ * Le nom "_global_" (sans suffixe d'empreinte) reste RÉSERVÉ : depuis BUG-02,
+ * getProjectDirName suffixe TOUJOURS un "-<hex>" au nom du projet, donc plus
+ * aucun dossier projet ne peut coïncider avec la mémoire globale — y compris un
+ * projet nommé littéralement "_global_" (qui donne "_global_-<hex>").
  */
 export function getGlobalMemoryDir(): string {
   return path.join(MEMORY_ROOT, "_global_");
