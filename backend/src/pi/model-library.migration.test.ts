@@ -17,18 +17,18 @@ describe("migration du bloc concurrency", () => {
       defaultModelId: "m1",
       concurrency: { maxLLMSlots: 7, maxAgentSlots: 9 },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 7, maxAgentSlots: 9, providerMaxLLMSlots: {} });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 7, maxAgentSlots: 9, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
     expect(lib.defaultModelId).toBe("m1");
   });
 
   it("sans bloc concurrency du tout → défauts complets", () => {
     const lib = migrateLibrary({ models: [] });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
   });
 
   it("concurrency null → défauts complets", () => {
     const lib = migrateLibrary({ models: [], concurrency: null });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
   });
 
   it("providerMaxLLMSlots existant est préservé (valeurs valides uniquement)", () => {
@@ -44,6 +44,7 @@ describe("migration du bloc concurrency", () => {
       maxLLMSlots: 3,
       maxAgentSlots: 5,
       providerMaxLLMSlots: { anthropic: 2, openai: 5 },
+      queueTimeoutMs: 600_000,
     });
   });
 
@@ -63,16 +64,16 @@ describe("migration du bloc concurrency", () => {
 
   it("maxLLMSlots/maxAgentSlots invalides (<= 0, non numériques) retombent sur les défauts", () => {
     const lib = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 0, maxAgentSlots: -2 } });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
     const lib2 = migrateLibrary({ models: [], concurrency: { maxLLMSlots: "beaucoup" } });
-    expect(lib2.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} });
+    expect(lib2.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
   });
 
   it("ancien format (modes) → concurrency par défaut normalisé", () => {
     const lib = migrateLibrary({
       modes: { default: { models: [{ id: "m1", provider: "ollama", modelId: "llama3", name: "Llama 3" }] } },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
     expect(lib.models).toHaveLength(1);
     expect(lib.defaultModelId).toBe("m1");
   });
@@ -80,9 +81,16 @@ describe("migration du bloc concurrency", () => {
   it("config concurrency complète et valide : inchangée", () => {
     const lib = migrateLibrary({
       models: [],
-      concurrency: { maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 } },
+      concurrency: { maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000 },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 } });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000 });
+  });
+
+  it("queueTimeoutMs invalide ou hors bornes → repli sur le défaut (10 min)", () => {
+    for (const bad of [0, -1, 1_000, 3_600_001, 1.5, "600000", null]) {
+      const lib = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: bad } });
+      expect(lib.concurrency.queueTimeoutMs).toBe(600_000);
+    }
   });
 });
 // ── Migration du thinkingLevel par catégorie de routage ──

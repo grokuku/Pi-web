@@ -2,6 +2,7 @@ import { scanProjectInventory, getAllItems, type InventoryItem } from "./librari
 import { loadIndex, saveIndex, archiveDoc, webclawScrape, webclawSearch, type DocEntry, type DocContent } from "./librarian-service.js";
 import { getModelRegistry, getModelRuntime, reloadModelRegistry } from "./session.js";
 import { loadModelLibrary, getLibrarianModel as getLibrarianModelConfig } from "./model-library.js";
+import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 
 const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
 const SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000; // Check toutes les 6h
@@ -97,11 +98,22 @@ Règles:
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
 
-    const response = await getModelRuntime().completeSimple(modelInfo, context, {
-      temperature: 0.3,
-      maxTokens: 2000,
-      signal: controller.signal,
-    });
+    const response = await (async () => {
+      // Phase 2 : call LLM réel — slot du provider du modèle libraire, libéré
+      // dans le finally (succès/erreur/timeout).
+      const libProvider = (modelInfo as any)?.providerId || (modelInfo as any)?.provider || DEFAULT_LLM_PROVIDER;
+      const libSlotKey = `librarian::${libProvider}::${Date.now()}`;
+      await concurrencyManager.acquireLLMSlot(libSlotKey, "librarian", libProvider);
+      try {
+        return await getModelRuntime().completeSimple(modelInfo, context, {
+          temperature: 0.3,
+          maxTokens: 2000,
+          signal: controller.signal,
+        });
+      } finally {
+        concurrencyManager.releaseLLMSlot(libSlotKey);
+      }
+    })();
     clearTimeout(timeout);
 
     // Extraire le texte de la réponse

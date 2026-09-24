@@ -3,6 +3,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
 import { DEFAULT_ROUTING_CONFIG, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
+import {
+  DEFAULT_QUEUE_TIMEOUT_MS,
+  MIN_QUEUE_TIMEOUT_MS,
+  MAX_QUEUE_TIMEOUT_MS,
+} from "./concurrency.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -99,6 +104,7 @@ export interface ModelLibrary {
     maxLLMSlots: number;                  // limite LLM par DÉFAUT (globale)
     maxAgentSlots: number;                // sessions Pi SDK simultanées max (global)
     providerMaxLLMSlots: Record<string, number>;  // override de limite LLM par providerId
+    queueTimeoutMs: number;               // délai max d'attente en file (ms)
   };
 }
 
@@ -166,6 +172,7 @@ const DEFAULT_CONCURRENCY: ModelLibrary["concurrency"] = {
   maxLLMSlots: 3,
   maxAgentSlots: 5,
   providerMaxLLMSlots: {},
+  queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
 };
 
 /**
@@ -191,6 +198,14 @@ function normalizeConcurrency(c: any): ModelLibrary["concurrency"] {
   return {
     maxLLMSlots: typeof c.maxLLMSlots === "number" && c.maxLLMSlots > 0 ? c.maxLLMSlots : DEFAULT_CONCURRENCY.maxLLMSlots,
     maxAgentSlots: typeof c.maxAgentSlots === "number" && c.maxAgentSlots > 0 ? c.maxAgentSlots : DEFAULT_CONCURRENCY.maxAgentSlots,
+    // Délai de file : entier dans [5 s, 1 h], sinon repli sur le défaut.
+    queueTimeoutMs:
+      typeof c.queueTimeoutMs === "number" &&
+      Number.isInteger(c.queueTimeoutMs) &&
+      c.queueTimeoutMs >= MIN_QUEUE_TIMEOUT_MS &&
+      c.queueTimeoutMs <= MAX_QUEUE_TIMEOUT_MS
+        ? c.queueTimeoutMs
+        : DEFAULT_CONCURRENCY.queueTimeoutMs,
     providerMaxLLMSlots,
   };
 }
@@ -204,7 +219,7 @@ function getDefaultLibrary(): ModelLibrary {
     audioModelId: null,
     librarianModelId: null,
     projectModes: {},
-    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} },
+    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS },
   };
 }
 
@@ -237,18 +252,28 @@ export function saveModelLibrary(library: ModelLibrary): void {
 export function getConcurrencyConfig(): ModelLibrary["concurrency"] {
   const lib = loadModelLibrary();
   // migrateLibrary garantit un bloc normalisé ; fallback défensif inchangé.
-  return lib.concurrency || { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} };
+  return lib.concurrency || { ...DEFAULT_CONCURRENCY, providerMaxLLMSlots: {} };
 }
 
 export async function setConcurrencyConfig(config: {
   maxLLMSlots?: number;
   maxAgentSlots?: number;
   providerMaxLLMSlots?: Record<string, number>;
+  queueTimeoutMs?: number;
 }) {
   const lib = loadModelLibrary();
-  if (!lib.concurrency) lib.concurrency = { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {} };
+  if (!lib.concurrency) lib.concurrency = { ...DEFAULT_CONCURRENCY, providerMaxLLMSlots: {} };
   if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) lib.concurrency.maxLLMSlots = config.maxLLMSlots;
   if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) lib.concurrency.maxAgentSlots = config.maxAgentSlots;
+  // Délai de file : entier dans [5 s, 1 h], sinon repli sur le défaut.
+  if (config.queueTimeoutMs !== undefined) {
+    const valid =
+      typeof config.queueTimeoutMs === "number" &&
+      Number.isInteger(config.queueTimeoutMs) &&
+      config.queueTimeoutMs >= MIN_QUEUE_TIMEOUT_MS &&
+      config.queueTimeoutMs <= MAX_QUEUE_TIMEOUT_MS;
+    lib.concurrency.queueTimeoutMs = valid ? config.queueTimeoutMs : DEFAULT_QUEUE_TIMEOUT_MS;
+  }
   // Map de limites par provider : remplacée ENTIÈREMENT quand fournie
   // (permet de supprimer un override), inchangée sinon (update partiel).
   if (config.providerMaxLLMSlots !== undefined) {

@@ -328,6 +328,42 @@ function getSessionModelLabel(tempSession: any): string {
   }
 }
 
+// ── Pont GLOBAL du limiteur de concurrence LLM ────────────────────────────
+// L'extension est chargée par jiti avec `moduleCache: false` : importer
+// `backend/src/pi/concurrency.js` depuis ici créerait une SECONDE instance du
+// singleton concurrencyManager (limiteur inopérant, slots non comptés par le
+// backend). Le backend publie donc son instance RÉELLE sur globalThis
+// (`__piWebConcurrency`), exactement comme les ponts `__cbmRepoMap`,
+// `__piWebResolveProjectIdByCwd__` et `__piWebHarnessRawEmit__`.
+const CONCURRENCY_BRIDGE_KEY = "__piWebConcurrency";
+
+interface LLMConcurrencyBridge {
+  acquireLLMSlot(slotKey: string, label: string, providerId?: string): Promise<void>;
+  releaseLLMSlot(slotKey: string): void;
+  getEffectiveLLMLimit(providerId: string): number;
+}
+
+// Repli sûr : si le pont est absent (tests, hôte inattendu), on ne bloque PAS
+// la délégation — on exécute sans slot et on journalise UNE fois.
+let concurrencyBridgeMissingLogged = false;
+function getConcurrencyBridge(): LLMConcurrencyBridge | null {
+  const b = (globalThis as any)[CONCURRENCY_BRIDGE_KEY];
+  if (b && typeof b.acquireLLMSlot === "function" && typeof b.releaseLLMSlot === "function") {
+    return b as LLMConcurrencyBridge;
+  }
+  if (!concurrencyBridgeMissingLogged) {
+    concurrencyBridgeMissingLogged = true;
+    console.warn(
+      "[harness-orchestrator] pont de concurrence absent (globalThis.__piWebConcurrency) — " +
+      "délégations exécutées SANS limite de concurrence LLM",
+    );
+  }
+  return null;
+}
+
+// Compteur monotone : slotKey unique par appel de sous-agent (jamais partagé).
+let subagentSlotSeq = 0;
+
 /**
  * Extrait le TEXTE joint d'une liste de blocs content SDK (résultat ou
  * partialResult d'un tool). Les blocs non textuels (images…) sont ignorés.
@@ -1635,6 +1671,25 @@ export default function (pi: ExtensionAPI) {
                 })
               : new Promise<void>(() => {}); // jamais résout si pas de signal
 
+            // ── Phase 2 : slot LLM par provider pour l'appel du sous-agent ──
+            // Le provider est résolu APRÈS le setModel (tempSession.model), donc
+            // c'est bien le provider réellement appelé. ANTI-DEADLOCK : le
+            // sous-agent ne dispose PAS du tool `delegate` → il ne sous-délègue
+            // jamais, donc le slot n'est jamais conservé pendant l'attente d'une
+            // sous-délégation. Libération garantie dans le finally ci-dessous.
+            const bridge = getConcurrencyBridge();
+            const subagentProvider = (tempSession as any)?.model?.provider ?? "__default__";
+            let subagentSlotKey: string | null = null;
+            if (bridge) {
+              subagentSlotKey =
+                `${subagentProvider}::${subagentProjectId ?? "unknown"}::subagent::${++subagentSlotSeq}`;
+              await bridge.acquireLLMSlot(
+                subagentSlotKey,
+                `subagent:${effectiveFunction}`,
+                subagentProvider,
+              );
+            }
+
             try {
               await Promise.race([
                 tempSession.prompt(functionPrompt, {}),
@@ -1677,6 +1732,10 @@ export default function (pi: ExtensionAPI) {
               }
               throw err; // autre erreur → propagate
             } finally {
+              // Phase 2 : TOUJOURS libérer le slot (succès, exception, abort,
+              // timeout d'inactivité/global). Un échec de libération ne doit pas
+              // masquer l'issue réelle de la délégation.
+              if (bridge && subagentSlotKey) bridge.releaseLLMSlot(subagentSlotKey);
               clearTimeout(inactivityTimer!);
               clearTimeout(globalTimer!);
               if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);

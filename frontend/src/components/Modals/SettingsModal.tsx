@@ -12,8 +12,12 @@ import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } 
 import { toast } from "../../utils/holaf-toast";
 import {
   normalizeProviderOverrides,
-  mergeProviderLimits,
+  mergeProviderLimitsIncludingOverrides,
   buildProviderOverridesPayload,
+  addProviderLimitRow,
+  removeProviderLimitRow,
+  normalizeProviderLimitInput,
+  MAX_PROVIDER_LIMIT,
   type ProviderLimitRow,
 } from "../../utils/concurrency";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "../../utils/preview-mode";
@@ -268,10 +272,14 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   // ── Concurrency state ──
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
   const [maxAgentSlots, setMaxAgentSlots] = useState(5);
+  // Délai d'attente en file, stocké en millisecondes (affiché en secondes).
+  const [queueTimeoutMs, setQueueTimeoutMs] = useState(600000);
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
   // Limites LLM par provider : une ligne par provider (GET /api/providers),
   // value null = champ vide = hérite du défaut global (maxLLMSlots).
   const [providerRows, setProviderRows] = useState<ProviderLimitRow[]>([]);
+  // Saisie pour ajouter manuellement un provider absent de la liste.
+  const [newProviderId, setNewProviderId] = useState("");
 
   // ── Webclaw config state ──
   // Durcissement (lot XSS) : la clé n'est plus renvoyée par l'API. Le champ
@@ -358,17 +366,30 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const data = await res.json();
       setMaxLLMSlots(data.config.maxLLMSlots ?? 3);
       setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
+      setQueueTimeoutMs(data.config.queueTimeoutMs ?? 600000);
       setConcurrencyStats(data.stats);
       // Limites par provider : liste (GET /api/providers) + overrides
-      // (config.providerMaxLLMSlots) fusionnés — value null = hérite du défaut.
+      // (config.providerMaxLLMSlots) fusionnés — les overrides absents de la
+      // liste (provider d'extension) sont conservés en fin de tableau.
       try {
         const pres = await fetch("/api/providers");
         if (pres.ok) {
           const list: Array<{ id: string; name?: string }> = await pres.json();
           const overrides = normalizeProviderOverrides(data.config?.providerMaxLLMSlots);
-          setProviderRows(mergeProviderLimits(list ?? [], overrides));
+          setProviderRows(mergeProviderLimitsIncludingOverrides(list ?? [], overrides));
         }
       } catch {}
+    } catch {}
+  }, []);
+
+  // Rafraîchit uniquement les stats (usage live par provider), sans toucher au
+  // formulaire : utilisé par l'auto-refresh tant que la modale est ouverte.
+  const refreshConcurrencyStats = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/concurrency");
+      if (!res.ok) return;
+      const data = await res.json();
+      setConcurrencyStats(data.stats);
     } catch {}
   }, []);
 
@@ -382,6 +403,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         body: JSON.stringify({
           maxLLMSlots,
           maxAgentSlots,
+          queueTimeoutMs,
           providerMaxLLMSlots: buildProviderOverridesPayload(providerRows),
         }),
       });
@@ -401,6 +423,14 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
 
   // Load concurrency config on mount
   useEffect(() => { loadConcurrencyConfig(); }, [loadConcurrencyConfig]);
+  // Auto-refresh de l'usage par provider, tant que l'onglet Général est actif
+  // (= la modale est ouverte) ; le timer est nettoyé au changement d'onglet
+  // et au démontage du composant.
+  useEffect(() => {
+    if (tab !== "general") return;
+    const timer = setInterval(refreshConcurrencyStats, 3000);
+    return () => clearInterval(timer);
+  }, [tab, refreshConcurrencyStats]);
   useEffect(() => { loadWebclawConfig(); }, [loadWebclawConfig]);
   useEffect(() => { loadTavilyConfig(); }, [loadTavilyConfig]);
 
@@ -1073,9 +1103,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       <input
                         type="number"
                         min={1}
-                        max={20}
+                        max={MAX_PROVIDER_LIMIT}
                         value={maxLLMSlots}
-                        onChange={e => setMaxLLMSlots(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        onChange={e => setMaxLLMSlots(Math.max(1, Math.min(MAX_PROVIDER_LIMIT, parseInt(e.target.value) || 1)))}
                         className="input-hacker w-full text-xs py-1.5 px-2"
                       />
                     </div>
@@ -1086,11 +1116,35 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                       <input
                         type="number"
                         min={1}
-                        max={50}
+                        max={MAX_PROVIDER_LIMIT}
                         value={maxAgentSlots}
-                        onChange={e => setMaxAgentSlots(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
+                        onChange={e => setMaxAgentSlots(Math.max(1, Math.min(MAX_PROVIDER_LIMIT, parseInt(e.target.value) || 1)))}
                         className="input-hacker w-full text-xs py-1.5 px-2"
                       />
+                      <div className="text-[10px] text-hacker-text-dim/70 mt-1 italic">
+                        {t('settings.general.concurrency.agentSlotsNotApplied')}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Délai d'attente en file — affiché en secondes, stocké en ms */}
+                  <div>
+                    <label className="text-hacker-text-dim text-xs block mb-1">
+                      {t('settings.general.concurrency.queueTimeout')}
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={3600}
+                      value={Math.round(queueTimeoutMs / 1000)}
+                      onChange={e => {
+                        const seconds = Math.max(5, Math.min(3600, parseInt(e.target.value) || 5));
+                        setQueueTimeoutMs(seconds * 1000);
+                      }}
+                      className="input-hacker w-32 text-xs py-1.5 px-2"
+                    />
+                    <div className="text-[10px] text-hacker-text-dim/70 mt-1">
+                      {t('settings.general.concurrency.queueTimeoutHint')}
                     </div>
                   </div>
 
@@ -1098,38 +1152,72 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   <div className="pt-2 border-t border-hacker-border/30">
                     <div className="text-[11px] font-bold text-hacker-text-dim">{t('settings.general.concurrency.perProvider')}</div>
                     <div className="text-[10px] text-hacker-text-dim/80 mb-2">{t('settings.general.concurrency.perProviderHint')}</div>
-                    {providerRows.length === 0 ? (
-                      <div className="text-[10px] text-hacker-text-dim/70 italic">{t('settings.general.concurrency.noProviders')}</div>
-                    ) : (
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {providerRows.length === 0 && (
+                      <div className="text-[10px] text-hacker-text-dim/70 italic mb-1">{t('settings.general.concurrency.noProviders')}</div>
+                    )}
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {providerRows.length > 0 && (
                         <div className="text-[10px] uppercase tracking-wider text-hacker-text-dim/60">
                           {t('settings.general.concurrency.provider')}
                         </div>
-                        {providerRows.map(row => (
-                          <div key={row.id} className="flex items-center gap-2">
-                            <span className="text-[11px] text-hacker-text flex-1 truncate" title={row.name}>
-                              {row.name}
-                            </span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={20}
-                              placeholder={t('settings.general.concurrency.inherit')}
-                              value={row.value ?? ""}
-                              onChange={e => {
-                                const raw = e.target.value;
-                                setProviderRows(prev => prev.map(r =>
-                                  r.id === row.id
-                                    ? { ...r, value: raw === "" ? null : Math.max(1, Math.min(20, parseInt(raw) || 1)) }
-                                    : r
-                                ));
-                              }}
-                              className="input-hacker w-24 text-xs py-1 px-2 text-right"
-                            />
-                          </div>
-                        ))}
+                      )}
+                      {providerRows.map(row => (
+                        <div key={row.id} className="flex items-center gap-2">
+                          <span className="text-[11px] text-hacker-text flex-1 truncate" title={row.name}>
+                            {row.name}
+                          </span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={MAX_PROVIDER_LIMIT}
+                            placeholder={t('settings.general.concurrency.inherit')}
+                            value={row.value ?? ""}
+                            onChange={e => {
+                              const value = normalizeProviderLimitInput(e.target.value);
+                              setProviderRows(prev => prev.map(r =>
+                                r.id === row.id ? { ...r, value } : r
+                              ));
+                            }}
+                            className="input-hacker w-24 text-xs py-1 px-2 text-right"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setProviderRows(prev => removeProviderLimitRow(prev, row.id))}
+                            title={t('settings.general.concurrency.removeProvider')}
+                            aria-label={t('settings.general.concurrency.removeProvider')}
+                            className="text-hacker-text-dim hover:text-hacker-error transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Ajout manuel d'un provider (id libre, absent de GET /api/providers) */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={newProviderId}
+                          placeholder={t('settings.general.concurrency.addProviderPlaceholder')}
+                          onChange={e => setNewProviderId(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") {
+                              setProviderRows(prev => addProviderLimitRow(prev, newProviderId));
+                              setNewProviderId("");
+                            }
+                          }}
+                          className="input-hacker flex-1 text-xs py-1 px-2"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProviderRows(prev => addProviderLimitRow(prev, newProviderId));
+                            setNewProviderId("");
+                          }}
+                          className="btn-hacker text-xs px-2 py-1 whitespace-nowrap"
+                        >
+                          + {t('settings.general.concurrency.addProvider')}
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
 
                   <button onClick={saveConcurrency}
@@ -1140,6 +1228,19 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     <div className="text-[10px] text-hacker-text-dim space-y-1 mt-2 pt-2 border-t border-hacker-border/30">
                       <div>{t('settings.general.concurrency.statsLlm', concurrencyStats.llmSlots.used, concurrencyStats.llmSlots.max, concurrencyStats.llmSlots.queue)}</div>
                       <div>{t('settings.general.concurrency.statsAgents', concurrencyStats.agentSlots.used, concurrencyStats.agentSlots.max, concurrencyStats.agentSlots.queue)}</div>
+                      {/* Utilisation live par provider (rafraîchie toutes les 3 s) */}
+                      <div className="pt-1 mt-1 border-t border-hacker-border/20">
+                        <div className="font-bold">{t('settings.general.concurrency.usageByProvider')}</div>
+                        {Object.keys(concurrencyStats.llmByProvider ?? {}).length === 0 ? (
+                          <div className="italic text-hacker-text-dim/70">{t('settings.general.concurrency.usageEmpty')}</div>
+                        ) : (
+                          Object.entries(concurrencyStats.llmByProvider as Record<string, { used: number; max: number; queue: number }>)
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([pid, u]) => (
+                              <div key={pid}>{t('settings.general.concurrency.usageRow', pid, u.used, u.max, u.queue)}</div>
+                            ))
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

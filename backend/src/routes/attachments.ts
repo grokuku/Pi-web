@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
 import os from "os";
 import { loadModelLibrary, resolveModelCapability } from "../pi/model-library.js";
 import { loadProviders } from "../pi/providers.js";
+import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "../pi/concurrency.js";
 
 // ─── Config ──────────────────────────────────────────────
 const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
@@ -231,7 +232,12 @@ export async function describeImageWithVisionModel(
   prompt: string,
   modelInfo: VisionModelInfo
 ): Promise<string> {
+  // Phase 2 : la vision est un appel LLM réel — elle consomme un slot du
+  // provider du modèle vision (libéré dans le finally, succès ou erreur).
+  const visionProvider = modelInfo.providerId || DEFAULT_LLM_PROVIDER;
+  const visionSlotKey = `vision::${visionProvider}::${randomUUID()}`;
   try {
+    await concurrencyManager.acquireLLMSlot(visionSlotKey, "vision", visionProvider);
     // Use OpenAI-compatible chat completions API (works with OpenRouter, OpenAI, Ollama, etc.)
     const baseUrl = modelInfo.baseUrl.replace(/\/+$/, "");
     const url = `${baseUrl}/chat/completions`;
@@ -274,6 +280,8 @@ export async function describeImageWithVisionModel(
   } catch (err: any) {
     // BUG-1 : sanitise le message d'erreur avant de le propager (fuite apiKey).
     throw new Error(`Failed to describe image: ${sanitizeErrorText(err?.message || String(err))}`);
+  } finally {
+    concurrencyManager.releaseLLMSlot(visionSlotKey);
   }
 }
 

@@ -20,27 +20,59 @@
  * Désormais, chaque appel utilise un slotKey unique (ex: "projectId::architect").
  */
 
+import { logger } from "../utils/logger.js";
+
 // ── Types ─────────────────────────────────────────────────────
 
 export interface ConcurrencyConfig {
   maxLLMSlots: number;    // limite LLM par DÉFAUT (globale, utilisée pour tout provider sans override)
   maxAgentSlots: number;  // sessions Pi SDK simultanées max (global, non segmenté par provider)
   providerMaxLLMSlots?: Record<string, number>;  // limite LLM par provider (override du défaut global)
+  queueTimeoutMs?: number;  // délai max d'attente en file avant rejet (ms)
 }
+
+// ── Timeout de file ──
+// Défaut généreux (10 min) : un sous-agent HARNESS peut être mis en file
+// derrière un provider saturé et attendre plusieurs minutes sans être perdu.
+// L'ancien 60 s fixe était un plafond arbitraire qui tuait ces attentes.
+// Bornes exposées pour la validation route (5 s..1 h) et la normalisation.
+export const DEFAULT_QUEUE_TIMEOUT_MS = 600_000;
+export const MIN_QUEUE_TIMEOUT_MS = 5_000;
+export const MAX_QUEUE_TIMEOUT_MS = 3_600_000;
+
+// ── Watchdog anti-blocage ──
+// Un slot LLM ne devrait jamais rester détenu beaucoup plus longtemps qu'un
+// appel provider normal. Au-delà du seuil (30 min, toujours > queueTimeoutMs),
+// on le libère de FORCE pour éviter de figer définitivement la limite d'un
+// provider (chemin de libération oublié, crash d'une branche, abort non
+// propagé). Le seuil effectif = max(30 min, 3 × queueTimeoutMs).
+export const LLM_SLOT_WATCHDOG_MIN_MS = 30 * 60_000;
+const LLM_SLOT_WATCHDOG_INTERVAL_MS = 60_000;
 
 export const DEFAULT_CONFIG: ConcurrencyConfig = {
   maxLLMSlots: 3,
   maxAgentSlots: 5,
+  queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
 };
+
+/** Ramène un délai de file arbitraire à un entier valide, sinon le défaut. */
+function sanitizeQueueTimeoutMs(value: unknown): number {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_QUEUE_TIMEOUT_MS &&
+    value <= MAX_QUEUE_TIMEOUT_MS
+  ) {
+    return value;
+  }
+  return DEFAULT_QUEUE_TIMEOUT_MS;
+}
 
 // Provider sentinelle : providerId de repli quand l'appelant ne connaît pas
 // le provider (modèle inconnu, anciens appels, tests). Un provider absent de
 // la map — y compris la sentinelle — retombe toujours sur le défaut global :
 // on ne rejette jamais un appel pour cause de provider inconnu.
 export const DEFAULT_LLM_PROVIDER = "__default__";
-
-// Temps max d'attente dans la file avant rejet (60s)
-const QUEUE_TIMEOUT_MS = 60_000;
 
 interface QueuedTask {
   slotKey: string;
@@ -77,6 +109,19 @@ function sanitizeProviderLimits(map: Record<string, number>): Record<string, num
 class ConcurrencyManager {
   private config: ConcurrencyConfig = { ...DEFAULT_CONFIG };
 
+  constructor() {
+    // Watchdog : libère les slots LLM anormalement anciens. `unref()` pour ne
+    // jamais retenir le process (arrêt propre, tests vitest).
+    const timer = setInterval(() => {
+      try {
+        this.forceReleaseStaleLLMSlots();
+      } catch {
+        /* le watchdog ne doit jamais faire tomber le process */
+      }
+    }, LLM_SLOT_WATCHDOG_INTERVAL_MS);
+    (timer as any)?.unref?.();
+  }
+
   // Limites LLM par provider (providerId → slots max). Champ séparé de
   // `config` pour que getConfig() n'expose la map que si elle est non vide
   // (rétro-compatibilité : un config sans override garde sa forme historique).
@@ -105,6 +150,11 @@ class ConcurrencyManager {
     if (config.providerMaxLLMSlots !== undefined && typeof config.providerMaxLLMSlots === "object") {
       this.providerLimits = sanitizeProviderLimits(config.providerMaxLLMSlots);
     }
+    // Délai de file : fourni → normalisé (valeur invalide = repli sur le défaut),
+    // absent → inchangé (setConfig partiel compatible).
+    if (config.queueTimeoutMs !== undefined) {
+      this.config.queueTimeoutMs = sanitizeQueueTimeoutMs(config.queueTimeoutMs);
+    }
     // Tenter de débloquer des tâches en attente si les limites ont augmenté
     this.drainQueues();
   }
@@ -123,6 +173,11 @@ class ConcurrencyManager {
    */
   getEffectiveLLMLimit(providerId: string): number {
     return this.providerLimits[providerId] ?? this.config.maxLLMSlots;
+  }
+
+  /** Délai d'attente effectif dans les files (LLM et agent), en millisecondes. */
+  getQueueTimeoutMs(): number {
+    return this.config.queueTimeoutMs ?? DEFAULT_QUEUE_TIMEOUT_MS;
   }
 
   /** Stats en temps réel */
@@ -179,7 +234,7 @@ class ConcurrencyManager {
    * Acquiert un slot LLM pour un provider. Si la limite effective de CE
    * provider est atteinte (providerMaxLLMSlots[providerId] ?? maxLLMSlots),
    * la promesse reste en attente dans la file du provider jusqu'à ce qu'un
-   * slot se libère ou que le timeout de file (60s) expire.
+   * slot se libère ou que le timeout de file configuré (queueTimeoutMs) expire.
    *
    * @param slotKey    Identifiant unique par appel (ex: "provider::projectId::architect")
    * @param label      Libellé pour affichage/stats
@@ -209,6 +264,7 @@ class ConcurrencyManager {
         aborted: false,
         timer: undefined as any,
       };
+      const timeoutMs = this.getQueueTimeoutMs();
       task.timer = setTimeout(() => {
         task.aborted = true;
         const queue = this.llmQueues.get(providerId);
@@ -216,11 +272,11 @@ class ConcurrencyManager {
         if (queue && idx >= 0) queue.splice(idx, 1);
         const remaining = queue ? queue.length : 0;
         reject(new Error(
-          `[concurrency] LLM slot acquisition timed out after ${QUEUE_TIMEOUT_MS / 1000}s ` +
+          `[concurrency] LLM slot acquisition timed out after ${timeoutMs / 1000}s ` +
           `(slotKey=${slotKey}, provider=${providerId}, ${this.usedLLMSlotsByProvider(providerId)}/${limit} slots used, ` +
           `${remaining} en attente)`
         ));
-      }, QUEUE_TIMEOUT_MS);
+      }, timeoutMs);
       let queue = this.llmQueues.get(providerId);
       if (!queue) {
         queue = [];
@@ -242,11 +298,42 @@ class ConcurrencyManager {
     this.drainLLMQueue(slot.providerId);
   }
 
+  /** Seuil effectif du watchdog (ms) : max(30 min, 3 × queueTimeoutMs). */
+  getSlotWatchdogMs(): number {
+    return Math.max(LLM_SLOT_WATCHDOG_MIN_MS, this.getQueueTimeoutMs() * 3);
+  }
+
+  /**
+   * Libère de FORCE les slots LLM détenus au-delà du seuil du watchdog, en
+   * journalisant une ERROR (slotKey, provider, âge) pour diagnostic. Retourne
+   * les slotKeys libérés (utile aux tests). Le détenteur libérant plus tard
+   * devient un no-op idempotent — rien ne casse.
+   */
+  forceReleaseStaleLLMSlots(now: number = Date.now()): string[] {
+    const threshold = this.getSlotWatchdogMs();
+    const stale: SlotInfo[] = [];
+    for (const slot of this.llmSlots.values()) {
+      if (now - slot.acquiredAt > threshold) stale.push(slot);
+    }
+    for (const slot of stale) {
+      this.llmSlots.delete(slot.slotKey);
+      logger.error("concurrency", "slot LLM libéré de FORCE par le watchdog (durée anormale)", {
+        slotKey: slot.slotKey,
+        label: slot.label,
+        provider: slot.providerId,
+        heldMs: now - slot.acquiredAt,
+        thresholdMs: threshold,
+      });
+      this.drainLLMQueue(slot.providerId);
+    }
+    return stale.map((s) => s.slotKey);
+  }
+
   // ── Agent Slots ──
 
   /**
    * Acquiert un slot agent (session Pi SDK). Bloque si tous les
-   * slots sont pris, avec timeout de file (60s).
+   * slots sont pris, avec timeout de file (queueTimeoutMs).
    *
    * @param slotKey Identifiant unique par appel (ex: "projectId::auto-review")
    * @param label   Libellé pour affichage/stats
@@ -270,16 +357,17 @@ class ConcurrencyManager {
         aborted: false,
         timer: undefined as any,
       };
+      const timeoutMs = this.getQueueTimeoutMs();
       task.timer = setTimeout(() => {
         task.aborted = true;
         const idx = this.agentQueue.indexOf(task);
         if (idx >= 0) this.agentQueue.splice(idx, 1);
         reject(new Error(
-          `[concurrency] Agent slot acquisition timed out after ${QUEUE_TIMEOUT_MS / 1000}s ` +
+          `[concurrency] Agent slot acquisition timed out after ${timeoutMs / 1000}s ` +
           `(slotKey=${slotKey}, ${this.agentSlots.size}/${this.config.maxAgentSlots} slots used, ` +
           `${this.agentQueue.length} en attente)`
         ));
-      }, QUEUE_TIMEOUT_MS);
+      }, timeoutMs);
       this.agentQueue.push(task);
     });
   }
@@ -334,3 +422,36 @@ class ConcurrencyManager {
 // ── Singleton ─────────────────────────────────────────────────
 
 export const concurrencyManager = new ConcurrencyManager();
+
+// ── Pont globalThis (extensions chargées par jiti) ─────────────────────
+// Pourquoi un pont et pas un import : l'extension harness-orchestrator est
+// chargée par le SDK via jiti avec `moduleCache: false`. Un module backend
+// importé depuis l'extension est RÉ-ÉVALUÉ dans le registre jiti → il obtient
+// une SECONDE instance de concurrency.ts (donc un autre singleton
+// concurrencyManager). Les slots acquis côté extension ne seraient alors pas
+// comptés par le limiteur du backend (limiteur inopérant). Preuve du besoin :
+// même contrainte documentée en tête de backend/src/pi/harness-stream.ts.
+// Solution : le backend publie son instance RÉELLE (ESM native) sur globalThis ;
+// l'extension la consomme via ce pont (même process).
+//
+// ⚠️ Ne JAMAIS importer ce module depuis une extension jiti : l'import
+// ré-évaluerait le module et ÉCRASERAIT le pont par une instance jiti distincte.
+
+/** Clé du pont global exposant le manager de concurrence du backend. */
+export const CONCURRENCY_BRIDGE_KEY = "__piWebConcurrency";
+
+/** Surface MINIMALE du manager consommée par les extensions (pas d'accès interne). */
+export interface LLMConcurrencyBridge {
+  acquireLLMSlot(slotKey: string, label: string, providerId?: string): Promise<void>;
+  releaseLLMSlot(slotKey: string): void;
+  getEffectiveLLMLimit(providerId: string): number;
+  getStats(): ReturnType<ConcurrencyManager["getStats"]>;
+}
+
+(globalThis as any)[CONCURRENCY_BRIDGE_KEY] = {
+  acquireLLMSlot: (slotKey: string, label: string, providerId?: string) =>
+    concurrencyManager.acquireLLMSlot(slotKey, label, providerId),
+  releaseLLMSlot: (slotKey: string) => concurrencyManager.releaseLLMSlot(slotKey),
+  getEffectiveLLMLimit: (providerId: string) => concurrencyManager.getEffectiveLLMLimit(providerId),
+  getStats: () => concurrencyManager.getStats(),
+} satisfies LLMConcurrencyBridge;

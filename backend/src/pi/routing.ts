@@ -21,6 +21,7 @@ import {
   type ThinkingLevel,
 } from "./routing-types.js";
 import { getDefaultModel, getModel, type ModelLibrary, type RegisteredModel } from "./model-library.js";
+import { concurrencyManager } from "./concurrency.js";
 
 // Le type `Route` est réexporté par routing-types ; ce fichier le consomme.
 
@@ -293,10 +294,21 @@ export async function llmClassifier(
       messages: [{ role: "user" as const, content: request, timestamp: Date.now() }],
     };
 
-    const response = await runtime.completeSimple(model, context, {
-      temperature: 0.1,
-      maxTokens: 100,
-    });
+    const response = await (async () => {
+      // Phase 2 : le classifieur est un appel LLM réel — il consomme un slot du
+      // provider du modèle de classification (libéré dans le finally). Sans cela,
+      // il contournait le limiteur de concurrence.
+      const slotKey = `${providerId}::routing-classifier::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`;
+      await concurrencyManager.acquireLLMSlot(slotKey, "routing-classifier", providerId);
+      try {
+        return await runtime.completeSimple(model, context, {
+          temperature: 0.1,
+          maxTokens: 100,
+        });
+      } finally {
+        concurrencyManager.releaseLLMSlot(slotKey);
+      }
+    })();
 
     const text =
       response.content

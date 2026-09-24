@@ -4,7 +4,7 @@
  * Le singleton concurrencyManager est testé avec de la concurrence simulée :
  * sections critiques asynchrones (Promises + setTimeout courts), files
  * d'attente observées via getStats(), et fake timers pour le timeout de
- * file de 60 s (QUEUE_TIMEOUT_MS — non configurable, donc simulé).
+ * file (queueTimeoutMs — configurable, donc simulé).
  *
  * Couverture :
  *  - configuration : valeurs par défaut, copie défensive, mise à jour
@@ -16,14 +16,15 @@
  *    distinctes, fallback sur le défaut global (provider absent de la map),
  *    sentinelle "__default__", réentrance slotKey en présence de providers,
  *    drain FIFO par provider, setConfig partiel/remplacement de la map ;
- *  - timeout de file : rejet après 60 s, tâche aborted ignorée par le
- *    drain, timer annulé pour une tâche servie avant expiration ;
+ *  - timeout de file : délai configurable (queueTimeoutMs) honoré, rejet à
+ *    expiration, tâche aborted ignorée par le drain, timer annulé pour une
+ *    tâche servie avant expiration, repli sur le défaut si valeur invalide ;
  *  - drain via setConfig : augmenter une limite débloque la file ;
  *  - slots agent : même sémantique, pools indépendants ;
  *  - charge mixte : Promise.all de tâches LLM et agent simultanées.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { concurrencyManager as manager, DEFAULT_CONFIG } from "./concurrency.js";
+import { concurrencyManager as manager, DEFAULT_CONFIG, DEFAULT_QUEUE_TIMEOUT_MS } from "./concurrency.js";
 
 beforeEach(() => {
   // État frais : configuration par défaut (les slots sont nettoyés afterEach).
@@ -56,8 +57,8 @@ afterEach(() => {
 
 describe("configuration", () => {
   it("expose la configuration par défaut (3 slots LLM, 5 slots agent)", () => {
-    expect(DEFAULT_CONFIG).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
+    expect(DEFAULT_CONFIG).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
     expect(manager.getStats().llmSlots.max).toBe(3);
     expect(manager.getStats().agentSlots.max).toBe(5);
   });
@@ -66,7 +67,7 @@ describe("configuration", () => {
     const cfg = manager.getConfig();
     cfg.maxLLMSlots = 99;
     cfg.maxAgentSlots = 99;
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
+    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
   });
 
   it("setConfig accepte une mise à jour partielle", () => {
@@ -77,9 +78,9 @@ describe("configuration", () => {
 
   it("setConfig ignore les valeurs invalides (0, négatif)", () => {
     manager.setConfig({ maxLLMSlots: 0, maxAgentSlots: -1 });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
+    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
     manager.setConfig({});
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
+    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
   });
 });
 
@@ -239,7 +240,44 @@ describe("slots LLM", () => {
   });
 });
 
-describe("timeout de file (60 s, simulé avec fake timers)", () => {
+describe("timeout de file (queueTimeoutMs configurable, simulé avec fake timers)", () => {
+  // Les tests historiques avancent de 60 s : on fixe explicitement 60 s.
+  beforeEach(() => {
+    manager.setConfig({ queueTimeoutMs: 60_000 });
+  });
+
+  it("honore le délai configuré : expire après queueTimeoutMs, pas après 60 s", async () => {
+    vi.useFakeTimers();
+    try {
+      manager.setConfig({ queueTimeoutMs: 120_000 });
+      await manager.acquireLLMSlot("llm-a", "A");
+      await manager.acquireLLMSlot("llm-b", "B");
+      await manager.acquireLLMSlot("llm-c", "C");
+
+      const late = manager.acquireLLMSlot("llm-late", "Late");
+      const assertion = expect(late).rejects.toThrow(/timed out/);
+
+      // À 60 s : toujours en attente (délai effectif = 120 s).
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(manager.getStats().llmSlots.queue).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+      expect(manager.getStats().llmSlots.queue).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("valeur invalide → repli sur le défaut (10 min)", () => {
+    manager.setConfig({ queueTimeoutMs: -5 });
+    expect(manager.getQueueTimeoutMs()).toBe(DEFAULT_QUEUE_TIMEOUT_MS);
+    manager.setConfig({ queueTimeoutMs: 1.5 });
+    expect(manager.getQueueTimeoutMs()).toBe(DEFAULT_QUEUE_TIMEOUT_MS);
+    manager.setConfig({ queueTimeoutMs: 1_000 }); // sous le minimum (5 s)
+    expect(manager.getQueueTimeoutMs()).toBe(DEFAULT_QUEUE_TIMEOUT_MS);
+  });
+
   it("rejette l'acquisition après le timeout de file de 60 s", async () => {
     vi.useFakeTimers();
     try {
@@ -649,6 +687,7 @@ describe("setConfig avec map de limites par provider", () => {
       maxLLMSlots: 4,
       maxAgentSlots: 5,
       providerMaxLLMSlots: { "prov-a": 2 },
+      queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
     });
     expect(manager.getEffectiveLLMLimit("prov-a")).toBe(2);
   });
@@ -660,7 +699,7 @@ describe("setConfig avec map de limites par provider", () => {
 
     // Map vide = plus aucun override : getConfig retombe sur la forme historique.
     manager.setConfig({ providerMaxLLMSlots: {} });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5 });
+    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
     expect(manager.getEffectiveLLMLimit("prov-a")).toBe(3); // défaut global
   });
 

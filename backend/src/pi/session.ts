@@ -20,7 +20,7 @@ import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
 import { recordUsage } from "../routes/usage.js";
-import { concurrencyManager } from "./concurrency.js";
+import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
@@ -207,6 +207,37 @@ async function withSessionTimeout(
     return await Promise.race([promise, timeoutPromise]);
   } finally {
     clearTimeout(timer!);
+    concurrencyManager.releaseLLMSlot(slotKey);
+  }
+}
+
+// Compteur monotone pour rendre chaque slotKey UNIQUE par appel (et non par
+// session/projet) : deux appels concurrents d'un même projet ne se partagent
+// donc pas un slot par réentrance, et le release de l'un ne libère pas le slot
+// de l'autre.
+let llmSlotSeq = 0;
+
+/**
+ * Exécute un appel LLM de session en acquérant un slot de concurrence du
+ * provider du modèle, puis en le LIBÉRANT TOUJOURS (finally) — succès,
+ * exception, abort ou timeout. Le slot couvre l'appel fourni et rien d'autre.
+ *
+ * ⚠️ Anti-deadlock : ne jamais englober l'attente d'une sous-délégation dans
+ * `fn` (le slot serait conservé pendant que les sous-agents tentent de
+ * démarrer). Ici `fn` = un prompt()/completeSimple() borné.
+ */
+async function withLLMSlot<T>(
+  provider: string | undefined,
+  projectId: string,
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const effectiveProvider = provider || DEFAULT_LLM_PROVIDER;
+  const slotKey = `${effectiveProvider}::${projectId}::${label}::${++llmSlotSeq}`;
+  await concurrencyManager.acquireLLMSlot(slotKey, label, effectiveProvider);
+  try {
+    return await fn();
+  } finally {
     concurrencyManager.releaseLLMSlot(slotKey);
   }
 }
@@ -1223,21 +1254,10 @@ export async function sendPrompt(
       options.images = imageAttachments;
     }
     if (state.activeMode === "harness") {
-      // BUG-72 : `isSessionStreaming` lit l'état RÉEL du SDK (session.isStreaming),
-      // pas le flag backend qui peut rester stale après reload/desync. Si l'agent
-      // est réellement idle côté SDK, steer() perdrait le message silencieusement
-      // → on fait un prompt complet. withSessionTimeout (5 min) est acceptable ici
-      // car l'agent n'est PAS en délégation longue (idle).
-      if (!isSessionStreaming(projectId)) {
-        console.log("[prompt] Harness: isStreaming flag stale — traitement comme nouveau prompt");
-        await withSessionTimeout(
-          state.session.prompt(message, options),
-          state.session,
-          projectId,
-          "prompt(harness)",
-        );
-        return;
-      }
+      // NOTE : l'ancienne branche `if (!isSessionStreaming(projectId))` était
+      // du code MORT (elle testait la NÉGATION du `if` englobant, sans `await`
+      // entre les deux lectures → toujours faux ; `isSessionStreaming` lit
+      // `state.session.isStreaming` de façon synchrone). Supprimée (Phase 2).
       console.log("[prompt] Harness mode streaming — steering message (no abort, function in progress)");
       try { await state.session.steer(message); } catch (e: any) {
         console.error("[prompt] steer() failed:", e.message);
@@ -1252,7 +1272,14 @@ export async function sendPrompt(
     // Option A : pas de timeout global en mode code (un tour d'agent peut
     // légitimement durer > 5 min, ex. refactor multi-fichiers). L'utilisateur
     // garde le bouton ABORT pour interrompre manuellement.
-    await state.session.prompt(message, options);
+    // Phase 2 : slot LLM par provider acquis autour du prompt(), libéré dans le
+    // finally (succès/exception/abort/timeout assurés).
+    await withLLMSlot(
+      state.session.model?.provider,
+      projectId,
+      "sendPrompt",
+      () => state.session!.prompt(message, options),
+    );
     console.log("[prompt] session.prompt() returned!");
   } else {
     const options: any = {};
@@ -1265,11 +1292,21 @@ export async function sendPrompt(
     // On désactive le timeout global en harness pour ne pas tuer l'orchestrator en pleine délégation.
     if (state.activeMode === "harness") {
       console.log("[prompt] Harness mode — no session timeout (functions have their own)");
-      await state.session.prompt(message, options);
+      await withLLMSlot(
+        state.session.model?.provider,
+        projectId,
+        "sendPrompt(harness)",
+        () => state.session!.prompt(message, options),
+      );
     } else {
       // Option A : pas de timeout global en mode code non plus (cf. harness).
       // L'utilisateur garde le bouton ABORT pour le contrôle manuel.
-      await state.session.prompt(message, options);
+      await withLLMSlot(
+        state.session.model?.provider,
+        projectId,
+        "sendPrompt",
+        () => state.session!.prompt(message, options),
+      );
     }
     console.log("[prompt] session.prompt() returned!");
   }

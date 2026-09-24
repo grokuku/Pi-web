@@ -23,13 +23,20 @@ export interface ProviderLimitRow {
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
+ * Plafond haut d'une limite de slots (global ou override par provider).
+ * Volontairement large (permet un provider à très haute limite, ex. 2500),
+ * mais borné et entier — miroir de la validation serveur.
+ */
+export const MAX_PROVIDER_LIMIT = 100_000;
+
+/**
  * Normalise la map brute `providerMaxLLMSlots` renvoyée par l'API (ou saisie
- * par l'utilisateur) : ne conserve que les entrées { providerId → entier 1..20 }.
+ * par l'utilisateur) : ne conserve que les entrées
+ * { providerId → entier 1..MAX_PROVIDER_LIMIT }.
  * Tout le reste (undefined, non-objet, valeur ≤ 0 / non numérique / flottante /
  * hors bornes, clé vide ou réservée) est filtré — jamais levé d'exception.
  *
- * Miroir de la validation serveur (PUT /api/settings/concurrency) : entier
- * entre 1 et 20 inclus.
+ * Miroir de la validation serveur (PUT /api/settings/concurrency).
  */
 export function normalizeProviderOverrides(
   raw: unknown | undefined
@@ -42,10 +49,26 @@ export function normalizeProviderOverrides(
     // Clé vide ou réservée JS → ignorée (protection pollution de prototype).
     if (!key || !key.trim() || RESERVED_KEYS.has(key)) continue;
     if (typeof value !== "number" || !Number.isInteger(value)) continue;
-    if (value < 1 || value > 20) continue;
+    if (value < 1 || value > MAX_PROVIDER_LIMIT) continue;
     out[key] = value;
   }
   return out;
+}
+
+/** Identifiant de provider valide : chaîne non vide, non réservée JS. */
+export function isValidProviderId(id: unknown): id is string {
+  return typeof id === "string" && !!id.trim() && !RESERVED_KEYS.has(id.trim());
+}
+
+/**
+ * Normalise la saisie d'un champ de limite : "" (ou valeur invalide) → null
+ * (= champ vide → hérite du défaut global) ; entier 1..MAX → nombre.
+ */
+export function normalizeProviderLimitInput(raw: unknown): number | null {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_PROVIDER_LIMIT) return null;
+  return n;
 }
 
 /**
@@ -67,6 +90,50 @@ export function mergeProviderLimits(
 }
 
 /**
+ * Variante de `mergeProviderLimits` utilisée par le formulaire : EN PLUS de la
+ * liste des providers connus (GET /api/providers), elle ajoute en fin de tableau
+ * les overrides dont le provider n'apparaît PAS dans la liste (provider
+ * enregistré dynamiquement par une extension, absent de l'UI). Sans cela, ces
+ * overrides seraient silencieusement perdus au save (la map est remplacée).
+ */
+export function mergeProviderLimitsIncludingOverrides(
+  providers: Array<{ id: string; name?: string }>,
+  overrides: Record<string, number>
+): ProviderLimitRow[] {
+  const rows = mergeProviderLimits(providers, overrides);
+  const known = new Set(rows.map((r) => r.id));
+  for (const [id, value] of Object.entries(overrides)) {
+    if (known.has(id)) continue;
+    rows.push({ id, name: id, value });
+  }
+  return rows;
+}
+
+/**
+ * Ajoute une ligne de provider saisie manuellement (identifiant libre).
+ * Sans effet si l'id est vide/réservé ou déjà présent (pas de doublon).
+ * Retourne un NOUVEAU tableau (immutabilité).
+ */
+export function addProviderLimitRow(
+  rows: ProviderLimitRow[],
+  id: unknown,
+  name?: string
+): ProviderLimitRow[] {
+  if (!isValidProviderId(id)) return rows;
+  const trimmed = id.trim();
+  if (rows.some((r) => r.id === trimmed)) return rows;
+  return [...rows, { id: trimmed, name: name?.trim() || trimmed, value: null }];
+}
+
+/** Supprime la ligne d'un provider. Retourne un NOUVEAU tableau. */
+export function removeProviderLimitRow(
+  rows: ProviderLimitRow[],
+  id: string
+): ProviderLimitRow[] {
+  return rows.filter((r) => r.id !== id);
+}
+
+/**
  * Construit le payload `providerMaxLLMSlots` pour le PUT /api/settings/concurrency
  * depuis les lignes du formulaire : les champs VIDES (value null) sont retirés
  * de la map → l'override est supprimé (le provider hérite à nouveau du défaut
@@ -79,9 +146,10 @@ export function buildProviderOverridesPayload(
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const row of rows) {
+    if (!isValidProviderId(row.id)) continue;
     if (row.value === null || row.value === undefined) continue;
     if (typeof row.value !== "number" || !Number.isInteger(row.value)) continue;
-    if (row.value < 1 || row.value > 20) continue;
+    if (row.value < 1 || row.value > MAX_PROVIDER_LIMIT) continue;
     out[row.id] = row.value;
   }
   return out;

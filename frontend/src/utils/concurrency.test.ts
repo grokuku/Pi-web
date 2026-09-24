@@ -5,7 +5,13 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeProviderOverrides,
   mergeProviderLimits,
+  mergeProviderLimitsIncludingOverrides,
   buildProviderOverridesPayload,
+  addProviderLimitRow,
+  removeProviderLimitRow,
+  isValidProviderId,
+  normalizeProviderLimitInput,
+  MAX_PROVIDER_LIMIT,
   type ProviderLimitRow,
 } from "./concurrency";
 
@@ -37,8 +43,14 @@ describe("normalizeProviderOverrides", () => {
     expect(normalizeProviderOverrides(raw)).toEqual({ ok: 3 });
   });
 
-  it("filtre les valeurs hors bornes (backend : entier 1..20)", () => {
-    expect(normalizeProviderOverrides({ tropGrand: 21, limite: 20 })).toEqual({ limite: 20 });
+  it("conserve les limites élevées (ex. 2500) et filtre au-delà du plafond", () => {
+    expect(normalizeProviderOverrides({ deepseek: 2500, limite: MAX_PROVIDER_LIMIT })).toEqual({
+      deepseek: 2500,
+      limite: MAX_PROVIDER_LIMIT,
+    });
+    expect(
+      normalizeProviderOverrides({ tropGrand: MAX_PROVIDER_LIMIT + 1, ok: 3 })
+    ).toEqual({ ok: 3 });
   });
 
   it("filtre les clés vides et les clés réservées JS (pollution de prototype)", () => {
@@ -113,6 +125,14 @@ describe("buildProviderOverridesPayload", () => {
     expect(buildProviderOverridesPayload(rows)).toEqual({ "prov-d": 2 });
   });
 
+  it("accepte les grandes limites (ex. 2500) et rejette au-delà du plafond", () => {
+    const rows: ProviderLimitRow[] = [
+      { id: "deepseek", name: "DeepSeek", value: 2500 },
+      { id: "trop", name: "Trop", value: MAX_PROVIDER_LIMIT + 1 },
+    ];
+    expect(buildProviderOverridesPayload(rows)).toEqual({ deepseek: 2500 });
+  });
+
   it("aller-retour : normalize → merge → payload préserve les valeurs saisies", () => {
     const overrides = normalizeProviderOverrides({ "prov-a": 4, bogus: 0 });
     const rows = mergeProviderLimits(
@@ -126,5 +146,77 @@ describe("buildProviderOverridesPayload", () => {
     rows[0].value = null;
     rows[1].value = 5;
     expect(buildProviderOverridesPayload(rows)).toEqual({ "prov-b": 5 });
+  });
+});
+
+describe("mergeProviderLimitsIncludingOverrides", () => {
+  it("ajoute en fin de liste les overrides absents de la liste des providers", () => {
+    const rows = mergeProviderLimitsIncludingOverrides(
+      [{ id: "prov-a", name: "A" }],
+      { "prov-a": 2, extension_prov: 2500 }
+    );
+    expect(rows).toEqual([
+      { id: "prov-a", name: "A", value: 2 },
+      { id: "extension_prov", name: "extension_prov", value: 2500 },
+    ]);
+  });
+
+  it("sans override orphelin, équivaut à mergeProviderLimits", () => {
+    const rows = mergeProviderLimitsIncludingOverrides([{ id: "prov-a", name: "A" }], {});
+    expect(rows).toEqual([{ id: "prov-a", name: "A", value: null }]);
+  });
+});
+
+describe("isValidProviderId", () => {
+  it("accepte un identifiant libre non vide, rejette vides et clés réservées", () => {
+    expect(isValidProviderId("ollama-cloud")).toBe(true);
+    expect(isValidProviderId("  ")).toBe(false);
+    expect(isValidProviderId("")).toBe(false);
+    expect(isValidProviderId(42)).toBe(false);
+    expect(isValidProviderId("__proto__")).toBe(false);
+    expect(isValidProviderId("constructor")).toBe(false);
+  });
+});
+
+describe("normalizeProviderLimitInput", () => {
+  it("champ vide → null (hérite), entier valide → nombre", () => {
+    expect(normalizeProviderLimitInput("")).toBeNull();
+    expect(normalizeProviderLimitInput(null)).toBeNull();
+    expect(normalizeProviderLimitInput(undefined)).toBeNull();
+    expect(normalizeProviderLimitInput("2500")).toBe(2500);
+    expect(normalizeProviderLimitInput(60)).toBe(60);
+  });
+
+  it("valeur invalide → null (0, flottante, hors plafond, texte)", () => {
+    expect(normalizeProviderLimitInput("0")).toBeNull();
+    expect(normalizeProviderLimitInput("12.5")).toBeNull();
+    expect(normalizeProviderLimitInput(String(MAX_PROVIDER_LIMIT + 1))).toBeNull();
+    expect(normalizeProviderLimitInput("abc")).toBeNull();
+  });
+});
+
+describe("addProviderLimitRow / removeProviderLimitRow", () => {
+  const base: ProviderLimitRow[] = [{ id: "prov-a", name: "A", value: null }];
+
+  it("ajoute une ligne manuelle (id libre) sans muter l'entrée", () => {
+    const rows = addProviderLimitRow(base, " deepseek ");
+    expect(rows).toEqual([
+      { id: "prov-a", name: "A", value: null },
+      { id: "deepseek", name: "deepseek", value: null },
+    ]);
+    expect(base).toHaveLength(1); // immutabilité
+  });
+
+  it("ignore les ids invalides et les doublons", () => {
+    expect(addProviderLimitRow(base, "")).toEqual(base);
+    expect(addProviderLimitRow(base, "__proto__")).toEqual(base);
+    expect(addProviderLimitRow(base, "prov-a")).toEqual(base);
+  });
+
+  it("supprime la ligne correspondante sans muter l'entrée", () => {
+    const rows = removeProviderLimitRow(base, "prov-a");
+    expect(rows).toEqual([]);
+    expect(base).toHaveLength(1); // immutabilité
+    expect(removeProviderLimitRow(base, "absent")).toEqual(base);
   });
 });
