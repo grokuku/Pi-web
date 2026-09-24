@@ -4,8 +4,8 @@
 // pour les afficher CÔTE À CÔTE, une colonne par run.
 //
 // CHOIX D'EMPLACEMENT (documenté) : la vue parallèle est un « mur » dédié
-// monté UNE fois en fin de fil (juste avant OrphanSubAgentRuns), et non à
-// l'endroit exact de chaque bloc `delegate`. Raisons :
+// monté UNE fois en fin de fil (juste avant les runs datés insérés inline), et
+// non à l'endroit exact de chaque bloc `delegate`. Raisons :
 //   1. le fil de messages ne doit JAMAIS re-rendre sur les events de
 //      sous-agents (spéc. §2.1) — or ce composant s'abonne seul au store ISOLÉ
 //      (stores/subagentRuns) : il peut apparaître/disparaître sans toucher

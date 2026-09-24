@@ -64,6 +64,8 @@ export const fr = {
     subAgentAttempt: (n: number) => `essai ${n}`,
     subAgentExtract: "(extrait)",
     subAgentCause: "cause",
+    // ── Run bloqué (running sans subagent_end au-delà du seuil) ──
+    subAgentStuck: "sans fin (débloqué)",
     // ── LOT 4 : vue en colonnes des sous-agents simultanés ──
     parallelSubAgents: (n: number) => `${n} sous-agents en parallèle`,
     parallelSubAgentsOverflow: (n: number) => `défilement horizontal au-delà de ${n}`,

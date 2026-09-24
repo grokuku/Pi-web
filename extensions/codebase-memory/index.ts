@@ -29,7 +29,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import { join } from "path";
 import { execSync, spawn, type ChildProcess } from "child_process";
 import { homedir, tmpdir } from "os";
@@ -47,6 +47,14 @@ import {
   type RepoMapRoute,
   type RepoMapSymbol,
 } from "../../backend/src/pi/repo-map.js";
+// Résolution du projet CBM depuis le cwd (pure, testée par vitest) : gère les
+// sous-dossiers et les workspaces liés qui ne sont pas indexés directement.
+import {
+  parseProjectList,
+  resolveCbmProjectName,
+  normalizeRootPath,
+  type IndexedProject,
+} from "../../backend/src/pi/cbm-project-resolution.js";
 
 /**
  * Les projets LIÉS de Pi-Web (placeholder avec symlinks vers plusieurs dépôts)
@@ -111,6 +119,88 @@ function trackFail(tool: string) {
   s.totalErrors++;
   if (!s.byTool[tool]) s.byTool[tool] = { ok: 0, fail: 0 };
   s.byTool[tool].fail++;
+}
+
+// Statistiques d'ÉCHEC CBM (observabilité) — exposées par /api/cbm/status
+// (champ `failures`). Objectif : pouvoir MESURER l'adoption de CBM. Auparavant,
+// les erreurs MÉTIER de CBM (« project not found or not indexed ») arrivaient
+// comme un simple TEXTE de résultat : elles passaient pour des succès (comptées
+// « ok ») et restaient invisibles.
+if (!g.__cbmFailureStats) {
+  g.__cbmFailureStats = {
+    total: 0,
+    byTool: {} as Record<string, number>,
+    byReason: {} as Record<string, number>,
+    // P1 : combien de cartes servies / vides (≈ délégations SANS carte).
+    repoMap: { served: 0, empty: 0 },
+    recent: [] as Array<{
+      at: string;
+      tool: string;
+      cwd: string;
+      project: string;
+      reason: string;
+      message: string;
+    }>,
+  };
+}
+
+/** Classe un message d'erreur CBM en motif stable (clé des compteurs). */
+function classifyCbmReason(message: string): string {
+  const m = (message || "").toLowerCase();
+  if (m.includes("project not found") || m.includes("not indexed")) return "project_not_found";
+  if (m.includes("timed out") || m.includes("timeout")) return "timeout";
+  if (m.includes("aborted")) return "aborted";
+  if (m.includes("not ready") || m.includes("binary not found") || m.includes("exited")) {
+    return "server_unavailable";
+  }
+  return "other";
+}
+
+/**
+ * Journalise + comptabilise un échec CBM. BEST-EFFORT : ne jette JAMAIS (une
+ * panne d'observabilité ne doit pas casser l'appel outil). Écrit une trace
+ * structurée sur stderr et incrémente les compteurs globalThis.
+ */
+function recordCbmFailure(
+  tool: string,
+  cwd: string,
+  project: string,
+  error: unknown,
+  reasonHint?: string,
+): void {
+  try {
+    const message = error instanceof Error ? error.message : String(error);
+    const reason = reasonHint || classifyCbmReason(message);
+    const s = g.__cbmFailureStats;
+    s.total++;
+    s.byTool[tool] = (s.byTool[tool] || 0) + 1;
+    s.byReason[reason] = (s.byReason[reason] || 0) + 1;
+    s.recent.push({
+      at: new Date().toISOString(),
+      tool,
+      cwd,
+      project,
+      reason,
+      message: message.slice(0, 500),
+    });
+    if (s.recent.length > 50) s.recent.splice(0, s.recent.length - 50);
+    console.error(
+      `[cbm][failure] tool=${tool} reason=${reason} project=${project} cwd=${cwd} :: ${message.slice(0, 300)}`,
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Comptabilise l'issue d'un pont de carte du repo (P1 : servie vs vide). */
+function trackRepoMapOutcome(served: boolean): void {
+  try {
+    const r = g.__cbmFailureStats.repoMap;
+    if (served) r.served++;
+    else r.empty++;
+  } catch {
+    /* ignore */
+  }
 }
 let status: CbmStatus = {
   installed: false,
@@ -588,6 +678,17 @@ async function mcpCall(
   if (data && data.error) {
     throw new Error(`MCP error: ${data.error.message || JSON.stringify(data.error)}`);
   }
+  // CBM renvoie les erreurs MÉTIER (ex. « project not found or not indexed »)
+  // dans un result JSON-RPC VALIDE : isError=true + structuredContent.error,
+  // sans objet `error`. Sans ce test, elles passaient pour des succès (comptées
+  // « ok ») et n'apparaissaient nulle part côté observabilité.
+  if (data && (data.isError || data?.structuredContent?.error)) {
+    const text = Array.isArray(data?.content)
+      ? data.content.map((c: any) => c?.text || "").join("\n")
+      : "";
+    const detail = text || data?.structuredContent?.error || "CBM tool error";
+    throw new Error(`MCP error: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+  }
   // MCP tools/call returns { content: [{ type: "text", text: "..." }] }
   if (data?.content) {
     return data.content.map((c: any) => c.text || "").join("\n");
@@ -602,13 +703,14 @@ async function mcpCallForProject(
   args: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<string> {
-  const project = getProjectName(cwd);
+  const project = await resolveProjectForCwd(cwd);
   try {
     const result = await mcpCall(toolName, { ...args, project }, signal);
     trackCall(toolName);
     return result;
   } catch (e: any) {
     trackFail(toolName);
+    recordCbmFailure(toolName, cwd, project, e);
     throw e;
   }
 }
@@ -716,7 +818,31 @@ async function extractRepoMapData(cwd: string): Promise<RepoMapData> {
     }
   }
 
+  if (files.length === 0 && hubs.length === 0 && routes.length === 0) {
+    reportRepoMapUnavailable(cwd, [hubsRes, filesRes, routesRes]);
+  }
+
   return { files, hubs, routes };
+}
+
+/**
+ * Observabilité P1 : une carte VIDE signifie que les sous-agents démarrent SANS
+ * carte du repo. On trace explicitement la raison (échec MCP vs graphe vide) au
+ * lieu du silence actuel (le seul avertissement vivait dans les ponts).
+ */
+function reportRepoMapUnavailable(
+  cwd: string,
+  results: Array<PromiseSettledResult<string>>,
+): void {
+  const project = getProjectName(cwd);
+  const rejected = results.find((r) => r.status === "rejected") as
+    | PromiseRejectedResult
+    | undefined;
+  if (rejected) {
+    recordCbmFailure("__repo_map", cwd, project, rejected.reason ?? new Error("mcp_error"), "mcp_error");
+  } else {
+    recordCbmFailure("__repo_map", cwd, project, new Error("empty_graph"), "empty_graph");
+  }
 }
 
 /**
@@ -748,8 +874,12 @@ export async function buildRepoMapCached(cwd: string): Promise<string | null> {
     if (!cwd) return null;
     const data = await getRepoMapData(cwd);
     const text = buildRepoMap(data, { rank: "stable" });
+    // Compte chaque délégation servie/vide (P1 : adoption de la carte).
+    trackRepoMapOutcome(!!text);
     return text ? text : null;
   } catch (e: any) {
+    trackRepoMapOutcome(false);
+    recordCbmFailure("__repo_map", cwd, "", e, "map_build_error");
     console.warn(`[cbm] carte du repo (stable) indisponible pour ${cwd} : ${e?.message || e}`);
     return null;
   }
@@ -773,8 +903,11 @@ export async function buildRepoMapAnnexCached(
     if (!cwd) return null;
     const data = await getRepoMapData(cwd);
     const text = buildRepoMap(data, { task, context, rank: "task" });
+    trackRepoMapOutcome(!!text);
     return text ? text : null;
   } catch (e: any) {
+    trackRepoMapOutcome(false);
+    recordCbmFailure("__repo_map_annex", cwd, "", e, "map_build_error");
     console.warn(`[cbm] annexe de carte indisponible pour ${cwd} : ${e?.message || e}`);
     return null;
   }
@@ -799,37 +932,104 @@ interface ProjectInfo {
 const projectByCwd = new Map<string, ProjectInfo>();
 const REINDEX_INTERVAL_MS = 5 * 60 * 1000; // 5 min — keeps index fresh without being too expensive
 
+// ── Résolution du projet CBM depuis le cwd ──────────────
+// CBM identifie un projet par son root_path (list_projects). Le pont dérivait
+// le nom du NOM DE DOSSIER du cwd : correct à la racine d'un dépôt indexé
+// (« Pi-Web »), mais FAUX pour un sous-dossier ou un workspace COMPOSITE jamais
+// indexé (projet lié `.pi-web-linked`, ex. « Yuki and Libs ») →
+// « project not found or not indexed ». On tient donc un registre
+// root_path → nom, et on résout via la règle documentée dans
+// backend/src/pi/cbm-project-resolution.ts (pure, testée par vitest).
+const indexedProjects = new Map<string, string>(); // root_path normalisé → nom CBM
+let indexedProjectsFetchedAt = 0;
+let indexedProjectsLastAttemptAt = 0;
+// Backoff des tentatives quand le registre reste vide (serveur indisponible) :
+// évite de marteler list_projects à chaque appel cbm_*.
+const REGISTRY_RETRY_MS = 30_000;
+
+/** Cibles réelles des symlinks d'un workspace lié (vide si cwd non lié). */
+function listLinkedTargets(cwd: string): string[] {
+  try {
+    if (!existsSync(join(cwd, ".pi-web-linked"))) return [];
+    const targets: string[] = [];
+    for (const entry of readdirSync(cwd)) {
+      try {
+        targets.push(realpathSync(join(cwd, entry)));
+      } catch {
+        /* symlink cassé → ignoré */
+      }
+    }
+    return targets;
+  } catch {
+    return [];
+  }
+}
+
 /** Get the CBM project name for a given cwd, or derive a fallback. */
 function getProjectName(cwd: string): string {
   if (!cwd) {
     console.warn("[cbm] getProjectName called with empty cwd, using fallback 'default'");
     return "default";
   }
-  return projectByCwd.get(cwd)?.projectName || cwd.split("/").pop() || cwd;
+  // Chemin rapide : entrée exacte posée après indexation/résolution.
+  const cached = projectByCwd.get(cwd);
+  if (cached) return cached.projectName;
+  const indexed: IndexedProject[] = [...indexedProjects.entries()].map(([rootPath, name]) => ({
+    rootPath,
+    name,
+  }));
+  const resolved = resolveCbmProjectName(cwd, indexed, { linkedTargets: listLinkedTargets(cwd) });
+  // Repli historique (nom de dossier) conservé pour ne rien casser.
+  return resolved || cwd.split("/").pop() || cwd;
 }
 
 // ── Project discovery ───────────────────────────────────
 // Au démarrage (restart container), la DB CBM existe déjà mais la Map en mémoire
 // projectByCwd est vide. Il faut découvrir le nom CBM sans ré-indexer.
+
+/** Remplit le registre root_path → nom depuis `list_projects` (TTL 5 min). */
+async function refreshIndexedProjects(force = false): Promise<void> {
+  const fresh =
+    indexedProjects.size > 0 && Date.now() - indexedProjectsFetchedAt < REINDEX_INTERVAL_MS;
+  if (!force && fresh) return;
+  if (!force && Date.now() - indexedProjectsLastAttemptAt < REGISTRY_RETRY_MS) return;
+  indexedProjectsLastAttemptAt = Date.now();
+  try {
+    // `list_projects` renvoie une TABLE TEXTE (pas du JSON) : parseProjectList
+    // gère les deux formats (l'ancien JSON.parse échouait toujours).
+    const raw = await mcpCall("list_projects", {});
+    let count = 0;
+    for (const p of parseProjectList(raw)) {
+      indexedProjects.set(normalizeRootPath(p.rootPath), p.name);
+      count++;
+    }
+    if (count > 0) indexedProjectsFetchedAt = Date.now();
+    else console.warn("[cbm] list_projects : aucune entrée parsable");
+  } catch (e: any) {
+    console.warn(`[cbm] refreshIndexedProjects failed: ${e.message}`);
+  }
+}
+
+/**
+ * Résolution ASYNCHRONE : garantit le registre (le projet LIÉ n'est jamais
+ * indexé par session_start, et la Map mémoire est vide après un restart) puis
+ * applique la règle de la plus spécifique à la plus large.
+ */
+async function resolveProjectForCwd(cwd: string): Promise<string> {
+  await refreshIndexedProjects();
+  return getProjectName(cwd);
+}
+
 async function discoverProjectName(cwd: string): Promise<void> {
   // Déjà en cache et récent → rien à faire
   const existing = projectByCwd.get(cwd);
   if (existing && Date.now() - existing.lastIndexedAt < REINDEX_INTERVAL_MS) return;
 
   try {
-    const listResult = await mcpCall("list_projects", {});
-    const projects = JSON.parse(listResult);
-    const arr = Array.isArray(projects) ? projects : (projects.projects || projects.results || []);
-    // Chercher par path d'abord, puis par nom de dossier
-    const dirName = cwd.split("/").pop() || cwd;
-    const match = arr.find((p: any) => {
-      const pPath = p.path || p.repo_path || p.repo || "";
-      return pPath === cwd || p.name === dirName || p.name === `projects-${dirName}` || pPath === cwd;
-    });
-    if (match?.name) {
-      projectByCwd.set(cwd, { projectName: match.name, lastIndexedAt: Date.now() });
-      console.log(`[cbm] Discovered project name: ${match.name} for cwd ${cwd}`);
-    }
+    await refreshIndexedProjects();
+    const name = getProjectName(cwd);
+    projectByCwd.set(cwd, { projectName: name, lastIndexedAt: Date.now() });
+    console.log(`[cbm] Discovered project name: ${name} for cwd ${cwd}`);
   } catch (e: any) {
     console.warn(`[cbm] discoverProjectName failed: ${e.message}`);
   }
@@ -853,37 +1053,14 @@ async function indexProject(cwd: string): Promise<void> {
     console.log("[cbm] Indexing complete");
     g.__cbmUsageStats.indexedProjects += 1;
 
-    // Discover the project name assigned by CBM
-    const listResult = await mcpCall("list_projects", {});
-    try {
-      const projects = JSON.parse(listResult);
-      // CBM returns either an array or { projects: [...] }
-      const arr = Array.isArray(projects) ? projects : (projects.projects || projects.results || []);
-      // Find the project matching our cwd
-      // BUG-65 : le serveur nomme les projets avec le préfixe "projects-" (ex: projects-Pi-Web).
-      // Le fallback par nom de dossier seul ("Pi-Web") ne matche JAMAIS → les appels suivants
-      // envoient un nom de projet inexistant → "project not found". Il faut aussi tester
-      // `projects-${dirName}` comme dans discoverProjectName().
-      const match = arr.find((p: any) => {
-        const pPath = p.path || p.repo_path || p.repo || "";
-        const dirName = cwd.split("/").pop() || cwd;
-        return pPath === cwd || p.name === dirName || p.name === `projects-${dirName}`;
-      });
-      if (match?.name) {
-        projectByCwd.set(cwd, { projectName: match.name, lastIndexedAt: Date.now() });
-        console.log(`[cbm] Project name: ${match.name}`);
-      } else {
-        // Fallback: use directory name as project name
-        const fallbackName = cwd.split("/").pop() || cwd;
-        projectByCwd.set(cwd, { projectName: fallbackName, lastIndexedAt: Date.now() });
-        console.log(`[cbm] Project name (fallback): ${fallbackName}`);
-      }
-    } catch (e: any) {
-      // If list_projects parsing fails, use dir name as fallback
-      const fallbackName = cwd.split("/").pop() || cwd;
-      projectByCwd.set(cwd, { projectName: fallbackName, lastIndexedAt: Date.now() });
-      console.warn(`[cbm] Could not parse list_projects: ${e.message}, using fallback name: ${fallbackName}`);
-    }
+    // Découvrir le nom attribué par CBM : rafraîchir le registre (force) puis
+    // résoudre. BUG-65 : `list_projects` renvoie une TABLE TEXTE et non du
+    // JSON — l'ancien JSON.parse échouait donc TOUJOURS et retombait sur le nom
+    // de dossier. On lit maintenant le registre root_path → nom.
+    await refreshIndexedProjects(true);
+    const resolved = indexedProjects.get(normalizeRootPath(cwd)) || getProjectName(cwd);
+    projectByCwd.set(cwd, { projectName: resolved, lastIndexedAt: Date.now() });
+    console.log(`[cbm] Project name: ${resolved}`);
   } catch (e: any) {
     console.warn("[cbm] Indexing failed:", e.message);
     status.error = `Indexing failed: ${e.message}`;

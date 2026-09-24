@@ -9,6 +9,23 @@
 // Fonction pure (hors `t` optionnel pour l'i18n) : testable unitairement.
 import type { AssistantBlock, DisplayMessage, PiEvent, ToolCallInfo } from "../types";
 
+// ── (mesure) Compteur des rattachements de SECOURS ──────────────────────────
+// Chaque fois qu'un toolCall est (re)créé faute d'avoir retrouvé son
+// `toolcall_start` (coupure WS, event manqué), on incrémente ce compteur. Exposé
+// simplement (getter + log en dev) pour mesurer la fréquence du phénomène et
+// suivre le correctif « bloc sous-agent après la réponse finale ».
+let toolCallFallbackCount = 0;
+
+/** Nombre de toolCalls rattachés en secours (création après event manqué). */
+export function getToolCallFallbackCount(): number {
+  return toolCallFallbackCount;
+}
+
+/** Remet le compteur à zéro (tests). */
+export function resetToolCallFallbackCount(): void {
+  toolCallFallbackCount = 0;
+}
+
 // ── (chronologie) Helpers purs de construction des blocs ordonnés ───────
 // Un message assistant conserve, en plus de ses agrégats (content/thinking/
 // toolCalls), un tableau ORDONNÉ de blocs (`blocks`) : c'est le cœur du
@@ -290,6 +307,22 @@ export function applyPiEvent(
     return -1;
   };
 
+  // ── (fix ordre) Message HÔTE d'un `delegate` non encore résolu ──
+  // Quand le `toolcall_start` d'un `delegate` a été manqué, le bloc de secours
+  // NE DOIT PAS atterrir aveuglément sur le DERNIER message assistant : celui-ci
+  // peut être la RÉPONSE FINALE, créée après la délégation — le bloc sous-agent
+  // apparaîtrait alors APRÈS elle. On retrouve donc le dernier message qui
+  // PORTE une délégation pas encore résolue (pas d'output) pour y réintégrer
+  // le bloc à sa place. À défaut, comportement historique (dernier message).
+  const findDelegateHostMsgIdx = (): number => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant" || !m.toolCalls) continue;
+      if (m.toolCalls.some((tc) => tc.name === "delegate" && !tc.output)) return i;
+    }
+    return -1;
+  };
+
   // Applique une mise à jour au tool call identifié. `create` permet de
   // (re)créer l'entrée sur le dernier message assistant si l'event de départ
   // (toolcall_start) a été manqué (coupure WS), avec ajout du bloc ordonné.
@@ -301,13 +334,24 @@ export function applyPiEvent(
     const idx = findToolCallMsgIdx(toolCallId);
     if (idx === -1) {
       if (!create) return;
-      const lastIdx = msgs.length - 1;
+      const created = create();
+      // Un `delegate` de secours réintègre le message HÔTE de la délégation
+      // (pas le dernier message, qui peut être la réponse finale) ; les autres
+      // outils restent sur le dernier message assistant (comportement actuel).
+      const hostIdx = created.name === "delegate" ? findDelegateHostMsgIdx() : -1;
+      const lastIdx = hostIdx >= 0 ? hostIdx : msgs.length - 1;
       if (lastIdx < 0 || msgs[lastIdx].role !== "assistant") return;
+      toolCallFallbackCount++;
+      if (typeof import.meta !== "undefined" && (import.meta as any).env?.DEV) {
+        console.debug(
+          `[pi-events] toolCall ${created.name} rattaché en secours (start manqué) — total=${toolCallFallbackCount}`,
+        );
+      }
       msgs = [...msgs];
       const m = msgs[lastIdx];
       msgs[lastIdx] = {
         ...m,
-        toolCalls: [...m.toolCalls, create()],
+        toolCalls: [...m.toolCalls, created],
         blocks: appendToolCallBlock(m.blocks, toolCallId),
       };
       return;

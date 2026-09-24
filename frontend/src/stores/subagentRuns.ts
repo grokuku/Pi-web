@@ -17,7 +17,7 @@
 // - `runFromActivity` reconstruit un run « archivé » depuis l'entrée custom
 //   `subagent_activity` persistée (relecture après rechargement).
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type {
   DisplayMessage,
   SubAgentAction,
@@ -545,6 +545,12 @@ export function routeSubagentEnvelope(
  * ÉTANCHÉITÉ : `projectId` (conversation qui relit ces runs) est marqué sur
  * chaque run avant stockage et borne le rattachement — un run archivé ne peut
  * jamais apparaître ni s'accrocher dans une conversation d'un autre projet.
+ *
+ * (fix orphelins) Le rattachement est RETENTÉ à CHAQUE appel, y compris pour
+ * des runs déjà enregistrés : un run resté orphelin (aucun toolCall `delegate`
+ * disponible lors de l'enregistrement) redevient inline dès que la pagination
+ * d'historique apporte enfin son `delegate`. L'ancien `if (!added) return`
+ * abandonnait définitivement le run en fin de fil.
  */
 export function registerArchivedRuns(
   list: SubAgentRun[],
@@ -558,12 +564,16 @@ export function registerArchivedRuns(
     runs.set(r.id, projectId && !r.projectId ? { ...r, projectId } : r);
     added = true;
   }
-  if (!added) return;
+  // Rattachement (re)tenté pour TOUS les runs fournis — pas seulement les
+  // nouveaux (cf. commentaire ci-dessus).
+  let attached = false;
   for (const r of list) {
-    if (![...attachment.values()].includes(r.id)) {
-      attachRun(r.id, r.function, messages, projectId);
-    }
+    if (!r || [...attachment.values()].includes(r.id)) continue;
+    const before = attachment.size;
+    attachRun(r.id, r.function, messages, projectId);
+    if (attachment.size > before) attached = true;
   }
+  if (!added && !attached) return;
   version++;
   for (const cb of globalListeners) cb();
 }
@@ -637,6 +647,27 @@ export function isRunActive(run: SubAgentRun): boolean {
 }
 
 /**
+ * Seuil au-delà duquel un run ENCORE `running` sans avoir reçu de
+ * `subagent_end` est considéré BLOQUÉ (abort/timeout dont l'événement de fin
+ * s'est perdu, coupure WS…). Il sort alors du mur de colonnes et rejoint le
+ * fil À SA DATE. Valeur cohérente avec les timeouts backend : inactivité
+ * 5 min × 2 tentatives ≈ 10 min, timeout global 30 min → 20 min laisse le
+ * temps à une fin normale tout en débloquant un run réellement coincé.
+ */
+export const STUCK_RUN_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * Vrai si le run est ENCORE `running` au-delà de STUCK_RUN_TIMEOUT_MS depuis
+ * son démarrage. Fonction PURE (now injectable). Un run sans `startedAt` connu
+ * n'est jamais considéré bloqué (on ne peut pas dater son début).
+ */
+export function isRunStuck(run: SubAgentRun, now: number = Date.now()): boolean {
+  if (!isRunActive(run)) return false;
+  if (typeof run.startedAt !== "number") return false;
+  return now - run.startedAt > STUCK_RUN_TIMEOUT_MS;
+}
+
+/**
  * Intervalle temporel d'un run : [startedAt, endedAt ?? now]. Un run actif est
  * ouvert jusqu'à `now` (il grandit à chaque rendu) ; un run terminé sans
  * `endedAt` est réduit à un point (startedAt). `startedAt` absent → `now`.
@@ -683,8 +714,11 @@ export function selectConcurrentRuns(runs: SubAgentRun[], now: number = Date.now
 
   const flush = () => {
     if (current.length > 0) {
+      // Les runs BLOQUÉS (sans subagent_end au-delà du seuil) sortent du mur :
+      // ils rejoignent le fil à leur date (cf. isRunStuck / insertDatedRuns)
+      // au lieu de rester indéfiniment en colonnes.
       const active = current
-        .filter(isRunActive)
+        .filter((r) => isRunActive(r) && !isRunStuck(r, now))
         .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
       if (active.length >= 2) groups.push(active);
     }
@@ -731,12 +765,15 @@ export function getAllRuns(projectId?: string): SubAgentRun[] {
  */
 export function useConcurrentRuns(projectId?: string): SubAgentRun[][] {
   const version = useSyncExternalStore(subscribeRuns, getRunsVersion, getRunsVersion);
+  // Horloge : réévalue le seuil de blocage même sans nouvel événement (un run
+  // bloqué doit sortir du mur et rejoindre le fil à sa date).
+  const tick = useActiveRunsClock();
   // `version` change à chaque notification → recalcul (getAllRuns renvoie un
   // nouveau tableau à chaque appel).
   return useMemo(
     () => selectConcurrentRuns(getAllRuns(projectId)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version, projectId],
+    [version, projectId, tick],
   );
 }
 
@@ -744,6 +781,151 @@ export function useConcurrentRuns(projectId?: string): SubAgentRun[][] {
 export function isRunConcurrent(runId: string | undefined, groups: SubAgentRun[][]): boolean {
   if (!runId) return false;
   return groups.some((g) => g.some((r) => r.id === runId));
+}
+
+// ── Insertion À LEUR DATE des runs détachés (fix « sous-agents après la
+// réponse finale ») ───────────────────────────────────────────────────────────
+// Les runs de sous-agents NON rattachables à un toolCall `delegate` (orphelins
+// archivés de l'historique, ou runs BLOQUÉS sans `subagent_end`) ne sont plus
+// rendus systématiquement EN FIN DE FIL — c'est-à-dire APRÈS la réponse finale
+// de l'assistant. Ils rejoignent le fil À LEUR DATE. L'ordre EXISTANT des
+// groupes n'est jamais modifié (le fil reste piloté par l'ordre d'arrivée) :
+// chaque run est inséré avant le premier groupe dont le timestamp le dépasse.
+
+/** Date d'ancrage d'un run dans le fil : début, sinon fin, sinon 0. */
+export function runAnchorTimestamp(run: SubAgentRun): number {
+  if (typeof run.startedAt === "number") return run.startedAt;
+  if (typeof run.endedAt === "number") return run.endedAt;
+  return 0;
+}
+
+/** Entrée ordonnée du fil : soit un groupe de messages, soit un run daté. */
+export type DatedThreadEntry<T> =
+  | { kind: "group"; ts: number; group: T }
+  | { kind: "run"; ts: number; run: SubAgentRun };
+
+/**
+ * Insère des runs datés dans une liste de groupes SANS réordonner les groupes.
+ * Stratégie : parcours linéaire des groupes (ordre existant préservé) ; chaque
+ * run est inséré AVANT le premier groupe dont le timestamp est ≥ à sa date
+ * (un run de même date passe donc AVANT le groupe, jamais après la réponse).
+ * Tri STABLE des runs entre eux par date, tie-break par id (déterministe).
+ *
+ * Fonction PURE (testable) : `groupTimestamp` extrait la date d'un groupe
+ * (typiquement le timestamp de son premier message).
+ */
+export function insertDatedRuns<T>(
+  groups: T[],
+  runs: SubAgentRun[],
+  groupTimestamp: (group: T) => number,
+): DatedThreadEntry<T>[] {
+  const sortedRuns = [...runs].sort(
+    (a, b) =>
+      runAnchorTimestamp(a) - runAnchorTimestamp(b) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  const out: DatedThreadEntry<T>[] = [];
+  let ri = 0;
+  for (const group of groups) {
+    const gts = groupTimestamp(group);
+    while (ri < sortedRuns.length && runAnchorTimestamp(sortedRuns[ri]) <= gts) {
+      const run = sortedRuns[ri];
+      out.push({ kind: "run", ts: runAnchorTimestamp(run), run });
+      ri++;
+    }
+    out.push({ kind: "group", ts: gts, group });
+  }
+  while (ri < sortedRuns.length) {
+    const run = sortedRuns[ri];
+    out.push({ kind: "run", ts: runAnchorTimestamp(run), run });
+    ri++;
+  }
+  return out;
+}
+
+/**
+ * Sélection PURE des runs à insérer dans le fil À LEUR DATE :
+ *  - ARCHIVÉS (historique) SANS toolCall `delegate` rattachable, OU
+ *  - BLOQUÉS (`running` au-delà de STUCK_RUN_TIMEOUT_MS sans fin) non
+ *    rattachables (les runs rattachés sont, eux, rendus inline par leur bloc).
+ * ÉTANCHÉITÉ : borné au projet affiché.
+ */
+export function getDatedDetachedRuns(projectId?: string, now: number = Date.now()): SubAgentRun[] {
+  const attached = new Set(attachment.values());
+  return [...runs.values()].filter(
+    (r) =>
+      !attached.has(r.id) &&
+      (!projectId || r.projectId === projectId) &&
+      (r.archived === true || isRunStuck(r, now)),
+  );
+}
+
+const EMPTY_DATED_RUNS: SubAgentRun[] = [];
+let datedSnapshotVersion = -1;
+let datedSnapshotProject: string | undefined;
+let datedSnapshotBucket = -1;
+let datedSnapshot: SubAgentRun[] = EMPTY_DATED_RUNS;
+
+/**
+ * Snapshot STABLE pour `useSyncExternalStore` : renvoie la MÊME référence tant
+ * que la liste des ids et le « bucket » temporel (30 s) ne changent pas — les
+ * notifications du store (events LIVE des sous-agents) ne re-rendent donc PAS
+ * le fil. Le bucket force la réévaluation périodique du seuil de blocage.
+ */
+export function getDatedDetachedSnapshot(projectId?: string): SubAgentRun[] {
+  const bucket = Math.floor(Date.now() / 30_000);
+  if (
+    datedSnapshotVersion === version &&
+    datedSnapshotProject === projectId &&
+    datedSnapshotBucket === bucket
+  ) {
+    return datedSnapshot;
+  }
+  const list = getDatedDetachedRuns(projectId);
+  datedSnapshotVersion = version;
+  datedSnapshotProject = projectId;
+  datedSnapshotBucket = bucket;
+  const sameIds =
+    list.length === datedSnapshot.length && list.every((r, i) => r.id === datedSnapshot[i].id);
+  if (!sameIds) datedSnapshot = list.length > 0 ? list : EMPTY_DATED_RUNS;
+  return datedSnapshot;
+}
+
+/**
+ * Force un re-rendu périodique TANT QU'IL RESTE des runs actifs : sans nouvel
+ * événement, le seuil de blocage (isRunStuck) doit quand même être réévalué
+ * pour libérer le mur de colonnes. Retourne le nombre de ticks (à inclure dans
+ * les deps des `useMemo` qui datent les runs).
+ */
+export function useActiveRunsClock(intervalMs = 30_000): number {
+  const [hasActive, setHasActive] = useState(false);
+  useEffect(() => {
+    const check = () => setHasActive([...runs.values()].some(isRunActive));
+    check();
+    return subscribeRuns(check);
+  }, []);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!hasActive) return;
+    const id = setInterval(() => setTick((n) => n + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [hasActive, intervalMs]);
+  return tick;
+}
+
+/**
+ * Hook : runs détachés à insérer À LEUR DATE dans le fil. S'abonne au store
+ * isolé via un snapshot STABLE (aucun re-rendu du fil sur les events live) et
+ * déclenche une horloge tant que des runs actifs existent (libération des runs
+ * bloqués au-delà du seuil).
+ */
+export function useDatedDetachedRuns(projectId?: string): SubAgentRun[] {
+  useActiveRunsClock();
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => getDatedDetachedSnapshot(projectId),
+    () => getDatedDetachedSnapshot(projectId),
+  );
 }
 
 // ── Hooks React ──────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 // du message _streaming, concaténation des deltas, timing de la réflexion,
 // tool calls, finalisation, timeout et dédup par id.
 import { describe, it, expect, vi } from "vitest";
-import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch, normalizeUserContentForMatch } from "./pi-events";
+import { applyPiEvent, appendMessageDedup, findPendingUserMessages, getToolCallFallbackCount, prependHistoryBatch, normalizeUserContentForMatch, resetToolCallFallbackCount } from "./pi-events";
 import type { DisplayMessage, PiEvent } from "../types";
 
 // ── Helpers de construction d'événements ─────────────────────────────
@@ -229,6 +229,86 @@ describe("applyPiEvent — ordre chronologique des blocs (fil chronologique)", (
       toolcallStart("tc-1", "delegate", {}),
     ]);
     expect(msgs[0].blocks?.filter((b) => b.kind === "toolCall")).toHaveLength(1);
+  });
+});
+
+// ── Tests : rattachement de SECOURS d'un toolCall `delegate` (fix ordre chat) ──
+// Quand le `toolcall_start` est manqué (coupure WS), le bloc de secours ne doit
+// pas atterrir aveuglément sur le DERNIER message assistant (qui peut être la
+// réponse finale) : il réintègre le message HÔTE de la délégation.
+describe("applyPiEvent — rattachement de secours d'un delegate (fix ordre)", () => {
+  function delegateHost(): DisplayMessage {
+    return {
+      id: "A", role: "assistant", content: "", thinking: "", timestamp: 1,
+      toolCalls: [{ id: "tc-old", name: "delegate", args: { function: "execute" }, output: "", isError: false, isStreaming: false }],
+      blocks: [{ kind: "toolCall", toolCallId: "tc-old" }],
+    };
+  }
+  function finalAnswer(): DisplayMessage {
+    return {
+      id: "B", role: "assistant", content: "réponse finale", thinking: "", timestamp: 2,
+      toolCalls: [], blocks: [{ kind: "text", text: "réponse finale" }],
+    };
+  }
+
+  it("réintègre le message hôte du delegate, PAS la réponse finale", () => {
+    resetToolCallFallbackCount();
+    const { msgs } = run(
+      [{ type: "tool_execution_start", toolCallId: "tc-new", toolName: "delegate", args: { function: "execute" } }],
+      [delegateHost(), finalAnswer()],
+    );
+    // Le nouveau delegate est posé sur A (l'hôte de la délégation)…
+    expect(msgs[0].toolCalls.map((tc) => tc.id)).toContain("tc-new");
+    expect(msgs[0].blocks).toEqual([
+      { kind: "toolCall", toolCallId: "tc-old" },
+      { kind: "toolCall", toolCallId: "tc-new" },
+    ]);
+    // …et B (la réponse finale) reste intacte, sans bloc sous-agent après elle.
+    expect(msgs[1].toolCalls).toHaveLength(0);
+    expect(msgs[1].blocks).toEqual([{ kind: "text", text: "réponse finale" }]);
+    expect(getToolCallFallbackCount()).toBe(1);
+  });
+
+  it("sans message hôte delegate, repli sur le dernier message assistant (comportement actuel)", () => {
+    resetToolCallFallbackCount();
+    const { msgs } = run(
+      [{ type: "tool_execution_start", toolCallId: "tc-x", toolName: "read", args: { path: "/a" } }],
+      [finalAnswer()],
+    );
+    expect(msgs[0].toolCalls.map((tc) => tc.id)).toContain("tc-x");
+    expect(getToolCallFallbackCount()).toBe(1);
+  });
+
+  it("un delegate réintègre l'hôte même quand un message non-delegate suit", () => {
+    resetToolCallFallbackCount();
+    const middle: DisplayMessage = {
+      id: "M", role: "assistant", content: "", thinking: "", timestamp: 3,
+      toolCalls: [{ id: "tc-read", name: "read", args: {}, output: "ok", isError: false, isStreaming: false }],
+      blocks: [{ kind: "toolCall", toolCallId: "tc-read" }],
+    };
+    const { msgs } = run(
+      [{ type: "tool_execution_start", toolCallId: "tc-new2", toolName: "delegate", args: { function: "execute" } }],
+      [delegateHost(), middle, finalAnswer()],
+    );
+    expect(msgs[0].toolCalls.map((tc) => tc.id)).toContain("tc-new2");
+    expect(msgs[2].toolCalls).toHaveLength(0);
+    expect(getToolCallFallbackCount()).toBe(1);
+  });
+
+  it("un delegate déjà résolu (output présent) n'est pas considéré hôte → repli dernier message", () => {
+    resetToolCallFallbackCount();
+    const resolved: DisplayMessage = {
+      id: "R", role: "assistant", content: "", thinking: "", timestamp: 1,
+      toolCalls: [{ id: "tc-done", name: "delegate", args: { function: "execute" }, output: "terminé", isError: false, isStreaming: false }],
+      blocks: [{ kind: "toolCall", toolCallId: "tc-done" }],
+    };
+    const { msgs } = run(
+      [{ type: "tool_execution_start", toolCallId: "tc-new3", toolName: "delegate", args: { function: "review" } }],
+      [resolved, finalAnswer()],
+    );
+    // L'hôte « résolu » n'est pas retenu → repli sur le dernier message (B).
+    expect(msgs[1].toolCalls.map((tc) => tc.id)).toContain("tc-new3");
+    expect(getToolCallFallbackCount()).toBe(1);
   });
 });
 

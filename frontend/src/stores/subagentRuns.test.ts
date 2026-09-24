@@ -9,16 +9,21 @@ import {
   extractDelegateCalls,
   flushSubagentNotifications,
   getAllRuns,
+  getDatedDetachedRuns,
   getOrphanRuns,
   getRun,
+  insertDatedRuns,
   isRunActive,
   isRunConcurrent,
+  isRunStuck,
   registerArchivedRuns,
   resetSubagentRuns,
   routeSubagentEnvelope,
+  runAnchorTimestamp,
   runFromActivity,
   runTimeInterval,
   selectConcurrentRuns,
+  STUCK_RUN_TIMEOUT_MS,
   subscribeRun,
   type SubagentEnvelope,
 } from "./subagentRuns";
@@ -298,6 +303,145 @@ describe("routeSubagentEnvelope — rattachement FIFO + args.function", () => {
       expect(getRun("r2")?.toolCallId).toBe("b-tc");
       expect(getOrphanRuns().some((r) => r.id === "r2")).toBe(false);
     });
+  });
+});
+
+// ── Insertion À LEUR DATE des runs détachés (fix chronologie chat) ─────────
+// Helper PUR d'insertion : l'ordre existant des groupes n'est jamais modifié,
+// les runs sont posés avant le premier groupe dont la date les dépasse, avec un
+// tri stable (tie-break par id).
+describe("insertDatedRuns — insertion chronologique STABLE des runs détachés", () => {
+  it("insère un run avant le premier groupe dont la date le dépasse", () => {
+    const entries = insertDatedRuns([100, 300], [makeRun("r", { startedAt: 200 })], (g) => g);
+    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : `r-${e.run.id}`))).toEqual([
+      "g100",
+      "r-r",
+      "g300",
+    ]);
+  });
+
+  it("deux runs de MÊME date → tie-break par id (déterministe)", () => {
+    const entries = insertDatedRuns(
+      [100, 300],
+      [makeRun("b", { startedAt: 200 }), makeRun("a", { startedAt: 200 })],
+      (g) => g,
+    );
+    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+      "g100",
+      "a",
+      "b",
+      "g300",
+    ]);
+  });
+
+  it("un run plus récent que tous les groupes est placé en fin", () => {
+    const entries = insertDatedRuns([100, 300], [makeRun("late", { startedAt: 500 })], (g) => g);
+    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+      "g100",
+      "g300",
+      "late",
+    ]);
+  });
+
+  it("un run plus ancien que tous les groupes est placé en tête", () => {
+    const entries = insertDatedRuns([100, 300], [makeRun("old", { startedAt: 50 })], (g) => g);
+    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+      "old",
+      "g100",
+      "g300",
+    ]);
+  });
+
+  it("à date égale, le run passe AVANT le groupe (jamais après la réponse)", () => {
+    const entries = insertDatedRuns([200], [makeRun("r", { startedAt: 200 })], (g) => g);
+    expect(entries.map((e) => e.kind)).toEqual(["run", "group"]);
+  });
+
+  it("sans run, renvoie les groupes dans leur ordre d'origine", () => {
+    const entries = insertDatedRuns([300, 100], [], (g) => g);
+    expect(entries.map((e) => (e.kind === "group" ? e.group : -1))).toEqual([300, 100]);
+  });
+
+  it("runAnchorTimestamp : début prioritaire, sinon fin, sinon 0", () => {
+    expect(runAnchorTimestamp(makeRun("a", { startedAt: 10, endedAt: 20 }))).toBe(10);
+    expect(runAnchorTimestamp(makeRun("a", { endedAt: 20 }))).toBe(20);
+    expect(runAnchorTimestamp(makeRun("a"))).toBe(0);
+  });
+});
+
+// ── Runs BLOQUÉS : sortie du mur de colonnes après seuil ─────────────────────
+describe("isRunStuck / selectConcurrentRuns — run bloqué sorti du mur", () => {
+  it("isRunStuck : vrai seulement si running au-delà du seuil", () => {
+    const live = makeRun("a", { startedAt: 0 });
+    expect(isRunStuck(live, STUCK_RUN_TIMEOUT_MS)).toBe(false); // borne inclusive
+    expect(isRunStuck(live, STUCK_RUN_TIMEOUT_MS + 1)).toBe(true);
+    // Un run terminé n'est jamais bloqué.
+    expect(isRunStuck(makeRun("a", { status: "done", startedAt: 0, endedAt: 10 }), 10_000_000)).toBe(false);
+    // Sans startedAt, impossible de dater → jamais bloqué.
+    expect(isRunStuck(makeRun("a"), 10_000_000)).toBe(false);
+  });
+
+  it("deux runs actifs au-delà du seuil → plus de groupe de colonnes", () => {
+    const a = makeRun("a", { startedAt: 0 });
+    const b = makeRun("b", { startedAt: 10 });
+    expect(selectConcurrentRuns([a, b], 1000)).toHaveLength(1); // récents → colonnes
+    expect(selectConcurrentRuns([a, b], STUCK_RUN_TIMEOUT_MS + 1000)).toEqual([]); // bloqués
+  });
+
+  it("un seul run récent + un run bloqué → pas de colonne (il ne reste qu'un actif)", () => {
+    const recent = makeRun("recent", { startedAt: STUCK_RUN_TIMEOUT_MS + 500 });
+    const stuck = makeRun("stuck", { startedAt: 0 });
+    expect(selectConcurrentRuns([recent, stuck], STUCK_RUN_TIMEOUT_MS + 1000)).toEqual([]);
+  });
+});
+
+// ── Runs détachés rendus À LEUR DATE ────────────────────────────────────────
+describe("getDatedDetachedRuns — runs sans toolCall à insérer dans le fil", () => {
+  it("inclut un orphelin archivé et exclut un run rattaché", () => {
+    const orphan = runFromActivity({ delegateRunId: "d-orph", function: "execute", status: "success" }, 0)!;
+    registerArchivedRuns([orphan], []);
+    expect(getDatedDetachedRuns(undefined, 0).some((r) => r.id === "d-orph")).toBe(true);
+
+    // Le toolCall `delegate` devient disponible → le run se rattache et quitte
+    // la liste des runs datés.
+    const attached = runFromActivity({ delegateRunId: "d-att", function: "execute", status: "success" }, 0)!;
+    registerArchivedRuns([attached], [msg("a", ["execute"])]);
+    expect(getRun("d-att")?.toolCallId).toBe("a-tc0");
+    expect(getDatedDetachedRuns(undefined, 0).some((r) => r.id === "d-att")).toBe(false);
+  });
+
+  it("inclut un run BLOQUÉ (running sans subagent_end) dès que le seuil est dépassé", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "d-stuck" }), [], 0);
+    // Avant le seuil : run actif, pas encore détaché (il vit dans le mur/fil).
+    expect(getDatedDetachedRuns(undefined, 1000).some((r) => r.id === "d-stuck")).toBe(false);
+    // Après le seuil : détaché → inséré à sa date.
+    expect(getDatedDetachedRuns(undefined, STUCK_RUN_TIMEOUT_MS + 1).some((r) => r.id === "d-stuck")).toBe(true);
+  });
+});
+
+/**
+ * (fix orphelins) Le rattachement d'un orphelin est RETENTÉ à chaque nouvelle
+ * liste de messages : un run resté orphelin redevient inline dès que la
+ * pagination d'historique apporte enfin son toolCall `delegate`.
+ */
+describe("registerArchivedRuns — rattachement RETENTÉ d'un orphelin", () => {
+  it("re-tente le rattachement quand le delegate arrive plus tard", () => {
+    const run = runFromActivity({ delegateRunId: "d-retry", function: "execute", status: "success" }, 0)!;
+    registerArchivedRuns([run], []);
+    expect(getOrphanRuns().some((r) => r.id === "d-retry")).toBe(true);
+
+    // Pagination : le toolCall `delegate` arrive enfin.
+    registerArchivedRuns([run], [msg("a", ["execute"])]);
+    expect(getRun("d-retry")?.toolCallId).toBe("a-tc0");
+    expect(getOrphanRuns().some((r) => r.id === "d-retry")).toBe(false);
+    expect(getDatedDetachedRuns(undefined, 0).some((r) => r.id === "d-retry")).toBe(false);
+  });
+
+  it("idempotent : un run déjà enregistré n'est jamais dupliqué", () => {
+    const run = runFromActivity({ delegateRunId: "d-dup", function: "execute", status: "success" }, 0)!;
+    registerArchivedRuns([run], []);
+    registerArchivedRuns([run], []);
+    expect(getAllRuns().filter((r) => r.id === "d-dup")).toHaveLength(1);
   });
 });
 

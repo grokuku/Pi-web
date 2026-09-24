@@ -108,6 +108,8 @@ router.get("/status", async (_req: Request, res: Response) => {
       binaryPath: installed ? BIN_PATH : null,
       // Usage stats from the extension (tracked per CBM tool call)
       usage: (globalThis as any).__cbmUsageStats || null,
+      // Échecs CBM (par tool + par motif) — observabilité de l'adoption de CBM.
+      failures: (globalThis as any).__cbmFailureStats || null,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

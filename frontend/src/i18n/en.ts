@@ -64,6 +64,8 @@ export const en = {
     subAgentAttempt: (n: number) => `attempt ${n}`,
     subAgentExtract: "(excerpt)",
     subAgentCause: "cause",
+    // ── Stalled run (still `running` with no subagent_end past the threshold) ──
+    subAgentStuck: "no end (stalled)",
     // ── LOT 4: side-by-side columns for simultaneous sub-agents ──
     parallelSubAgents: (n: number) => `${n} sub-agents in parallel`,
     parallelSubAgentsOverflow: (n: number) => `horizontal scroll beyond ${n}`,

@@ -10,11 +10,12 @@
 // messages tronqués « extrait », ses outils résumés par le LOT 1). Erreurs
 // auto-dépliées ; résumé final + cause si échec.
 //
-// `OrphanSubAgentRuns` rend en fin de fil les runs ARCHIVÉS (relus depuis
-// l'historique) qui n'ont pas de toolCall `delegate` rattachable — dégradé
-// propre, sans toucher le fil (le composant s'abonne seul au store).
+// `DatedSubAgentBlock` rend un run détaché À SA DATE dans le fil (il est inséré
+// par `insertDatedRuns` côté ChatView) : runs ARCHIVÉS (relus depuis l'historique)
+// sans toolCall `delegate` rattachable OU runs BLOQUÉS sans `subagent_end`.
+// Le composant s'abonne seul au run (par id) → aucun re-rendu du fil.
 
-import { memo, useMemo, useSyncExternalStore } from "react";
+import { memo, useCallback, useSyncExternalStore } from "react";
 import type { SubAgentRun, ToolCallInfo } from "../../types";
 import { useTranslation } from "../../i18n";
 import { CollapsibleBlock } from "./CollapsibleBlock";
@@ -22,10 +23,10 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallTimer } from "./ToolCallTimer";
 import { computeDurationMs, formatToolDuration } from "../../utils/toolSummaries";
 import {
-  getOrphanRuns,
-  getRunsVersion,
+  getRun,
   isRunConcurrent,
-  subscribeRuns,
+  isRunStuck,
+  subscribeRun,
   useConcurrentRuns,
   useSubAgentRun,
 } from "../../stores/subagentRuns";
@@ -80,16 +81,18 @@ interface HeaderProps {
   toolCall?: ToolCallInfo;
   running: boolean;
   failed: boolean;
+  /** Run bloqué (running sans fin au-delà du seuil) → marqueur discret. */
+  stuck?: boolean;
   durationMs?: number;
   liveStartedAt?: number;
 }
 
 /** En-tête commun d'un run (live, colonne parallèle, orphelin). Exporté pour
  *  être réutilisé tel quel par la vue en colonnes (LOT 4). */
-export function SubAgentHeader({ run, toolCall, running, failed, durationMs, liveStartedAt }: HeaderProps) {
+export function SubAgentHeader({ run, toolCall, running, failed, stuck, durationMs, liveStartedAt }: HeaderProps) {
   const { t } = useTranslation();
   const { meta, roleLabel, model, task } = computeHeaderInfo(run, toolCall);
-  const status = running ? "⟳" : failed ? "❌" : "✓";
+  const status = stuck ? "⏱" : running ? "⟳" : failed ? "❌" : "✓";
   const actionCount = run?.actions.length ?? 0;
   const attempt = run?.attempt ?? 1;
   // Aperçu replié : dernier résumé d'action, sinon dernier output connu — du
@@ -111,6 +114,11 @@ export function SubAgentHeader({ run, toolCall, running, failed, durationMs, liv
       )}
       {attempt > 1 && <span className="text-amber-400/80">{t("chat.subAgentAttempt", attempt)}</span>}
       {task && <span className="text-hacker-text-dim/60 truncate max-w-[300px]">— {task}</span>}
+      {stuck && (
+        <span className="text-amber-400/70" title={t("chat.subAgentStuck")}>
+          ⏱ {t("chat.subAgentStuck")}
+        </span>
+      )}
       {running ? (
         <ToolCallTimer startedAt={liveStartedAt} />
       ) : durationMs !== undefined ? (
@@ -228,8 +236,11 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
   // ni masquer ce bloc, ni apparaître dans le mur de cette conversation.
   const concurrentGroups = useConcurrentRuns(run?.projectId);
   if (run && isRunConcurrent(run.id, concurrentGroups)) return null;
+  // Run BLOQUÉ (running sans fin au-delà du seuil) : il n'est plus une colonne
+  // (selectConcurrentRuns l'exclut) → rendu inline à sa place avec un marqueur.
+  const stuck = run ? isRunStuck(run) : false;
   // Statut : le run (store) prime une fois connu ; sinon dérivé du toolCall.
-  const running = run ? run.status === "running" : toolCall.isStreaming;
+  const running = run ? run.status === "running" && !stuck : toolCall.isStreaming;
   const failed = run ? run.isError : isSubAgentFailed(toolCall);
   // AUTO-DÉPLI : un sous-agent EN COURS est DÉPLIÉ par défaut pour montrer son
   // activité (exigence « plus de silence »). Contrairement aux outils simples,
@@ -263,6 +274,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
           toolCall={toolCall}
           running={running}
           failed={failed}
+          stuck={stuck}
           durationMs={finishedDurationMs}
           liveStartedAt={liveStartedAt}
         />
@@ -273,54 +285,42 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
   );
 });
 
-// ── Runs archivés orphelins (fin de fil, dégradé propre) ─────────────────────
+// ── Run détaché daté (orphelin archivé OU run bloqué) ────────────────────────
+// Rendu À SA DATE dans le fil (inséré par `insertDatedRuns` côté ChatView).
+// S'abonne au run PAR ID : un run bloqué encore vivant se rafraîchit seul, sans
+// que le snapshot global des runs datés (stable) ne re-rende le fil.
 
-const OrphanSubAgentBlock = memo(function OrphanSubAgentBlock({ run }: { run: SubAgentRun }) {
+export const DatedSubAgentBlock = memo(function DatedSubAgentBlock({ run }: { run: SubAgentRun }) {
+  const live = useSyncExternalStore(
+    useCallback((cb: () => void) => subscribeRun(run.id, cb), [run.id]),
+    useCallback(() => getRun(run.id) ?? run, [run.id, run]),
+    () => run,
+  );
+  const stuck = isRunStuck(live);
+  const running = live.status === "running" && !stuck;
+  const blockId = `dated:${live.id}`;
   return (
     <CollapsibleBlock
-      blockId={`orphan:${run.id}`}
-      isError={run.isError}
-      className="ml-4 pl-2 border-l border-hacker-border/60 min-w-0"
+      blockId={blockId}
+      isError={live.isError}
+      isRunning={running}
+      className="ml-4 my-1 pl-2 border-l border-hacker-border/60 min-w-0"
       headerClassName={`inline-flex items-center gap-1.5 text-[0.6875rem] font-mono leading-tight text-left min-w-0 flex-wrap ${
-        run.isError ? "text-red-400" : "text-hacker-text-dim"
+        live.isError ? "text-red-400" : "text-hacker-text-dim"
       }`}
       contentClassName="mt-1"
       header={
         <SubAgentHeader
-          run={run}
-          running={false}
-          failed={run.isError}
-          durationMs={run.end?.durationMs}
+          run={live}
+          running={running}
+          failed={live.isError}
+          stuck={stuck}
+          durationMs={live.end?.durationMs}
+          liveStartedAt={running ? live.startedAt : undefined}
         />
       }
     >
-      <SubAgentRunBody run={run} blockId={`orphan:${run.id}`} />
+      <SubAgentRunBody run={live} blockId={blockId} />
     </CollapsibleBlock>
-  );
-});
-
-/**
- * Rend les runs de sous-agents ARCHIVÉS sans toolCall `delegate` rattachable.
- * Composant ISOLÉ : il s'abonne seul au store (version globale) → son re-rendu
- * ne provoque PAS celui du fil de messages.
- * ÉTANCHÉITÉ inter-projets : `projectId` (projet affiché) borne la sélection —
- * un run archivé d'un autre projet (persisté dans SA session) n'apparaît jamais
- * ici.
- */
-export const OrphanSubAgentRuns = memo(function OrphanSubAgentRuns({ projectId }: { projectId?: string }) {
-  const version = useSyncExternalStore(subscribeRuns, getRunsVersion, getRunsVersion);
-  // useMemo sur la version : getOrphanRuns(projectId) reconstruit un tableau.
-  const orphans = useMemo(
-    () => getOrphanRuns(projectId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version, projectId],
-  );
-  if (orphans.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1.5 mt-1">
-      {orphans.map((r) => (
-        <OrphanSubAgentBlock key={r.id} run={r} />
-      ))}
-    </div>
   );
 });

@@ -25,8 +25,8 @@ import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "../../utils/pi-events";
-import { routeSubagentEnvelope, resetSubagentRuns, type SubagentEnvelope } from "../../stores/subagentRuns";
-import { OrphanSubAgentRuns } from "./SubAgentBlock";
+import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, useDatedDetachedRuns, type SubagentEnvelope } from "../../stores/subagentRuns";
+import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
 
@@ -1484,6 +1484,26 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
   const showServerLoad = hiddenCount === 0 && !!serverHasMore && !!onLoadEarlierFromServer;
   const showServerAll = showServerLoad && (serverRemaining ?? 0) > VISIBLE_GROUPS_STEP;
 
+  // ── (fix chronologie) Runs détachés insérés À LEUR DATE ──
+  // Les runs de sous-agents non rattachables à un toolCall `delegate` (orphelins
+  // archivés de l'historique, runs bloqués sans `subagent_end`) ne sont plus
+  // rendus EN FIN DE FIL (après la réponse finale) : on les réinsère dans le fil
+  // selon leur date, sans réordonner les groupes existants.
+  // - le hook s'abonne au store avec un snapshot STABLE → aucun re-rendu du fil
+  //   sur les events LIVE des sous-agents ;
+  // - `hideLiveExtras` (conversation passée) → aucun run live inséré.
+  const datedRuns = useDatedDetachedRuns(projectId);
+  const threadEntries = useMemo(
+    () =>
+      insertDatedRuns(
+        visibleGroups,
+        hideLiveExtras ? [] : datedRuns,
+        // Date d'un groupe = timestamp de son premier message (0 si absent).
+        (group) => (typeof group[0]?.timestamp === "number" ? group[0].timestamp : 0),
+      ),
+    [visibleGroups, datedRuns, hideLiveExtras],
+  );
+
   // ── CollapseProvider (LOT 1) ──
   // Porte le réglage global « détail d'affichage déplié » et la Map d'overrides
   // par bloc. Monté ICI (remonté par projet via key={projectId} → overrides
@@ -1535,7 +1555,12 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
         )}
       </div>
     )}
-    {visibleGroups.map((group) => {
+    {threadEntries.map((entry) => {
+      // Run détaché daté (orphelin archivé OU run bloqué) → rendu À SA DATE.
+      if (entry.kind === "run") {
+        return <DatedSubAgentBlock key={`run-${entry.run.id}`} run={entry.run} />;
+      }
+      const group = entry.group;
       const first = group[0];
       // LOT 3 : dispatch des blocs de timeline historique à leur place.
       if (first.kind === "toolResult") return <ToolResultRow key={first.id} message={first} />;
@@ -1548,11 +1573,6 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
         fil, s'abonne seul au store isolé → aucun re-render du fil).
         Masqué en consultation d'une conversation passée (hideLiveExtras). */}
     {!hideLiveExtras && <ParallelSubAgents projectId={projectId} />}
-    {/* LOT 2b : runs de sous-agents ARCHIVÉS non rattachables à un tool `delegate`
-        (dégradé propre en fin de fil). Composant isolé : il s'abonne seul au
-        store → son re-rendu ne provoque PAS celui du fil. ÉTANCHÉITÉ : borné
-        au projet affiché (projectId). */}
-    {!hideLiveExtras && <OrphanSubAgentRuns projectId={projectId} />}
     </>
   </CollapseProvider>
   );
