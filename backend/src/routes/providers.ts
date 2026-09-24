@@ -7,6 +7,9 @@ import {
   getProvider,
   testProviderConnection,
   toPublicProvider,
+  normalizeMaxConcurrentCalls,
+  syncConcurrencyProviderLimits,
+  MAX_CONCURRENT_CALLS,
   type ProviderConfig,
   type ProviderType,
   PROVIDER_PRESETS,
@@ -28,12 +31,16 @@ router.get("/", (_req: Request, res: Response) => {
 
 // ── POST create provider ──────────────────────────────
 
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   try {
-    const { name, type, baseUrl, apiKey } = req.body;
+    const { name, type, baseUrl, apiKey, maxConcurrentCalls } = req.body;
     if (!type) return res.status(400).json({ error: "type required" });
     if (!PROVIDER_PRESETS[type as ProviderType]) {
       return res.status(400).json({ error: `Unknown type: ${type}. Valid: ${Object.keys(PROVIDER_PRESETS).join(", ")}` });
+    }
+    // Limite de concurrence : entier 1..MAX, sinon 400 (pas de repli silencieux).
+    if (maxConcurrentCalls !== undefined && normalizeMaxConcurrentCalls(maxConcurrentCalls) === undefined) {
+      return res.status(400).json({ error: `maxConcurrentCalls must be an integer between 1 and ${MAX_CONCURRENT_CALLS}` });
     }
 
     const preset = PROVIDER_PRESETS[type as ProviderType];
@@ -42,8 +49,11 @@ router.post("/", (req: Request, res: Response) => {
       type,
       baseUrl: baseUrl || preset.defaultBaseUrl,
       apiKey: apiKey || undefined,
+      maxConcurrentCalls: normalizeMaxConcurrentCalls(maxConcurrentCalls),
     });
 
+    // Le provider est la source de vérité → resynchronise la map du moteur.
+    await syncConcurrencyProviderLimits();
     res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -52,10 +62,10 @@ router.post("/", (req: Request, res: Response) => {
 
 // ── PUT update provider ───────────────────────────────
 
-router.put("/:id", (req: Request, res: Response) => {
+router.put("/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, type, baseUrl, apiKey } = req.body;
+    const { name, type, baseUrl, apiKey, maxConcurrentCalls } = req.body;
 
     const existing = getProvider(id);
     if (!existing) return res.status(404).json({ error: "Provider not found" });
@@ -70,8 +80,18 @@ router.put("/:id", (req: Request, res: Response) => {
     }
     if (baseUrl !== undefined) updates.baseUrl = baseUrl;
     if (apiKey !== undefined) updates.apiKey = apiKey;
+    // Limite de concurrence : entier 1..MAX, sinon 400 (champ absent = inchangé).
+    if (maxConcurrentCalls !== undefined) {
+      const parsed = normalizeMaxConcurrentCalls(maxConcurrentCalls);
+      if (parsed === undefined) {
+        return res.status(400).json({ error: `maxConcurrentCalls must be an integer between 1 and ${MAX_CONCURRENT_CALLS}` });
+      }
+      updates.maxConcurrentCalls = parsed;
+    }
 
     const provider = updateProvider(id, updates);
+    // Le provider est la source de vérité → resynchronise la map du moteur.
+    await syncConcurrencyProviderLimits();
     res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -83,6 +103,9 @@ router.put("/:id", (req: Request, res: Response) => {
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
     await deleteProvider(req.params.id);
+
+    // Le provider est la source de vérité → retire sa limite du moteur.
+    await syncConcurrencyProviderLimits();
 
     // Regenerate models.json for Pi SDK after cleanup
     try {

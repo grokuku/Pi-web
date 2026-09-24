@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
 import {
   X, Wifi, Plus, Trash2, Star, Check, RefreshCw,
-  Edit2, Key, Power, TestTube2, Eye, EyeOff,
+  Edit2, Key, Power, TestTube2, Eye, EyeOff, Gauge,
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
 import { PROVIDER_PRESETS } from "../../types";
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
+import { MAX_PROVIDER_LIMIT, effectiveProviderCalls, normalizeProviderCallsInput } from "../../utils/concurrency";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
@@ -275,6 +276,10 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || PROVIDER_PRESETS.ollama.defaultBaseUrl);
   const [apiKey, setApiKey] = useState(provider?.apiKey || "");
   const [showKey, setShowKey] = useState(false);
+  // Appels LLM simultanés vers ce provider : pré-rempli avec la valeur du
+  // provider, sinon le défaut (3). Champ vide/invalide → message clair.
+  const [maxCalls, setMaxCalls] = useState(String(effectiveProviderCalls(provider?.maxConcurrentCalls)));
+  const [maxCallsError, setMaxCallsError] = useState(false);
 
   const handleTypeChange = (newType: ProviderType) => {
     setType(newType);
@@ -284,11 +289,18 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
   };
 
   const handleSave = () => {
+    const parsedCalls = normalizeProviderCallsInput(maxCalls);
+    if (parsedCalls === null) {
+      // Entier ≥ 1 requis : on n'enregistre pas silencieusement une valeur invalide.
+      setMaxCallsError(true);
+      return;
+    }
     onSave({
       name: name || type,
       type,
       baseUrl,
       apiKey: apiKey || undefined,
+      maxConcurrentCalls: parsedCalls,
     });
   };
 
@@ -339,6 +351,30 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
           </div>
         </div>
       )}
+
+      {/* Limite de concurrence : nombre d'appels LLM menés en parallèle vers ce provider. */}
+      <div className="mb-2">
+        <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
+          <Gauge size={10} /> {t('modelLibrary.maxConcurrentCalls')}
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={MAX_PROVIDER_LIMIT}
+          value={maxCalls}
+          onChange={e => { setMaxCalls(e.target.value); setMaxCallsError(false); }}
+          className={`input-hacker w-full text-xs ${maxCallsError ? "border-hacker-error" : ""}`}
+        />
+        {maxCallsError ? (
+          <div className="text-hacker-error text-[0.6875rem] mt-1">
+            {t('modelLibrary.maxConcurrentCallsError', MAX_PROVIDER_LIMIT)}
+          </div>
+        ) : (
+          <div className="text-hacker-text-dim/70 text-[0.6875rem] mt-1">
+            {t('modelLibrary.maxConcurrentCallsHelp')}
+          </div>
+        )}
+      </div>
 
       <div className="flex gap-2">
         <button onClick={handleSave} className="btn-hacker flex-1 text-xs flex items-center justify-center gap-1">

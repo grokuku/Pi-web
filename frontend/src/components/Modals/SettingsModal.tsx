@@ -10,16 +10,7 @@ import type { ModelLibrary, RegisteredModel, ProviderConfig } from "../../types"
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { toast } from "../../utils/holaf-toast";
-import {
-  normalizeProviderOverrides,
-  mergeProviderLimitsIncludingOverrides,
-  buildProviderOverridesPayload,
-  addProviderLimitRow,
-  removeProviderLimitRow,
-  normalizeProviderLimitInput,
-  MAX_PROVIDER_LIMIT,
-  type ProviderLimitRow,
-} from "../../utils/concurrency";
+import { MAX_PROVIDER_LIMIT } from "../../utils/concurrency";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, type PreviewMode } from "../../utils/preview-mode";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import type { ResourceType } from "./settings/types";
@@ -275,11 +266,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   // Délai d'attente en file, stocké en millisecondes (affiché en secondes).
   const [queueTimeoutMs, setQueueTimeoutMs] = useState(600000);
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
-  // Limites LLM par provider : une ligne par provider (GET /api/providers),
-  // value null = champ vide = hérite du défaut global (maxLLMSlots).
-  const [providerRows, setProviderRows] = useState<ProviderLimitRow[]>([]);
-  // Saisie pour ajouter manuellement un provider absent de la liste.
-  const [newProviderId, setNewProviderId] = useState("");
 
   // ── Webclaw config state ──
   // Durcissement (lot XSS) : la clé n'est plus renvoyée par l'API. Le champ
@@ -368,17 +354,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
       setQueueTimeoutMs(data.config.queueTimeoutMs ?? 600000);
       setConcurrencyStats(data.stats);
-      // Limites par provider : liste (GET /api/providers) + overrides
-      // (config.providerMaxLLMSlots) fusionnés — les overrides absents de la
-      // liste (provider d'extension) sont conservés en fin de tableau.
-      try {
-        const pres = await fetch("/api/providers");
-        if (pres.ok) {
-          const list: Array<{ id: string; name?: string }> = await pres.json();
-          const overrides = normalizeProviderOverrides(data.config?.providerMaxLLMSlots);
-          setProviderRows(mergeProviderLimitsIncludingOverrides(list ?? [], overrides));
-        }
-      } catch {}
     } catch {}
   }, []);
 
@@ -398,13 +373,13 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/concurrency", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        // providerMaxLLMSlots : les champs vides sont retirés de la map →
-        // override supprimé (le provider hérite à nouveau du défaut global).
+        // La limite par provider se règle désormais dans la fiche du provider
+        // (model-library) : on n'envoie plus providerMaxLLMSlots ici pour ne pas
+        // écraser la map moteur dérivée des providers.
         body: JSON.stringify({
           maxLLMSlots,
           maxAgentSlots,
           queueTimeoutMs,
-          providerMaxLLMSlots: buildProviderOverridesPayload(providerRows),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -1148,76 +1123,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </div>
                   </div>
 
-                  {/* Limites par provider — champ vide = hérite du défaut global */}
-                  <div className="pt-2 border-t border-hacker-border/30">
-                    <div className="text-[11px] font-bold text-hacker-text-dim">{t('settings.general.concurrency.perProvider')}</div>
-                    <div className="text-[10px] text-hacker-text-dim/80 mb-2">{t('settings.general.concurrency.perProviderHint')}</div>
-                    {providerRows.length === 0 && (
-                      <div className="text-[10px] text-hacker-text-dim/70 italic mb-1">{t('settings.general.concurrency.noProviders')}</div>
-                    )}
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {providerRows.length > 0 && (
-                        <div className="text-[10px] uppercase tracking-wider text-hacker-text-dim/60">
-                          {t('settings.general.concurrency.provider')}
-                        </div>
-                      )}
-                      {providerRows.map(row => (
-                        <div key={row.id} className="flex items-center gap-2">
-                          <span className="text-[11px] text-hacker-text flex-1 truncate" title={row.name}>
-                            {row.name}
-                          </span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={MAX_PROVIDER_LIMIT}
-                            placeholder={t('settings.general.concurrency.inherit')}
-                            value={row.value ?? ""}
-                            onChange={e => {
-                              const value = normalizeProviderLimitInput(e.target.value);
-                              setProviderRows(prev => prev.map(r =>
-                                r.id === row.id ? { ...r, value } : r
-                              ));
-                            }}
-                            className="input-hacker w-24 text-xs py-1 px-2 text-right"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setProviderRows(prev => removeProviderLimitRow(prev, row.id))}
-                            title={t('settings.general.concurrency.removeProvider')}
-                            aria-label={t('settings.general.concurrency.removeProvider')}
-                            className="text-hacker-text-dim hover:text-hacker-error transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                      {/* Ajout manuel d'un provider (id libre, absent de GET /api/providers) */}
-                      <div className="flex items-center gap-2 pt-1">
-                        <input
-                          type="text"
-                          value={newProviderId}
-                          placeholder={t('settings.general.concurrency.addProviderPlaceholder')}
-                          onChange={e => setNewProviderId(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === "Enter") {
-                              setProviderRows(prev => addProviderLimitRow(prev, newProviderId));
-                              setNewProviderId("");
-                            }
-                          }}
-                          className="input-hacker flex-1 text-xs py-1 px-2"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setProviderRows(prev => addProviderLimitRow(prev, newProviderId));
-                            setNewProviderId("");
-                          }}
-                          className="btn-hacker text-xs px-2 py-1 whitespace-nowrap"
-                        >
-                          + {t('settings.general.concurrency.addProvider')}
-                        </button>
-                      </div>
-                    </div>
+                  {/* Limite par provider : déplacée dans la fiche de chaque provider */}
+                  <div className="pt-2 border-t border-hacker-border/30 text-[10px] text-hacker-text-dim/80">
+                    {t('settings.general.concurrency.perProviderMoved')}
                   </div>
 
                   <button onClick={saveConcurrency}

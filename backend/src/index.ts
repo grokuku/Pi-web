@@ -1346,6 +1346,16 @@ httpServer.listen(PORT, async () => {
     console.warn("[startup] models.json regeneration failed:", e.message);
   }
 
+  // Synchroniser les limites de concurrence LLM depuis les providers (source de
+  // vérité : champ maxConcurrentCalls) → map moteur concurrency.providerMaxLLMSlots.
+  // Inclut la migration des overrides historiques (valeur reprise sur le provider).
+  try {
+    const { syncConcurrencyProviderLimits } = await import("./pi/providers.js");
+    await syncConcurrencyProviderLimits();
+  } catch (e: any) {
+    console.warn("[startup] concurrency sync failed:", e.message);
+  }
+
   // Auto-mount SMB projects
   try {
     const projects = getAllProjects();

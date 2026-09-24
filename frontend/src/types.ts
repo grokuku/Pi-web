@@ -333,6 +333,8 @@ export interface ProviderConfig {
   type: ProviderType;
   baseUrl: string;
   apiKey?: string;
+  /** Nombre max d'appels LLM simultanés vers ce provider (défaut 3). */
+  maxConcurrentCalls?: number;
   discoveredModels?: DiscoveredModel[];
   connectionStatus?: "ok" | "error" | "untested";
   connectionError?: string;

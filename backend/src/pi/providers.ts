@@ -16,6 +16,12 @@ export interface ProviderConfig {
   type: ProviderType;
   baseUrl: string;
   apiKey?: string;         // encrypted/stored, empty for ollama
+  /**
+   * Nombre max d'appels LLM menés en PARALLÈLE vers ce provider (source de
+   * vérité du limiteur de concurrence ; défaut 3). Les appels en trop attendent
+   * leur tour dans la file du provider.
+   */
+  maxConcurrentCalls?: number;
   /** Discovered models from last test/scan */
   discoveredModels?: DiscoveredModel[];
   /** Connection status from last test */
@@ -23,6 +29,18 @@ export interface ProviderConfig {
   connectionError?: string;
   lastTestedAt?: string;
 }
+
+// ── Limite de concurrence LLM par provider ────────────
+// Source de vérité : le champ `maxConcurrentCalls` porté par l'enregistrement
+// du provider (un provider supprimé/renommé n'y laisse donc pas d'entrée
+// orpheline, contrairement à une map séparée). Le moteur de concurrence consomme
+// la map dérivée `concurrency.providerMaxLLMSlots` de model-library.json,
+// resynchronisée depuis les providers au démarrage et après chaque
+// création/mise à jour/suppression (voir syncConcurrencyProviderLimits).
+
+export const DEFAULT_MAX_CONCURRENT_CALLS = 3;
+/** Plafond haut (miroir de MAX_SLOTS côté route concurrency). */
+export const MAX_CONCURRENT_CALLS = 100_000;
 
 export interface DiscoveredModel {
   id: string;              // model ID on the provider (e.g., "glm-5.1:cloud")
@@ -116,7 +134,72 @@ function migrateProvider(p: any): ProviderConfig {
     connectionStatus: p.connectionStatus || "untested",
     connectionError: p.connectionError,
     lastTestedAt: p.lastTestedAt,
+    // Conservée telle quelle : l'absence de valeur = héritage du défaut (3),
+    // appliqué par getProviderMaxConcurrentCalls / la synchronisation.
+    maxConcurrentCalls: p.maxConcurrentCalls,
   };
+}
+
+/** Entier sûr dans [1, MAX_CONCURRENT_CALLS], sinon undefined (absent/invalide). */
+export function normalizeMaxConcurrentCalls(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
+  if (value < 1 || value > MAX_CONCURRENT_CALLS) return undefined;
+  return value;
+}
+
+/** Limite LLM effective d'un provider : champ dédié sinon défaut (3). */
+export function getProviderMaxConcurrentCalls(provider: ProviderConfig): number {
+  return normalizeMaxConcurrentCalls(provider.maxConcurrentCalls) ?? DEFAULT_MAX_CONCURRENT_CALLS;
+}
+
+/**
+ * Synchronise la map moteur `concurrency.providerMaxLLMSlots` (model-library)
+ * depuis les enregistrements de providers (SOURCE DE VÉRITÉ).
+ *
+ * Migration / rétro-compatibilité : un provider sans `maxConcurrentCalls`
+ * reprend l'override historique `providerMaxLLMSlots[p.id]` s'il existe, sinon
+ * le défaut 3 ; cette valeur est alors persistée sur le provider. Les entrées
+ * de providers ABSENTS de la liste (provider d'extension, sentinelle
+ * "__default__") sont conservées telles quelles. Le moteur (getEffectiveLLMLimit)
+ * reste inchangé : il lit toujours `providerMaxLLMSlots[providerId] ?? défaut`.
+ *
+ * Idempotente : appelée au démarrage et après chaque mutation de provider.
+ */
+export async function syncConcurrencyProviderLimits(): Promise<void> {
+  try {
+    const providers = loadProviders();
+    const { loadModelLibrary, saveModelLibrary } = await import("../pi/model-library.js");
+    const library = loadModelLibrary();
+    // Garanti par migrateLibrary, mais on reste défensif.
+    if (!library.concurrency) return;
+    const existing = library.concurrency.providerMaxLLMSlots ?? {};
+
+    // 1) Migration : doter chaque provider d'une valeur explicite (reprise de
+    //    l'override existant sinon défaut 3).
+    let migrated = false;
+    const withLimit = providers.map((p) => {
+      if (normalizeMaxConcurrentCalls(p.maxConcurrentCalls) !== undefined) return p;
+      const inherited = normalizeMaxConcurrentCalls(existing[p.id]);
+      migrated = true;
+      return { ...p, maxConcurrentCalls: inherited ?? DEFAULT_MAX_CONCURRENT_CALLS };
+    });
+    if (migrated) saveProviders(withLimit);
+
+    // 2) Map moteur = entrées existantes (providers inconnus préservés) écrasées
+    //    par la valeur de chaque provider connu.
+    const nextMap: Record<string, number> = { ...existing };
+    for (const p of withLimit) {
+      nextMap[p.id] = getProviderMaxConcurrentCalls(p);
+    }
+    library.concurrency.providerMaxLLMSlots = nextMap;
+    saveModelLibrary(library);
+
+    // 3) Appliquer au moteur runtime.
+    const { concurrencyManager } = await import("./concurrency.js");
+    concurrencyManager.setConfig(library.concurrency);
+  } catch (e: any) {
+    console.warn("[providers] Failed to sync concurrency limits:", e?.message || e);
+  }
 }
 
 // ── CRUD ──────────────────────────────────────────────
@@ -126,6 +209,9 @@ export function addProvider(config: Omit<ProviderConfig, "id" | "discoveredModel
   const id = `provider_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const provider: ProviderConfig = {
     ...config,
+    // Valeur par défaut explicite (3) : le champ est la source de vérité.
+    maxConcurrentCalls:
+      normalizeMaxConcurrentCalls(config.maxConcurrentCalls) ?? DEFAULT_MAX_CONCURRENT_CALLS,
     id,
     discoveredModels: [],
     connectionStatus: "untested",
@@ -182,6 +268,11 @@ export async function deleteProvider(id: string): Promise<void> {
           }
         }
       }
+    }
+    // Limite de concurrence : le provider disparaît → retirer son entrée de la
+    // map moteur (évite une entrée orpheline que la synchro ne recréera pas).
+    if (library.concurrency?.providerMaxLLMSlots) {
+      delete library.concurrency.providerMaxLLMSlots[id];
     }
     saveModelLibrary(library);
     console.log(`[providers] Cleaned up ${before - library.models.length} models from deleted provider ${id}`);
