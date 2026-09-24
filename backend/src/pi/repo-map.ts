@@ -16,9 +16,12 @@
  *
  * Dégradation ordonnée : on essaie les paliers dans l'ordre
  *   signatures → noms seuls → arborescence
- * et on retient le PREMIER qui tient dans le budget. Si aucun ne tient, on
- * tronque l'arborescence à la dernière ligne entière (jamais au milieu d'une
- * ligne). L'absence de données (graphe non indexé) rend une chaîne vide → le
+ * et on retient le PREMIER qui tient dans le budget. Si AUCUN ne tient, on
+ * conserve le palier le plus riche et on le réduit SECTION par section : seules
+ * des entrées ENTIÈRES sont retirées (jamais au milieu d'une ligne), chaque
+ * section vidée disparaît entièrement et les entrées écartées sont signalées
+ * par « … (N … de plus) ». Une section n'est donc jamais coupée en silence.
+ * L'absence de données (graphe non indexé) rend une chaîne vide → le
  * appelant n'injecte rien et le sous-agent démarre normalement.
  */
 
@@ -238,20 +241,18 @@ function renderHubLine(hub: RepoMapSymbol, lineMax: number, withSignature: boole
 
 /**
  * Dossiers distincts dérivés des chemins de fichiers (section « CHEMINS »).
- * Compact : un dossier parent par ligne, trié, borné — le détail fichier vit
- * sur les lignes de hubs et, au palier dégradé, dans l'arborescence.
+ * Compact : un dossier parent par ligne, trié, NON borné ici — la borne
+ * REPO_MAP_MAX_DIRS est appliquée par le découpage en sections, qui peut en plus
+ * signaler les entrées non affichées (« … (N dossiers de plus) »).
  */
-function renderDirs(files: string[], lineMax: number): string[] {
+function distinctDirs(files: string[]): string[] {
   const dirs = new Set<string>();
   for (const f of files) {
     const parts = String(f).split("/");
     parts.pop();
     if (parts.length > 0) dirs.add(parts.join("/"));
   }
-  return [...dirs]
-    .sort()
-    .slice(0, REPO_MAP_MAX_DIRS)
-    .map((d) => truncateLine(d, lineMax));
+  return [...dirs].sort();
 }
 
 /** Arborescence (dossiers + fichiers) compacte — palier le plus dégradé. */
@@ -293,37 +294,95 @@ function renderTree(files: string[], lineMax: number): string[] {
   return lines;
 }
 
-/** Rend un palier SANS appliquer le budget (le budget est décidé par l'appelant). */
-function renderTier(tier: RepoMapTier, data: RepoMapData, lineMax: number): string {
-  const lines: string[] = [renderHeader(data, tier)];
+// ── Sections (base de la troncature par section) ─────────
+// Une section = un titre + des entrées ENTIÈRES. Le rendu budgété ne retire que
+// des entrées entières (jamais un milieu de ligne) et signale explicitement les
+// entrées non affichées par « … (N … de plus) » : une section ne doit JAMAIS
+// paraître coupée en silence par le mécanisme d'injection.
+interface RepoMapSection {
+  /** Titre affiché (ex. « ROUTES: »). */
+  title: string;
+  /** Entrées affichables (déjà tronquées à `lineMax`, déjà bornées par MAX). */
+  entries: string[];
+  /** Nombre TOTAL d'entrées disponibles (≥ entries.length). */
+  total: number;
+  /** Libellé des entrées écartées (« routes », « hubs », « dossiers »). */
+  label: string;
+}
+
+/** Lignes d'une section pour `keep` entrées conservées (marqueur inclus). */
+function sectionLines(section: RepoMapSection, keep: number): string[] {
+  const lines = [section.title];
+  const k = Math.max(0, Math.min(keep, section.entries.length));
+  for (let i = 0; i < k; i++) lines.push(section.entries[i]);
+  if (k < section.total) lines.push(`… (${section.total - k} ${section.label} de plus)`);
+  return lines;
+}
+
+/** Assemble l'en-tête + les sections conservées (entrées ENTIÈRES uniquement). */
+function joinSections(
+  header: string,
+  sections: Array<{ section: RepoMapSection; keep: number }>,
+): string {
+  const parts = [header];
+  for (const { section, keep } of sections) {
+    if (keep <= 0) continue;
+    parts.push(sectionLines(section, keep).join("\n"));
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Découpe un palier en sections (CHEMINS / HUBS / ROUTES, ou ARBRE au palier le
+ * plus dégradé). Les bornes MAX sont appliquées ici ; `total` mémorise la taille
+ * réelle pour que le rendu signale explicitement les entrées non affichées.
+ */
+function buildSections(tier: RepoMapTier, data: RepoMapData, lineMax: number): RepoMapSection[] {
   if (tier === "tree") {
     if (data.files.length > 0) {
-      lines.push("ARBRE:");
-      lines.push(...renderTree(data.files, lineMax));
-    } else if (data.hubs.length > 0) {
-      // Repli : pas de fichiers connus, on liste au moins les noms de hubs.
-      lines.push("HUBS (noms):");
-      lines.push(...data.hubs.slice(0, REPO_MAP_MAX_HUBS).map((h) => truncateLine(h.name, lineMax)));
+      const entries = renderTree(data.files, lineMax);
+      return [{ title: "ARBRE:", entries, total: entries.length, label: "fichiers" }];
     }
-    return lines.join("\n");
+    if (data.hubs.length > 0) {
+      // Repli : pas de fichiers connus, on liste au moins les noms de hubs.
+      const entries = data.hubs.slice(0, REPO_MAP_MAX_HUBS).map((h) => truncateLine(h.name, lineMax));
+      return [{ title: "HUBS (noms):", entries, total: data.hubs.length, label: "hubs" }];
+    }
+    return [];
   }
+  const sections: RepoMapSection[] = [];
   if (data.files.length > 0) {
-    lines.push("CHEMINS:");
-    lines.push(...renderDirs(data.files, lineMax));
+    const all = distinctDirs(data.files);
+    const entries = all.slice(0, REPO_MAP_MAX_DIRS).map((d) => truncateLine(d, lineMax));
+    sections.push({ title: "CHEMINS:", entries, total: all.length, label: "dossiers" });
   }
   if (data.hubs.length > 0) {
-    lines.push(tier === "signatures" ? "HUBS:" : "HUBS (noms):");
-    for (const h of data.hubs.slice(0, REPO_MAP_MAX_HUBS)) {
-      lines.push(renderHubLine(h, lineMax, tier === "signatures"));
-    }
+    const entries = data.hubs
+      .slice(0, REPO_MAP_MAX_HUBS)
+      .map((h) => renderHubLine(h, lineMax, tier === "signatures"));
+    sections.push({
+      title: tier === "signatures" ? "HUBS:" : "HUBS (noms):",
+      entries,
+      total: data.hubs.length,
+      label: "hubs",
+    });
   }
   if (data.routes.length > 0) {
-    lines.push("ROUTES:");
-    for (const r of data.routes.slice(0, REPO_MAP_MAX_ROUTES)) {
-      lines.push(truncateLine(`${(r.method || "?").toUpperCase()} ${r.path}`, lineMax));
-    }
+    const entries = data.routes
+      .slice(0, REPO_MAP_MAX_ROUTES)
+      .map((r) => truncateLine(`${(r.method || "?").toUpperCase()} ${r.path}`, lineMax));
+    sections.push({ title: "ROUTES:", entries, total: data.routes.length, label: "routes" });
   }
-  return lines.join("\n");
+  return sections;
+}
+
+/** Rend un palier SANS appliquer le budget (le budget est décidé par l'appelant). */
+function renderTier(tier: RepoMapTier, data: RepoMapData, lineMax: number): string {
+  const sections = buildSections(tier, data, lineMax);
+  return joinSections(
+    renderHeader(data, tier),
+    sections.map((section) => ({ section, keep: section.entries.length })),
+  );
 }
 
 /** Prépare (classement + boost) une copie des données, sans mutation. */
@@ -374,24 +433,48 @@ export function renderRepoMapTier(
   return renderTier(tier, ranked, lineMax);
 }
 
-/** Tronque un texte à la dernière ligne entière tenant dans `budget`. */
-function truncateAtLine(text: string, budget: number): string {
+/**
+ * Ajuste un palier au budget en RETIRANT DES ENTRÉES ENTIÈRES, section par
+ * section (jamais au milieu d'une ligne). Déterministe : on réduit toujours la
+ * section actuellement la plus volumineuse (à égalité, la plus tardive), ce qui
+ * répartit la réduction entre CHEMINS/HUBS/ROUTES au lieu de sacrifier la
+ * dernière. Une section vidée disparaît ENTIÈREMENT (titre compris) ; en dernier
+ * recours (en-tête seul encore trop long), l'en-tête est tronqué.
+ */
+function fitSectionsToBudget(header: string, sections: RepoMapSection[], budget: number): string {
   if (budget <= 0) return "";
-  if (text.length <= budget) return text;
-  const suffix = "\n…";
-  const room = Math.max(0, budget - suffix.length);
-  const slice = text.slice(0, room);
-  const cut = slice.lastIndexOf("\n");
-  const head = cut > 0 ? slice.slice(0, cut) : slice;
-  return head + suffix;
+  const keep = sections.map((s) => s.entries.length);
+  const current = (): string =>
+    joinSections(header, sections.map((section, i) => ({ section, keep: keep[i] })));
+
+  while (current().length > budget) {
+    let pick = -1;
+    let best = -1;
+    for (let i = 0; i < sections.length; i++) {
+      if (keep[i] <= 0) continue;
+      const len = sectionLines(sections[i], keep[i]).join("\n").length;
+      if (len >= best) {
+        best = len;
+        pick = i;
+      }
+    }
+    if (pick < 0) break; // plus aucune entrée à retirer
+    keep[pick]--;
+  }
+
+  const out = current();
+  if (out.length <= budget) return out;
+  // Même l'en-tête dépasse le budget : on le tronque (jamais une section).
+  return truncateLine(header, budget);
 }
 
 /**
  * Construit la carte du repo, bornée au budget.
  *
  * Dégradation ordonnée (« signatures » → « noms seuls » → « arborescence ») :
- * le premier palier dont le rendu tient dans le budget est retourné. En
- * dernier recours, l'arborescence est tronquée à la dernière ligne entière.
+ * le premier palier dont le rendu tient dans le budget est retourné. Si aucun ne
+ * tient, le palier le plus riche est réduit SECTION par section (entrées
+ * entières retirées, non affichées signalées) — jamais au milieu d'une ligne.
  *
  * `options.rank` (P3) : "stable" ignore les hints de la tâche → le texte ne
  * dépend que du projet, donc réutilisable dans un prompt système cachable.
@@ -411,10 +494,14 @@ export function buildRepoMap(data: RepoMapData, options: BuildRepoMapOptions = {
     : REPO_MAP_BUDGET_CHARS;
   const { ranked, lineMax } = prepareRanked({ files, hubs, routes }, options);
 
+  // 1. Dégradation ordonnée : premier palier qui tient SANS troncature.
   for (const tier of REPO_MAP_TIER_ORDER) {
     const text = renderTier(tier, ranked, lineMax);
     if (text.length <= budget) return text;
   }
-  // Dernier recours : arborescence tronquée (jamais au milieu d'une ligne).
-  return truncateAtLine(renderTier("tree", ranked, lineMax), budget);
+  // 2. Aucun palier ne tient : troncature PAR SECTION du palier le plus riche
+  //    (signatures). On préfère conserver un maximum d'information plutôt que
+  //    de tout jeter en passant directement à l'arborescence.
+  const sections = buildSections("signatures", ranked, lineMax);
+  return fitSectionsToBudget(renderHeader(ranked, "signatures"), sections, budget);
 }

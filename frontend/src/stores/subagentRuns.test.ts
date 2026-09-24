@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { DisplayMessage, SubAgentRun } from "../types";
 import {
   applySubagentEvent,
+  concurrentWallAnchor,
+  delegateAnchorTimestamp,
   extractDelegateCalls,
   flushSubagentNotifications,
   getAllRuns,
@@ -25,6 +27,7 @@ import {
   selectConcurrentRuns,
   STUCK_RUN_TIMEOUT_MS,
   subscribeRun,
+  toEpochMs,
   type SubagentEnvelope,
 } from "./subagentRuns";
 
@@ -311,11 +314,14 @@ describe("routeSubagentEnvelope — rattachement FIFO + args.function", () => {
 // les runs sont posés avant le premier groupe dont la date les dépasse, avec un
 // tri stable (tie-break par id).
 describe("insertDatedRuns — insertion chronologique STABLE des runs détachés", () => {
+  // Étiquette lisible d'une entrée de fil (groupe / run / mur) pour les asserts.
+  const labelEntry = (e: { kind: string; group?: number; run?: { id: string }; id?: string }): string =>
+    e.kind === "group" ? `g${e.group}` : e.kind === "run" ? e.run!.id : `w-${e.id}`;
   it("insère un run avant le premier groupe dont la date le dépasse", () => {
     const entries = insertDatedRuns([100, 300], [makeRun("r", { startedAt: 200 })], (g) => g);
-    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : `r-${e.run.id}`))).toEqual([
+    expect(entries.map(labelEntry)).toEqual([
       "g100",
-      "r-r",
+      "r",
       "g300",
     ]);
   });
@@ -326,7 +332,7 @@ describe("insertDatedRuns — insertion chronologique STABLE des runs détachés
       [makeRun("b", { startedAt: 200 }), makeRun("a", { startedAt: 200 })],
       (g) => g,
     );
-    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+    expect(entries.map((e) => labelEntry(e))).toEqual([
       "g100",
       "a",
       "b",
@@ -336,7 +342,7 @@ describe("insertDatedRuns — insertion chronologique STABLE des runs détachés
 
   it("un run plus récent que tous les groupes est placé en fin", () => {
     const entries = insertDatedRuns([100, 300], [makeRun("late", { startedAt: 500 })], (g) => g);
-    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+    expect(entries.map((e) => labelEntry(e))).toEqual([
       "g100",
       "g300",
       "late",
@@ -345,7 +351,7 @@ describe("insertDatedRuns — insertion chronologique STABLE des runs détachés
 
   it("un run plus ancien que tous les groupes est placé en tête", () => {
     const entries = insertDatedRuns([100, 300], [makeRun("old", { startedAt: 50 })], (g) => g);
-    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.run.id))).toEqual([
+    expect(entries.map((e) => labelEntry(e))).toEqual([
       "old",
       "g100",
       "g300",
@@ -709,5 +715,124 @@ describe("étanchéité inter-projets du store (BUG sous-agents cross-project)",
     // même si details portait (par erreur) ce runId, le mismatch projet bloque.
     routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "rb1", projectId: PB }), exactA, 110, PB);
     expect(getRun("rb1")?.toolCallId).toBeUndefined();
+  });
+});
+
+// ── Ancrage À L'APPEL `delegate` (fix « sous-agent après la réponse finale ») ─
+// Cause racine : `buildFullUiHistory` sérialise les timestamps d'entrées en ISO
+// 8601 → `now - durationMs` donnait NaN et les dates de groupes valaient 0 ; le
+// tri poussait alors TOUT run détaché en fin de fil (après la réponse finale).
+// On vérifie : normalisation des dates, rattachement au `toolResult` `delegate`
+// orphelin, et placement AVANT la réponse finale même si l'activité du
+// sous-agent est enregistrée après.
+describe("ancrage par appel `delegate` (jamais après la réponse finale)", () => {
+  it("toEpochMs normalise ISO 8601 en epoch ms (et préserve le numérique)", () => {
+    expect(toEpochMs("2026-09-20T12:54:41.841Z")).toBe(1789908881841);
+    expect(toEpochMs(1234)).toBe(1234);
+    expect(toEpochMs(undefined, 42)).toBe(42);
+    expect(toEpochMs("pas une date", 42)).toBe(42);
+  });
+
+  it("runFromActivity accepte un timestamp ISO : startedAt/endedAt finis (jamais NaN)", () => {
+    const run = runFromActivity(
+      { delegateRunId: "d-iso", function: "execute", status: "success", durationMs: 362103 },
+      "2026-09-20T12:54:41.841Z",
+    )!;
+    expect(Number.isFinite(run.startedAt as number)).toBe(true);
+    expect(run.startedAt).toBe(1789908881841 - 362103);
+    expect(run.endedAt).toBe(1789908881841);
+    // Même sans durée, l'ancrage reste numérique.
+    const noDur = runFromActivity({ delegateRunId: "d-nodur", function: "execute", status: "success" }, "2026-09-20T12:54:41.841Z")!;
+    expect(noDur.startedAt).toBe(1789908881841);
+    expect(runAnchorTimestamp(noDur)).toBe(1789908881841);
+  });
+
+  it("runAnchorTimestamp refuse les valeurs non finies (jamais NaN)", () => {
+    expect(runAnchorTimestamp(makeRun("a", { startedAt: NaN, endedAt: 10 }))).toBe(10);
+    expect(runAnchorTimestamp(makeRun("a", { startedAt: Infinity }))).toBe(0);
+  });
+
+  it("extractDelegateCalls accepte un toolResult `delegate` ORPHELIN (toolCall hors fenêtre)", () => {
+    const messages: DisplayMessage[] = [
+      {
+        id: "tr1", role: "assistant", content: "", thinking: "", timestamp: 5,
+        toolCalls: [],
+        kind: "toolResult",
+        toolResult: {
+          id: "call_orphan", name: "delegate", args: {}, output: "…", isError: false, isStreaming: false,
+          details: { delegateRunId: "d-orph", delegateFunction: "execute" },
+        },
+      },
+    ];
+    expect(extractDelegateCalls(messages)).toEqual([{ id: "call_orphan", fn: "execute", runId: "d-orph" }]);
+  });
+
+  it("un run archivé se rattache à son toolResult `delegate` orphelin (plus détaché)", () => {
+    const run = runFromActivity({ delegateRunId: "d-orph", function: "execute", status: "success", durationMs: 1000 }, 5000)!;
+    const messages: DisplayMessage[] = [
+      {
+        id: "tr1", role: "assistant", content: "", thinking: "", timestamp: 5,
+        toolCalls: [],
+        kind: "toolResult",
+        toolResult: {
+          id: "call_orphan", name: "delegate", args: {}, output: "", isError: false, isStreaming: false,
+          details: { delegateRunId: "d-orph", delegateFunction: "execute" },
+        },
+      },
+    ];
+    registerArchivedRuns([run], messages);
+    expect(getRun("d-orph")?.toolCallId).toBe("call_orphan");
+    expect(getDatedDetachedRuns(undefined, 0).some((r) => r.id === "d-orph")).toBe(false);
+  });
+
+  it("activité enregistrée APRÈS la réponse finale → le run est placé AVANT elle", () => {
+    // Fil : groupe assistant (delegate + réponse finale) à ts 1000, puis rien.
+    // L'activité du sous-agent est écrite à 5000, sa durée 4000 → début 1000.
+    const run = runFromActivity(
+      { delegateRunId: "d-late", function: "execute", status: "success", durationMs: 4000 },
+      5000,
+    )!;
+    expect(runAnchorTimestamp(run)).toBe(1000);
+    // La réponse finale est dans un groupe daté 1000 : le run (début 1000) est
+    // inséré AVANT ce groupe (début ≤ date du groupe), jamais après.
+    const entries = insertDatedRuns([1000], [run], (g) => g);
+    expect(entries.map((e) => e.kind)).toEqual(["run", "group"]);
+  });
+
+  it("delegateAnchorTimestamp privilégie la position du toolCall dans le fil", () => {
+    const groups: DisplayMessage[][] = [
+      [{ id: "a", role: "assistant", content: "", thinking: "", timestamp: 111, toolCalls: [{ id: "t1", name: "delegate", args: {}, output: "", isError: false, isStreaming: false }] }],
+    ];
+    const run = makeRun("d-x", { startedAt: 999, toolCallId: "t1" });
+    expect(delegateAnchorTimestamp(run, groups)).toBe(111);
+    // ToolCall absent → repli sur la date du run.
+    expect(delegateAnchorTimestamp(makeRun("d-y", { startedAt: 999, toolCallId: "absent" }), groups)).toBe(999);
+  });
+
+  it("le mur des colonnes se place À LA DATE du premier `delegate` du lot", () => {
+    const entries = insertDatedRuns(
+      [100, 300],
+      [],
+      (g) => g,
+      [{ ts: 200, id: "parallel" }],
+    );
+    expect(entries.map((e) => (e.kind === "group" ? `g${e.group}` : e.kind === "run" ? e.run.id : `w-${e.id}`))).toEqual([
+      "g100",
+      "w-parallel",
+      "g300",
+    ]);
+    // À date égale, le run passe AVANT le mur (tie-break clé stable).
+    const tied = insertDatedRuns([300], [makeRun("r", { startedAt: 200 })], (g) => g, [{ ts: 200 }]);
+    expect(tied.map((e) => e.kind)).toEqual(["run", "wall", "group"]);
+  });
+
+  it("concurrentWallAnchor : date du premier delegate du groupe, sinon null", () => {
+    const a = makeRun("a", { startedAt: 100 });
+    const b = makeRun("b", { startedAt: 150 });
+    expect(concurrentWallAnchor([a, b], 200)).toBe(100);
+    expect(concurrentWallAnchor([a], 200)).toBeNull(); // 1 seul actif → pas de mur
+    expect(concurrentWallAnchor([], 200)).toBeNull();
+    // Deux runs actifs sans date exploitable → null (l'appelant retombe en fin de fil).
+    expect(concurrentWallAnchor([makeRun("a"), makeRun("b")], 200)).toBeNull();
   });
 });

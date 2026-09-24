@@ -58,6 +58,25 @@ export interface SubagentEnvelope {
 
 const noopUnsub = () => {};
 
+/**
+ * Normalise un horodatage en epoch ms. Le backend (buildFullUiHistory) sérialise
+ * les timestamps des ENTRÉES de session au format ISO 8601 (`entry.timestamp`),
+ * alors que les événements LIVE utilisent `Date.now()` (numérique). Sans cette
+ * normalisation, l'arithmétique `now - durationMs` donne `NaN` → l'ancrage des
+ * runs datés était non fini (`NaN <= x` toujours faux) et TOUS les runs détachés
+ * finissaient en fin de fil (après la réponse finale) ; les groupes de messages,
+ * eux, voyaient `typeof timestamp === "number"` faux → date 0 pour tous. D'où le
+ * bug « sous-agent affiché après la réponse finale ».
+ */
+export function toEpochMs(value: unknown, fallback: number = Date.now()): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
 /** Snapshot serveur stable (pas de SSR ici, mais évite le warning React). */
 const getUndefinedRun = () => undefined;
 
@@ -267,8 +286,15 @@ export function applySubagentEvent(
 // ── Reconstruction d'un run « archivé » (entrée persistée) ───────────────────
 
 /** Convertit le détail d'une entrée custom `subagent_activity` en SubAgentRun. */
-export function runFromActivity(activity: any, now: number = Date.now()): SubAgentRun | null {
+export function runFromActivity(activity: any, now: number | string = Date.now()): SubAgentRun | null {
   if (!activity || typeof activity.delegateRunId !== "string") return null;
+  // `now` peut être ISO (entrée de session) ou numérique (appel direct) :
+  // normalisé pour que `startedAt`/`endedAt` soient TOUJOURS finis (jamais NaN).
+  const ts = toEpochMs(now);
+  const durationMs =
+    typeof activity.durationMs === "number" && Number.isFinite(activity.durationMs)
+      ? Math.max(0, activity.durationMs)
+      : 0;
   const endStatus: SubAgentEndStatus =
     typeof activity.status === "string" ? activity.status : "success";
   const failed = endStatus !== "success";
@@ -310,11 +336,12 @@ export function runFromActivity(activity: any, now: number = Date.now()): SubAge
       droppedEvents: 0,
     },
     archived: true,
-    // Horodatage : la fin − durée si connue (le store trie par startedAt).
-    endedAt: now,
-    ...(typeof activity.durationMs === "number" && activity.durationMs > 0
-      ? { startedAt: now - activity.durationMs }
-      : {}),
+    // Horodatage : la fin (timestamp de l'activité) − la durée. `startedAt` est
+    // TOUJOURS posé (même durée absente → = fin) pour garantir un ancrage
+    // numérique : un run dont l'enregistrement d'activité survient APRÈS la
+    // réponse finale reste ainsi daté AVANT elle (le sous-agent a tourné avant).
+    endedAt: ts,
+    startedAt: ts - durationMs,
   };
 }
 
@@ -425,6 +452,20 @@ export function extractDelegateCalls(
           ...(runId ? { runId } : {}),
         });
       }
+    }
+    // `toolResult` ORPHELIN (toolCall absent de l'historique — pagination,
+    // compaction) : c'est le SEUL ancrage "delegate" encore présent. On l'accepte
+    // comme cible de rattachement ET de rendu (ChatView y monte un SubAgentBlock)
+    // pour qu'un run ne soit jamais détaché s'il reste une trace de son appel.
+    if (m.kind === "toolResult" && m.toolResult?.name === "delegate") {
+      const tr = m.toolResult;
+      const runId =
+        typeof tr.details?.delegateRunId === "string" ? tr.details.delegateRunId : undefined;
+      calls.push({
+        id: tr.id,
+        fn: typeof tr.details?.delegateFunction === "string" ? tr.details.delegateFunction : "",
+        ...(runId ? { runId } : {}),
+      });
     }
   }
   return calls;
@@ -783,6 +824,61 @@ export function isRunConcurrent(runId: string | undefined, groups: SubAgentRun[]
   return groups.some((g) => g.some((r) => r.id === runId));
 }
 
+/**
+ * Date d'ancrage du MUR des sous-agents simultanés = date du PREMIER appel
+ * `delegate` du lot (approximée par le plus ancien `startedAt` des runs du
+ * premier groupe — le sous-agent démarre au moment de sa délégation). Fonction
+ * PURE (testable) ; renvoie `null` sans groupe concurrent, ou si aucun run n'a
+ * de date exploitable (l'appelant retombe alors sur un mur en fin de fil).
+ */
+export function concurrentWallAnchor(runs: SubAgentRun[], now: number = Date.now()): number | null {
+  const groups = selectConcurrentRuns(runs, now);
+  if (groups.length === 0) return null;
+  let min = Infinity;
+  for (const run of groups[0]) {
+    if (typeof run.startedAt === "number" && Number.isFinite(run.startedAt)) {
+      min = Math.min(min, run.startedAt);
+    }
+  }
+  return Number.isFinite(min) ? min : null;
+}
+
+// Snapshot STABLE du mur (ids de groupe) : le fil ne re-rend PAS à chaque event
+// de sous-agent, seulement quand l'appartenance du groupe concurrent change.
+let wallSnapVersion = -1;
+let wallSnapProject: string | undefined;
+let wallSnapIds = "";
+let wallSnapAnchor: number | null = null;
+
+export function getConcurrentWallSnapshot(projectId?: string): number | null {
+  if (wallSnapVersion === version && wallSnapProject === projectId) return wallSnapAnchor;
+  const runs = getAllRuns(projectId);
+  const groups = selectConcurrentRuns(runs);
+  wallSnapVersion = version;
+  wallSnapProject = projectId;
+  const first = groups[0];
+  const ids = first ? first.map((r) => r.id).sort().join("+") : "";
+  if (ids !== wallSnapIds) {
+    wallSnapIds = ids;
+    // Date d'ancrage = plus ancien début du groupe concurrent (premier delegate).
+    wallSnapAnchor = concurrentWallAnchor(runs);
+  }
+  return wallSnapAnchor;
+}
+
+/**
+ * Hook : date d'ancrage du mur de colonnes (stable). S'abonne au store ISOLÉ
+ * via un snapshot qui ne change QUE si l'appartenance du groupe concurrent
+ * change → aucun re-rendu du fil sur les events LIVE des sous-agents.
+ */
+export function useConcurrentWallAnchor(projectId?: string): number | null {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => getConcurrentWallSnapshot(projectId),
+    () => getConcurrentWallSnapshot(projectId),
+  );
+}
+
 // ── Insertion À LEUR DATE des runs détachés (fix « sous-agents après la
 // réponse finale ») ───────────────────────────────────────────────────────────
 // Les runs de sous-agents NON rattachables à un toolCall `delegate` (orphelins
@@ -792,24 +888,51 @@ export function isRunConcurrent(runId: string | undefined, groups: SubAgentRun[]
 // groupes n'est jamais modifié (le fil reste piloté par l'ordre d'arrivée) :
 // chaque run est inséré avant le premier groupe dont le timestamp le dépasse.
 
-/** Date d'ancrage d'un run dans le fil : début, sinon fin, sinon 0. */
+/** Date d'ancrage d'un run dans le fil : début, sinon fin, sinon 0.
+ * On refuse les valeurs non finies (NaN/Infinity) : un ancrage non fini rendait
+ * le tri instable et poussait le run en fin de fil. */
 export function runAnchorTimestamp(run: SubAgentRun): number {
-  if (typeof run.startedAt === "number") return run.startedAt;
-  if (typeof run.endedAt === "number") return run.endedAt;
+  if (typeof run.startedAt === "number" && Number.isFinite(run.startedAt)) return run.startedAt;
+  if (typeof run.endedAt === "number" && Number.isFinite(run.endedAt)) return run.endedAt;
   return 0;
 }
 
-/** Entrée ordonnée du fil : soit un groupe de messages, soit un run daté. */
+/**
+ * Date d'ancrage d'un run = date du message portant son toolCall `delegate`
+ * (position RÉELLE de l'appel dans le fil), sinon sa date propre. Permet de
+ * placer un bloc à l'endroit de son appel même si son enregistrement d'activité
+ * est plus tardif. PURE et testable ; `messages` doit être la fenêtre affichée.
+ */
+export function delegateAnchorTimestamp(run: SubAgentRun, groups: DisplayMessage[][]): number {
+  if (run.toolCallId) {
+    for (const group of groups) {
+      for (const m of group) {
+        for (const tc of m.toolCalls || []) {
+          if (tc.id === run.toolCallId) {
+            return typeof m.timestamp === "number" ? m.timestamp : runAnchorTimestamp(run);
+          }
+        }
+      }
+    }
+  }
+  return runAnchorTimestamp(run);
+}
+
+/** Entrée ordonnée du fil : soit un groupe de messages, soit un run daté, soit
+ * le mur des sous-agents simultanés (placé À SA DATE, jamais systématiquement en
+ * fin de fil). */
 export type DatedThreadEntry<T> =
   | { kind: "group"; ts: number; group: T }
-  | { kind: "run"; ts: number; run: SubAgentRun };
+  | { kind: "run"; ts: number; run: SubAgentRun }
+  | { kind: "wall"; ts: number; id: string };
 
 /**
- * Insère des runs datés dans une liste de groupes SANS réordonner les groupes.
- * Stratégie : parcours linéaire des groupes (ordre existant préservé) ; chaque
- * run est inséré AVANT le premier groupe dont le timestamp est ≥ à sa date
- * (un run de même date passe donc AVANT le groupe, jamais après la réponse).
- * Tri STABLE des runs entre eux par date, tie-break par id (déterministe).
+ * Insère des runs datés ET des marqueurs (mur de colonnes) dans une liste de
+ * groupes SANS réordonner les groupes. Stratégie : parcours linéaire des
+ * groupes (ordre existant préservé) ; chaque marqueur est inséré AVANT le
+ * premier groupe dont le timestamp est ≥ à sa date (un run de même date passe
+ * donc AVANT le groupe, jamais après la réponse). Tri STABLE entre marqueurs
+ * par date, tie-break par clé (run avant mur) puis par id (déterministe).
  *
  * Fonction PURE (testable) : `groupTimestamp` extrait la date d'un groupe
  * (typiquement le timestamp de son premier message).
@@ -818,27 +941,34 @@ export function insertDatedRuns<T>(
   groups: T[],
   runs: SubAgentRun[],
   groupTimestamp: (group: T) => number,
+  walls: { ts: number; id?: string }[] = [],
+  anchorOf: (run: SubAgentRun) => number = runAnchorTimestamp,
 ): DatedThreadEntry<T>[] {
-  const sortedRuns = [...runs].sort(
-    (a, b) =>
-      runAnchorTimestamp(a) - runAnchorTimestamp(b) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
+  // Marqueurs unifiés (runs + murs) triés par date, tie-break stable.
+  const markers: { ts: number; key: string; make: () => DatedThreadEntry<T> }[] = [];
+  for (const run of runs) {
+    const ts = anchorOf(run);
+    markers.push({ ts, key: `run:${run.id}`, make: () => ({ kind: "run", ts, run }) });
+  }
+  for (const wall of walls) {
+    const id = wall.id ?? "parallel";
+    markers.push({ ts: wall.ts, key: `wall:${id}`, make: () => ({ kind: "wall", ts: wall.ts, id }) });
+  }
+  markers.sort((a, b) => a.ts - b.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
   const out: DatedThreadEntry<T>[] = [];
-  let ri = 0;
+  let mi = 0;
   for (const group of groups) {
     const gts = groupTimestamp(group);
-    while (ri < sortedRuns.length && runAnchorTimestamp(sortedRuns[ri]) <= gts) {
-      const run = sortedRuns[ri];
-      out.push({ kind: "run", ts: runAnchorTimestamp(run), run });
-      ri++;
+    while (mi < markers.length && markers[mi].ts <= gts) {
+      out.push(markers[mi].make());
+      mi++;
     }
     out.push({ kind: "group", ts: gts, group });
   }
-  while (ri < sortedRuns.length) {
-    const run = sortedRuns[ri];
-    out.push({ kind: "run", ts: runAnchorTimestamp(run), run });
-    ri++;
+  while (mi < markers.length) {
+    out.push(markers[mi].make());
+    mi++;
   }
   return out;
 }

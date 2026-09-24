@@ -1,6 +1,6 @@
 import { useRef, useCallback, useEffect } from "react";
 import type { AssistantBlock, DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
-import { registerArchivedRuns, runFromActivity } from "../stores/subagentRuns";
+import { registerArchivedRuns, runFromActivity, toEpochMs } from "../stores/subagentRuns";
 
 // ─────────────────────────────────────────────────────────────
 // Per-project chat history store
@@ -34,7 +34,8 @@ interface HistoryMessage {
   tokensBefore?: number;
   // Custom/BashExecution fields
   display?: boolean;
-  timestamp?: number;
+  // ISO (buildFullUiHistory, entrées de session) ou epoch ms (messages SDK).
+  timestamp?: number | string;
   // Usage
   usage?: { input?: number; output?: number; cost?: { total?: number } };
 }
@@ -113,6 +114,12 @@ export function convertHistoryToDisplayMessages(
   let totalToolCallsFound = 0;
 
   for (const msg of history) {
+    // Horodatage NORMALISÉ en epoch ms : le backend sérialise les entrées de
+    // session en ISO 8601 (buildFullUiHistory) alors que les events LIVE sont
+    // numériques. Sans ça, les dates de groupes valaient 0 et l'arithmétique
+    // des runs (`now - durationMs`) donnait NaN → tout bloc daté en fin de fil.
+    const ts = toEpochMs(msg.timestamp);
+
     // ── User messages ──
     if (msg.role === "user") {
       const text = typeof msg.content === "string"
@@ -132,19 +139,19 @@ export function convertHistoryToDisplayMessages(
       if (!text.trim() && images.length === 0) continue;
 
       displayMessages.push({
-        id: msg.id || `user-${msg.timestamp || Date.now()}`,
+        id: msg.id || `user-${ts}`,
         role: "user",
         content: text,
         thinking: "",
         toolCalls: [],
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: ts,
         images: images.length > 0 ? images : undefined,
       });
     }
 
     // ── Assistant messages ──
     else if (msg.role === "assistant") {
-      currentAssistantId = msg.id || `asst-${msg.timestamp || Date.now()}`;
+      currentAssistantId = msg.id || `asst-${ts}`;
 
       const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
 
@@ -208,7 +215,7 @@ export function convertHistoryToDisplayMessages(
         thinking,
         toolCalls,
         blocks: blocks.length > 0 ? blocks : undefined,
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: ts,
         usage: msg.usage ? {
           input: msg.usage.input || 0,
           output: msg.usage.output || 0,
@@ -226,12 +233,12 @@ export function convertHistoryToDisplayMessages(
     // convertie en bulle `user` avec un unique fence ```bash (sortie perdue).
     else if (msg.role === "bashExecution") {
       displayMessages.push({
-        id: msg.id || `bash-${msg.timestamp || Date.now()}`,
+        id: msg.id || `bash-${ts}`,
         role: "assistant",
         content: "",
         thinking: "",
         toolCalls: [],
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: ts,
         kind: "bashExecution",
         bashExecution: {
           command: msg.command || "",
@@ -248,12 +255,12 @@ export function convertHistoryToDisplayMessages(
     // + résumé fourré dans le ThinkingBlock, sans montrer tokensBefore.
     else if (msg.role === "compactionSummary") {
       displayMessages.push({
-        id: msg.id || `compact-${msg.timestamp || Date.now()}`,
+        id: msg.id || `compact-${ts}`,
         role: "assistant",
         content: "",
         thinking: "",
         toolCalls: [],
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: ts,
         kind: "compaction",
         compaction: {
           summary: msg.summary || "",
@@ -268,7 +275,7 @@ export function convertHistoryToDisplayMessages(
     // fait un SubAgentRun archivé, rattaché au toolCall `delegate` correspondant
     // (FIFO + fonction) → le SubAgentBlock relit le travail du sous-agent.
     else if (msg.role === "custom" && (msg as any).customType === "subagent_activity") {
-      const run = runFromActivity((msg as any).details, msg.timestamp || Date.now());
+      const run = runFromActivity((msg as any).details, ts);
       if (run) archivedRuns.push(run);
     }
 
@@ -278,12 +285,12 @@ export function convertHistoryToDisplayMessages(
         : extractTextContent(msg.content as any);
       if (text.trim()) {
         displayMessages.push({
-          id: msg.id || `custom-${msg.timestamp || Date.now()}`,
+          id: msg.id || `custom-${ts}`,
           role: "user",
           content: text,
           thinking: "",
           toolCalls: [],
-          timestamp: msg.timestamp || Date.now(),
+          timestamp: ts,
           customType: (msg as any).customType,
           display: (msg as any).display,
           // Messages système injectés (ex. web_screenshot) → rendu à gauche.
@@ -311,12 +318,12 @@ export function convertHistoryToDisplayMessages(
       const orphan = pendingToolResults.get(msg.toolCallId!);
       if (!orphan) continue;
       displayMessages.push({
-        id: msg.id || `tool-${msg.timestamp || Date.now()}`,
+        id: msg.id || `tool-${ts}`,
         role: "assistant",
         content: "",
         thinking: "",
         toolCalls: [],
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: ts,
         kind: "toolResult",
         toolResult: orphan,
       });

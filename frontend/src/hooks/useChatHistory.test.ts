@@ -4,7 +4,7 @@
 // `delegate` correspondant (FIFO + fonction) pour relecture après rechargement.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { convertHistoryToDisplayMessages } from "./useChatHistory";
-import { getRun, resetSubagentRuns } from "../stores/subagentRuns";
+import { getRun, resetSubagentRuns, runAnchorTimestamp } from "../stores/subagentRuns";
 
 const raw = [
   {
@@ -186,5 +186,46 @@ describe("convertHistoryToDisplayMessages — ordre des blocs", () => {
       { kind: "thinking", text: "je réfléchis" },
       { kind: "text", text: "réponse" },
     ]);
+  });
+});
+
+// ── Normalisation des timestamps ISO (fix ancrage « après la réponse finale ») ─
+// `buildFullUiHistory` sérialise les timestamps d'ENTRÉES de session en ISO 8601.
+// La conversion doit les normaliser en epoch ms, sinon les dates de groupes
+// valaient 0 et l'arithmétique des runs donnait NaN → blocs en fin de fil.
+describe("convertHistoryToDisplayMessages — timestamps ISO normalisés", () => {
+  beforeEach(() => {
+    resetSubagentRuns();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("convertit un timestamp ISO en epoch ms (messages + run archivé)", () => {
+    const history = [
+      { id: "u1", role: "user", content: "salut", timestamp: "2026-09-20T12:40:55.732Z" },
+      {
+        id: "a1", role: "assistant",
+        content: [{ type: "toolCall", id: "tc1", name: "delegate", arguments: { function: "execute" } }],
+        timestamp: "2026-09-20T12:41:12.638Z",
+      },
+      { role: "toolResult", toolCallId: "tc1", toolName: "delegate", content: [{ type: "text", text: "ok" }], timestamp: "2026-09-20T12:43:10.650Z" },
+      // Réponse FINALE de l'orchestrateur.
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "terminé" }], timestamp: "2026-09-20T12:45:00.000Z" },
+      {
+        id: "c1", role: "custom", customType: "subagent_activity", display: false, content: "",
+        details: { delegateRunId: "d-iso", function: "execute", status: "success", durationMs: 118006, actionCount: 46 },
+        // L'activité est enregistrée APRÈS la réponse finale, et en ISO.
+        timestamp: "2026-09-20T12:45:05.000Z",
+      },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    expect(display[0].timestamp).toBe(Date.parse("2026-09-20T12:40:55.732Z"));
+    expect(display[1].timestamp).toBe(Date.parse("2026-09-20T12:41:12.638Z"));
+    // startedAt = fin − durée, numérique : ANTÉRIEUR à la réponse finale.
+    const run = getRun("d-iso")!;
+    expect(run.startedAt).toBe(Date.parse("2026-09-20T12:45:05.000Z") - 118006);
+    expect(Number.isFinite(runAnchorTimestamp(run))).toBe(true);
+    expect(runAnchorTimestamp(run)).toBeLessThan(Date.parse("2026-09-20T12:45:00.000Z"));
+    // Le run est rattaché au toolCall `delegate` (rendu inline, pas détaché).
+    expect(run.toolCallId).toBe("tc1");
   });
 });

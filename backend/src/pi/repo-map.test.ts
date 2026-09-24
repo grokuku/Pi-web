@@ -221,3 +221,53 @@ describe("buildRepoMap — signatures", () => {
     expect(text).not.toContain('\\"');
   });
 });
+
+describe("buildRepoMap — troncature par section (jamais en milieu de ligne)", () => {
+  /** Marqueur explicite d'entrées écartées : « … (N … de plus) ». */
+  const MARKER_RE = /^… \(\d+ .+ de plus\)$/;
+
+  it("ne retire que des entrées ENTIÈRES (toute ligne = ligne d'origine ou marqueur)", () => {
+    const data = makeData();
+    // La dégradation peut retenir n'importe quel palier : on autorise toutes les
+    // lignes des trois paliers naturels (aucune n'est coupée), plus les marqueurs.
+    const naturalLines = new Set<string>();
+    for (const tier of ["signatures", "names", "tree"] as const) {
+      for (const line of renderRepoMapTier(data, tier).split("\n")) naturalLines.add(line);
+    }
+    for (const budget of [150, 250, 350, 500, 700, 900]) {
+      const text = buildRepoMap(data, { budget });
+      for (const line of text.split("\n")) {
+        // Toute ligne rendue existe telle quelle dans un palier naturel, ou est
+        // un marqueur de troncature — jamais un fragment de ligne coupé.
+        expect(naturalLines.has(line) || MARKER_RE.test(line)).toBe(true);
+      }
+    }
+  });
+
+  it("respecte le budget quand la troncature par section s'active", () => {
+    const data = makeData();
+    for (const budget of [60, 90, 120, 200, 400, 800, 1600]) {
+      expect(buildRepoMap(data, { budget }).length).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("signale explicitement les entrées écartées (aucune section coupée en silence)", () => {
+    const many = {
+      files: [],
+      hubs: [],
+      routes: Array.from({ length: 40 }, (_, i) => ({ method: "GET", path: `/api/r${i}` })),
+    };
+    const text = buildRepoMap(many, { budget: 4000 });
+    expect(text).toContain("ROUTES:");
+    expect(text).toContain("GET /api/r0");
+    expect(text).toMatch(/… \(\d+ routes de plus\)/);
+  });
+
+  it("reste DÉTERMINISTE en mode stable sous troncature", () => {
+    const data = makeData();
+    const runs = Array.from({ length: 5 }, () =>
+      buildRepoMap(data, { rank: "stable", budget: 500 }),
+    );
+    for (const r of runs) expect(r).toBe(runs[0]);
+  });
+});

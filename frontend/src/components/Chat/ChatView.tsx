@@ -25,7 +25,7 @@ import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "../../utils/pi-events";
-import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, useDatedDetachedRuns, type SubagentEnvelope } from "../../stores/subagentRuns";
+import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
@@ -1493,6 +1493,11 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
   //   sur les events LIVE des sous-agents ;
   // - `hideLiveExtras` (conversation passée) → aucun run live inséré.
   const datedRuns = useDatedDetachedRuns(projectId);
+  // Mur des colonnes : ancré à la date du PREMIER appel `delegate` du lot
+  // concurrent (et non plus systématiquement en fin de fil). Snapshot STABLE :
+  // le fil ne re-rend que si l'appartenance du groupe concurrent change.
+  const wallAnchor = useConcurrentWallAnchor(projectId);
+  const hasAnchoredWall = !hideLiveExtras && wallAnchor !== null;
   const threadEntries = useMemo(
     () =>
       insertDatedRuns(
@@ -1500,8 +1505,13 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
         hideLiveExtras ? [] : datedRuns,
         // Date d'un groupe = timestamp de son premier message (0 si absent).
         (group) => (typeof group[0]?.timestamp === "number" ? group[0].timestamp : 0),
+        // Mur des sous-agents simultanés, placé À SA DATE.
+        hasAnchoredWall && wallAnchor !== null ? [{ ts: wallAnchor, id: "parallel" }] : [],
+        // Ancre chaque run à la POSITION DE SON APPEL `delegate` dans le fil
+        // (repli sur sa propre date si le toolCall n'est pas résolvable).
+        (run) => delegateAnchorTimestamp(run, visibleGroups),
       ),
-    [visibleGroups, datedRuns, hideLiveExtras],
+    [visibleGroups, datedRuns, hideLiveExtras, hasAnchoredWall, wallAnchor],
   );
 
   // ── CollapseProvider (LOT 1) ──
@@ -1556,6 +1566,10 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
       </div>
     )}
     {threadEntries.map((entry) => {
+      // Mur des colonnes (runs simultanés) → rendu À SA DATE.
+      if (entry.kind === "wall") {
+        return <ParallelSubAgents key="parallel-wall" projectId={projectId} />;
+      }
       // Run détaché daté (orphelin archivé OU run bloqué) → rendu À SA DATE.
       if (entry.kind === "run") {
         return <DatedSubAgentBlock key={`run-${entry.run.id}`} run={entry.run} />;
@@ -1563,16 +1577,32 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
       const group = entry.group;
       const first = group[0];
       // LOT 3 : dispatch des blocs de timeline historique à leur place.
-      if (first.kind === "toolResult") return <ToolResultRow key={first.id} message={first} />;
+      if (first.kind === "toolResult") {
+        // `toolResult` `delegate` ORPHELIN (toolCall absent de l'historique —
+        // pagination/compaction) : c'est encore une trace de l'appel `delegate`
+        // → on y rend le BLOC SOUS-AGENT (ancrage exact, AVANT la réponse finale)
+        // plutôt qu'un simple résultat d'outil.
+        if (first.toolResult?.name === "delegate") {
+          return (
+            <SubAgentBlock
+              key={first.id}
+              toolCall={first.toolResult}
+              blockId={`orphan:delegate:${first.toolResult.id}`}
+            />
+          );
+        }
+        return <ToolResultRow key={first.id} message={first} />;
+      }
       if (first.kind === "bashExecution") return <BashExecutionRow key={first.id} message={first} />;
       if (first.kind === "compaction") return <CompactionRow key={first.id} message={first} />;
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
       return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
     })}
-    {/* LOT 4 : sous-agents simultanés — vue EN COLONNES (mur dédié en fin de
-        fil, s'abonne seul au store isolé → aucun re-render du fil).
-        Masqué en consultation d'une conversation passée (hideLiveExtras). */}
-    {!hideLiveExtras && <ParallelSubAgents projectId={projectId} />}
+    {/* LOT 4 : sous-agents simultanés — vue EN COLONNES. Rendue À LA DATE du
+        premier `delegate` du lot quand elle est connue (cf. wallAnchor) ; en
+        repli seulement (date inconnue), elle reste en fin de fil. Masqué en
+        consultation d'une conversation passée (hideLiveExtras). */}
+    {!hideLiveExtras && !hasAnchoredWall && <ParallelSubAgents projectId={projectId} />}
     </>
   </CollapseProvider>
   );

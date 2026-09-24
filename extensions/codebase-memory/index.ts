@@ -55,6 +55,15 @@ import {
   normalizeRootPath,
   type IndexedProject,
 } from "../../backend/src/pi/cbm-project-resolution.js";
+// Persistance CUMULÉE des compteurs d'observabilité (défaut 2) : le module pur
+// sait charger/écrire .data/cbm-stats.json et agréger les compteurs.
+import {
+  accumulateCumulativeStats,
+  emptyCumulativeStats,
+  loadCbmStats,
+  persistCbmStats,
+  type CbmCumulativeStats,
+} from "../../backend/src/pi/cbm-stats.js";
 
 /**
  * Les projets LIÉS de Pi-Web (placeholder avec symlinks vers plusieurs dépôts)
@@ -97,6 +106,9 @@ if (!g.__cbmUsageStats) {
     totalErrors: 0,
     byTool: {} as Record<string, { ok: number; fail: number }>,
     byMode: {} as Record<string, number>,
+    // JAUGE (pas un compteur de session) : nombre réel de projets connus du
+    // registre CBM (root_path → nom alimenté par `list_projects`). Maintenue à
+    // jour par refreshIndexedProjects() — cf. défaut « indexedProjects: 0 ».
     indexedProjects: 0,
     since: new Date().toISOString(),
   };
@@ -202,6 +214,55 @@ function trackRepoMapOutcome(served: boolean): void {
     /* ignore */
   }
 }
+
+// ── Persistance CUMULÉE des compteurs (observabilité dans le temps) ──
+// Les compteurs de SESSION vivent dans g.__cbmUsageStats / g.__cbmFailureStats
+// (remis à zéro au démarrage). Pour suivre l'adoption de CBM dans le TEMPS, un
+// cumul persisté est maintenu dans <racine>/.data/cbm-stats.json :
+//   cumulative = base_persistée (chargée au boot) + compteurs de session
+// La base est FIGÉE pendant le process, donc la vue est recalculée sans double
+// comptage à chaque flush. La jauge `indexedProjects` (non cumulable) et
+// l'anneau `recent` (session) sont volontairement exclus du cumul.
+if (!g.__cbmCumulativeBase) {
+  g.__cbmCumulativeBase = loadCbmStats() || emptyCumulativeStats(new Date().toISOString());
+}
+/** Fréquence d'écriture best-effort du cumul (le flush à l'arrêt force l'écrit). */
+const CBM_STATS_FLUSH_MS = 60_000;
+let cbmStatsLastFlushAt = 0;
+
+/** Vue cumulée FRAÎCHE = base persistée + compteurs de session courants. */
+function getCbmCumulativeStats(): CbmCumulativeStats {
+  return accumulateCumulativeStats(
+    g.__cbmCumulativeBase,
+    g.__cbmUsageStats,
+    g.__cbmFailureStats,
+    new Date().toISOString(),
+  );
+}
+
+/** Persiste la vue cumulée (throttlé sauf `force`). Best-effort : ne jette jamais. */
+function flushCbmStats(force = false): CbmCumulativeStats {
+  try {
+    const now = Date.now();
+    if (!force && now - cbmStatsLastFlushAt < CBM_STATS_FLUSH_MS) return getCbmCumulativeStats();
+    cbmStatsLastFlushAt = now;
+    const stats = getCbmCumulativeStats();
+    persistCbmStats(stats);
+    return stats;
+  } catch {
+    return g.__cbmCumulativeBase;
+  }
+}
+
+// Flush périodique (timer non référencé : ne retient pas le process en vie).
+if (!g.__cbmStatsTimer) {
+  g.__cbmStatsTimer = setInterval(() => flushCbmStats(true), CBM_STATS_FLUSH_MS);
+  if (typeof g.__cbmStatsTimer?.unref === "function") g.__cbmStatsTimer.unref();
+}
+
+// Ponts globalThis lus par backend/src/routes/cbm.ts (même process).
+g.__cbmCumulativeView = getCbmCumulativeStats;
+g.__cbmFlushStats = flushCbmStats;
 let status: CbmStatus = {
   installed: false,
   version: null,
@@ -1003,12 +1064,26 @@ async function refreshIndexedProjects(force = false): Promise<void> {
       indexedProjects.set(normalizeRootPath(p.rootPath), p.name);
       count++;
     }
-    if (count > 0) indexedProjectsFetchedAt = Date.now();
-    else console.warn("[cbm] list_projects : aucune entrée parsable");
+    // Source de vérité de `usage.indexedProjects` : la TAILLE du registre
+    // (nombre de projets réellement indexés connus de CBM), et non le nombre
+    // d'indexations lancées. Corrige le « indexedProjects: 0 » trompeur.
+    // Mise à jour seulement si la liste est non vide : une réponse vide
+    // transitoire (serveur CBM momentanément indisponible) ne doit pas
+    // écraser une valeur connue par 0.
+    if (count > 0) {
+      g.__cbmUsageStats.indexedProjects = indexedProjects.size;
+      indexedProjectsFetchedAt = Date.now();
+    } else {
+      console.warn("[cbm] list_projects : aucune entrée parsable");
+    }
   } catch (e: any) {
     console.warn(`[cbm] refreshIndexedProjects failed: ${e.message}`);
   }
 }
+
+// Pont lu par /api/cbm/status : rafraîchit le registre avant de lire la jauge
+// `usage.indexedProjects` (no-op si déjà rafraîchi récemment). Best-effort.
+g.__cbmRefreshProjectRegistry = refreshIndexedProjects;
 
 /**
  * Résolution ASYNCHRONE : garantit le registre (le projet LIÉ n'est jamais
@@ -1057,6 +1132,9 @@ async function indexProject(cwd: string): Promise<void> {
     // résoudre. BUG-65 : `list_projects` renvoie une TABLE TEXTE et non du
     // JSON — l'ancien JSON.parse échouait donc TOUJOURS et retombait sur le nom
     // de dossier. On lit maintenant le registre root_path → nom.
+    // NB : `usage.indexedProjects` n'est plus incrémenté ici (c'était un
+    // compteur d'INDEXATIONS de session, trompeur) ; il reflète désormais la
+    // taille réelle du registre, posée par refreshIndexedProjects().
     await refreshIndexedProjects(true);
     const resolved = indexedProjects.get(normalizeRootPath(cwd)) || getProjectName(cwd);
     projectByCwd.set(cwd, { projectName: resolved, lastIndexedAt: Date.now() });
@@ -1307,6 +1385,12 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     // Keep the server running — it's shared across sessions
     // It will be killed when the container/process exits
+    // Flush final des compteurs cumulés (best-effort, jamais bloquant).
+    try {
+      flushCbmStats(true);
+    } catch {
+      /* ignore */
+    }
   });
 
   // ── Register tools ──

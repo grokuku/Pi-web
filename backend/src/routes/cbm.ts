@@ -92,6 +92,42 @@ router.get("/status", async (_req: Request, res: Response) => {
     const running = installed && isServerRunning();
     const latestVersion = await getLatestVersion();
 
+    // IndexedProjects (jauge) : rafraîchir le registre CBM du process AVANT de
+    // lire les stats. Best-effort et no-op si déjà rafraîchi récemment : sans
+    // ce pont, le compteur restait à 0 entre deux appels cbm_* (le registre
+    // root_path → nom n'était alimenté qu'à la première résolution).
+    // Plafonné à 3 s : un serveur CBM lent ne doit pas bloquer /api/cbm/status.
+    try {
+      const refreshRegistry = (globalThis as any).__cbmRefreshProjectRegistry;
+      if (typeof refreshRegistry === "function") {
+        await Promise.race([
+          Promise.resolve(refreshRegistry()).catch(() => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 3_000).unref();
+          }),
+        ]);
+      }
+    } catch {
+      /* observabilité best-effort : ne bloque jamais la route */
+    }
+
+    // Compteurs cumulés persistés : flush throttlé (écriture best-effort dans
+    // .data/cbm-stats.json) puis lecture de la vue FRAÎCHE. L'absence
+    // d'extension (démarrage, tests) → cumulative: null.
+    try {
+      const flush = (globalThis as any).__cbmFlushStats;
+      if (typeof flush === "function") flush();
+    } catch {
+      /* ignore */
+    }
+    let cumulative: unknown = null;
+    try {
+      const view = (globalThis as any).__cbmCumulativeView;
+      if (typeof view === "function") cumulative = view();
+    } catch {
+      /* ignore */
+    }
+
     // Update available if latest is different from current (normalize v-prefix)
     let updateAvailable = false;
     if (latestVersion && version) {
@@ -106,10 +142,15 @@ router.get("/status", async (_req: Request, res: Response) => {
       updateAvailable,
       running,
       binaryPath: installed ? BIN_PATH : null,
-      // Usage stats from the extension (tracked per CBM tool call)
+      // Usage stats from the extension (tracked per CBM tool call). `since` et
+      // `indexedProjects` ne concernent que la session courante.
       usage: (globalThis as any).__cbmUsageStats || null,
       // Échecs CBM (par tool + par motif) — observabilité de l'adoption de CBM.
       failures: (globalThis as any).__cbmFailureStats || null,
+      // Vue CUMULÉE persistée (.data/cbm-stats.json) : survit aux redémarrages,
+      // permettant de suivre l'adoption de CBM dans le temps. Exclut la jauge
+      // `indexedProjects` et l'anneau `recent` (non cumulables).
+      cumulative,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
