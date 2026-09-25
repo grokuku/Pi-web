@@ -21,6 +21,15 @@ import {
   resolveEffectiveAllowedOrigins,
   validateOriginInput,
 } from "../utils/origins.js";
+import { logger } from "../utils/logger.js";
+import {
+  isValidVersion,
+  isMajorOrMinorBump,
+  evaluateUpdateTarget,
+  getApplicableBreakingChanges,
+  replaceEntrypointPin,
+  type SdkBreakingChange,
+} from "../pi/sdk-breaking-changes.js";
 
 const router = Router();
 
@@ -49,27 +58,57 @@ router.get("/version", (_req: Request, res: Response) => {
   });
 });
 
-// Check for pi-agent update
+// Interroge npm pour la DERNIÈRE version publiée du SDK pi-coding-agent.
+function queryLatestPiAgentVersion(): string {
+  return execSync("npm view @earendil-works/pi-coding-agent version", {
+    timeout: 15000,
+    encoding: "utf-8",
+  }).trim();
+}
+
+/** Résumé compact d'une liste de ruptures pour les logs (versions + résumés). */
+function summarizeBreakingChanges(changes: SdkBreakingChange[]) {
+  return changes.map((c) => ({ version: c.version, summary: c.summary }));
+}
+
+// Check for pi-agent update — GARDE-FOU : la réponse annonce les ruptures
+// connues applicables au saut `current → latest` et si un acquittement explicite
+// est requis (saut mineur/majeur). Le frontend les affiche AVANT toute action.
 router.get("/update-check", async (_req: Request, res: Response) => {
   try {
     const currentVersion = getPiAgentVersion();
-    const result = execSync("npm view @earendil-works/pi-coding-agent version", { timeout: 15000, encoding: "utf-8" }).trim();
-    const latestVersion = result;
+    const latestVersion = queryLatestPiAgentVersion();
+    const breakingChanges = getApplicableBreakingChanges(currentVersion, latestVersion);
     res.json({
       current: currentVersion,
       latest: latestVersion,
       updateAvailable: latestVersion !== currentVersion,
+      // Ruptures des versions intermédiaires (current, latest].
+      breakingChanges,
+      // Saut mineur/majeur → une case de confirmation est exigée côté UI et
+      // la route POST répond 409 sans `acknowledged: true`.
+      requiresAck:
+        latestVersion !== currentVersion && isMajorOrMinorBump(currentVersion, latestVersion),
     });
   } catch (e: any) {
     const currentVersion = getPiAgentVersion();
-    res.json({ current: currentVersion, latest: currentVersion, updateAvailable: false, error: e.message });
+    res.json({
+      current: currentVersion,
+      latest: currentVersion,
+      updateAvailable: false,
+      breakingChanges: [],
+      requiresAck: false,
+      error: e.message,
+    });
   }
 });
 
 // ── Mise à jour à chaud du SDK pi-agent (option C) ──
-// Installe la dernière version, PERSISTE le pin (package.json --save-exact +
-// entrypoint.sh) puis redémarre le container via la restart policy. Un audit
-// préalable est recommandé (changelog, breaking changes, nouveaux tools) —
+// Installe une version CIBLE identifiée (`targetVersion` explicite, sinon
+// dernière version publiée — JAMAIS `@latest`), PERSISTE le pin (package.json
+// --save-exact + entrypoint.sh) puis redémarre le container (restart policy).
+// GARDE-FOU : un saut mineur/majeur est refusé (409) sans `acknowledged: true`,
+// avec la liste des ruptures connues applicables (pi/sdk-breaking-changes.ts) —
 // cf. modale UpdateAgentModal côté frontend.
 
 // Localise entrypoint.sh : chemin attendu BACKEND_DIR/../entrypoint.sh, sinon
@@ -86,42 +125,77 @@ function findEntrypoint(): string | null {
   return null;
 }
 
-router.post("/update", (_req: Request, res: Response) => {
+router.post("/update", (req: Request, res: Response) => {
   try {
+    const body = (req.body ?? {}) as { targetVersion?: unknown; acknowledged?: unknown };
+    const acknowledged = body.acknowledged === true;
     const installed = getPiAgentVersion();
-    const latest = execSync("npm view @earendil-works/pi-coding-agent version", {
-      timeout: 15000,
-      encoding: "utf-8",
-    }).trim();
+
+    // Cible EXPLICITE si fournie, sinon dernière version publiée. Plus de
+    // `@latest` aveugle : on installe toujours une version identifiée et on la
+    // COMPARE à l'installée.
+    const requested =
+      typeof body.targetVersion === "string" ? body.targetVersion.trim() : "";
+    const target = requested || queryLatestPiAgentVersion();
 
     // Déjà à jour → pas de redémarrage inutile.
-    if (latest === installed) {
+    if (target === installed) {
       return res.json({ success: false, error: "already up to date" });
     }
+    if (!isValidVersion(target)) {
+      return res.status(400).json({ success: false, error: "invalid target version" });
+    }
 
-    // 1) Installer la dernière version (--save-exact → pin EXACT, pas ^).
-    execSync(
-      "npm install @earendil-works/pi-coding-agent@latest --no-audit --no-fund --save-exact",
-      { cwd: BACKEND_DIR, stdio: "pipe" }
-    );
+    // GARDE-FOU : un saut mineur/majeur non acquitté est REFUSÉ (409) avec la
+    // liste des ruptures connues applicables (versions intermédiaires).
+    const decision = evaluateUpdateTarget(installed, target, acknowledged);
+    if (decision.blocked) {
+      logger.warn("sdk-update", `bump ${installed} → ${target} refusé (acquittement requis)`, {
+        breakingChanges: summarizeBreakingChanges(decision.breakingChanges),
+      });
+      return res.status(409).json({
+        success: false,
+        error: "breaking_changes_ack_required",
+        current: installed,
+        target,
+        breakingChanges: decision.breakingChanges,
+      });
+    }
 
-    // 2) Persister le pin dans entrypoint.sh (regex générique, futur-proof).
+    // Saut reconnu (ou acquitté) : on trace les ruptures applicables.
+    if (
+      isMajorOrMinorBump(installed, target) ||
+      getApplicableBreakingChanges(installed, target).length > 0
+    ) {
+      logger.warn("sdk-update", `bump ${installed} → ${target}`, {
+        acknowledged,
+        breakingChanges: summarizeBreakingChanges(decision.breakingChanges),
+      });
+    }
+
+    // 1) Vérifier la ligne de pin AVANT l'install (fail-fast : si le pin est
+    //    introuvable on n'installe rien, l'état reste cohérent).
     const entrypointPath = findEntrypoint();
     if (!entrypointPath) {
       throw new Error("entrypoint.sh introuvable — pin non persisté");
     }
     const content = readFileSync(entrypointPath, "utf-8");
-    const updated = content.replace(
-      /pi-coding-agent@[0-9]+\.[0-9]+\.[0-9]+/g,
-      `pi-coding-agent@${latest}`
+    const updated = replaceEntrypointPin(content, target);
+
+    // 2) Installer la version CIBLE exacte (--save-exact → pin EXACT, pas ^).
+    execSync(
+      `npm install @earendil-works/pi-coding-agent@${target} --no-audit --no-fund --save-exact`,
+      { cwd: BACKEND_DIR, stdio: "pipe" }
     );
-    if (updated === content) {
-      throw new Error("aucune ligne npm install pi-coding-agent trouvée dans entrypoint.sh");
-    }
+
+    // 3) Persister le pin dans entrypoint.sh (ligne déjà validée ci-dessus).
     writeFileSync(entrypointPath, updated);
 
-    // 3) Relire la version réellement installée puis redémarrer.
+    // 4) Relire la version réellement installée puis redémarrer.
     const version = getPiAgentVersion();
+    logger.warn("sdk-update", `SDK mis à jour ${installed} → ${version} (redémarrage)`, {
+      target,
+    });
     res.json({ success: true, version });
     setTimeout(() => process.exit(0), 500);
   } catch (e: any) {

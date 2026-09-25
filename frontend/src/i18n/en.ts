@@ -395,6 +395,8 @@ export const en = {
     updatingTo: (v: string) => `Updating to ${v}... restarting`,
     updateSuccess: (v: string) => `Update to ${v} successful — restarting, auto-reconnecting.`,
     updateFailed: "Update failed",
+    updateBreakingTitle: "Known breaking changes in this version jump",
+    updateBreakingAck: "I acknowledge these known breaking changes and still want to update.",
   },
 
   // ── Past conversation (LOT E1 — read-only) ──

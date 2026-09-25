@@ -15,8 +15,28 @@ import {
   PROVIDER_PRESETS,
 } from "../pi/providers.js";
 import { validateHttpUrl } from "../utils/ssrf.js";
+import { logger } from "../utils/logger.js";
 
 const router = Router();
+
+// ── Traçabilité des mutations ─────────────────────────
+// Chaque création/modification/suppression est journalisée (horodatage via
+// logger, méthode, id ciblé, champs modifiés). La VALEUR de la clé API n'est
+// JAMAIS écrite : seul un booléen « clé modifiée » est tracé.
+function changedFields(existing: ProviderConfig, updates: Partial<ProviderConfig>): string[] {
+  const fields: string[] = [];
+  if (updates.name !== undefined && updates.name !== existing.name) fields.push("name");
+  if (updates.type !== undefined && updates.type !== existing.type) fields.push("type");
+  if (updates.baseUrl !== undefined && updates.baseUrl !== existing.baseUrl) fields.push("baseUrl");
+  if (updates.apiKey !== undefined && updates.apiKey !== existing.apiKey) fields.push("apiKey");
+  if (
+    updates.maxConcurrentCalls !== undefined &&
+    updates.maxConcurrentCalls !== existing.maxConcurrentCalls
+  ) {
+    fields.push("maxConcurrentCalls");
+  }
+  return fields;
+}
 
 // ── GET all providers ─────────────────────────────────
 
@@ -54,6 +74,15 @@ router.post("/", async (req: Request, res: Response) => {
 
     // Le provider est la source de vérité → resynchronise la map du moteur.
     await syncConcurrencyProviderLimits();
+    // Trace de création : jamais la valeur de la clé API, seulement sa présence.
+    logger.info("providers", `POST /api/providers → ${provider.id}`, {
+      id: provider.id,
+      name: provider.name,
+      type: provider.type,
+      baseUrl: provider.baseUrl,
+      maxConcurrentCalls: provider.maxConcurrentCalls,
+      apiKeyProvided: !!provider.apiKey,
+    });
     res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -76,6 +105,17 @@ router.put("/:id", async (req: Request, res: Response) => {
       if (!PROVIDER_PRESETS[type as ProviderType]) {
         return res.status(400).json({ error: `Unknown type: ${type}` });
       }
+      // Le type est IMMUABLE en édition (l'UI le verrouille) : refuser toute
+      // tentative de changement évite un écrasement accidentel. Un envoi du
+      // même type (cas normal) reste accepté sans effet.
+      if (type !== existing.type) {
+        logger.warn("providers", `PUT /api/providers/${id} → type refusé`, {
+          id,
+          from: existing.type,
+          to: type,
+        });
+        return res.status(400).json({ error: "type cannot be changed" });
+      }
       updates.type = type;
     }
     if (baseUrl !== undefined) updates.baseUrl = baseUrl;
@@ -92,6 +132,14 @@ router.put("/:id", async (req: Request, res: Response) => {
     const provider = updateProvider(id, updates);
     // Le provider est la source de vérité → resynchronise la map du moteur.
     await syncConcurrencyProviderLimits();
+    // Trace de modification : id ciblé + champs réellement changés. La valeur
+    // de la clé API n'est jamais journalisée (seulement « modifiée : oui/non »).
+    logger.info("providers", `PUT /api/providers/${id}`, {
+      id,
+      name: provider.name,
+      fields: changedFields(existing, updates),
+      apiKeyChanged: updates.apiKey !== undefined && updates.apiKey !== existing.apiKey,
+    });
     res.json(toPublicProvider(provider));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -102,10 +150,19 @@ router.put("/:id", async (req: Request, res: Response) => {
 
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
+    // Récupéré AVANT suppression pour tracer le provider visé (nom/type).
+    const target = getProvider(req.params.id);
     await deleteProvider(req.params.id);
 
     // Le provider est la source de vérité → retire sa limite du moteur.
     await syncConcurrencyProviderLimits();
+
+    // Trace de suppression (id ciblé + identité, jamais de secret).
+    logger.info("providers", `DELETE /api/providers/${req.params.id}`, {
+      id: req.params.id,
+      name: target?.name,
+      type: target?.type,
+    });
 
     // Regenerate models.json for Pi SDK after cleanup
     try {

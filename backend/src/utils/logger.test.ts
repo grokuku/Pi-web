@@ -19,6 +19,7 @@ import {
   crashFileNameFor,
   formatLine,
   getLogsDir,
+  installConsoleCapture,
   logFileNameFor,
   logger,
   purgeOldLogs,
@@ -152,5 +153,29 @@ describe("utils/logger — écriture fichier (dossier temporaire)", () => {
     readdirSync(tmp); // sanity : le dossier contient bien le journal
     expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
     expect(readFileSync(file, "utf8").includes("\n\n")).toBe(false);
+  });
+
+  // Fin de l'angle mort des logs : les `console.warn` émis par un module
+  // backend (ex. échec du prompt système) étaient invisibles dans les fichiers
+  // de log. installConsoleCapture les recopie désormais (comme console.error).
+  // NB : installConsoleCapture est idempotent → les deux niveaux sont vérifiés
+  // dans le MÊME test (un 2e appel ne re-wrapperait pas les consoles restaurées).
+  it("installConsoleCapture recopie console.warn ET console.error dans le fichier", () => {
+    const origWarn = console.warn;
+    const origError = console.error;
+    try {
+      installConsoleCapture();
+      console.warn("[system-prompt] build failed: boom");
+      console.error("boom-error");
+      const file = path.join(tmp, logFileNameFor(new Date()));
+      const content = readFileSync(file, "utf8");
+      expect(content).toContain("[WARN] [console] [system-prompt] build failed: boom");
+      expect(content).toContain("[ERROR] [console] boom-error");
+    } finally {
+      // On restaure les consoles d'origine pour ne pas polluer les tests
+      // suivants (le wrapper est idempotent : captureInstalled reste vrai).
+      console.warn = origWarn;
+      console.error = origError;
+    }
   });
 });

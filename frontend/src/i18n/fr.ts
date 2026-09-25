@@ -396,6 +396,8 @@ export const fr = {
     updatingTo: (v: string) => `Mise à jour vers ${v}... redémarrage en cours`,
     updateSuccess: (v: string) => `Mise à jour vers ${v} réussie — redémarrage en cours, reconnexion automatique.`,
     updateFailed: "Échec de la mise à jour",
+    updateBreakingTitle: "Ruptures connues sur ce saut de version",
+    updateBreakingAck: "Je reconnais ces ruptures connues et je souhaite mettre à jour malgré tout.",
   },
 
   // ── Conversation passée (LOT E1 — lecture seule) ──

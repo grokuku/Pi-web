@@ -156,6 +156,14 @@ export function ProvidersTab({ providers, setProviders, setError }: {
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
+  // « Ajouter » et « Modifier » sont MUTUELLEMENT EXCLUSIFS : ouvrir l'un
+  // ferme l'autre. Sans cela, showAdd (testé en premier) restait vrai et
+  // l'on pouvait créer un doublon au lieu de modifier le provider ciblé.
+  const openAdd = () => { setEditing(null); setShowAdd(true); };
+  const openEdit = (p: ProviderConfig) => { setShowAdd(false); setEditing(p); };
+  // Fermer un panneau libère les deux états (retour à la liste/au bouton Ajouter).
+  const closePanel = () => { setShowAdd(false); setEditing(null); };
+
   const handleDelete = async (id: string) => {
     try {
       await fetch(`/api/providers/${id}`, { method: "DELETE" });
@@ -200,7 +208,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
                 className="btn-hacker text-[0.6875rem] px-2 py-0.5 flex items-center gap-1">
                 <TestTube2 size={10} /> {t('modelLibrary.test')}
               </button>
-              <button onClick={() => setEditing(p)}
+              <button onClick={() => openEdit(p)}
                 className="text-hacker-text-dim hover:text-hacker-accent"><Edit2 size={11} /></button>
               <button onClick={() => handleDelete(p.id)}
                 className="text-hacker-text-dim hover:text-hacker-error"><Trash2 size={11} /></button>
@@ -216,8 +224,12 @@ export function ProvidersTab({ providers, setProviders, setError }: {
         </div>
       )}
 
+      {/* `key` distincte par branche : tout changement de provider (ou passage
+          ajout↔édition) REMONTE ProviderEditPanel et réinitialise ses états.
+          Sans cela, passer de editing=A à editing=B conservait les valeurs de A. */}
       {showAdd ? (
         <ProviderEditPanel
+          key="new"
           provider={null}
           onSave={async (config) => {
             try {
@@ -228,13 +240,14 @@ export function ProvidersTab({ providers, setProviders, setError }: {
               });
               const newP = await res.json();
               setProviders([...providers, newP]);
-              setShowAdd(false);
+              closePanel();
             } catch (e: any) { setError(e.message); }
           }}
-          onCancel={() => setShowAdd(false)}
+          onCancel={closePanel}
         />
       ) : editing ? (
         <ProviderEditPanel
+          key={editing.id}
           provider={editing}
           onSave={async (config) => {
             try {
@@ -245,13 +258,13 @@ export function ProvidersTab({ providers, setProviders, setError }: {
               });
               const updated = await res.json();
               setProviders(providers.map(p => p.id === editing.id ? updated : p));
-              setEditing(null);
+              closePanel();
             } catch (e: any) { setError(e.message); }
           }}
-          onCancel={() => setEditing(null)}
+          onCancel={closePanel}
         />
       ) : (
-        <button onClick={() => setShowAdd(true)}
+        <button onClick={openAdd}
           className="mt-2 btn-hacker w-full text-xs py-2 flex items-center justify-center gap-1.5">
           <Plus size={12} /> {t('modelLibrary.addProvider')}
         </button>
@@ -280,6 +293,19 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
   // provider, sinon le défaut (3). Champ vide/invalide → message clair.
   const [maxCalls, setMaxCalls] = useState(String(effectiveProviderCalls(provider?.maxConcurrentCalls)));
   const [maxCallsError, setMaxCallsError] = useState(false);
+
+  // Ceinture et bretelles (en plus de la `key` posée par le parent) : si la
+  // prop `provider` change sans remontage, on resynchronise TOUS les champs
+  // depuis la nouvelle source et on efface l'erreur de validation. Empêche
+  // toute fuite des valeurs d'un autre provider dans le PUT.
+  useEffect(() => {
+    setName(provider?.name || "");
+    setType(provider?.type || "ollama");
+    setBaseUrl(provider?.baseUrl || PROVIDER_PRESETS.ollama.defaultBaseUrl);
+    setApiKey(provider?.apiKey || "");
+    setMaxCalls(String(effectiveProviderCalls(provider?.maxConcurrentCalls)));
+    setMaxCallsError(false);
+  }, [provider?.id]);
 
   const handleTypeChange = (newType: ProviderType) => {
     setType(newType);

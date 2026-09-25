@@ -12,6 +12,7 @@ import { usePastSessions } from "../../hooks/usePastSessions";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { UpdateAgentModal } from "../Modals/UpdateAgentModal";
+import type { SdkBreakingChange } from "../../utils/sdk-update";
 import type { Project } from "../../types";
 import type { PastSession } from "../../types";
 import { useTranslation } from "../../i18n";
@@ -68,6 +69,10 @@ export function Sidebar({
   const [piAgentVersion, setPiAgentVersion] = useState("?");
   const [piAgentLatest, setPiAgentLatest] = useState("");
   const [piAgentCurrent, setPiAgentCurrent] = useState("");
+  // Garde-fou de mise à jour : ruptures connues + acquittement requis (saut
+  // mineur/majeur), renvoyés par GET /api/settings/update-check.
+  const [piAgentBreaking, setPiAgentBreaking] = useState<SdkBreakingChange[]>([]);
+  const [piAgentRequiresAck, setPiAgentRequiresAck] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [cbmVersion, setCbmVersion] = useState<string | null>(null);
   const [cbmInstalled, setCbmInstalled] = useState(false);
@@ -85,6 +90,8 @@ export function Sidebar({
       setUpdataAvailable(!!data.updateAvailable);
       if (data.latest) setPiAgentLatest(data.latest);
       if (data.current) setPiAgentCurrent(data.current);
+      if (Array.isArray(data.breakingChanges)) setPiAgentBreaking(data.breakingChanges);
+      setPiAgentRequiresAck(!!data.requiresAck);
     }).catch(() => {});
     // Check CBM status
     fetch("/api/cbm/status").then(r => r.json()).then(data => {
@@ -320,6 +327,8 @@ export function Sidebar({
         onClose={() => setUpdateModalOpen(false)}
         latestVersion={piAgentLatest}
         currentVersion={piAgentCurrent || piAgentVersion}
+        breakingChanges={piAgentBreaking}
+        requiresAck={piAgentRequiresAck}
       />
 
       {/* ── Conversation passée en lecture seule (LOT E1) ── */}

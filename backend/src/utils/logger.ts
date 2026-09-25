@@ -259,21 +259,38 @@ export const logger = {
 };
 
 /**
- * Duplique tout `console.error` « extérieur » (modules, SDK, startup...) vers
- * le fichier du jour. Idempotent. Anti-boucle double :
- *  1. le logger écrit via rawConsoleError (référence pristine) → hors wrapper ;
+ * Duplique tout `console.error` ET `console.warn` « extérieur » (modules, SDK,
+ * startup...) vers le fichier du jour. Idempotent. Anti-boucle double :
+ *  1. le logger écrit via les références pristine (rawConsoleError/rawConsoleWarn)
+ *     → hors wrapper ;
  *  2. le wrapper se ré-entoure jamais (flag inCapture).
+ *
+ * `console.log` n'est VOLONTAIREMENT pas capturé : trop bavard, il noierait le
+ * journal (le miroir fichier est réservé aux signaux info/warn/error du logger
+ * et aux avertissements/erreurs émis hors logger).
  */
 export function installConsoleCapture(): void {
   if (captureInstalled) return;
   captureInstalled = true;
-  const original = rawConsoleError;
-  console.error = (...args: unknown[]) => {
+  console.error = wrapConsole("error", rawConsoleError);
+  console.warn = wrapConsole("warn", rawConsoleWarn);
+}
+
+/**
+ * Construit un wrapper de console pour un niveau donné : stdout préservé à
+ * l'identique (référence pristine) PUIS miroir fichier sous la catégorie
+ * `console`. Ne lève jamais : un échec de capture ne doit pas casser l'app.
+ */
+function wrapConsole(
+  level: LogLevel,
+  original: (...args: unknown[]) => void
+): (...args: unknown[]) => void {
+  return (...args: unknown[]) => {
     original(...args); // stdout docker préservé à l'identique
     if (inCapture || fileDisabled) return;
     inCapture = true;
     try {
-      const line = truncate(formatLine("error", "console", args.map(stringifyArg).join(" ")));
+      const line = truncate(formatLine(level, "console", args.map(stringifyArg).join(" ")));
       remember(line);
       appendLine(line);
     } catch {
