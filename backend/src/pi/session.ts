@@ -1,4 +1,4 @@
-import { createAgentSession, ModelRegistry, SessionManager, ModelRuntime, buildSessionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager, SettingsManager, ModelRuntime, buildSessionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -41,12 +41,14 @@ import {
   DELEGATE_TOOL_NAME,
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
+import { createPromptExtension, type PiWebPromptContext } from "./system-prompt.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 import { getProject, getAllProjects } from "../projects/manager.js";
 import { logger } from "../utils/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_DIR = path.join(__dirname, "..", "..", ".pi-agent");
+// Répertoire de configuration global du SDK (identique à getDefaultAgentDir() du SDK).
+const PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 
 /**
  * Compute a project-specific session directory.
@@ -577,10 +579,77 @@ async function createPiSessionInternal(
   // global : entrypoint.sh neutralise donc le fichier au boot (cbmem.ts →
   // .disabled-broken-binpath) — destruction au boot = seul garde possible,
   // le binaire régénère le fichier à chaque install/update.
+  // ── Contexte de prompt Pi-Web (SDK 0.87.1) ──
+  // Le prompt système n'est plus mutable en place (`agent.state.systemPrompt` est
+  // un getter sans setter, transcript canonique via SessionManager). Le backend,
+  // qui n'est pas une extension fichier, enregistre une extension INLINE via le
+  // loader : elle remplace le prompt à CHAQUE run par l'API officielle
+  // `before_agent_start`. Le contexte projet + mémoire est figé à la création ;
+  // le mode est relu à chaque run (l'état de session peut changer).
+  const promptContext: PiWebPromptContext = {
+    projectContext: "",
+    memoryContext: "",
+    getMode: () => sessionsByProject.get(projectId)?.activeMode || "code",
+  };
+
+  // Contexte projet (<!-- PI_PROJECT_CONTEXT -->)
+  if (options?.projectName) {
+    let projectContext = `\n\n<!-- PI_PROJECT_CONTEXT -->\nYou are working on project "${options.projectName}" (ID: ${projectId}).\nWorking directory: ${cwd}\n`;
+    // Projet LIÉ : décrire la structure (chacun des sous-dossiers pointe vers
+    // un projet indépendant avec son PROPRE repo git). Le LLM doit savoir que
+    // `pi-web/` et `ai-helper/` ne partagent rien (ni git ni historique).
+    try {
+      const proj = getProject(projectId);
+      if (proj?.storage === "linked" && Array.isArray(proj.linkedProjectIds)) {
+        const subs = proj.linkedProjectIds
+          .map((id) => getProject(id))
+          .filter((p): p is NonNullable<typeof p> => !!p)
+          .map((p) => `- <${proj.cwd}>/${p.name}/ : sous-projet "${p.name}" (dépôt git indépendant, commiter/pousser séparément)`);
+        if (subs.length > 0) {
+          projectContext += `This is a LINKED (composite) project gathering ${subs.length} independent sub-projects:
+${subs.join("\n")}
+When editing, respect each sub-project's folder. Each sub-project has its OWN git repository — never cross-commit between them.
+`;
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[PiSession] Linked context skipped (${projectId}): ${e?.message || e}`);
+    }
+    projectContext += `<!-- /PI_PROJECT_CONTEXT -->`;
+    promptContext.projectContext = projectContext;
+  }
+
+  // ── Injection mémoire (après PI_PROJECT_CONTEXT) ──
+  // Bloc reconstruit depuis le store disque à chaque création de session.
   try {
+    const memoryContext = await buildMemoryContext(cwd);
+    if (memoryContext) {
+      promptContext.memoryContext = memoryContext;
+      console.log(`[PiSession] Memory context injected for project ${projectId}`);
+    }
+  } catch (e: any) {
+    // L'échec du store mémoire ne doit jamais empêcher la création de session.
+    console.warn(`[PiSession] Memory context injection skipped (${projectId}) : ${e?.message || e}`);
+  }
+
+  try {
+    // Loader explicite : reproduit exactement le loader par défaut du SDK et y
+    // ajoute l'extension inline qui pilote le prompt système (contexte projet +
+    // mémoire + bannière/instructions de mode).
+    const settingsManager = SettingsManager.create(cwd, PI_AGENT_DIR);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir: PI_AGENT_DIR,
+      settingsManager,
+      extensionFactories: [createPromptExtension(promptContext)],
+    });
+    await resourceLoader.reload();
+
     const { session } = await createAgentSession({
       cwd,
       sessionManager,
+      settingsManager,
+      resourceLoader,
       modelRuntime: sharedModelRuntime!,
       customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
@@ -611,7 +680,7 @@ async function createPiSessionInternal(
         // couvre donc l'erreur LIVE du tour courant comme les erreurs d'une session reprise.
         agent.convertToLlm = async (messages: unknown[]) => {
           // Outils RÉELLEMENT actifs au moment de l'envoi (source de vérité : SDK).
-          const activeTools = getActiveToolNamesForBanner(session);
+          const activeTools: string[] = (session as any).getActiveToolNames?.() ?? [];
           const contextualized = neutralizeUnavailableToolErrors(
             normalizeLegacyDelegateToolNames(filterSubagentActivityFromContext(messages)),
             activeTools,
@@ -625,57 +694,6 @@ async function createPiSessionInternal(
       console.warn(`[PiSession] Image budget filter install failed (${projectId}): ${e?.message || e}`);
     }
 
-    // Inject project context into system prompt
-    if (options?.projectName) {
-      let projectContext = `\n\n<!-- PI_PROJECT_CONTEXT -->\nYou are working on project "${options.projectName}" (ID: ${projectId}).\nWorking directory: ${cwd}\n`;
-      // Projet LIÉ : décrire la structure (chacun des sous-dossiers pointe vers
-      // un projet indépendant avec son PROPRE repo git). Le LLM doit savoir que
-      // `pi-web/` et `ai-helper/` ne partagent rien (ni git ni historique).
-      try {
-        const proj = getProject(projectId);
-        if (proj?.storage === "linked" && Array.isArray(proj.linkedProjectIds)) {
-          const subs = proj.linkedProjectIds
-            .map((id) => getProject(id))
-            .filter((p): p is NonNullable<typeof p> => !!p)
-            .map((p) => `- <${proj.cwd}>/${p.name}/ : sous-projet "${p.name}" (dépôt git indépendant, commiter/pousser séparément)`);
-          if (subs.length > 0) {
-            projectContext += `This is a LINKED (composite) project gathering ${subs.length} independent sub-projects:
-${subs.join("\n")}
-When editing, respect each sub-project's folder. Each sub-project has its OWN git repository — never cross-commit between them.
-`;
-          }
-        }
-      } catch (e: any) {
-        console.warn(`[PiSession] Linked context skipped (${projectId}): ${e?.message || e}`);
-      }
-      projectContext += `<!-- /PI_PROJECT_CONTEXT -->`;
-      (session as any)._baseSystemPrompt = (session as any)._baseSystemPrompt + projectContext;
-      (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-    }
-
-    // ── Injection mémoire (après PI_PROJECT_CONTEXT) ──
-    // Bloc reconstruit depuis le store disque à chaque création de session ;
-    // applyModeToSession/restoreCodeMode le préservent lors des rebuilds de prompt.
-    try {
-      const memoryContext = await buildMemoryContext(cwd);
-      if (memoryContext) {
-        (session as any)._baseSystemPrompt += memoryContext;
-        (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-        console.log(`[PiSession] Memory context injected for project ${projectId}`);
-      }
-    } catch (e: any) {
-      // L'échec du store mémoire ne doit jamais empêcher la création de session.
-      console.warn(`[PiSession] Memory context injection skipped (${projectId}) : ${e?.message || e}`);
-    }
-
-    // Wrap prompt() : réinjecte la bannière de mode avant chaque interaction LLM.
-    // Le SDK reconstruit _baseSystemPrompt à chaque setActiveToolsByName, donc on
-    // garantit que le mode est toujours visible au moment de l'appel.
-    const origPrompt = (session as any).prompt.bind(session);
-    (session as any).prompt = (message: any, options?: any) => {
-      reapplyModeBanner(session, projectId);
-      return origPrompt(message, options);
-    };
     const unsubscribe = session.subscribe((event) => {
       // Track tool executions
       if (event.type === "tool_execution_start") {
@@ -1144,8 +1162,7 @@ export async function sendPrompt(
         // Destroy the existing session before creating a new one
         const oldState = sessionsByProject.get(projectId);
         if (oldState?.session) {
-          // Clear messages on the old session
-          try { (oldState.session as any).agent.state.messages = []; } catch {}
+          // La session est jetée juste après : plus besoin de vider ses messages.
           // Remove from map so createPiSession won't reuse it
           stopStreamingHeartbeat(projectId);
           sessionsByProject.delete(projectId);
@@ -1488,7 +1505,7 @@ export async function cycleModel(projectId: string): Promise<any> {
 }
 
 export async function setThinkingLevel(level: string, projectId?: string): Promise<boolean> {
-  // Aligné sur le type `ThinkingLevel` du SDK 0.85.1 ("max" inclus).
+  // Aligné sur le type `ThinkingLevel` du SDK 0.87.1 ("max" inclus).
   const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   if (!validLevels.includes(level)) {
     throw new Error(`Invalid thinking level: ${level}`);
@@ -1685,9 +1702,12 @@ async function manualCompact(session: any, customInstructions?: string): Promise
   // Insère l'entrée de compaction (mécanisme append-only du SDK).
   sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore);
 
-  // Reconstruit la liste de messages en mémoire de l'agent depuis le nouveau contexte.
+  // Resynchronise la liste de messages publique de l'agent depuis la projection
+  // canonique du SessionManager (0.87.1 : assigner agent.state.messages est écrasé).
   const newContext = sessionManager.buildSessionContext();
-  session.agent.state.messages = newContext.messages;
+  if (typeof session.refreshContext === "function") {
+    session.refreshContext();
+  }
 
   logCompactionDebug(
     `manual compaction done: kept=${kept.length} summarized=${summarized.length} ` +
@@ -2063,25 +2083,8 @@ function toolsForMode(session: any, baseTools: string[], exclude: string[] = [])
 }
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
-/**
- * Strip any previously injected mode blocks and identity overrides from the prompt.
- * This prevents accumulation when switching modes.
- */
-const MODE_IDENTITY_MARKER = "<!-- PI_IDENTITY -->";
-const MODE_BLOCK_MARKER_START = "<!-- PI_MODE:" ;
-const MODE_BLOCK_MARKER_END = "-->";
-// Bannière de mode proéminente (marqueurs DÉDIÉS, distincts des instructions de mode)
-const MODE_BANNER_START = "<!-- PI_MODE_BANNER -->";
-const MODE_BANNER_END = "<!-- /PI_MODE_BANNER -->";
-
-/** Renvoie les noms des outils actifs de la session (pour la bannière de mode). */
-function getActiveToolNamesForBanner(session: any): string[] {
-  try {
-    return (session as any).getActiveToolNames?.() ?? [];
-  } catch {
-    return [];
-  }
-}
+// NB : la bannière et les instructions de mode vivent désormais dans
+// system-prompt.ts (réassemblage officiel via before_agent_start).
 
 /**
  * Construit le bloc d'injection mémoire (<!-- PI_MEMORY_CONTEXT -->) à partir
@@ -2093,190 +2096,6 @@ async function buildMemoryContext(cwd: string): Promise<string> {
   if (!body) return "";
   return `\n\n<!-- PI_MEMORY_CONTEXT -->\n${body}\n<!-- /PI_MEMORY_CONTEXT -->`;
 }
-
-/** Blocs de contexte injectés à préserver lors des rebuilds de prompt SDK. */
-interface PreservedContextBlocks {
-  projectContextBlock: string;
-  memoryContextBlock: string;
-}
-
-/**
- * Extrait les blocs de contexte (projet + mémoire) d'un prompt avant un
- * setActiveToolsByName (qui reconstruit _baseSystemPrompt et les efface).
- */
-function extractPreservedContextBlocks(prompt: string | undefined | null): PreservedContextBlocks {
-  const src = prompt || "";
-  return {
-    projectContextBlock:
-      src.match(/<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->/)?.[0] || "",
-    memoryContextBlock:
-      src.match(/<!-- PI_MEMORY_CONTEXT -->[\s\S]*?<!-- \/PI_MEMORY_CONTEXT -->/)?.[0] || "",
-  };
-}
-
-/** Réinjecte les blocs de contexte préservés en fin de prompt. */
-function appendPreservedContextBlocks(prompt: string, blocks: PreservedContextBlocks): string {
-  let out = prompt;
-  if (blocks.projectContextBlock) out += `\n\n${blocks.projectContextBlock}`;
-  if (blocks.memoryContextBlock) out += `\n\n${blocks.memoryContextBlock}`;
-  return out;
-}
-
-/**
- * Réinjecte une bannière de mode PROÉMINENTE en tête du prompt système.
- * Pourquoi : le SDK Pi reconstruit `_baseSystemPrompt` à chaque setActiveToolsByName
- * (agent-session.js), ce qui efface le marqueur de mode injecté par applyModeToSession.
- * Sans cette bannière, l'agent ne sait pas s'il est en mode code (travail direct)
- * ou routing (orchestrateur qui délègue) — et essaie les outils de l'autre mode.
- */
-function reapplyModeBanner(session: any, projectId: string): void {
-  const state = sessionsByProject.get(projectId);
-  const mode = state?.activeMode || "code";
-  const tools = getActiveToolNamesForBanner(session);
-  const toolsList = tools.length > 0 ? tools.join(", ") : "(aucun)";
-
-  const banner = mode === "harness"
-    ? `${MODE_BANNER_START}\n## ⚠️ MODE ACTUEL : ROUTING — VOUS ÊTES L'ORCHESTRATEUR\n\nRÈGLE ABSOLUE : déléguez TOUTE tâche d'exécution via le tool \`delegate\` (fonctions : planning, execute, review, integrate). Ne codez JAMAIS vous-même, ne faites JAMAIS de recherche/exploration vous-même — déléguez. Vos outils : ${toolsList}.\n${MODE_BANNER_END}\n\n`
-    : `${MODE_BANNER_START}\n## MODE ACTUEL : CODE — travail direct\n\nVous travaillez directement avec vos outils. Le tool \`delegate\` n'est PAS disponible dans ce mode. Vos outils : ${toolsList}.\n${MODE_BANNER_END}\n\n`;
-
-  // Nettoyer une éventuelle bannière précédente, puis préfixer la nouvelle en tête de prompt
-  let prompt = (session as any)._baseSystemPrompt || "";
-  prompt = prompt.replace(/\n*<!-- PI_MODE_BANNER -->[\s\S]*?<!-- \/PI_MODE_BANNER -->\n*/g, "\n");
-  (session as any)._baseSystemPrompt = banner + prompt.trimStart();
-  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-}
-
-
-function cleanPromptForModeChange(rawPrompt: string): string {
-  // Remove existing mode blocks (e.g. <!-- PI_MODE:REVIEW -->...<!-- /PI_MODE:REVIEW -->)
-  let prompt = rawPrompt.replace(/\n*<!-- PI_MODE:\w+ -->[\s\S]*?<!-- \/PI_MODE:\w+ -->\n*/g, "\n");
-  // Remove identity override block
-  prompt = prompt.replace(/\n*<!-- PI_IDENTITY -->[\s\S]*?<!-- \/PI_IDENTITY -->\n*/g, "\n");
-  // Remove project context block
-  prompt = prompt.replace(/\n*<!-- PI_PROJECT_CONTEXT -->[\s\S]*?<!-- \/PI_PROJECT_CONTEXT -->\n*/g, "\n");
-  // Remove memory context block (réinjecté ensuite via appendPreservedContextBlocks)
-  prompt = prompt.replace(/\n*<!-- PI_MEMORY_CONTEXT -->[\s\S]*?<!-- \/PI_MEMORY_CONTEXT -->\n*/g, "\n");
-  return prompt.trim() + "\n";
-}
-
-/**
- * Strip the default Pi identity paragraph from the base prompt so we can replace it.
- * The default starts with "You are an expert coding assistant" and ends before "Available tools:".
- */
-function stripDefaultIdentity(prompt: string): { identity: string; rest: string } {
-  const marker = "You are an expert coding assistant";
-  const idx = prompt.indexOf(marker);
-  if (idx === -1) return { identity: "", rest: prompt };
-  // Find the end of the identity paragraph — ends at "Available tools:", "Guidelines:", or double newline
-  const afterMarker = prompt.slice(idx);
-  const endMatch = afterMarker.match(/\n(?:Available tools:|Guidelines:)/);
-  if (endMatch && endMatch.index !== undefined) {
-    const endIdx = idx + endMatch.index;
-    return {
-      identity: prompt.slice(idx, endIdx).trim(),
-      rest: prompt.slice(0, idx) + prompt.slice(endIdx),
-    };
-  }
-  // Fallback: identity goes to first double newline
-  const doubleNl = afterMarker.indexOf("\n\n");
-  if (doubleNl !== -1) {
-    const endIdx = idx + doubleNl;
-    return {
-      identity: prompt.slice(idx, endIdx).trim(),
-      rest: prompt.slice(0, idx) + prompt.slice(endIdx),
-    };
-  }
-  return { identity: "", rest: prompt };
-}
-
-/** Identity overrides for each mode — replaces the default "expert coding assistant" paragraph */
-const MODE_IDENTITIES: Record<string, string> = {
-  code: "",  // Keep default identity for code mode
-  harness: "Tu es le chef de projet de Pi-Web. Ton rôle est d'orchestrer les fonctions de routage et d'être l'interface entre l'utilisateur et l'équipe.",
-};
-
-const MODE_INSTRUCTIONS: Record<string, string> = {
-  code: `General coding rules:
-- Do NOT run git push or git push-like commands unless the user explicitly asks you to
-- Do NOT commit changes unless the user explicitly asks you to
-- When working on files, make minimal targeted changes — avoid rewriting entire files
-- Before editing, always read the current file content to understand the existing code
-- Prefer using the edit tool for small changes, write tool only for new files or complete rewrites
-- When creating new files, follow existing project conventions (naming, structure, style)
-- Test your changes mentally — think about edge cases and error paths
-- If a change affects multiple files, list all affected files before starting
-- Keep commits atomic — one logical change per commit when possible
-- Après chaque modification logique de fichiers, appelle le tool log_commit_note avec un résumé concis (1 ligne) de ce que tu as modifié et pourquoi. Cela construit incrémentalement le message de commit.
-
-## Code exploration: prefer graph tools over grep/find/ls
-When the project has been indexed by the knowledge graph (cbm_* tools are visible):
-- Use **cbm_search** instead of grep/find to find code by name, label, or meaning
-- Use **cbm_search_code** instead of grep -r for text/regex searches
-- Use **cbm_trace** instead of manually reading files to trace callers/callees
-- Use **cbm_code** to get source code of specific symbols
-- Use **cbm_arch** to understand the overall project structure
-- Use **cbm_diff** to analyze the impact of uncommitted changes
-
-Règles opérationnelles (déclencheurs concrets) :
-- AVANT toute 2e lecture du MÊME fichier → **cbm_code** sur le symbole visé.
-- AVANT toute recherche de symbole (définition/appelant/appelé) → **cbm_search** ou **cbm_trace**.
-- AVANT un grep structurel/récursif → **cbm_search_code**.
-- N'utilise read/grep/find/ls que si le graphe ne peut pas répondre (fichier hors
-  projet : Dockerfile, entrypoint.sh, config, script non indexé) ou si cbm_* est absent.
-
-These are 100x more token-efficient than file-by-file exploration. Use them when possible.
-grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
-  harness: `## Mode HARNESS — Chef de Projet
-
-Tu es le chef de projet. Tu discutes avec l'utilisateur et délègue l'exécution aux fonctions de routage.
-
-### Tes responsabilités
-- Comprendre la demande de l'utilisateur
-- Évaluer la complexité de la tâche
-- Choisir la bonne fonction de routage et lui déléguer
-- Présenter les résultats à l'utilisateur de façon claire
-- Coordonner plusieurs fonctions de routage si nécessaire
-
-### Règles ABSOLUES
-- Tu ne codes JAMAIS. Tu ne débugges JAMAIS. Tu ne fais JAMAIS de plan détaillé.
-- Tu ne lis JAMAIS le code pour investiguer un bug. L'investigation est le job des fonctions de routage.
-- Tu délègues TOUJOURS l'exécution via le tool delegate.
-- Tu peux répondre directement aux questions simples (conseils, explications, clarifications).
-- Quand l'utilisateur signale un bug, délègue IMMÉDIATEMENT à la fonction appropriée (review pour investiguer, execute pour fixer). Ne fais pas de recherche toi-même.
-- Quand tu n'es pas sûr, demande à l'utilisateur.
-
-### Quand déléguer vs répondre directement
-- **Réponds directement** : questions simples, conseils, explications, clarifications, synthèse de résultats
-- **Délègue** : toute tâche d'exécution (code, debug, review, test, doc, plan)
-- **Tâche complexe** : délègue d'abord à la fonction planning pour un plan, puis à la fonction execute
-- **Tâche simple** : délègue directement à la fonction execute
-- **Relecture / audit** : délègue à la fonction review
-- **Synthèse / rapport final** : délègue à la fonction integrate
-
-### Fonctions de routage disponibles
-| Fonction | Rôle |
-|----------|------|
-| planning | Planification, exploration, architecture |
-| execute | Implémentation : code, debug, tests, documentation |
-| review | Relecture, audit, qualité, sécurité |
-| integrate | Synthèse, rapport final, intégration |
-
-### Comment déléguer
-Utilise le tool delegate avec :
-- function : la fonction à appeler, parmi planning, execute, review, integrate
-- task : la tâche précise et auto-contenue
-- context : résumé concis et actionnable du contexte pertinent (2-5 phrases) : décisions clés, contraintes, fichiers concernés, ce qui a déjà été fait. Obligatoire dès que la conversation contient du contexte utile.
-
-⚠️ Le tool s'appelle EXACTEMENT \`delegate\` (paramètre \`function\`). \`delegate_to_expert\` n'existe plus : ce nom a été renommé. Si l'historique de la conversation (session reprise) contient d'anciens appels \`delegate_to_expert\`, ignore-les et appelle \`delegate\`.
-
-⚠ La fonction déléguée ne voit PAS la conversation — elle ne lit QUE task + context (+ le code du projet). Rédige TOUJOURS un résumé du contexte dans \`context\` avant de déléguer, même bref (2-3 phrases). Sans cela, la fonction travaille à l'aveugle sur ce qui s'est dit.
-
-### Après une délégation
-- Analyse le résultat retourné par la fonction
-- Si la fonction signale un problème ou un besoin de clarification -> demande à l'utilisateur
-- Si la tâche est terminée -> résume le résultat pour l'utilisateur
-- Si tu as besoin d'une autre fonction -> délègue à nouveau`,
-};
 
 // Default thinking levels per mode
 const DEFAULT_THINKING: Record<string, string> = {
@@ -2413,7 +2232,8 @@ async function applyModelAndThinking(
  * - Switch model (from project-specific mode config or default)
  * - Set thinking level
  * - Filter tools (read-only for review)
- * - Inject mode instructions into system prompt
+ * - Le prompt système (instructions/bannière de mode) est réassemblé automatiquement
+ *   par l'extension inline à chaque run (voir system-prompt.ts).
  */
 export async function applyModeToSession(mode: AgentMode, projectId: string): Promise<void> {
   const state = sessionsByProject.get(projectId);
@@ -2425,9 +2245,6 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
 
   // ── Apply model + thinking level ──
   await applyModelAndThinking(model, projectId, DEFAULT_THINKING[mode] || "medium");
-
-  // Sauvegarder les contextes projet + mémoire avant setActiveToolsByName (qui rebuild le prompt)
-  const preservedBlocks = extractPreservedContextBlocks((session as any)._baseSystemPrompt);
 
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
@@ -2441,7 +2258,7 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     // les appelle et boucle sur « Tool … not found »). Warn-only : ne casse pas
     // le mode si une extension n'a pas encore enregistré son tool.
     try {
-      const active = getActiveToolNamesForBanner(session);
+      const active: string[] = (session as any).getActiveToolNames?.() ?? [];
       if (!active.includes(DELEGATE_TOOL_NAME)) {
         console.warn(`[mode] harness: le tool '${DELEGATE_TOOL_NAME}' n'est PAS actif pour ${projectId} — délégation impossible. Outils: ${active.join(", ")}`);
       }
@@ -2454,33 +2271,6 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
     // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
     (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
   }
-
-  // ── Inject mode instructions into system prompt ──
-  const instructions = MODE_INSTRUCTIONS[mode] || "";
-  const identityOverride = MODE_IDENTITIES[mode] || "";
-
-  // Clean any previously injected mode blocks and identity overrides
-  const rawPrompt = (session as any)._baseSystemPrompt || "";
-  let prompt = cleanPromptForModeChange(rawPrompt);
-
-  // Pour les modes avec identité spécifique, remplace l'identité par défaut.
-  if (identityOverride) {
-    const { rest } = stripDefaultIdentity(prompt);
-    prompt = rest.trim() + "\n";
-    // Inject new identity with markers
-    prompt += `\n${MODE_IDENTITY_MARKER}\n${identityOverride}\n${MODE_IDENTITY_MARKER.replace("<!-- PI", "<!-- /PI")}\n\n`;
-  }
-
-  // Append mode-specific instructions with markers
-  if (instructions.trim()) {
-    prompt += `\n${MODE_BLOCK_MARKER_START}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n## Current Mode: ${mode.toUpperCase()}\n\n${instructions}\n${MODE_BLOCK_MARKER_START.replace("<!-- PI", "<!-- /PI")}${mode.toUpperCase()} ${MODE_BLOCK_MARKER_END}\n`;
-  }
-
-  // Réinjecter les contextes préservés (écrasés par setActiveToolsByName)
-  prompt = appendPreservedContextBlocks(prompt, preservedBlocks);
-
-  (session as any)._baseSystemPrompt = prompt;
-  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
 
   // ── Update state ──
   state.activeMode = mode;
@@ -2496,9 +2286,6 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   } catch (e: any) {
     console.warn(`[mode] Failed to persist activeMode for ${projectId}:`, e?.message || e);
   }
-
-  // Bannière de mode proéminente (réinjectée aussi avant chaque prompt via le wrapper)
-  reapplyModeBanner(session, projectId);
 
   emitModeChange(projectId, mode, false);
   emitSessionUpdate(projectId);
@@ -2546,31 +2333,11 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     }
   }
 
-  // Sauvegarder les contextes projet + mémoire avant setActiveToolsByName (qui rebuild le prompt)
-  const preservedBlocks = extractPreservedContextBlocks((session as any)._baseSystemPrompt);
-
   // Restore all tools (base + extension), hors tools d'orchestration (BUG-71)
   (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
 
-  // Restore clean prompt: strip mode blocks and identity overrides, then apply CODE mode
-  let prompt = cleanPromptForModeChange((session as any)._baseSystemPrompt || "");
-  // Restore default identity if it was stripped
-  const { identity } = stripDefaultIdentity(prompt);
-  if (!identity) {
-    // Default identity was stripped by a mode with a custom identity — we can't restore it perfectly,
-    // but the rest of the prompt (tools, guidelines, context) is still there.
-    // The Pi framework will have set it originally, so we just need to make sure
-    // the "Available tools" and other sections remain intact.
-  }
-  prompt = prompt.trim() + "\n";
-  prompt += `\n${MODE_BLOCK_MARKER_START}CODE ${MODE_BLOCK_MARKER_END}\n## Current Mode: CODE\n\n${MODE_INSTRUCTIONS.code}\n${MODE_BLOCK_MARKER_START.replace("\u003c!-- PI", "\u003c!-- /PI")}CODE ${MODE_BLOCK_MARKER_END}\n`;
-
-  // Réinjecter les contextes préservés (écrasés par setActiveToolsByName)
-  prompt = appendPreservedContextBlocks(prompt, preservedBlocks);
-
-  (session as any)._baseSystemPrompt = prompt;
-  (session as any).agent.state.systemPrompt = (session as any)._baseSystemPrompt;
-
+  // Le prompt (instructions + bannière CODE) est réassemblé automatiquement par
+  // l'extension inline au prochain run (l'état ci-dessous suffit).
   state.activeMode = "code";
 
   // Persiste le retour au mode code sur disque.
@@ -2583,7 +2350,6 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
     console.warn(`[mode] Failed to persist activeMode for ${projectId}:`, e?.message || e);
   }
 
-  reapplyModeBanner(session, projectId);
   emitModeChange(projectId, "code", false);
   emitSessionUpdate(projectId);
 }

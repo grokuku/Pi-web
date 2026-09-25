@@ -455,7 +455,7 @@ export type TaskCategory = "trivial" | "standard" | "complex" | "review";
 
 /**
  * Niveau de réflexion (reasoning effort) — aligné sur le type EXACT
- * `ThinkingLevel` du SDK pi-coding-agent 0.85.1
+ * `ThinkingLevel` du SDK pi-coding-agent 0.87.1
  * (`@earendil-works/pi-agent-core`).
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

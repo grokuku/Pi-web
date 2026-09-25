@@ -727,10 +727,10 @@ export default function (pi: ExtensionAPI) {
   console.log("[harness-orchestrator] Extension loaded");
 
   // ── Rappel FERME en fin de system prompt, à chaque turn, en mode HARNESS ──
-  // Même mécanisme que l'injection <!-- PI_PROJECT_CONTEXT --> de session.ts,
-  // côté extension : le handler reçoit le prompt assemblé du tour et peut le
-  // remplacer (override valable pour ce turn uniquement — pas d'accumulation dans
-  // _baseSystemPrompt). Le bloc est retiré/réinjecté à chaque fois (idempotent).
+  // Même mécanisme officiel que le prompt Pi-Web (backend/src/pi/system-prompt.ts) :
+  // le handler reçoit le prompt assemblé du tour et peut le remplacer (override
+  // valable pour ce turn uniquement — aucun cumul dans le transcript). Le bloc est
+  // retiré/réinjecté à chaque fois (idempotent).
   // GATE : détection du mode harness par la signature fiable (présence de
   // `delegate` dans les outils ACTIFS — cf. getEffectiveActiveMode dans
   // backend/src/pi/session.ts), avec fallback sur le marqueur de mode
@@ -879,7 +879,7 @@ export default function (pi: ExtensionAPI) {
       // tool_execution_update consécutifs d'un même toolCallId, droppedEvents.
       const subagentGate = createSubagentEventGate();
       // projectId du projet cible : ExtensionContext du SDK n'expose PAS de
-      // projectId (types 0.85.1) — fallback documenté = résolution HTTP
+      // projectId (types 0.87.1) — fallback documenté = résolution HTTP
       // /api/projects par cwd (resolveProjectId, déjà utilisée pour le
       // routage). null → toutes les émissions LOT 2a deviennent des no-ops
       // silencieux (une délégation ne dépend JAMAIS du streaming).
@@ -1243,8 +1243,9 @@ export default function (pi: ExtensionAPI) {
 
       try {
         // Créer une session temporaire pour la fonction
-        const { createAgentSession, SessionManager } = await import("@earendil-works/pi-coding-agent");
+        const { createAgentSession, DefaultResourceLoader, SessionManager } = await import("@earendil-works/pi-coding-agent");
         const { existsSync, unlinkSync } = await import("fs");
+        const { homedir } = await import("os");
 
         // (cwd est résolu dans le bloc d'état LOT 2a, avant le try externe.)
 
@@ -1284,11 +1285,42 @@ export default function (pi: ExtensionAPI) {
         // que les strings, le catch externe archivera sinon "rien à archiver".)
         pendingSessionFile = typeof tempSessionFile === "string" ? tempSessionFile : null;
 
+        // ── Prompt système du sous-agent (SDK 0.87.1) ──
+        // Ne plus écrire `_baseSystemPrompt` (getter sans setter en 0.87.1). Une
+        // extension INLINE, branchée sur le loader de la session temporaire,
+        // remplace le prompt à chaque run via l'API officielle `before_agent_start`.
+        // `subagentPromptState.systemPrompt` est renseigné APRÈS le calcul des blocs
+        // (rôle + carte + carnet STABLES) mais AVANT le premier `prompt()` ; le
+        // handler lit la ligne cwd produite par le SDK pour la réinjecter à
+        // l'identique. Préfixe byte-stable pour un couple (projet, rôle) → cache P3.
+        const subagentPromptState: { systemPrompt: string } = { systemPrompt: "" };
+        const subagentPromptExtension = (pi: any) => {
+          pi.on("before_agent_start", (event: any) => {
+            try {
+              if (!subagentPromptState.systemPrompt) return undefined;
+              // Le SDK 0.87.1 rend le cwd comme section `<cwd>…</cwd>` ; on la
+              // réinjecte telle quelle (le prompt forcé est opaque → sans cela le
+              // sous-agent perdrait son répertoire de travail).
+              const cwdSection = event.systemPrompt?.match(/<cwd>[\s\S]*?<\/cwd>/)?.[0] || "";
+              return { systemPrompt: subagentPromptState.systemPrompt + (cwdSection ? `\n\n${cwdSection}` : "") };
+            } catch {
+              return undefined;
+            }
+          });
+        };
+        const tempResourceLoader = new DefaultResourceLoader({
+          cwd,
+          agentDir: `${homedir()}/.pi/agent`,
+          extensionFactories: [{ name: "harness-subagent-prompt", factory: subagentPromptExtension, hidden: true }],
+        });
+        await tempResourceLoader.reload();
+
         // SDK 0.80+: modelRuntime remplace authStorage + modelRegistry.
         // Si on ne passe rien, le SDK crée un ModelRuntime par défaut (~/.pi/agent/auth.json).
         const result = await createAgentSession({
           cwd,
           sessionManager: tempSessionManager,
+          resourceLoader: tempResourceLoader,
         });
         const tempSession = result.session;
 
@@ -1312,7 +1344,7 @@ export default function (pi: ExtensionAPI) {
         // ré-enregistré) et setModel(qwen3.8-flash-next) jetait
         // « No API key for provider_x/qwen3.8-flash-next ».
         // On itère donc les VRAIS providers connus du runtime de la tempSession
-        // via ModelRuntime.getProviders() (API SDK 0.85.1, inclut les built-ins
+        // via ModelRuntime.getProviders() (API SDK 0.87.1, inclut les built-ins
         // de models.json) et on ré-enregistre chacun dans ce même runtime.
         // Convention de clé = backend/src/pi/session.ts l.1811 : clé existante
         // résolue via getAuth(), sinon sentinelle "ollama" — les serveurs locaux
@@ -1425,9 +1457,8 @@ export default function (pi: ExtensionAPI) {
             }
           } catch {}
 
-          // Set le system prompt APRÈS setActiveToolsByName (sinon écrasé)
-          // Préserver le "Current working directory:" du SDK en l'ajoutant après le prompt de la fonction
-          const cwdLine = (tempSession as any)._baseSystemPrompt?.match(/Current working directory: (.+)/)?.[0] || "";
+          // Le prompt système est porté par l'extension inline (subagentPromptState),
+          // résolu plus bas une fois les blocs STABLES calculés.
 
           // ── Carte du Repo automatique (P1, étude tokens sous-agents) ──
           // Le sous-agent démarre à contexte VIDE : on lui injecte d'office une
@@ -1483,14 +1514,11 @@ export default function (pi: ExtensionAPI) {
             console.warn(`[harness-orchestrator] Carnet d'exploration indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
           }
 
-          // Préfixe SYSTÈME stable (P3) : rôle + carte stable + carnet stable + cwd.
-          // Ces quatre blocs n'ont AUCUNE dépendance à la tâche → la totalité du
-          // prompt système est identique pour un couple (projet, rôle) et reste
-          // cachable entre deux délégations du même rôle.
-          const systemPromptWithCwd =
-            effectiveFunc.systemPrompt + repoMapBlock + explorationNotesBlock + (cwdLine ? `\n\n${cwdLine}` : "");
-          (tempSession as any)._baseSystemPrompt = systemPromptWithCwd;
-          (tempSession as any).agent.state.systemPrompt = systemPromptWithCwd;
+          // Préfixe SYSTÈME stable (P3) : rôle + carte stable + carnet stable (+ cwd
+          // réinjecté au run par l'extension inline). Ces blocs n'ont AUCUNE
+          // dépendance à la tâche → la totalité du prompt système est identique pour
+          // un couple (projet, rôle) et reste cachable entre deux délégations.
+          subagentPromptState.systemPrompt = effectiveFunc.systemPrompt + repoMapBlock + explorationNotesBlock;
 
           // ── Annexe de pertinence (P3) → PREMIER MESSAGE USER ──────────────
           // Les éléments VARIABLES par tâche (carte CBM boostée P1 + carnet
@@ -1707,8 +1735,9 @@ export default function (pi: ExtensionAPI) {
             // Si le signal est déjà aborté avant le lancement, ne pas relancer un prompt
             if (signal?.aborted) {
               // P0 : abort sans travail → échec, boîte noire à archiver
-              archiveCause = abortCause();
-              throw new Error(abortMessageFor(archiveCause));
+              const cause = abortCause();
+              archiveCause = cause;
+              throw new Error(abortMessageFor(cause));
             }
 
             // Valeurs lues au RUNTIME via le pont (un changement de réglage

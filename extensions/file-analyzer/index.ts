@@ -10,7 +10,7 @@
  * Uses plain JSON Schema for parameters (zero dependencies).
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type JSONSchema = { type: string; [key: string]: unknown };
 
@@ -76,6 +76,7 @@ export default function (pi: ExtensionAPI) {
               type: "text" as const,
               text: `Error analyzing file: ${response.status} ${response.statusText}\n${errorText}`,
             }],
+            details: undefined,
           };
         }
 
@@ -91,6 +92,7 @@ export default function (pi: ExtensionAPI) {
             type: "text" as const,
             text: result.content,
           }],
+          details: undefined,
         };
       } catch (err: any) {
         return {
@@ -98,6 +100,7 @@ export default function (pi: ExtensionAPI) {
             type: "text" as const,
             text: `Failed to analyze file ${file_id}: ${err.message}\n\nThe file may not be found on the server, or the Pi-Web backend may not be running.`,
           }],
+          details: undefined,
         };
       }
     },

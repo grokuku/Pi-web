@@ -2,7 +2,7 @@
  * Sentinelle d'authentification pour les providers enregistrés dans le runtime Pi.
  *
  * ── Pourquoi une sentinelle ? ──
- * Le SDK Pi (@earendil-works/pi-coding-agent 0.85.1) exige une clé API configurée
+ * Le SDK Pi (@earendil-works/pi-coding-agent 0.87.1) exige une clé API configurée
  * pour chaque provider avant tout setModel/completions :
  *   - `ModelRuntime.checkAuth(providerId)` retourne `undefined` si le provider
  *     n'a aucune méthode d'auth (composeApiKeyAuth → undefined quand ni clé

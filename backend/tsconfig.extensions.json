@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "outDir": "./.tsbuild-extensions",
+    "declaration": false,
+    "sourceMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["./node_modules/@earendil-works/pi-coding-agent"],
+      "better-sqlite3": ["./node_modules/@types/better-sqlite3"]
+    }
+  },
+  "include": ["../extensions/**/*.ts"],
+  "exclude": ["node_modules", "dist", "../extensions/**/node_modules"]
+}

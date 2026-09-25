@@ -66,7 +66,7 @@ export interface SignalsInput {
 
 /**
  * Niveau de réflexion (reasoning effort) supporté par le SDK pi-coding-agent
- * 0.85.1 : c'est le type EXACT `ThinkingLevel` exporté par
+ * 0.87.1 : c'est le type EXACT `ThinkingLevel` exporté par
  * `@earendil-works/pi-agent-core` (dist/types.d.ts).
  *
  * "off" désactive la réflexion ; "minimal".."max" correspondent à un effort
