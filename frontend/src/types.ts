@@ -296,6 +296,9 @@ export interface SubAgentRun {
   status: SubAgentRunStatus;
   /** Timestamp de démarrage (live). */
   startedAt?: number;
+  /** Timestamp du DERNIER événement streamé (live) — sert à la détection de
+   *  blocage par SILENCE (et non par durée). */
+  lastEventAt?: number;
   /** Timestamp de fin (live). */
   endedAt?: number;
   isError: boolean;

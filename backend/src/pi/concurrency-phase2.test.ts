@@ -151,7 +151,8 @@ describe("provider inconnu / isolation des providers", () => {
 
 describe("watchdog anti-blocage", () => {
   it("seuil = max(30 min, 3 × queueTimeoutMs)", () => {
-    manager.setConfig({ queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    // 5 min → 15 min < 30 min : le plancher de 30 min s'applique.
+    manager.setConfig({ queueTimeoutMs: 300_000 });
     expect(manager.getSlotWatchdogMs()).toBe(LLM_SLOT_WATCHDOG_MIN_MS);
     manager.setConfig({ queueTimeoutMs: 3_600_000 }); // 1 h → 3 h > 30 min
     expect(manager.getSlotWatchdogMs()).toBe(3 * 3_600_000);

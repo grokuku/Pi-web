@@ -22,6 +22,7 @@ import { CollapsibleBlock } from "./CollapsibleBlock";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallTimer } from "./ToolCallTimer";
 import { computeDurationMs, formatToolDuration } from "../../utils/toolSummaries";
+import { dedupeSubAgentEndTexts } from "../../utils/subagent-partial";
 import {
   getRun,
   isRunConcurrent,
@@ -142,6 +143,9 @@ export function SubAgentHeader({ run, toolCall, running, failed, stuck, duration
 export function SubAgentRunBody({ run, blockId, fallback }: { run?: SubAgentRun; blockId: string; fallback?: string }) {
   const { t } = useTranslation();
   const hasStructured = !!run && (run.messages.length > 0 || run.actions.length > 0 || !!run.end);
+  // P5 : le partiel ne doit apparaître qu'UNE fois. On masque une source de
+  // fin (errorMessage / responsePreview) déjà contenue dans le mini-fil.
+  const endVisibility = dedupeSubAgentEndTexts(run);
   return (
     <div className="flex flex-col gap-1.5">
       {/* Messages du sous-agent : réflexion (ThinkingBlock) + texte tronqué. */}
@@ -194,10 +198,10 @@ export function SubAgentRunBody({ run, blockId, fallback }: { run?: SubAgentRun;
             {run.end.durationMs > 0 ? ` · ${formatToolDuration(run.end.durationMs)}` : ""}
           </span>
           {run.end.cause && <div className="text-hacker-text-dim/80">{t("chat.subAgentCause")} : {run.end.cause}</div>}
-          {run.end.errorMessage && (
+          {run.end.errorMessage && endVisibility.showErrorMessage && (
             <div className="text-red-400/90 whitespace-pre-wrap break-words max-h-40 overflow-y-auto mt-0.5">{run.end.errorMessage}</div>
           )}
-          {run.end.responsePreview && (
+          {run.end.responsePreview && endVisibility.showResponsePreview && (
             <div className="mt-0.5 whitespace-pre-wrap break-words text-hacker-text-dim/70 max-h-32 overflow-y-auto">
               {run.end.responsePreview}
               {run.end.responsePreview.length >= 500 && <span className="italic"> {t("chat.subAgentExtract")}</span>}

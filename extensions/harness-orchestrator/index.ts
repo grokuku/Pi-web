@@ -24,6 +24,39 @@ import {
   classifyFailure,
 } from "../../backend/src/pi/harness-archive.js";
 
+// ── P2/P3 : distinction abort UTILISATEUR / abort INTERNE + garde de course ──
+// Module backend PUR (backend/src/pi/harness-abort.ts), résolu par jiti comme
+// harness-archive. Empêche (P2) qu'un abort interne soit étiqueté
+// « abort-utilisateur » et (P3) qu'un rejet de promesse perdante de course
+// remonte en unhandledRejection (ce qui tuait le backend).
+import {
+  abortMessageFor,
+  createRaceGuard,
+  isAbortInterruption,
+  resolveAbortCause,
+  swallowRejection,
+} from "../../backend/src/pi/harness-abort.js";
+
+// ── Détecteur de SILENCE DE FLUX des sous-agents ─────────────────────────
+// Module backend PUR (backend/src/pi/stream-silence.ts) : la liveness d'un run
+// n'est plus sa DURÉE mais la production continue d'événements. Tant que le
+// flux émet, le compteur de silence se réinitialise → une génération de
+// plusieurs heures n'est pas coupée ; seul un silence réel (aucun événement
+// pendant le délai configuré, défaut 15 min) arrête proprement le sous-agent.
+// Les valeurs (délai de silence + garde-fou de dernier recours) sont lues au
+// RUNTIME via le pont `__piWebConcurrency` (l'extension est chargée par jiti).
+import {
+  DEFAULT_AGENT_HARD_TIMEOUT_MS,
+  DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  StreamSilenceDetector,
+  hardTimeoutMessage,
+  isHardTimeoutMessage,
+  isSilenceTimeoutMessage,
+  sanitizeAgentHardTimeoutMs,
+  sanitizeStreamSilenceTimeoutMs,
+  streamSilenceMessage,
+} from "../../backend/src/pi/stream-silence.js";
+
 // ── LOT 2a (refonte chat) : streaming de l'activité des sous-agents ──
 // Module backend (backend/src/pi/harness-stream.ts), résolu par jiti comme
 // harness-archive. Contient :
@@ -341,6 +374,29 @@ interface LLMConcurrencyBridge {
   acquireLLMSlot(slotKey: string, label: string, providerId?: string): Promise<void>;
   releaseLLMSlot(slotKey: string): void;
   getEffectiveLLMLimit(providerId: string): number;
+  // Lecture runtime de la config du détecteur de silence (optionnel : un pont
+  // ancien/partiel retombe sur les défauts du module stream-silence).
+  getStreamSilenceTimeoutMs?(): number;
+  getAgentHardTimeoutMs?(): number;
+}
+
+/**
+ * Résout la config du détecteur de silence au RUNTIME (pont globalThis) — un
+ * changement de réglage s'applique à la délégation suivante sans redémarrage.
+ * Valeur illisible/invalide → repli sur les défauts du module (jamais d'échec).
+ */
+function resolveStreamSilenceConfig(): { silenceTimeoutMs: number; hardTimeoutMs: number } {
+  const b = getConcurrencyBridge();
+  let silenceTimeoutMs: unknown = DEFAULT_STREAM_SILENCE_TIMEOUT_MS;
+  let hardTimeoutMs: unknown = DEFAULT_AGENT_HARD_TIMEOUT_MS;
+  try {
+    if (typeof b?.getStreamSilenceTimeoutMs === "function") silenceTimeoutMs = b.getStreamSilenceTimeoutMs();
+    if (typeof b?.getAgentHardTimeoutMs === "function") hardTimeoutMs = b.getAgentHardTimeoutMs();
+  } catch {}
+  return {
+    silenceTimeoutMs: sanitizeStreamSilenceTimeoutMs(silenceTimeoutMs),
+    hardTimeoutMs: sanitizeAgentHardTimeoutMs(hardTimeoutMs),
+  };
 }
 
 // Repli sûr : si le pont est absent (tests, hôte inattendu), on ne bloque PAS
@@ -363,6 +419,24 @@ function getConcurrencyBridge(): LLMConcurrencyBridge | null {
 
 // Compteur monotone : slotKey unique par appel de sous-agent (jamais partagé).
 let subagentSlotSeq = 0;
+
+// ── Pont global : abort UTILISATEUR vs abort INTERNE (P2) ─────────────────
+// Le backend publie `__piWebWasSessionAbortedByUser__(projectId)` (session.ts) :
+// true UNIQUEMENT si le dernier abort subi par la session du projet vient d'un
+// abandon utilisateur explicite (bouton ABORT → abortPi). Un abort interne
+// (timeout de session, shutdown, switchMode, reloadModelRegistry) laisse le
+// marqueur à false. Prudence : sans pont (tests, hôte inattendu), on suppose un
+// abort interne — jamais de faux « abort-utilisateur ».
+const USER_ABORT_BRIDGE_KEY = "__piWebWasSessionAbortedByUser__";
+
+function isUserInitiatedAbort(projectId: string | null): boolean {
+  if (!projectId) return false;
+  try {
+    const bridge = (globalThis as any)[USER_ABORT_BRIDGE_KEY];
+    if (typeof bridge === "function") return bridge(projectId) === true;
+  } catch {}
+  return false;
+}
 
 /**
  * Extrait le TEXTE joint d'une liste de blocs content SDK (résultat ou
@@ -396,7 +470,10 @@ function statusFromCause(cause: string | null, success: boolean): SubagentEndSta
       return "timeout-inactivity";
     case "timeout-global":
       return "timeout-global";
+    // P2 : une interruption reste « aborted » quel que soit son motif ; seul le
+    // libellé de cause (abort-utilisateur vs abort-session) les distingue.
     case "abort-utilisateur":
+    case "abort-session":
       return "aborted";
     default:
       return "error";
@@ -1448,21 +1525,19 @@ export default function (pi: ExtensionAPI) {
           }
           functionPrompt += taskRelevance;
 
-          // ── BUG-59 (porté de la v2 vers la v3) : timeout à activité + retry ──
-          // L'ancien timeout FIXE de 300s couvrait TOUT le cycle prompt() (boucle agent
-          // complète : LLM → tool calls → LLM → ...). Une fonction qui lit des fichiers ou
-          // lance bash itère facilement au-delà de 300s → elle était tuée alors qu'elle
-          // travaillait activement.
-          // Désormais :
-          //  - INACTIVITY_TIMEOUT_MS : le timer d'inactivité se reset à chaque event reçu
-          //    de la session temp (text_delta, tool_execution_start, tool_execution_end,
-          //    message_update, etc.). Tant que la fonction travaille, elle n'est pas tuée.
-          //  - GLOBAL_MAX_TIMEOUT_MS : timeout global max (safety net) qui ne se reset
-          //    JAMAIS, pour empêcher une fonction de tourner indéfiniment.
-          //  - Retry (1 retry = 2 attempts max) sur timeout d'inactivité UNIQUEMENT.
-          const INACTIVITY_TIMEOUT_MS = 300_000;   // 5 min sans activité → timeout
-          const GLOBAL_MAX_TIMEOUT_MS = 1_800_000; // 30 min au total (safety net)
-          const MAX_ATTEMPTS = 2;                  // 1 retry sur timeout d'inactivité
+          // ── DÉTECTEUR DE SILENCE DE FLUX (remplace l'ancien timeout fixe) ──
+          // La liveness d'un sous-agent n'est PLUS sa DURÉE mais le fait qu'il
+          // PRODUISE encore des événements. Tant que le flux émet (text_delta,
+          // tool_execution_start/end, message_update…), le compteur de silence
+          // est réinitialisé → une génération de PLUSIEURS HEURES n'est jamais
+          // coupée. Seul un SILENCE RÉEL (aucun événement pendant le délai
+          // configuré, défaut 15 min) arrête proprement la délégation.
+          //  - Plus AUCUN plafond de durée fixe : le garde-fou de dernier
+          //    recours est OPTIONNEL et DÉSACTIVÉ par défaut (0).
+          //  - Retry (1 retry = 2 attempts max) sur silence de flux uniquement.
+          //  - Un sous-agent EN ATTENTE de slot LLM n'émet rien : le détecteur
+          //    est mis en pause pendant cette attente légitime (cf. plus bas).
+          const MAX_ATTEMPTS = 2;                  // 1 retry sur silence de flux
 
           // Récupération partielle au timeout : les erreurs de timeout sont
           // pré-formatées (préfixe "❌") avec un extrait du travail déjà produit
@@ -1477,8 +1552,8 @@ export default function (pi: ExtensionAPI) {
             return new Error(text);
           };
 
-          // Callback de reset du timer d'inactivité — connecté au subscribe ci-dessous
-          let resetInactivityFn: (() => void) | null = null;
+          // Callback de reset du compteur de silence — connecté au subscribe ci-dessous
+          let resetSilenceFn: (() => void) | null = null;
 
           // ── Streaming d'avancement du sous-agent (BUG-67) ───────────────────
           // À chaque event du sous-agent, on émet un partialResult MULTI-LIGNES
@@ -1587,7 +1662,7 @@ export default function (pi: ExtensionAPI) {
           // fonction travaille → reset du timer. Les events alimentent AUSSI le
           // partialResult streamé vers le frontend (tool_execution_update).
           tempUnsub = tempSession.subscribe((event: any) => {
-            if (resetInactivityFn) resetInactivityFn();
+            if (resetSilenceFn) resetSilenceFn();
             try {
               eventCount++;
               lastEventAt = Date.now();
@@ -1618,58 +1693,92 @@ export default function (pi: ExtensionAPI) {
           emitProgress(`sous-agent ${effectiveFunc.label} lancé...`);
 
           /**
-           * Exécute prompt() avec timeout d'inactivité + timeout global + abort signal.
-           * Retourne true si succès, false si timeout d'inactivité (pour retry).
+           * Exécute prompt() avec DÉTECTEUR DE SILENCE DE FLUX + abort signal.
+           * Retourne true si succès, false si silence de flux (pour retry).
            * Throw sur abort signal ou erreurs modèle (pas de retry).
            */
           const runPromptWithTimeouts = async (): Promise<boolean> => {
+            // P2 : cause d'abandon dérivée d'une PREUVE (marqueur backend), pas
+            // du message. Un abort interne ne doit jamais devenir
+            // « abort-utilisateur ».
+            const abortCause = () =>
+              resolveAbortCause(isUserInitiatedAbort(subagentProjectId));
+
             // Si le signal est déjà aborté avant le lancement, ne pas relancer un prompt
             if (signal?.aborted) {
               // P0 : abort sans travail → échec, boîte noire à archiver
-              archiveCause = "abort-utilisateur";
-              throw new Error("Délégation interrompue par l'utilisateur (abort de l'orchestrator)");
+              archiveCause = abortCause();
+              throw new Error(abortMessageFor(archiveCause));
             }
 
-            let inactivityTimer: ReturnType<typeof setTimeout>;
-            let globalTimer: ReturnType<typeof setTimeout>;
+            // Valeurs lues au RUNTIME via le pont (un changement de réglage
+            // s'applique dès la délégation suivante, sans redémarrage).
+            const silenceCfg = resolveStreamSilenceConfig();
+            // Le détecteur est propre à CHAQUE tentative (retry = nouveau compteur).
+            const detector = new StreamSilenceDetector({
+              silenceTimeoutMs: silenceCfg.silenceTimeoutMs,
+              hardTimeoutMs: silenceCfg.hardTimeoutMs,
+            });
+
+            // P3 : garde de course — aucun callback de timer ne doit rejeter
+            // après la fin de la course (finish() est posé en finally).
+            const raceGuard = createRaceGuard();
+            let detectorTimer: ReturnType<typeof setInterval> | null = null;
             let rejectTimeout: ((err: Error) => void) | null = null;
             let abortHandler: (() => void) | null = null;
+            let warnedOnce = false;
 
-            const resetInactivity = () => {
-              clearTimeout(inactivityTimer!);
-              inactivityTimer = setTimeout(() => {
-                (tempSession as any).abort?.().catch(() => {});
-                rejectTimeout?.(new Error(
-                  `Fonction ${effectiveFunction} inactive depuis ${INACTIVITY_TIMEOUT_MS / 1000}s — timeout d'inactivité`
-                ));
-              }, INACTIVITY_TIMEOUT_MS);
-            };
-
-            // Connecter le reset au subscription handler de la session temp
-            resetInactivityFn = resetInactivity;
+            // Chaque événement reçu de la tempSession prouve que le flux vit →
+            // il réinitialise le compteur de silence (cf. subscribe plus haut).
+            resetSilenceFn = () => detector.touch();
 
             const timeoutPromise = new Promise<void>((_, reject) => {
               rejectTimeout = reject;
-              resetInactivity();
-              // Timeout global max (safety net — ne se reset jamais)
-              globalTimer = setTimeout(() => {
-                (tempSession as any).abort?.().catch(() => {});
-                reject(new Error(
-                  `Fonction ${effectiveFunction} a dépassé le timeout global de ${GLOBAL_MAX_TIMEOUT_MS / 1000}s`
-                ));
-              }, GLOBAL_MAX_TIMEOUT_MS);
+              // Vérification périodique (aucun timer par event : le compteur
+              // est une simple horloge, réinitialisée par touch()).
+              detectorTimer = setInterval(() => {
+                const verdict = detector.evaluate();
+                if (verdict.status === "silence") {
+                  raceGuard.guard(() => {
+                    (tempSession as any).abort?.().catch(() => {});
+                    reject(new Error(streamSilenceMessage(effectiveFunction, verdict.silentMs)));
+                  });
+                } else if (verdict.status === "hard-timeout") {
+                  raceGuard.guard(() => {
+                    (tempSession as any).abort?.().catch(() => {});
+                    reject(new Error(hardTimeoutMessage(effectiveFunction, verdict.elapsedMs)));
+                  });
+                } else if (verdict.status === "warning") {
+                  // Alerte progressive : distingue « long mais vivant » de « bloqué ».
+                  if (!warnedOnce) {
+                    warnedOnce = true;
+                    console.warn(
+                      `[harness-orchestrator] Fonction ${effectiveFunction} silencieuse depuis ` +
+                      `${Math.round(verdict.silentMs / 1000)}s (seuil d'arrêt : ${Math.round(silenceCfg.silenceTimeoutMs / 1000)}s)`,
+                    );
+                  }
+                }
+              }, SILENCE_TICK_MS);
+              (detectorTimer as any)?.unref?.();
             });
+            // P3 : une promesse perdante de la course ne doit JAMAIS produire de
+            // rejet non géré (sinon le handler unhandledRejection tue le process).
+            swallowRejection(timeoutPromise);
 
             // Abort signal de l'orchestrator → abort la fonction aussi (message clair)
             const abortPromise = signal
               ? new Promise<void>((_, reject) => {
                   abortHandler = () => {
-                    (tempSession as any).abort?.().catch(() => {});
-                    reject(new Error("Délégation interrompue par l'utilisateur (abort de l'orchestrator)"));
+                    raceGuard.guard(() => {
+                      (tempSession as any).abort?.().catch(() => {});
+                      reject(new Error(abortMessageFor(abortCause())));
+                    });
                   };
                   signal.addEventListener("abort", abortHandler);
                 })
               : new Promise<void>(() => {}); // jamais résout si pas de signal
+            // P3 : idem — la promesse d'abort perdante est neutralisée.
+            swallowRejection(abortPromise);
 
             // ── Phase 2 : slot LLM par provider pour l'appel du sous-agent ──
             // Le provider est résolu APRÈS le setModel (tempSession.model), donc
@@ -1677,17 +1786,25 @@ export default function (pi: ExtensionAPI) {
             // sous-agent ne dispose PAS du tool `delegate` → il ne sous-délègue
             // jamais, donc le slot n'est jamais conservé pendant l'attente d'une
             // sous-délégation. Libération garantie dans le finally ci-dessous.
+            // ⚠️ Un sous-agent EN ATTENTE de slot n'émet AUCUN événement : sans
+            // pause, le détecteur de silence le tuerait à tort. On neutralise
+            // donc le compteur pendant toute attente légitime sans flux.
             const bridge = getConcurrencyBridge();
             const subagentProvider = (tempSession as any)?.model?.provider ?? "__default__";
             let subagentSlotKey: string | null = null;
             if (bridge) {
               subagentSlotKey =
                 `${subagentProvider}::${subagentProjectId ?? "unknown"}::subagent::${++subagentSlotSeq}`;
-              await bridge.acquireLLMSlot(
-                subagentSlotKey,
-                `subagent:${effectiveFunction}`,
-                subagentProvider,
-              );
+              detector.pause();
+              try {
+                await bridge.acquireLLMSlot(
+                  subagentSlotKey,
+                  `subagent:${effectiveFunction}`,
+                  subagentProvider,
+                );
+              } finally {
+                detector.resume();
+              }
             }
 
             try {
@@ -1702,48 +1819,64 @@ export default function (pi: ExtensionAPI) {
               // BUG-67 : si l'orchestrator a été aborté pendant que la fonction travaillait,
               // on tente de récupérer ce que la fonction a déjà produit avant de rendre la main.
               // Le travail est souvent terminé (fichiers modifiés) — seule la réponse finale manque.
-              if (msg.includes("abort de l'orchestrator")) {
-                // P0 : abort de l'orchestrator → échec (avec ou sans travail
-                // récupéré), boîte noire à archiver dans tous les cas.
-                archiveCause = "abort-utilisateur";
+              if (isAbortInterruption(msg)) {
+                // P0 : interruption → échec (avec ou sans travail récupéré),
+                // boîte noire à archiver dans tous les cas.
+                // P2 : étiquette EXACTE — « abort-utilisateur » seulement sur
+                // preuve d'un abandon utilisateur, sinon « abort-session ».
+                const cause = abortCause();
+                archiveCause = cause;
                 const partial = collectExpertResponse(tempSession);
+                // P5 : motif COURT dans l'UI/archive. Le partiel est affiché UNE
+                // SEULE fois (responsePreview collecté au finally) — l'embarquer
+                // aussi dans errorMessage produisait un triple affichage.
+                archiveErrorMessage = `${abortMessageFor(cause)} (récupéré : ${partial.length} chars)`;
                 if (partial) {
                   console.log(`[harness-orchestrator] Fonction ${effectiveFunction} interrompue mais ${partial.length} chars récupérés`);
-                  throw new Error(`Délégation interrompue par l'utilisateur (abort de l'orchestrator). Travail récupéré (${partial.length} chars) :\n\n${partial.slice(0, 2000)}`);
+                  // Le partiel reste utile à l'orchestrator (résultat du tool) :
+                  // joint au message d'erreur levé, mais SANS repasser par
+                  // archiveErrorMessage (déjà fixé court ci-dessus).
+                  throw new Error(`${archiveErrorMessage}\n\n${partial.slice(0, 2000)}`);
                 }
+                throw new Error(archiveErrorMessage);
               }
               // Timeout global : l'abort de la session temp est déjà déclenché —
               // on attend qu'il se termine (le dernier message assistant partiel
               // atterrit dans l'historique) puis on le collecte avant de rejeter
-              // (pas de retry sur le timeout global).
-              if (msg.includes("timeout global")) {
-                // P0 : pas de retry sur le timeout global → échec définitif.
+              // Garde-fou de dernier recours (OPTIONNEL, désactivé par défaut) :
+              // pas de retry → échec définitif.
+              if (isHardTimeoutMessage(msg)) {
+                // P0 : pas de retry sur le garde-fou global → échec définitif.
                 archiveCause = "timeout-global";
                 try { await tempSession.waitForIdle(); } catch {}
                 const partial = collectExpertResponse(tempSession);
-                console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: timeout global — ${partial.length} chars récupérés`);
-                throw timeoutError("timeout global", partial);
+                console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: garde-fou de dernier recours — ${partial.length} chars récupérés`);
+                // P5 : errorMessage court, le partiel vit dans responsePreview.
+                archiveErrorMessage = `${requestedFunc.label} a échoué (garde-fou de dernier recours) (récupéré : ${partial.length} chars)`;
+                throw timeoutError("garde-fou de dernier recours", partial);
               }
-              // Retry UNIQUEMENT sur timeout d'inactivité.
+              // Retry UNIQUEMENT sur silence de flux (le flux peut reprendre).
               // Pas de retry sur abort signal ni sur les erreurs modèle.
-              if (msg.includes("inactivité") || msg.includes("inactivity") || msg.includes("Inactivity")) {
-                console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: timeout d'inactivité — ${msg}`);
+              if (isSilenceTimeoutMessage(msg)) {
+                console.warn(`[harness-orchestrator] Fonction ${effectiveFunction}: silence de flux — ${msg}`);
                 return false; // signal pour retry
               }
               throw err; // autre erreur → propagate
             } finally {
               // Phase 2 : TOUJOURS libérer le slot (succès, exception, abort,
-              // timeout d'inactivité/global). Un échec de libération ne doit pas
+              // silence de flux/garde-fou). Un échec de libération ne doit pas
               // masquer l'issue réelle de la délégation.
               if (bridge && subagentSlotKey) bridge.releaseLLMSlot(subagentSlotKey);
-              clearTimeout(inactivityTimer!);
-              clearTimeout(globalTimer!);
+              // P3 : marquer la course terminée AVANT de couper les timers — un
+              // callback de timer déjà en file ne peut plus rejeter.
+              raceGuard.finish();
+              if (detectorTimer) clearInterval(detectorTimer);
               if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
-              resetInactivityFn = null; // déconnecter le callback
+              resetSilenceFn = null; // déconnecter le callback
             }
           };
 
-          // Exécution avec retry (1 retry sur timeout d'inactivité uniquement)
+          // Exécution avec retry (1 retry sur silence de flux uniquement)
           let succeeded = false;
           for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             attemptsMade = attempt; // P0 : tentatives réellement jouées (meta d'archivage)
@@ -1752,29 +1885,31 @@ export default function (pi: ExtensionAPI) {
               succeeded = true;
               break;
             }
-            // Timeout d'inactivité — retry si possible
+            // Silence de flux — retry si possible
             if (attempt < MAX_ATTEMPTS) {
-              console.log(`[harness-orchestrator] Fonction ${effectiveFunction} a timeouté (attempt ${attempt}/${MAX_ATTEMPTS}). Retry en cours...`);
+              console.log(`[harness-orchestrator] Fonction ${effectiveFunction} a été arrêtée (silence de flux, attempt ${attempt}/${MAX_ATTEMPTS}). Retry en cours...`);
               // BUG-70 : l'abort du 1er attempt est asynchrone — attendre que la run
               // soit vraiment terminée (et tous les event listeners settle) sinon le
               // 2e prompt() jette "Agent is already processing a prompt".
               // waitForIdle() résout quand la run et les listeners ont fini.
               try { await tempSession.waitForIdle(); } catch {}
             } else {
-              console.error(`[harness-orchestrator] Fonction ${effectiveFunction} a timeouté définitivement après ${MAX_ATTEMPTS} attempts.`);
+              console.error(`[harness-orchestrator] Fonction ${effectiveFunction} arrêtée définitivement (silence de flux) après ${MAX_ATTEMPTS} attempts.`);
             }
           }
           if (!succeeded) {
-            // P0 : timeout d'inactivité épuisé (2 attempts) → échec définitif,
+            // P0 : silence de flux épuisé (2 attempts) → échec définitif,
             // cause explicite pour l'archivage de la boîte noire.
             archiveCause = "timeout-inactivite";
-            // Récupération partielle au timeout : attendre que l'abort de la
+            // Récupération partielle au silence : attendre que l'abort de la
             // session temp soit terminé (le dernier message assistant partiel
             // atterrit dans l'historique) puis le collecter pour l'orchestrator.
             try { await tempSession.waitForIdle(); } catch {}
             const partial = collectExpertResponse(tempSession);
-            console.warn(`[harness-orchestrator] Fonction ${effectiveFunction} a timeouté définitivement — ${partial.length} chars récupérés`);
-            throw timeoutError("timeout d'inactivité", partial);
+            console.warn(`[harness-orchestrator] Fonction ${effectiveFunction} arrêtée définitivement (silence de flux) — ${partial.length} chars récupérés`);
+            // P5 : errorMessage court, le partiel vit dans responsePreview.
+            archiveErrorMessage = `${requestedFunc.label} a échoué (flux silencieux) (récupéré : ${partial.length} chars)`;
+            throw timeoutError("flux silencieux", partial);
           }
 
           // Collecter la réponse

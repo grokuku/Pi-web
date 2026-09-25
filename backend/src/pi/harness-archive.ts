@@ -60,6 +60,7 @@ export type HarnessFailureCause =
   | "timeout-inactivite"
   | "timeout-global"
   | "abort-utilisateur"
+  | "abort-session"
   | "erreur-modele"
   | "reponse-vide"
   | "erreur-sdk"
@@ -75,7 +76,12 @@ export type HarnessFailureCause =
  */
 export function classifyFailure(message: string): HarnessFailureCause {
   const msg = String(message || "").toLowerCase();
-  if (msg.includes("abort")) return "abort-utilisateur";
+  // P2 : « abort-utilisateur » exige une PREUVE d'abandon utilisateur (le
+  // message doit mentionner l'utilisateur). Tout autre abort est INTERNE
+  // (timeout de session, shutdown, switchMode, reloadModelRegistry) : on
+  // l'étiquette « abort-session », jamais « abort-utilisateur ».
+  if (msg.includes("utilisateur")) return "abort-utilisateur";
+  if (msg.includes("abort")) return "abort-session";
   if (msg.includes("timeout global")) return "timeout-global";
   // "inact" couvre "inactivité" (fr) et "inactivity" (en) — mêmes messages.
   if (msg.includes("inact")) return "timeout-inactivite";

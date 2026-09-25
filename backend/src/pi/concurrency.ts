@@ -21,6 +21,12 @@
  */
 
 import { logger } from "../utils/logger.js";
+import {
+  DEFAULT_AGENT_HARD_TIMEOUT_MS,
+  DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  sanitizeAgentHardTimeoutMs,
+  sanitizeStreamSilenceTimeoutMs,
+} from "./stream-silence.js";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -29,23 +35,34 @@ export interface ConcurrencyConfig {
   maxAgentSlots: number;  // sessions Pi SDK simultanées max (global, non segmenté par provider)
   providerMaxLLMSlots?: Record<string, number>;  // limite LLM par provider (override du défaut global)
   queueTimeoutMs?: number;  // délai max d'attente en file avant rejet (ms)
+  streamSilenceTimeoutMs?: number;  // détecteur de silence de flux (ms ; 0 = illimité)
+  agentHardTimeoutMs?: number;      // garde-fou de dernier recours (ms ; 0 = désactivé)
 }
 
 // ── Timeout de file ──
-// Défaut généreux (10 min) : un sous-agent HARNESS peut être mis en file
-// derrière un provider saturé et attendre plusieurs minutes sans être perdu.
-// L'ancien 60 s fixe était un plafond arbitraire qui tuait ces attentes.
-// Bornes exposées pour la validation route (5 s..1 h) et la normalisation.
-export const DEFAULT_QUEUE_TIMEOUT_MS = 600_000;
+// Défaut très généreux (1 h) : un sous-agent HARNESS peut être mis en file
+// derrière un provider saturé pendant une longue génération (plusieurs heures
+// côté utilisateur) sans devoir être rejeté. L'ancien 60 s fixe était un
+// plafond arbitraire qui tuait ces attentes ; l'ancien défaut de 10 min reste
+// insuffisant pour les générations longues. Bornes exposées pour la validation
+// route (5 s..12 h) et la normalisation. La borne haute est VOLONTAIREMENT
+// au-dessus du défaut, pour que le réglage reste ajustable vers le haut.
+export const DEFAULT_QUEUE_TIMEOUT_MS = 3_600_000;
 export const MIN_QUEUE_TIMEOUT_MS = 5_000;
-export const MAX_QUEUE_TIMEOUT_MS = 3_600_000;
+export const MAX_QUEUE_TIMEOUT_MS = 12 * 3_600_000; // 12 h
+
+// Ancien défaut (10 min) conservé pour la migration de la config persistée :
+// une valeur stockée EXACTEMENT égale est considérée comme « non personnalisée »
+// et alignée sur le nouveau défaut (cf. model-library.ts:normalizeConcurrency).
+export const LEGACY_DEFAULT_QUEUE_TIMEOUT_MS = 600_000;
 
 // ── Watchdog anti-blocage ──
 // Un slot LLM ne devrait jamais rester détenu beaucoup plus longtemps qu'un
-// appel provider normal. Au-delà du seuil (30 min, toujours > queueTimeoutMs),
-// on le libère de FORCE pour éviter de figer définitivement la limite d'un
-// provider (chemin de libération oublié, crash d'une branche, abort non
-// propagé). Le seuil effectif = max(30 min, 3 × queueTimeoutMs).
+// appel provider normal. Au-delà du seuil, on le libère de FORCE pour éviter
+// de figer définitivement la limite d'un provider (chemin de libération oublié,
+// crash d'une branche, abort non propagé). Le seuil effectif =
+// max(30 min, 3 × queueTimeoutMs) : avec le défaut de 1 h, il vaut 3 h, ce qui
+// garantit que le watchdog reste TOUJOURS au-dessus du délai de file.
 export const LLM_SLOT_WATCHDOG_MIN_MS = 30 * 60_000;
 const LLM_SLOT_WATCHDOG_INTERVAL_MS = 60_000;
 
@@ -53,6 +70,8 @@ export const DEFAULT_CONFIG: ConcurrencyConfig = {
   maxLLMSlots: 3,
   maxAgentSlots: 5,
   queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
+  streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
 };
 
 /** Ramène un délai de file arbitraire à un entier valide, sinon le défaut. */
@@ -155,6 +174,14 @@ class ConcurrencyManager {
     if (config.queueTimeoutMs !== undefined) {
       this.config.queueTimeoutMs = sanitizeQueueTimeoutMs(config.queueTimeoutMs);
     }
+    // Détecteur de silence de flux + garde-fou de dernier recours : mêmes règles
+    // (valeur invalide = repli sur le défaut, jamais d'exception).
+    if (config.streamSilenceTimeoutMs !== undefined) {
+      this.config.streamSilenceTimeoutMs = sanitizeStreamSilenceTimeoutMs(config.streamSilenceTimeoutMs);
+    }
+    if (config.agentHardTimeoutMs !== undefined) {
+      this.config.agentHardTimeoutMs = sanitizeAgentHardTimeoutMs(config.agentHardTimeoutMs);
+    }
     // Tenter de débloquer des tâches en attente si les limites ont augmenté
     this.drainQueues();
   }
@@ -178,6 +205,16 @@ class ConcurrencyManager {
   /** Délai d'attente effectif dans les files (LLM et agent), en millisecondes. */
   getQueueTimeoutMs(): number {
     return this.config.queueTimeoutMs ?? DEFAULT_QUEUE_TIMEOUT_MS;
+  }
+
+  /** Délai de silence de flux effectif (ms ; 0 = illimité). */
+  getStreamSilenceTimeoutMs(): number {
+    return this.config.streamSilenceTimeoutMs ?? DEFAULT_STREAM_SILENCE_TIMEOUT_MS;
+  }
+
+  /** Garde-fou de dernier recours effectif (ms ; 0 = désactivé). */
+  getAgentHardTimeoutMs(): number {
+    return this.config.agentHardTimeoutMs ?? DEFAULT_AGENT_HARD_TIMEOUT_MS;
   }
 
   /** Stats en temps réel */
@@ -446,6 +483,10 @@ export interface LLMConcurrencyBridge {
   releaseLLMSlot(slotKey: string): void;
   getEffectiveLLMLimit(providerId: string): number;
   getStats(): ReturnType<ConcurrencyManager["getStats"]>;
+  /** Détecteur de silence de flux lu au runtime par l'extension harness (ms). */
+  getStreamSilenceTimeoutMs(): number;
+  /** Garde-fou de dernier recours lu au runtime (ms ; 0 = désactivé). */
+  getAgentHardTimeoutMs(): number;
 }
 
 (globalThis as any)[CONCURRENCY_BRIDGE_KEY] = {
@@ -454,4 +495,6 @@ export interface LLMConcurrencyBridge {
   releaseLLMSlot: (slotKey: string) => concurrencyManager.releaseLLMSlot(slotKey),
   getEffectiveLLMLimit: (providerId: string) => concurrencyManager.getEffectiveLLMLimit(providerId),
   getStats: () => concurrencyManager.getStats(),
+  getStreamSilenceTimeoutMs: () => concurrencyManager.getStreamSilenceTimeoutMs(),
+  getAgentHardTimeoutMs: () => concurrencyManager.getAgentHardTimeoutMs(),
 } satisfies LLMConcurrencyBridge;

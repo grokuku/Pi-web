@@ -21,6 +21,7 @@ import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickR
 import { resolveThinkingLevel } from "./thinking.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
+import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
@@ -169,12 +170,24 @@ export function getModelRuntime(): ModelRuntime {
 // AuthStorage is no longer directly accessible — ModelRuntime handles auth internally.
 // HarnessEngine should use getModelRuntime() instead.
 
-// ── Session timeout helper ──
-// Prevents LLM calls from hanging indefinitely. If prompt()/steer() doesn't
-// resolve within SESSION_TIMEOUT_MS, abort the session and emit agent_end.
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000;  // 5 minutes
+// ── Session timeout helper (DÉTECTEUR DE SILENCE) ──
+// Filet de sécurité du MODE CODE : le run n'est plus borné par une DURÉE fixe
+// (l'ancien SESSION_TIMEOUT_MS de 5 min tuait un long travail en mode code).
+// Il est borné par un SILENCE de flux : tant que la session émet des
+// événements (deltas, tool calls…), le compteur de silence se réinitialise →
+// une génération de plusieurs heures n'est PAS coupée. Seul un silence réel
+// (aucun événement pendant le délai configuré, défaut 15 min) provoque un arrêt
+// PROPRE, au message honnête.
+//
+// ⚠️ L'acquisition du slot LLM a lieu AVANT le démarrage du détecteur : une
+// attente légitime en file n'est donc jamais comptée comme du silence.
+// Conservé pour le mode code / usages futurs bornés (le chemin harness utilise
+// le détecteur de l'extension, cf. harness-orchestrator).
 
-async function withSessionTimeout(
+/** Période de vérification du détecteur de silence (ms). */
+export const SESSION_SILENCE_CHECK_INTERVAL_MS = 5_000;
+
+export async function withSessionTimeout(
   promise: Promise<void>,
   session: AgentSession,
   projectId: string,
@@ -189,24 +202,46 @@ async function withSessionTimeout(
   // Acquire LLM slot (respects max parallel LLM calls, per provider)
   await concurrencyManager.acquireLLMSlot(slotKey, label, provider);
 
-  let timer: ReturnType<typeof setTimeout>;
+  // Délais lus au runtime (config modifiable sans redémarrage).
+  const detector = new StreamSilenceDetector({
+    silenceTimeoutMs: concurrencyManager.getStreamSilenceTimeoutMs(),
+    hardTimeoutMs: concurrencyManager.getAgentHardTimeoutMs(),
+  });
+  // Chaque événement de CE projet prouve que le flux vit → reset du silence.
+  const unsubscribe = subscribeToEvents((_event, pid) => {
+    if (pid === projectId) detector.touch();
+  });
+
+  let timer: ReturnType<typeof setInterval> | null = null;
   const timeoutPromise = new Promise<void>((_, reject) => {
-    timer = setTimeout(async () => {
-      try {
-        await session.abort();
-      } catch {}
-      // (debug) reason:"timeout" : rend cet agent_end synthétisé par le timeout
-      // 5 min distinguable d'un vrai event agent_end émis par le SDK.
-      emitToSubscribers({ type: "agent_end", reason: "timeout" } as any, projectId);
-      emitSessionUpdate(projectId);
-      stopStreamingHeartbeat(projectId);
-      reject(new Error(`[${label}] Session request timed out after ${SESSION_TIMEOUT_MS/1000}s`));
-    }, SESSION_TIMEOUT_MS);
+    timer = setInterval(() => {
+      const verdict = detector.evaluate();
+      if (verdict.status !== "silence" && verdict.status !== "hard-timeout") return;
+      if (timer) clearInterval(timer);
+      void (async () => {
+        try {
+          await session.abort();
+        } catch {}
+        // (debug) reason:"timeout" : rend cet agent_end synthétisé par le
+        // détecteur distinguable d'un vrai event agent_end émis par le SDK.
+        emitToSubscribers({ type: "agent_end", reason: "timeout" } as any, projectId);
+        emitSessionUpdate(projectId);
+        stopStreamingHeartbeat(projectId);
+        reject(new Error(
+          verdict.status === "hard-timeout"
+            ? hardTimeoutMessage(label, verdict.elapsedMs)
+            : streamSilenceMessage(label, verdict.silentMs)
+        ));
+      })();
+    }, SESSION_SILENCE_CHECK_INTERVAL_MS);
+    // Ne pas maintenir le process en vie à cause d'un timer orphelin.
+    (timer as any)?.unref?.();
   });
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timer!);
+    if (timer) clearInterval(timer);
+    unsubscribe();
     concurrencyManager.releaseLLMSlot(slotKey);
   }
 }
@@ -343,6 +378,24 @@ export function resolveProjectIdByCwd(cwd: string): string | null {
 }
 
 (globalThis as any)[RESOLVE_PROJECT_ID_KEY] = resolveProjectIdByCwd;
+
+// ── Pont global : abort UTILISATEUR vs abort INTERNE (P2) ─────────────────
+// L'extension harness-orchestrator doit étiqueter une délégation interrompue
+// « abort-utilisateur » UNIQUEMENT si l'abandon provient d'une action
+// utilisateur explicite (bouton ABORT → abortPi). Or session.abort() est AUSSI
+// appelé en interne (timeout de session, shutdown/disposeAllSessions,
+// switchMode, reloadModelRegistry) : sans cette distinction, un abort interne
+// était présenté à tort comme un abandon utilisateur (faux diagnostic).
+// `harnessAborted` est posé par abortPi et remis à false au début de chaque
+// sendPrompt/steerPrompt : le marqueur ne vaut que pour le tour en cours —
+// exactement la fenêtre où l'extension lit la cause d'une interruption.
+const USER_ABORT_QUERY_KEY = "__piWebWasSessionAbortedByUser__";
+
+export function wasSessionAbortedByUser(projectId: string): boolean {
+  return sessionsByProject.get(projectId)?.harnessAborted === true;
+}
+
+(globalThis as any)[USER_ABORT_QUERY_KEY] = wasSessionAbortedByUser;
 
 export function emitToSubscribers(event: AgentSessionEvent, projectId: string) {
   // Deltas de texte/thinking : bufferisés puis flushés toutes les 40 ms.
@@ -1031,6 +1084,12 @@ export async function sendPrompt(
     throw new Error("No active Pi session for this project");
   }
 
+  // Nouveau tour utilisateur : le marqueur d'abandon utilisateur ne vaut que
+  // pour ce tour (cf. pont __piWebWasSessionAbortedByUser__). Sans ce reset,
+  // un ancien abort utilisateur étiquetterait à tort une interruption interne
+  // ultérieure.
+  state.harnessAborted = false;
+
   // ── Routage au niveau MESSAGE (niveau a) ──
   // Précédence : le routage n'agit QUE si le kill switch global ET la config
   // projet/mode sont actifs ; dans ce cas la CATÉGORIE décide du modèle de
@@ -1321,6 +1380,9 @@ export async function steerPrompt(
   if (!state?.session) {
     throw new Error("No active Pi session for this project");
   }
+  // Nouveau tour utilisateur : cf. sendPrompt — le marqueur d'abandon
+  // utilisateur ne vaut que pour le tour qui commence.
+  state.harnessAborted = false;
   // BUG-6 : le SDK supporte steer(text, images?) — on convertit les images au
   // format ImageContent ({ type: "image", data, mimeType }) pour ne pas les
   // perdre silencieusement pendant le streaming.
@@ -1335,16 +1397,23 @@ export async function steerPrompt(
   if (state.activeMode === "harness") {
     // BUG-69/72 : même garde qu'en sendPrompt — si l'agent est idle côté SDK,
     // steer() perdrait le message silencieusement. On fait un prompt complet.
-    // Le timeout 5 min est OK ici (l'agent n'est pas en délégation, il est idle).
+    // P1 (délégations coupées) : PAS de timeout de session ici. Un prompt lancé
+    // depuis l'idle n'est PAS « hors délégation » — il démarre un tour qui PEUT
+    // déléguer, et une délégation dépasse légitimement 5 min. Le timeout de
+    // session de 5 min tuait donc l'orchestrator en pleine délégation.
+    // En mode harness, le contrôle du temps est assuré par l'extension :
+    // inactivité 5 min PAR SOUS-AGENT + plafond global 30 min. Un timeout au
+    // niveau de l'orchestrateur ne peut que tuer une délégation légitime.
+    // Même schéma que la branche harness de sendPrompt : withLLMSlot seul.
     if (!isSessionStreaming(projectId)) {
-      console.log("[steer] Harness: agent idle — steer perdu, on fait un prompt complet");
+      console.log("[steer] Harness: agent idle — steer perdu, on fait un prompt complet (sans timeout de session)");
       const options: any = {};
       if (imageContent && imageContent.length > 0) options.images = imageContent;
-      await withSessionTimeout(
-        state.session.prompt(message, options),
-        state.session,
+      await withLLMSlot(
+        state.session.model?.provider,
         projectId,
         "steer(harness)",
+        () => state.session!.prompt(message, options),
       );
       return;
     }

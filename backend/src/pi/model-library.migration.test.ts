@@ -17,18 +17,18 @@ describe("migration du bloc concurrency", () => {
       defaultModelId: "m1",
       concurrency: { maxLLMSlots: 7, maxAgentSlots: 9 },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 7, maxAgentSlots: 9, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 7, maxAgentSlots: 9, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
     expect(lib.defaultModelId).toBe("m1");
   });
 
   it("sans bloc concurrency du tout → défauts complets", () => {
     const lib = migrateLibrary({ models: [] });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
   });
 
   it("concurrency null → défauts complets", () => {
     const lib = migrateLibrary({ models: [], concurrency: null });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
   });
 
   it("providerMaxLLMSlots existant est préservé (valeurs valides uniquement)", () => {
@@ -44,7 +44,9 @@ describe("migration du bloc concurrency", () => {
       maxLLMSlots: 3,
       maxAgentSlots: 5,
       providerMaxLLMSlots: { anthropic: 2, openai: 5 },
-      queueTimeoutMs: 600_000,
+      queueTimeoutMs: 3_600_000,
+      streamSilenceTimeoutMs: 900_000,
+      agentHardTimeoutMs: 0,
     });
   });
 
@@ -64,16 +66,16 @@ describe("migration du bloc concurrency", () => {
 
   it("maxLLMSlots/maxAgentSlots invalides (<= 0, non numériques) retombent sur les défauts", () => {
     const lib = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 0, maxAgentSlots: -2 } });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
     const lib2 = migrateLibrary({ models: [], concurrency: { maxLLMSlots: "beaucoup" } });
-    expect(lib2.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib2.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
   });
 
   it("ancien format (modes) → concurrency par défaut normalisé", () => {
     const lib = migrateLibrary({
       modes: { default: { models: [{ id: "m1", provider: "ollama", modelId: "llama3", name: "Llama 3" }] } },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 600_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: 3_600_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
     expect(lib.models).toHaveLength(1);
     expect(lib.defaultModelId).toBe("m1");
   });
@@ -81,16 +83,46 @@ describe("migration du bloc concurrency", () => {
   it("config concurrency complète et valide : inchangée", () => {
     const lib = migrateLibrary({
       models: [],
-      concurrency: { maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000 },
+      concurrency: { maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 },
     });
-    expect(lib.concurrency).toEqual({ maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000 });
+    expect(lib.concurrency).toEqual({ maxLLMSlots: 10, maxAgentSlots: 20, providerMaxLLMSlots: { openai: 4 }, queueTimeoutMs: 120_000, streamSilenceTimeoutMs: 900_000, agentHardTimeoutMs: 0 });
   });
 
-  it("queueTimeoutMs invalide ou hors bornes → repli sur le défaut (10 min)", () => {
-    for (const bad of [0, -1, 1_000, 3_600_001, 1.5, "600000", null]) {
+  it("queueTimeoutMs invalide ou hors bornes → repli sur le défaut (1 h)", () => {
+    for (const bad of [0, -1, 1_000, 43_200_001, 1.5, "600000", null]) {
       const lib = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: bad } });
-      expect(lib.concurrency.queueTimeoutMs).toBe(600_000);
+      expect(lib.concurrency.queueTimeoutMs).toBe(3_600_000);
     }
+  });
+});
+
+// ── Migration de l'ancien défaut d'attente en file (10 min → 1 h) ──
+// Une valeur stockée EXACTEMENT égale à l'ancien défaut est « non
+// personnalisée » → alignée sur le nouveau défaut ; tout autre délai est un
+// choix explicite → préservé. La migration est idempotente.
+describe("migration de l'ancien défaut d'attente en file (600000 → 3600000)", () => {
+  const queueTimeoutOf = (raw: unknown) =>
+    migrateLibrary({ models: [], concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: raw } })
+      .concurrency.queueTimeoutMs;
+
+  it("valeur stockée == ancien défaut (600000) → alignée sur 1 h", () => {
+    expect(queueTimeoutOf(600_000)).toBe(3_600_000);
+  });
+
+  it("valeurs personnalisées (30 min, 45 min, 5 s, 10 h) → inchangées", () => {
+    for (const kept of [1_800_000, 2_700_000, 5_000, 36_000_000]) {
+      expect(queueTimeoutOf(kept)).toBe(kept);
+    }
+  });
+
+  it("idempotente : deux exécutions donnent le même résultat", () => {
+    const first = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: 600_000 } });
+    const second = migrateLibrary(JSON.parse(JSON.stringify(first)));
+    expect(first.concurrency.queueTimeoutMs).toBe(3_600_000);
+    expect(second.concurrency.queueTimeoutMs).toBe(3_600_000);
+    // Une config déjà personnalisée n'est jamais retouchée, même re-migrée.
+    const custom = migrateLibrary({ models: [], concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: 1_800_000 } });
+    expect(migrateLibrary(JSON.parse(JSON.stringify(custom))).concurrency.queueTimeoutMs).toBe(1_800_000);
   });
 });
 // ── Migration du thinkingLevel par catégorie de routage ──

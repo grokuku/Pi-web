@@ -20,6 +20,12 @@ import LayoutTab from "./settings/LayoutTab";
 import ApiKeysTab from "./settings/ApiKeysTab";
 import ResourceSection from "./settings/ResourceSection";
 
+// ── Bornes du délai d'attente en file (secondes) ───────
+// Alignées sur MIN_QUEUE_TIMEOUT_MS / MAX_QUEUE_TIMEOUT_MS du backend
+// (5 s..12 h). Le champ est affiché en secondes, stocké en ms.
+const QUEUE_TIMEOUT_MIN_S = 5;
+const QUEUE_TIMEOUT_MAX_S = 43_200; // 12 h
+
 // ── Types ──────────────────────────────────────────────
 
 interface PackageInfo {
@@ -264,7 +270,11 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
   const [maxAgentSlots, setMaxAgentSlots] = useState(5);
   // Délai d'attente en file, stocké en millisecondes (affiché en secondes).
-  const [queueTimeoutMs, setQueueTimeoutMs] = useState(600000);
+  const [queueTimeoutMs, setQueueTimeoutMs] = useState(3_600_000);
+  // Détecteur de silence de flux (stocké en ms, affiché en minutes ; 0 = illimité).
+  const [streamSilenceTimeoutMs, setStreamSilenceTimeoutMs] = useState(900000);
+  // Garde-fou de dernier recours (stocké en ms, affiché en minutes ; 0 = désactivé).
+  const [agentHardTimeoutMs, setAgentHardTimeoutMs] = useState(0);
   const [concurrencyStats, setConcurrencyStats] = useState<any>(null);
 
   // ── Webclaw config state ──
@@ -352,7 +362,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const data = await res.json();
       setMaxLLMSlots(data.config.maxLLMSlots ?? 3);
       setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
-      setQueueTimeoutMs(data.config.queueTimeoutMs ?? 600000);
+      setQueueTimeoutMs(data.config.queueTimeoutMs ?? 3_600_000);
+      setStreamSilenceTimeoutMs(data.config.streamSilenceTimeoutMs ?? 900000);
+      setAgentHardTimeoutMs(data.config.agentHardTimeoutMs ?? 0);
       setConcurrencyStats(data.stats);
     } catch {}
   }, []);
@@ -380,6 +392,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           maxLLMSlots,
           maxAgentSlots,
           queueTimeoutMs,
+          streamSilenceTimeoutMs,
+          agentHardTimeoutMs,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -1109,17 +1123,65 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     </label>
                     <input
                       type="number"
-                      min={5}
-                      max={3600}
+                      min={QUEUE_TIMEOUT_MIN_S}
+                      max={QUEUE_TIMEOUT_MAX_S}
                       value={Math.round(queueTimeoutMs / 1000)}
                       onChange={e => {
-                        const seconds = Math.max(5, Math.min(3600, parseInt(e.target.value) || 5));
+                        const seconds = Math.max(QUEUE_TIMEOUT_MIN_S, Math.min(QUEUE_TIMEOUT_MAX_S, parseInt(e.target.value) || QUEUE_TIMEOUT_MIN_S));
                         setQueueTimeoutMs(seconds * 1000);
                       }}
                       className="input-hacker w-32 text-xs py-1.5 px-2"
                     />
                     <div className="text-[10px] text-hacker-text-dim/70 mt-1">
                       {t('settings.general.concurrency.queueTimeoutHint')}
+                    </div>
+                  </div>
+
+                  {/* Détecteur de SILENCE DE FLUX — liveness par événements.
+                      Affiché en minutes, stocké en ms (0 = illimité). */}
+                  <div className="pt-2 border-t border-hacker-border/30">
+                    <div className="text-xs font-bold text-hacker-accent/90 mb-2">
+                      {t('settings.general.concurrency.durationsTitle')}
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-hacker-text-dim text-xs block mb-1">
+                          {t('settings.general.concurrency.silenceTimeout')}
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={Math.round(streamSilenceTimeoutMs / 60000)}
+                          onChange={e => {
+                            const minutes = Math.max(0, Math.min(1440, parseInt(e.target.value) || 0));
+                            setStreamSilenceTimeoutMs(minutes * 60000);
+                          }}
+                          className="input-hacker w-32 text-xs py-1.5 px-2"
+                        />
+                        <div className="text-[10px] text-hacker-text-dim/70 mt-1">
+                          {t('settings.general.concurrency.silenceTimeoutHint')}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-hacker-text-dim text-xs block mb-1">
+                          {t('settings.general.concurrency.hardTimeout')}
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={Math.round(agentHardTimeoutMs / 60000)}
+                          onChange={e => {
+                            const minutes = Math.max(0, Math.min(1440, parseInt(e.target.value) || 0));
+                            setAgentHardTimeoutMs(minutes * 60000);
+                          }}
+                          className="input-hacker w-32 text-xs py-1.5 px-2"
+                        />
+                        <div className="text-[10px] text-hacker-text-dim/70 mt-1">
+                          {t('settings.general.concurrency.hardTimeoutHint')}
+                        </div>
+                      </div>
                     </div>
                   </div>
 

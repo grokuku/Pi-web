@@ -26,10 +26,11 @@ describe("validateConcurrencyPayload — acceptance", () => {
     expect(validateConcurrencyPayload({ maxAgentSlots: MAX_SLOTS })).toEqual({ value: { maxAgentSlots: MAX_SLOTS } });
   });
 
-  it("accepte un queueTimeoutMs dans les bornes (défaut 600000)", () => {
-    expect(validateConcurrencyPayload({ queueTimeoutMs: 600_000 })).toEqual({ value: { queueTimeoutMs: 600_000 } });
-    expect(validateConcurrencyPayload({ queueTimeoutMs: 5_000 })).toEqual({ value: { queueTimeoutMs: 5_000 } });
+  it("accepte un queueTimeoutMs dans les bornes (défaut 3600000, max 12 h)", () => {
     expect(validateConcurrencyPayload({ queueTimeoutMs: 3_600_000 })).toEqual({ value: { queueTimeoutMs: 3_600_000 } });
+    expect(validateConcurrencyPayload({ queueTimeoutMs: 5_000 })).toEqual({ value: { queueTimeoutMs: 5_000 } });
+    expect(validateConcurrencyPayload({ queueTimeoutMs: 600_000 })).toEqual({ value: { queueTimeoutMs: 600_000 } });
+    expect(validateConcurrencyPayload({ queueTimeoutMs: 43_200_000 })).toEqual({ value: { queueTimeoutMs: 43_200_000 } });
   });
 
   it("corps vide → update partiel (champs indéfinis)", () => {
@@ -72,7 +73,7 @@ describe("validateConcurrencyPayload — rejets", () => {
 
   it("rejette queueTimeoutMs hors bornes ou non entier", () => {
     expect(expectError({ queueTimeoutMs: 1_000 })).toMatch(/queueTimeoutMs/);
-    expect(expectError({ queueTimeoutMs: 3_600_001 })).toMatch(/queueTimeoutMs/);
+    expect(expectError({ queueTimeoutMs: 43_200_001 })).toMatch(/queueTimeoutMs/);
     expect(expectError({ queueTimeoutMs: 1.5 })).toMatch(/queueTimeoutMs/);
     expect(expectError({ queueTimeoutMs: "600000" })).toMatch(/queueTimeoutMs/);
   });

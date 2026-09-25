@@ -25,6 +25,19 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { concurrencyManager as manager, DEFAULT_CONFIG, DEFAULT_QUEUE_TIMEOUT_MS } from "./concurrency.js";
+import {
+  DEFAULT_AGENT_HARD_TIMEOUT_MS,
+  DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+} from "./stream-silence.js";
+
+/** Forme attendue de la config par défaut (détecteur de silence inclus). */
+const DEFAULTS = {
+  maxLLMSlots: 3,
+  maxAgentSlots: 5,
+  queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
+  streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
+};
 
 beforeEach(() => {
   // État frais : configuration par défaut (les slots sont nettoyés afterEach).
@@ -57,8 +70,8 @@ afterEach(() => {
 
 describe("configuration", () => {
   it("expose la configuration par défaut (3 slots LLM, 5 slots agent)", () => {
-    expect(DEFAULT_CONFIG).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(DEFAULT_CONFIG).toEqual(DEFAULTS);
+    expect(manager.getConfig()).toEqual(DEFAULTS);
     expect(manager.getStats().llmSlots.max).toBe(3);
     expect(manager.getStats().agentSlots.max).toBe(5);
   });
@@ -67,7 +80,7 @@ describe("configuration", () => {
     const cfg = manager.getConfig();
     cfg.maxLLMSlots = 99;
     cfg.maxAgentSlots = 99;
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(manager.getConfig()).toEqual(DEFAULTS);
   });
 
   it("setConfig accepte une mise à jour partielle", () => {
@@ -78,9 +91,9 @@ describe("configuration", () => {
 
   it("setConfig ignore les valeurs invalides (0, négatif)", () => {
     manager.setConfig({ maxLLMSlots: 0, maxAgentSlots: -1 });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(manager.getConfig()).toEqual(DEFAULTS);
     manager.setConfig({});
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(manager.getConfig()).toEqual(DEFAULTS);
   });
 });
 
@@ -269,7 +282,7 @@ describe("timeout de file (queueTimeoutMs configurable, simulé avec fake timers
     }
   });
 
-  it("valeur invalide → repli sur le défaut (10 min)", () => {
+  it("valeur invalide → repli sur le défaut (1 h)", () => {
     manager.setConfig({ queueTimeoutMs: -5 });
     expect(manager.getQueueTimeoutMs()).toBe(DEFAULT_QUEUE_TIMEOUT_MS);
     manager.setConfig({ queueTimeoutMs: 1.5 });
@@ -358,6 +371,38 @@ describe("timeout de file (queueTimeoutMs configurable, simulé avec fake timers
       // Le timer de la tâche servie a été annulé : avancer au-delà de 60 s
       // ne doit déclencher aucune rejection tardive.
       await vi.advanceTimersByTimeAsync(60_000);
+      expect(rejected).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("un sous-agent qui attend un slot 45 min n'est PAS rejeté (défaut 1 h)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Défaut : 1 h — largement au-dessus des 45 min d'attente simulées.
+      manager.setConfig({ queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+      await manager.acquireLLMSlot("llm-a", "A");
+      await manager.acquireLLMSlot("llm-b", "B");
+      await manager.acquireLLMSlot("llm-c", "C");
+
+      let resolved = false;
+      let rejected = false;
+      const waiting = manager.acquireLLMSlot("llm-sub", "sub-agent").then(
+        () => { resolved = true; },
+        () => { rejected = true; }
+      );
+
+      // 45 min d'attente : toujours en file, aucune expiration de file.
+      await vi.advanceTimersByTimeAsync(45 * 60_000);
+      expect(rejected).toBe(false);
+      expect(resolved).toBe(false);
+      expect(manager.getStats().llmSlots.queue).toBe(1);
+
+      // Un slot se libère enfin : le sous-agent le récupère (pas de rejet).
+      manager.releaseLLMSlot("llm-a");
+      await waiting;
+      expect(resolved).toBe(true);
       expect(rejected).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -688,6 +733,8 @@ describe("setConfig avec map de limites par provider", () => {
       maxAgentSlots: 5,
       providerMaxLLMSlots: { "prov-a": 2 },
       queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
+      streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+      agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
     });
     expect(manager.getEffectiveLLMLimit("prov-a")).toBe(2);
   });
@@ -699,7 +746,7 @@ describe("setConfig avec map de limites par provider", () => {
 
     // Map vide = plus aucun override : getConfig retombe sur la forme historique.
     manager.setConfig({ providerMaxLLMSlots: {} });
-    expect(manager.getConfig()).toEqual({ maxLLMSlots: 3, maxAgentSlots: 5, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS });
+    expect(manager.getConfig()).toEqual(DEFAULTS);
     expect(manager.getEffectiveLLMLimit("prov-a")).toBe(3); // défaut global
   });
 

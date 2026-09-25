@@ -26,6 +26,7 @@ import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
+import { mergeServerSessionState } from "./utils/session-sync";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -870,7 +871,12 @@ function App() {
           .then(r => r.json())
           .then(data => {
             if (data) {
-              updateProjectSession(activeProject.id, { session: data });
+              // P4 : re-qualifier isStreaming depuis la VÉRITÉ backend. Un flag
+              // front resté bloqué à true (crash backend) faisait partir le
+              // message suivant en pi_steer (steer sur session idle) au lieu de
+              // pi_prompt. On ne réinitialise jamais aveuglément (BUG-68) : on
+              // copie seulement l'état réel exposé par le backend.
+              updateProjectSession(activeProject.id, mergeServerSessionState(data));
               if (data.activeMode) {
                 setActiveMode(data.activeMode);
                 activeModeByProjectRef.current.set(activeProject.id, data.activeMode);

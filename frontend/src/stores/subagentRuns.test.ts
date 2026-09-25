@@ -387,6 +387,17 @@ describe("isRunStuck / selectConcurrentRuns — run bloqué sorti du mur", () =>
     expect(isRunStuck(makeRun("a"), 10_000_000)).toBe(false);
   });
 
+  it("isRunStuck : un run ACTIF depuis des heures mais dont le DERNIER événement est récent n'est PAS bloqué", () => {
+    const now = 10 * 60 * 60_000; // démarrage il y a 10 h
+    const longButAlive = makeRun("a", {
+      startedAt: 0,
+      lastEventAt: now - 60_000, // événement il y a 1 min
+    });
+    expect(isRunStuck(longButAlive, now)).toBe(false);
+    // À l'inverse, le MÊME run silencieux au-delà du seuil est bloqué.
+    expect(isRunStuck(longButAlive, now + STUCK_RUN_TIMEOUT_MS)).toBe(true);
+  });
+
   it("deux runs actifs au-delà du seuil → plus de groupe de colonnes", () => {
     const a = makeRun("a", { startedAt: 0 });
     const b = makeRun("b", { startedAt: 10 });

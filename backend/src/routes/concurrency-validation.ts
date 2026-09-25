@@ -6,11 +6,20 @@
  * - slots (défaut global, agent, override par provider) : ENTIERS 1..MAX_SLOTS
  *   (plafond volontairement large : un provider peut avoir une limite très
  *   haute, ex. 2500) ; 0, floats, chaînes et clés JS réservées sont rejetés ;
- * - queueTimeoutMs : ENTIER dans [MIN_QUEUE_TIMEOUT_MS, MAX_QUEUE_TIMEOUT_MS].
+ * - queueTimeoutMs : ENTIER dans [MIN_QUEUE_TIMEOUT_MS, MAX_QUEUE_TIMEOUT_MS] ;
+ * - streamSilenceTimeoutMs : ENTIER dans [MIN_STREAM_SILENCE_TIMEOUT_MS,
+ *   MAX_STREAM_SILENCE_TIMEOUT_MS] ou 0 (= illimité) ;
+ * - agentHardTimeoutMs : ENTIER dans [0, MAX_AGENT_HARD_TIMEOUT_MS] (0 = désactivé).
  * Les champs absents sont laissés indéfinis = update partiel (le manager
  * conserve la valeur courante).
  */
 import { MIN_QUEUE_TIMEOUT_MS, MAX_QUEUE_TIMEOUT_MS } from "../pi/concurrency.js";
+import {
+  MAX_AGENT_HARD_TIMEOUT_MS,
+  MAX_STREAM_SILENCE_TIMEOUT_MS,
+  MIN_STREAM_SILENCE_TIMEOUT_MS,
+  STREAM_SILENCE_DISABLED,
+} from "../pi/stream-silence.js";
 
 /** Plafond haut d'une limite de slots (global ou override par provider). */
 export const MAX_SLOTS = 100_000;
@@ -23,6 +32,8 @@ export interface ConcurrencyPayload {
   maxAgentSlots?: number;
   providerMaxLLMSlots?: Record<string, number>;
   queueTimeoutMs?: number;
+  streamSilenceTimeoutMs?: number;
+  agentHardTimeoutMs?: number;
 }
 
 /** Entier sûr dans [1, MAX_SLOTS]. */
@@ -39,6 +50,7 @@ export function validateConcurrencyPayload(
 ): { error: string } | { value: ConcurrencyPayload } {
   const raw = (body ?? {}) as Record<string, unknown>;
   const { maxLLMSlots, maxAgentSlots, providerMaxLLMSlots, queueTimeoutMs } = raw;
+  const { streamSilenceTimeoutMs, agentHardTimeoutMs } = raw;
 
   if (maxLLMSlots !== undefined && !isValidSlotCount(maxLLMSlots)) {
     return { error: `maxLLMSlots must be an integer between 1 and ${MAX_SLOTS}` };
@@ -73,6 +85,29 @@ export function validateConcurrencyPayload(
       error: `queueTimeoutMs must be an integer between ${MIN_QUEUE_TIMEOUT_MS} and ${MAX_QUEUE_TIMEOUT_MS}`,
     };
   }
+  if (streamSilenceTimeoutMs !== undefined) {
+    const v = streamSilenceTimeoutMs as number;
+    const valid =
+      Number.isSafeInteger(v) &&
+      (v === STREAM_SILENCE_DISABLED || (v >= MIN_STREAM_SILENCE_TIMEOUT_MS && v <= MAX_STREAM_SILENCE_TIMEOUT_MS));
+    if (!valid) {
+      return {
+        error:
+          `streamSilenceTimeoutMs must be 0 (illimité) or an integer between ` +
+          `${MIN_STREAM_SILENCE_TIMEOUT_MS} and ${MAX_STREAM_SILENCE_TIMEOUT_MS}`,
+      };
+    }
+  }
+  if (
+    agentHardTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(agentHardTimeoutMs) ||
+      (agentHardTimeoutMs as number) < 0 ||
+      (agentHardTimeoutMs as number) > MAX_AGENT_HARD_TIMEOUT_MS)
+  ) {
+    return {
+      error: `agentHardTimeoutMs must be an integer between 0 and ${MAX_AGENT_HARD_TIMEOUT_MS}`,
+    };
+  }
 
   return {
     value: {
@@ -80,6 +115,8 @@ export function validateConcurrencyPayload(
       maxAgentSlots: maxAgentSlots as number | undefined,
       providerMaxLLMSlots: providerMaxLLMSlots as Record<string, number> | undefined,
       queueTimeoutMs: queueTimeoutMs as number | undefined,
+      streamSilenceTimeoutMs: streamSilenceTimeoutMs as number | undefined,
+      agentHardTimeoutMs: agentHardTimeoutMs as number | undefined,
     },
   };
 }

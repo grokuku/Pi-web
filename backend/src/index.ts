@@ -1162,6 +1162,16 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const pid = msg.projectId || projectId;
       const { message, images } = msg;
       if (!getValidatedProject(pid) || !message) return;
+      // Observabilité incident : pi_steer n'était JAMAIS tracé — l'événement
+      // déclencheur du bug « délégations coupées » (session restaurée idle →
+      // steer → branche idle de steerPrompt) restait invisible dans les logs.
+      // Même niveau/format que pi_prompt / pi_abort, sans contenu du message.
+      logger.info("ws", "pi_steer reçu", {
+        projectId: pid,
+        messageLength: typeof message === "string" ? message.length : 0,
+        images: Array.isArray(images) ? images.length : 0,
+        mode: getSessionInfo(pid)?.activeMode ?? null,
+      });
       try {
         // BUG-6 : transmettre les images au steer pour ne pas les perdre
         // pendant le streaming (le SDK supporte steer(text, images?)).

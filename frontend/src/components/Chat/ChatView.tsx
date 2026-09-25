@@ -29,6 +29,7 @@ import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnch
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
+import { promptMessageType } from "../../utils/session-sync";
 
 // ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
 // Retarde la propagation d'une valeur qui change très souvent (contenu
@@ -1150,8 +1151,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     }
 
     // Pendant le streaming, envoyer comme steer au lieu de prompt
-    // Le steer est injecté par le Pi SDK entre les appels d'outils
-    const msgType = isStreaming ? "pi_steer" : "pi_prompt";
+    // Le steer est injecté par le Pi SDK entre les appels d'outils.
+    // P4 : le choix dépend de l'état de streaming RE-QUALIFIÉ depuis le backend
+    // (cf. App.tsx / mergeServerSessionState) — un flag front resté bloqué à
+    // true (crash backend) faisait partir un pi_steer vers une session idle.
+    const msgType = promptMessageType(isStreaming);
     // ── Filet de secours « needsHistory » (régression 6210d1c) ──
     // Si aucun pi_history n'a été appliqué pour ce projet depuis le chargement
     // (resync perdue dans une coupure WS — l'écran peut afficher le cache

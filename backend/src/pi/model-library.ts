@@ -5,9 +5,16 @@ import { inferReasoning, inferVision, inferContextWindow } from "./providers.js"
 import { DEFAULT_ROUTING_CONFIG, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
 import {
   DEFAULT_QUEUE_TIMEOUT_MS,
+  LEGACY_DEFAULT_QUEUE_TIMEOUT_MS,
   MIN_QUEUE_TIMEOUT_MS,
   MAX_QUEUE_TIMEOUT_MS,
 } from "./concurrency.js";
+import {
+  DEFAULT_AGENT_HARD_TIMEOUT_MS,
+  DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  sanitizeAgentHardTimeoutMs,
+  sanitizeStreamSilenceTimeoutMs,
+} from "./stream-silence.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "..", ".data");
@@ -105,6 +112,8 @@ export interface ModelLibrary {
     maxAgentSlots: number;                // sessions Pi SDK simultanées max (global)
     providerMaxLLMSlots: Record<string, number>;  // override de limite LLM par providerId
     queueTimeoutMs: number;               // délai max d'attente en file (ms)
+    streamSilenceTimeoutMs?: number;      // détecteur de silence de flux (ms ; 0 = illimité)
+    agentHardTimeoutMs?: number;          // garde-fou de dernier recours (ms ; 0 = désactivé)
   };
 }
 
@@ -173,13 +182,33 @@ const DEFAULT_CONCURRENCY: ModelLibrary["concurrency"] = {
   maxAgentSlots: 5,
   providerMaxLLMSlots: {},
   queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
+  streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+  agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
 };
+
+/**
+ * Migration CONSERVATRICE du délai d'attente en file persisté : une valeur
+ * égale à l'ancien défaut (600 000 ms = 10 min) est considérée comme « jamais
+ * personnalisée » et alignée sur le nouveau défaut (1 h) ; toute autre valeur
+ * (ex. 30 min, 90 min) est un choix explicite de l'utilisateur et reste
+ * INCHANGÉE. Pure, sans exception, idempotente (après alignement la valeur
+ * n'est plus l'ancien défaut).
+ */
+function migrateLegacyQueueTimeout(value: number): number {
+  return value === LEGACY_DEFAULT_QUEUE_TIMEOUT_MS ? DEFAULT_QUEUE_TIMEOUT_MS : value;
+}
 
 /**
  * Normalise le bloc concurrency issu du disque (migration/rétro-compatibilité).
  * Garantit que `providerMaxLLMSlots` existe toujours ({} par défaut) et que
  * toutes les valeurs sont des entiers valides — une config legacy sans map,
  * ou avec des entrées corrompues, est réparée sans rejet.
+ *
+ * Migration « attente en file » : l'ancien défaut était 600 000 ms (10 min).
+ * Une valeur stockée EXACTEMENT égale à cet ancien défaut est traitée comme
+ * « non personnalisée » → alignée sur le nouveau défaut (1 h), sinon le choix
+ * explicite de l'utilisateur est préservé. Idempotent : après alignement la
+ * valeur n'est plus 600 000, donc les chargements suivants ne la retouchent pas.
  */
 function normalizeConcurrency(c: any): ModelLibrary["concurrency"] {
   if (!c || typeof c !== "object") {
@@ -198,14 +227,19 @@ function normalizeConcurrency(c: any): ModelLibrary["concurrency"] {
   return {
     maxLLMSlots: typeof c.maxLLMSlots === "number" && c.maxLLMSlots > 0 ? c.maxLLMSlots : DEFAULT_CONCURRENCY.maxLLMSlots,
     maxAgentSlots: typeof c.maxAgentSlots === "number" && c.maxAgentSlots > 0 ? c.maxAgentSlots : DEFAULT_CONCURRENCY.maxAgentSlots,
-    // Délai de file : entier dans [5 s, 1 h], sinon repli sur le défaut.
+    // Délai de file : entier dans [5 s, 12 h], sinon repli sur le défaut ;
+    // l'ancien défaut (10 min) est migré vers le nouveau (cf. commentaire ci-dessus).
     queueTimeoutMs:
       typeof c.queueTimeoutMs === "number" &&
       Number.isInteger(c.queueTimeoutMs) &&
       c.queueTimeoutMs >= MIN_QUEUE_TIMEOUT_MS &&
       c.queueTimeoutMs <= MAX_QUEUE_TIMEOUT_MS
-        ? c.queueTimeoutMs
+        ? migrateLegacyQueueTimeout(c.queueTimeoutMs)
         : DEFAULT_CONCURRENCY.queueTimeoutMs,
+    // Détecteur de silence de flux : délai valide (0 = illimité) sinon défaut.
+    streamSilenceTimeoutMs: sanitizeStreamSilenceTimeoutMs(c.streamSilenceTimeoutMs),
+    // Garde-fou de dernier recours : 0 = désactivé (défaut), sinon valide.
+    agentHardTimeoutMs: sanitizeAgentHardTimeoutMs(c.agentHardTimeoutMs),
     providerMaxLLMSlots,
   };
 }
@@ -219,7 +253,14 @@ function getDefaultLibrary(): ModelLibrary {
     audioModelId: null,
     librarianModelId: null,
     projectModes: {},
-    concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots: {}, queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS },
+    concurrency: {
+      maxLLMSlots: 3,
+      maxAgentSlots: 5,
+      providerMaxLLMSlots: {},
+      queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
+      streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
+      agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
+    },
   };
 }
 
@@ -260,12 +301,14 @@ export async function setConcurrencyConfig(config: {
   maxAgentSlots?: number;
   providerMaxLLMSlots?: Record<string, number>;
   queueTimeoutMs?: number;
+  streamSilenceTimeoutMs?: number;
+  agentHardTimeoutMs?: number;
 }) {
   const lib = loadModelLibrary();
   if (!lib.concurrency) lib.concurrency = { ...DEFAULT_CONCURRENCY, providerMaxLLMSlots: {} };
   if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) lib.concurrency.maxLLMSlots = config.maxLLMSlots;
   if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) lib.concurrency.maxAgentSlots = config.maxAgentSlots;
-  // Délai de file : entier dans [5 s, 1 h], sinon repli sur le défaut.
+  // Délai de file : entier dans [5 s, 12 h], sinon repli sur le défaut.
   if (config.queueTimeoutMs !== undefined) {
     const valid =
       typeof config.queueTimeoutMs === "number" &&
@@ -273,6 +316,14 @@ export async function setConcurrencyConfig(config: {
       config.queueTimeoutMs >= MIN_QUEUE_TIMEOUT_MS &&
       config.queueTimeoutMs <= MAX_QUEUE_TIMEOUT_MS;
     lib.concurrency.queueTimeoutMs = valid ? config.queueTimeoutMs : DEFAULT_QUEUE_TIMEOUT_MS;
+  }
+  // Détecteur de silence de flux + garde-fou de dernier recours : normalisés
+  // (valeur invalide = repli sur le défaut, jamais d'exception).
+  if (config.streamSilenceTimeoutMs !== undefined) {
+    lib.concurrency.streamSilenceTimeoutMs = sanitizeStreamSilenceTimeoutMs(config.streamSilenceTimeoutMs);
+  }
+  if (config.agentHardTimeoutMs !== undefined) {
+    lib.concurrency.agentHardTimeoutMs = sanitizeAgentHardTimeoutMs(config.agentHardTimeoutMs);
   }
   // Map de limites par provider : remplacée ENTIÈREMENT quand fournie
   // (permet de supprimer un override), inchangée sinon (update partiel).

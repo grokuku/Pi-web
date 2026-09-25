@@ -121,6 +121,7 @@ function createRun(env: SubagentEnvelope, now: number): SubAgentRun {
     modelId: env.model && env.model !== "?" ? env.model : undefined,
     status: "running",
     startedAt: now,
+    lastEventAt: now,
     isError: false,
     attempt: env.attempt ?? 1,
     actions: [],
@@ -133,13 +134,16 @@ function createRun(env: SubagentEnvelope, now: number): SubAgentRun {
 }
 
 /** Champs d'en-tête rafraîchis à CHAQUE event (relance : tentatives/modèle). */
-function envelopeMeta(env: SubagentEnvelope, base: SubAgentRun) {
+function envelopeMeta(env: SubagentEnvelope, base: SubAgentRun, now: number) {
   return {
     function: env.delegateFunction || base.function,
     label: env.delegateLabel || base.label,
     modelId: env.model && env.model !== "?" ? env.model : base.modelId,
     attempt: env.attempt ?? base.attempt,
     task: env.taskExcerpt || base.task,
+    // Liveness : tout événement reçu prouve que le run vit (détection de
+    // blocage par SILENCE, pas par durée).
+    lastEventAt: now,
     // Le projet d'appartenance NE CHANGE JAMAIS en cours de run : préservé si
     // l'enveloppe ne le porte pas (frames antérieurs au correctif).
     projectId: env.projectId || base.projectId,
@@ -158,7 +162,7 @@ export function applySubagentEvent(
   now: number = Date.now(),
 ): SubAgentRun {
   const base = prev ?? createRun(env, now);
-  const meta = envelopeMeta(env, base);
+  const meta = envelopeMeta(env, base, now);
   const ev = env.event || {};
 
   switch (ev.type) {
@@ -688,24 +692,24 @@ export function isRunActive(run: SubAgentRun): boolean {
 }
 
 /**
- * Seuil au-delà duquel un run ENCORE `running` sans avoir reçu de
- * `subagent_end` est considéré BLOQUÉ (abort/timeout dont l'événement de fin
- * s'est perdu, coupure WS…). Il sort alors du mur de colonnes et rejoint le
- * fil À SA DATE. Valeur cohérente avec les timeouts backend : inactivité
- * 5 min × 2 tentatives ≈ 10 min, timeout global 30 min → 20 min laisse le
- * temps à une fin normale tout en débloquant un run réellement coincé.
+ * Seuil de SILENCE au-delà duquel un run ENCORE `running` sans nouvel
+ * événement est considéré BLOQUÉ (abort/timeout dont l'événement de fin s'est
+ * perdu, coupure WS…). On mesure le silence depuis le DERNIER événement (et non
+ * la durée depuis le démarrage) : un long run qui streame encore n'est jamais
+ * marqué bloqué. Valeur cohérente avec le détecteur backend (silence 15 min).
  */
 export const STUCK_RUN_TIMEOUT_MS = 20 * 60_000;
 
 /**
- * Vrai si le run est ENCORE `running` au-delà de STUCK_RUN_TIMEOUT_MS depuis
- * son démarrage. Fonction PURE (now injectable). Un run sans `startedAt` connu
- * n'est jamais considéré bloqué (on ne peut pas dater son début).
+ * Vrai si le run est ENCORE `running` et silencieux depuis plus de
+ * STUCK_RUN_TIMEOUT_MS. Fonction PURE (now injectable). Un run sans date
+ * d'activité connue n'est jamais considéré bloqué.
  */
 export function isRunStuck(run: SubAgentRun, now: number = Date.now()): boolean {
   if (!isRunActive(run)) return false;
-  if (typeof run.startedAt !== "number") return false;
-  return now - run.startedAt > STUCK_RUN_TIMEOUT_MS;
+  const last = typeof run.lastEventAt === "number" ? run.lastEventAt : run.startedAt;
+  if (typeof last !== "number") return false;
+  return now - last > STUCK_RUN_TIMEOUT_MS;
 }
 
 /**
