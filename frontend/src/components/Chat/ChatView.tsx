@@ -22,7 +22,7 @@ import { toast } from "../../utils/holaf-toast";
 import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
-import { applyPiEvent, appendMessageDedup, findPendingUserMessages, prependHistoryBatch } from "../../utils/pi-events";
+import { applyPiEvent, appendMessageDedup, findPendingUserMessages, mergeHistoryWithPending, prependHistoryBatch } from "../../utils/pi-events";
 import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
@@ -483,9 +483,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           const pending = findPendingUserMessages(existing, display, Date.now(), undefined, {
             windowFrom: typeof msg.from === "number" ? msg.from : 0,
           });
-          const merged = pending.length > 0
-            ? [...display, ...pending, ...stillStreaming]
-            : (stillStreaming.length > 0 ? [...display, ...stillStreaming] : display);
+          // Fusion idempotente + ordre chronologique (jamais un ancien message
+          // collé en fin de fil) : cf. mergeHistoryWithPending (pi-events).
+          const base = mergeHistoryWithPending(display, pending);
+          const merged = stillStreaming.length > 0 ? [...base, ...stillStreaming] : base;
           chatHistory.saveMessagesFor(merged, pid);
           if (pid === projectId) {
             setMessages(merged);
@@ -512,7 +513,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const pending = findPendingUserMessages(existing, display, Date.now(), undefined, {
         windowFrom: typeof msg.from === "number" ? msg.from : 0,
       });
-      const mergedDisplay = pending.length > 0 ? [...display, ...pending] : display;
+      // Fusion idempotente + ordre chronologique (cf. mergeHistoryWithPending).
+      const mergedDisplay = mergeHistoryWithPending(display, pending);
       chatHistory.saveMessagesFor(mergedDisplay, pid);
 
       if (pid === projectId) {

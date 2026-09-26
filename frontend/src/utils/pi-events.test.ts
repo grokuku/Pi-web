@@ -3,7 +3,7 @@
 // du message _streaming, concaténation des deltas, timing de la réflexion,
 // tool calls, finalisation, timeout et dédup par id.
 import { describe, it, expect, vi } from "vitest";
-import { applyPiEvent, appendMessageDedup, findPendingUserMessages, getToolCallFallbackCount, prependHistoryBatch, normalizeUserContentForMatch, resetToolCallFallbackCount } from "./pi-events";
+import { applyPiEvent, appendMessageDedup, findPendingUserMessages, getToolCallFallbackCount, isSameMessage, mergeHistoryWithPending, prependHistoryBatch, normalizeUserContentForMatch, resetToolCallFallbackCount } from "./pi-events";
 import type { DisplayMessage, PiEvent } from "../types";
 
 // ── Helpers de construction d'événements ─────────────────────────────
@@ -484,6 +484,41 @@ describe("findPendingUserMessages — messages user en vol", () => {
     expect(missing).toHaveLength(0);
   });
 
+  it("ne ré-attache PAS un candidat PÉRIMÉ sorti de la fenêtre (bug « ancien message en queue »)", () => {
+    // Données RÉELLES (session dd5e824c, capture 2026-09-26) : le message
+    // 13:01:15 est à l'index UI 2863, la fenêtre serveur du moment commence à
+    // l'index 2864 avec un premier message à 13:01:55 — 40 s plus tard, donc
+    // DANS la marge de skew (120 s). L'ancien filtre de floor le laissait
+    // passer, il était cru « en vol » et ré-apposé EN FIN DE FIL après des
+    // échanges du 26/09 18:51. Le backend ayant produit depuis des messages
+    // bien plus récents (borne haute = dernier message − skew), il doit être
+    // écarté — avec ou sans curseur de fenêtre.
+    const OLD_TS = Date.parse("2026-09-24T13:01:15.224Z");
+    const WIN_FIRST_TS = Date.parse("2026-09-24T13:01:55.294Z");
+    const WIN_LAST_TS = Date.parse("2026-09-26T18:51:09.341Z");
+    const stale = userMsg("e3015", "je veux bien que tu corriges les 3 petits défauts…", OLD_TS);
+    const display = [
+      userMsg("e3016", "suite du fil", WIN_FIRST_TS),
+      userMsg("e3359", "je voulais ajouter holaf lib…", WIN_LAST_TS - 60_000),
+      userMsg("e3366", "et pour info…", WIN_LAST_TS),
+    ];
+    const NOW_REAL = WIN_LAST_TS + 60_000;
+    expect(findPendingUserMessages([stale], display, NOW_REAL, undefined, { windowFrom: 2864 })).toHaveLength(0);
+    expect(findPendingUserMessages([stale], display, NOW_REAL)).toHaveLength(0);
+    const merged = mergeHistoryWithPending(display, findPendingUserMessages([stale], display, NOW_REAL));
+    expect(merged).toEqual(display);
+    expect(merged[merged.length - 1].id).toBe("e3366"); // jamais l'ancien en queue
+  });
+
+  it("ne ré-attache PAS un message plus ancien que le dernier message de l'historique (idempotence)", () => {
+    // Absent de l'historique ET plus ancien que son dernier message : il a
+    // nécessairement été commité avant ceux-ci (ou n'a jamais été envoyé) —
+    // une copie périmée ne doit jamais être ré-attachée, même sans fenêtre.
+    const stale = userMsg("opti-old", "vieux", NOW - 300_000);
+    const history = [userMsg("h1", "récent", NOW - 5_000), userMsg("h2", "plus récent", NOW - 1_000)];
+    expect(findPendingUserMessages([stale], history, NOW)).toHaveLength(0);
+  });
+
   it("préserve un candidat RÉCENT absent d'un historique FENÊTRÉ (plus récent que la fenêtre)", () => {
     // Le scénario incident : rattrapage fenêtré construit AVANT le commit de
     // la question — la question est plus récente que tout ce que la fenêtre
@@ -667,5 +702,81 @@ describe("prependHistoryBatch — préfixage d'un lot antérieur", () => {
     list = prependHistoryBatch(list, [msg("e3", "3"), msg("e4", "4"), msg("e5", "5")]);
     list = prependHistoryBatch(list, [msg("e1", "1"), msg("e2", "2")]);
     expect(list.map((m) => m.id)).toEqual(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10"]);
+  });
+});
+
+// ── Tests unitaires : fusion historique + messages en vol ─────────────────
+// Bug « ancien message user réapparu en fin de fil » (capture 2026-09-26) :
+// après une resync fenêtrée, un message d'historique absent de la fenêtre
+// pouvait être ré-apposa EN QUEUE. La fusion doit être IDEMPOTENTE (id ou
+// identité normalisée : jamais deux occurrences) et ORDONNÉE (jamais un
+// ancien message collé en fin de fil).
+describe("mergeHistoryWithPending — fusion idempotente et ordonnée", () => {
+  const NOW = 5_000_000;
+  function userMsg(id: string, content: string, timestamp: number): DisplayMessage {
+    return { id, role: "user", content, thinking: "", toolCalls: [], timestamp };
+  }
+  function assistantMsg(id: string, content: string, timestamp: number): DisplayMessage {
+    return { id, role: "assistant", content, thinking: "", toolCalls: [], timestamp };
+  }
+
+  it("un message présent des deux côtés (même id) n'apparaît qu'une fois", () => {
+    const display = [userMsg("h1", "ma question", NOW - 1000), assistantMsg("a1", "réponse", NOW - 900)];
+    const pending = [userMsg("h1", "ma question", NOW - 1000)];
+    const merged = mergeHistoryWithPending(display, pending);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "a1"]);
+  });
+
+  it("version optimiste et version commitée (ids différents, contenu identique) → une seule occurrence", () => {
+    const committed = userMsg("h-entry", "ma question", NOW - 999);
+    const optimistic = userMsg("opti-1", "ma question", NOW - 1000);
+    const display = [committed, assistantMsg("a1", "réponse", NOW - 900)];
+    const merged = mergeHistoryWithPending(display, [optimistic]);
+    expect(merged.map((m) => m.id)).toEqual(["h-entry", "a1"]);
+  });
+
+  it("un message en vol PLUS ANCIEN que la fin de l'historique est inséré à sa place (jamais en queue)", () => {
+    const display = [
+      userMsg("h1", "vieux", NOW - 3000),
+      assistantMsg("a1", "réponse 1", NOW - 2000),
+      userMsg("h2", "récent", NOW - 1000),
+    ];
+    const late = userMsg("opti", "message daté", NOW - 2500);
+    const merged = mergeHistoryWithPending(display, [late]);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "opti", "a1", "h2"]);
+    expect(merged[merged.length - 1].id).toBe("h2");
+  });
+
+  it("un message en vol plus récent que tout l'historique est ajouté en fin de fil (flux normal)", () => {
+    const display = [userMsg("h1", "ma question", NOW - 1000), assistantMsg("a1", "réponse", NOW - 900)];
+    const pending = userMsg("opti", "nouvelle question", NOW - 100);
+    const merged = mergeHistoryWithPending(display, [pending]);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "a1", "opti"]);
+  });
+
+  it("deux envois identiques espacés restent distincts (re-send légitime)", () => {
+    const display = [userMsg("h1", "ok", NOW - 100_000)];
+    const resend = userMsg("opti", "ok", NOW - 100);
+    const merged = mergeHistoryWithPending(display, [resend]);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "opti"]);
+  });
+
+  it("pending vide → liste inchangée (même référence, aucun re-render inutile)", () => {
+    const display = [userMsg("h1", "ma question", NOW - 1000)];
+    expect(mergeHistoryWithPending(display, [])).toBe(display);
+  });
+
+  it("isSameMessage : id, identité utilisateur, pièces jointes, garde-fous", () => {
+    const a = userMsg("o1", "salut", NOW - 1000);
+    expect(isSameMessage(a, userMsg("h1", "salut", NOW - 900))).toBe(true);
+    // Contenu identique mais horodatages éloignés → deux envois distincts.
+    expect(isSameMessage(a, userMsg("h2", "salut", NOW - 50_000))).toBe(false);
+    // Contenus différents → distincts.
+    expect(isSameMessage(a, userMsg("h3", "autre", NOW - 900))).toBe(false);
+    // Messages système/injectés : l'id seul fait foi (deux injections identiques
+    // restent distinctes).
+    const sys1 = { ...userMsg("s1", "capture", NOW - 1000), customType: "screenshot" };
+    const sys2 = { ...sys1, id: "s2" };
+    expect(isSameMessage(sys1, sys2)).toBe(false);
   });
 });

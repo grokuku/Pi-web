@@ -375,6 +375,11 @@ export const fr = {
       showOriginsHint: "Les sous-projets regroupés dans ce projet sont masqués par défaut dans la liste",
       linkError: (m: string) => `Échec de la liaison : ${m}`,
       unlinkError: (m: string) => `Échec du déliage : ${m}`,
+      // Multi-appartenance autorisée : on signale un projet déjà regroupé
+      // ailleurs au lieu de le masquer silencieusement de la liste.
+      linkedElsewhereBadge: (n: number) => `lié ×${n}`,
+      linkedElsewhereHint: (name: string, n: number) =>
+        `« ${name} » est déjà regroupé dans ${n} autre(s) projet(s) lié(s). L'ajouter ici créera une appartenance multiple.`,
     },
     streaming: "Diffusion en cours",
     streamingStalled: "Diffusion bloquée",

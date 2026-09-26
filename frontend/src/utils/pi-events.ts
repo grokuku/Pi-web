@@ -127,7 +127,11 @@ export function promoteThinkingOnlyAnswer(input: {
 // ne dédupaient pas — évite les doublons entre la version optimiste et la
 // version backend du même message.
 export function appendMessageDedup(prev: DisplayMessage[], msg: DisplayMessage): DisplayMessage[] {
-  if (prev.some(m => m.id === msg.id)) return prev;
+  // (fix idempotence) Au-delà de l'id, un message USER simple est reconnu
+  // comme déjà présent si son IDENTITÉ (contenu normalisé + pièces jointes)
+  // et un horodatage proche concordent — couvre la version optimiste locale
+  // et sa version commitée (ids différents) livrée par un autre canal.
+  if (prev.some(m => m.id === msg.id || isSameMessage(m, msg))) return prev;
   return [...prev, msg];
 }
 
@@ -205,6 +209,77 @@ function extractAttachmentIdsFromContent(content: string): string[] {
   return out;
 }
 
+// ── (dédup) Identité de message : clé robuste inter-sources ──────────────
+// Un même envoi peut provenir de DEUX sources avec des ids différents : la
+// version optimiste locale (id = Date.now()) et la version commitée par le
+// backend (id = id d'entrée de session). Pour ne jamais afficher deux fois le
+// même message après une resynchronisation (rechargement, reconnexion WS,
+// resync pi_history), on compare une IDENTITÉ normalisée :
+//   rôle + contenu (refs d'attachement neutralisées) + ids de pièces jointes.
+// L'horodatage fait partie de la comparaison avec une tolérance COURTE
+// (MESSAGE_IDENTITY_SKEW_MS) : la copie optimiste (horloge client) et la copie
+// commitée (horloge serveur) diffèrent de quelques secondes au plus, alors que
+// deux envois successifs à contenu identique (re-send légitime) sont plus
+// espacés — ils ne doivent PAS être confondus.
+export const MESSAGE_IDENTITY_SKEW_MS = 5_000;
+
+/** Clé d'identité normalisée d'un message (exportée pour les tests). */
+export function messageIdentityKey(m: DisplayMessage): string {
+  const atts = collectAttachmentIds(m).sort().join(",");
+  const content = normalizeUserContentForMatch(m.content || "");
+  return `${m.role}|${m.customType ?? m.kind ?? ""}|${content}|${atts}`;
+}
+
+/**
+ * Deux messages désignent-ils le MÊME envoi (toutes sources confondues) ?
+ * Oui si l'id est identique, ou — pour un message USER simple — si l'identité
+ * normalisée concorde ET que les horodatages sont proches (tolérance d'horloge
+ * courte). Les messages système/injectés (customType) et les blocs datés
+ * (kind : bash, compaction, toolResult) ne sont comparés que par id : deux
+ * injections identiques (ex. deux screenshots) restent des messages distincts.
+ */
+export function isSameMessage(a: DisplayMessage, b: DisplayMessage): boolean {
+  if (a.id && b.id && a.id === b.id) return true;
+  if (a.role !== b.role) return false;
+  // Contenu comparé uniquement pour les messages USER : pour l'assistant et
+  // les outils, l'id (id d'entrée) est la seule identité fiable — un texte
+  // identique peut être une nouvelle réponse légitime.
+  if (a.role !== "user") return false;
+  if (a.customType || b.customType || a.kind || b.kind) return false;
+  if (typeof a.timestamp !== "number" || typeof b.timestamp !== "number") return false;
+  if (Math.abs(a.timestamp - b.timestamp) > MESSAGE_IDENTITY_SKEW_MS) return false;
+  return messageIdentityKey(a) === messageIdentityKey(b);
+}
+
+/**
+ * Fusionne l'historique reçu et les messages user « en vol » : aucune
+ * occurrence en double (id OU identité — un message déjà présent n'est JAMAIS
+ * ré-ajouté, quelle que soit la source), et insertion à la POSITION
+ * CHRONOLOGIQUE (jamais un ancien message collé en fin de fil). PURE.
+ */
+export function mergeHistoryWithPending(
+  display: DisplayMessage[],
+  pending: DisplayMessage[],
+): DisplayMessage[] {
+  if (pending.length === 0) return display;
+  const out: DisplayMessage[] = [...display];
+  for (const p of pending) {
+    if (out.some((m) => isSameMessage(m, p))) continue; // déjà présent → jamais ré-ajouté
+    const ts = typeof p.timestamp === "number" && Number.isFinite(p.timestamp) ? p.timestamp : null;
+    // Premier message STRICTEMENT postérieur = place du message en vol ;
+    // sinon (cas normal : message plus récent que tout l'historique reçu), il
+    // est ajouté en fin de fil.
+    const idx = ts === null
+      ? -1
+      : out.findIndex(
+          (m) => typeof m.timestamp === "number" && Number.isFinite(m.timestamp) && m.timestamp > ts,
+        );
+    if (idx >= 0) out.splice(idx, 0, p);
+    else out.push(p);
+  }
+  return out;
+}
+
 export interface PendingUserOptions {
   /**
    * Index (dans la liste complète backend) du PREMIER message de l'historique
@@ -243,6 +318,22 @@ export function findPendingUserMessages(
     if (stamps.length > 0) windowFloorTs = Math.min(...stamps) - PENDING_WINDOW_SKEW_MS;
   }
 
+  // Borne « backend déjà plus récent » : un message user absent de l'historique
+  // reçu mais PLUS ANCIEN que son dernier message (au-delà de la tolérance
+  // d'horloge) ne peut PAS être « en vol » — le backend a nécessairement reçu
+  // et commité ce message AVANT de produire les suivants. C'est une copie
+  // périmée d'une fenêtre précédente (la tranche a glissé d'un cran) : la
+  // ré-attacher la ferait réapparaître EN FIN DE FIL (bug « ancien message en
+  // queue », capture 2026-09-26 : ancien message 13:01:15, fenêtre commençant
+  // 40 s plus tard seulement — la marge de skew du floor ne suffisait pas).
+  let historyCeilTs = -Infinity;
+  {
+    const stamps = history
+      .map((m) => m.timestamp)
+      .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts));
+    if (stamps.length > 0) historyCeilTs = Math.max(...stamps) - PENDING_WINDOW_SKEW_MS;
+  }
+
   const userHistory = history.filter((m) => m.role === "user");
   const lastUser = [...userHistory].reverse()[0];
   // Comparaison sur contenu NORMALISÉ (refs d'attachement neutralisées) : sans
@@ -262,6 +353,9 @@ export function findPendingUserMessages(
   return candidates.filter((c) => {
     const ts = c.timestamp as number;
     if (ts <= windowFloorTs) return false; // antérieur à la fenêtre serveur → hors périmètre
+    // Plus vieux que le DERNIER message reçu : commité depuis longtemps (ou
+    // jamais envoyé) — une copie périmée ne doit jamais être ré-attachée.
+    if (ts < historyCeilTs) return false;
 
     // Message à pièce jointe : si TOUS ses ids d'attachement (UUID uniques)
     // figurent déjà dans l'historique reçu, la version COMMITÉE est présente

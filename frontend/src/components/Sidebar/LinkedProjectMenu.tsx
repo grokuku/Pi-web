@@ -4,7 +4,9 @@
 //
 // Contenu :
 //   1. « Lier un projet… » → mode pick : liste des projets éligibles
-//      (local/SMB uniquement, contrainte backend ; pas déjà regroupés)
+//      (local/SMB uniquement, contrainte backend ; hors doublons du groupe
+//      courant — un projet déjà membre d'un AUTRE groupe reste proposable,
+//      la multi-appartenance est autorisée et signalée dans la liste)
 //      → POST /api/projects/:id/linked { subProjectId }
 //   2. « Délier » : un item par sous-projet regroupé
 //      → DELETE /api/projects/:id/linked/:subId
@@ -18,11 +20,12 @@
 // menu est ouvert (pattern useAnchorPosition). Fermeture au clic extérieur
 // et à la touche Escape (pattern ModelQuickSwitch/MobileHeaderMenu).
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, Link2, Unlink, X } from "lucide-react";
 import { useTranslation } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
+import { buildLinkCandidates } from "../../utils/linked-projects";
 import type { Project } from "../../types";
 
 const MENU_WIDTH = 240;
@@ -100,20 +103,15 @@ export function LinkedProjectMenu({
     .map((id) => projects.find((p) => p.id === id))
     .filter((p): p is Project => !!p);
 
-  // Candidats à la liaison : contraintes backend (local ou SMB monté, pas un
-  // placeholder — l'imbrication est refusée) + on exclut les projets déjà
-  // regroupés dans n'importe quel placeholder (un sous-projet = un seul groupe).
-  const linkedEverywhere = new Set<string>();
-  for (const p of projects) {
-    if (p.storage === "linked" && Array.isArray(p.linkedProjectIds)) {
-      for (const id of p.linkedProjectIds) linkedEverywhere.add(id);
-    }
-  }
-  const candidates = projects.filter(
-    (p) =>
-      p.id !== project.id &&
-      !linkedEverywhere.has(p.id) &&
-      (p.storage === "local" || p.storage === "smb")
+  // Candidats à la liaison (logique pure testée dans utils/linked-projects.ts) :
+  // contraintes backend (local ou SMB monté, pas un placeholder — l'imbrication
+  // est refusée) + on exclut seulement le projet lui-même et les doublons du
+  // groupe COURANT. Un projet déjà membre d'un AUTRE groupe reste proposable
+  // (multi-appartenance autorisée par le backend) et est signalé par son
+  // nombre de groupes (linkedGroupCount).
+  const candidates = useMemo(
+    () => buildLinkCandidates(project, projects),
+    [project, projects]
   );
 
   const handleLink = async (subProjectId: string) => {
@@ -179,9 +177,14 @@ export function LinkedProjectMenu({
             <span className="truncate">{project.name}</span>
           </div>
 
-          {/* Lier un projet… → bascule en mode pick */}
+          {/* Lier un projet… → bascule en mode pick. On recharge la liste des
+              projets à l'entrée : les candidats doivent refléter les créations/
+              éditions récentes d'autres projets liés (pas d'état périmé). */}
           <button
-            onClick={() => setMode("pick")}
+            onClick={() => {
+              setMode("pick");
+              void onProjectsChanged();
+            }}
             className="w-full text-left px-3 py-2 text-xs text-hacker-text-dim hover:bg-hacker-accent/5 hover:text-hacker-text flex items-center gap-1.5"
           >
             <Link2 size={12} className="shrink-0" />
@@ -243,7 +246,7 @@ export function LinkedProjectMenu({
             </span>
           </div>
           <div className="px-2 pb-2 flex flex-col gap-0.5">
-            {candidates.map((p) => (
+            {candidates.map(({ project: p, linkedGroupCount }) => (
               <button
                 key={p.id}
                 onClick={() => handleLink(p.id)}
@@ -255,6 +258,16 @@ export function LinkedProjectMenu({
                   {busyId === p.id ? "…" : "+"}
                 </span>
                 <span className="truncate flex-1">{p.name}</span>
+                {/* Multi-appartenance autorisée : on signale un projet déjà
+                    regroupé ailleurs au lieu de le faire disparaître. */}
+                {linkedGroupCount > 0 && (
+                  <span
+                    className="text-[9px] text-hacker-warn/80 shrink-0"
+                    title={t('sidebar.linkedMenu.linkedElsewhereHint', p.name, linkedGroupCount)}
+                  >
+                    {t('sidebar.linkedMenu.linkedElsewhereBadge', linkedGroupCount)}
+                  </span>
+                )}
                 <span className="text-[9px] text-hacker-text-dim/50 uppercase shrink-0">{p.storage}</span>
               </button>
             ))}

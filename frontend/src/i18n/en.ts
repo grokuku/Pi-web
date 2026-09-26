@@ -374,6 +374,11 @@ export const en = {
       showOriginsHint: "Sub-projects grouped in this project are hidden by default in the list",
       linkError: (m: string) => `Failed to link: ${m}`,
       unlinkError: (m: string) => `Failed to unlink: ${m}`,
+      // Multi-appartenance autorisée : on signale un projet déjà regroupé
+      // ailleurs au lieu de le masquer silencieusement de la liste.
+      linkedElsewhereBadge: (n: number) => `linked ×${n}`,
+      linkedElsewhereHint: (name: string, n: number) =>
+        `"${name}" is already grouped in ${n} other linked project(s). Adding it here will create a multiple membership.`,
     },
     streaming: "Streaming",
     streamingStalled: "Streaming stalled",
