@@ -510,6 +510,20 @@ export function thinkingLevelsForModel(m: RegisteredModel): readonly ThinkingLev
   return levels.length > 0 ? levels : THINKING_LEVELS;
 }
 
+/**
+ * Ramène un niveau de réflexion enregistré sur `null` (« défaut » du mode) s'il
+ * n'est plus PROPOSÉ par le modèle — ex. le provider ne le déclare plus après une
+ * mise à jour. Évite qu'un sélecteur affiche un niveau fantôme (ou envoie une
+ * valeur non supportée) et aligne l'UI sur les niveaux réellement acceptés.
+ */
+export function clampThinkingLevel(
+  level: string | null | undefined,
+  levels: readonly ThinkingLevel[],
+): ThinkingLevel | null {
+  if (!level) return null;
+  return (levels as readonly string[]).includes(level) ? (level as ThinkingLevel) : null;
+}
+
 export interface CategoryConfig {
   modelId: string | null;
   /** Absent/undefined = « défaut » : niveau de réflexion du MODE conservé. */

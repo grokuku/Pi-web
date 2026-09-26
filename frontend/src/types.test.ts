@@ -4,7 +4,7 @@
  * défaut du provider inclus ; information inconnue = comportement historique.
  */
 import { describe, expect, it } from "vitest";
-import { THINKING_LEVELS, thinkingLevelsForModel, type RegisteredModel } from "./types";
+import { THINKING_LEVELS, thinkingLevelsForModel, clampThinkingLevel, type RegisteredModel } from "./types";
 
 function model(overrides: Partial<RegisteredModel> = {}): RegisteredModel {
   return {
@@ -53,5 +53,22 @@ describe("thinkingLevelsForModel", () => {
 
   it("modèle non-raisonneur (values:[false] → reasoningLevels:['off']) → seulement off", () => {
     expect(thinkingLevelsForModel(model({ reasoning: false, reasoningLevels: ["off"] }))).toEqual(["off"]);
+  });
+});
+
+describe("clampThinkingLevel", () => {
+  it("niveau PROPOSÉ → conservé", () => {
+    expect(clampThinkingLevel("high", ["off", "low", "high", "max"])).toBe("high");
+  });
+
+  it("niveau devenu INDISPONIBLE → ramené à null (« défaut » du mode)", () => {
+    expect(clampThinkingLevel("medium", ["off", "low", "high", "max"])).toBeNull();
+    expect(clampThinkingLevel("xhigh", ["off", "low", "high", "max"])).toBeNull();
+  });
+
+  it("absence de niveau → null ; tous les niveaux → conservé", () => {
+    expect(clampThinkingLevel(undefined, THINKING_LEVELS)).toBeNull();
+    expect(clampThinkingLevel(null, THINKING_LEVELS)).toBeNull();
+    expect(clampThinkingLevel("xhigh", THINKING_LEVELS)).toBe("xhigh");
   });
 });

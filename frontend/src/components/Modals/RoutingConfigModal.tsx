@@ -4,6 +4,8 @@ import { ModalDialog } from "../common/ModalDialog";
 import {
   DEFAULT_ROUTING_CONFIG,
   THINKING_LEVELS,
+  thinkingLevelsForModel,
+  clampThinkingLevel,
   type CategoryConfig,
   type ProviderConfig,
   type RegisteredModel,
@@ -110,12 +112,15 @@ function ThinkingSelect({
   onChange,
   defaultLabel,
   ariaLabel,
+  levels,
   t,
 }: {
   value: ThinkingLevel | null;
   onChange: (level: ThinkingLevel | null) => void;
   defaultLabel: string;
   ariaLabel: string;
+  /** Niveaux réellement proposables pour le modèle de la catégorie. */
+  levels: readonly ThinkingLevel[];
   t: TFunction;
 }) {
   return (
@@ -127,7 +132,7 @@ function ThinkingSelect({
       className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[11px] px-2 py-1.5 rounded focus:border-hacker-accent outline-none"
     >
       <option value="">{defaultLabel}</option>
-      {THINKING_LEVELS.map(level => (
+      {levels.map(level => (
         <option key={level} value={level}>
           {t(`routingModal.thinkingLevels.${level}`)}
         </option>
@@ -161,7 +166,15 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
   const [error, setError] = useState("");
 
   const updateCategoryModel = (category: TaskCategory, modelId: string | null) => {
-    setRouting(prev => ({ ...prev, [category]: { ...prev[category], modelId } as CategoryConfig }));
+    setRouting(prev => {
+      const next: CategoryConfig = { ...prev[category], modelId } as CategoryConfig;
+      // Le modèle change : un niveau enregistré devenu indisponible est ramené
+      // au « défaut » (clamp) plutôt que de rester affiché/soumis.
+      const clamped = clampThinkingLevel(next.thinkingLevel, levelsForModelId(modelId));
+      if (clamped) next.thinkingLevel = clamped;
+      else delete next.thinkingLevel;
+      return { ...prev, [category]: next };
+    });
   };
 
   const updateCategoryThinking = (category: TaskCategory, level: ThinkingLevel | null) => {
@@ -179,6 +192,21 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
     if (!id) return t("routingModal.summaryModelDefault");
     return models.find(m => m.id === id)?.name || id;
   };
+
+  /**
+   * Niveaux de réflexion PROPOSABLES pour un modèle donné. Source de vérité :
+   * `thinkingLevelsForModel` (niveaux déclarés par le provider). Catégorie sur
+   * « défaut » (modèle non déterminé) ou modèle introuvable → repli sur TOUS les
+   * niveaux : on conserve le comportement historique.
+   */
+  const levelsForModelId = (modelId: string | null): readonly ThinkingLevel[] => {
+    if (!modelId) return THINKING_LEVELS;
+    const m = models.find(mm => mm.id === modelId);
+    return m ? thinkingLevelsForModel(m) : THINKING_LEVELS;
+  };
+
+  const levelsForCategory = (category: TaskCategory): readonly ThinkingLevel[] =>
+    levelsForModelId(routing[category].modelId);
 
   /** Résumé lisible de la catégorie : « <modèle> · réflexion <niveau> ». */
   const categorySummary = (category: TaskCategory): string => {
@@ -253,10 +281,11 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
                   disabled={false}
                 />
                 <ThinkingSelect
-                  value={routing[cat.id].thinkingLevel ?? null}
+                  value={clampThinkingLevel(routing[cat.id].thinkingLevel, levelsForCategory(cat.id))}
                   onChange={level => updateCategoryThinking(cat.id, level)}
                   defaultLabel={t("routingModal.thinkingDefaultOption")}
                   ariaLabel={`${t("routingModal.thinkingLabel")} — ${cat.label}`}
+                  levels={levelsForCategory(cat.id)}
                   t={t}
                 />
               </div>

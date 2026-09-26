@@ -6,7 +6,7 @@ import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
-import { thinkingLevelsForModel, resolveModelCapability } from "../../types";
+import { thinkingLevelsForModel, clampThinkingLevel, resolveModelCapability } from "../../types";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -294,9 +294,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                       // Niveaux PROPOSÉS limités à ceux déclarés par le provider (info
                       // inconnue = tous les niveaux). Voir thinkingLevelsForModel.
                       const levels = thinkingLevelsForModel(m);
-                      const selectedThinking = m.thinkingLevel && (levels as readonly string[]).includes(m.thinkingLevel)
-                        ? m.thinkingLevel
-                        : "";
+                      // Niveau enregistré devenu indisponible → ramené à « défaut » (clamp).
+                      const selectedThinking = clampThinkingLevel(m.thinkingLevel, levels) ?? "";
                       return (
                         <div
                           key={m.id}

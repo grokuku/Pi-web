@@ -30,6 +30,7 @@ vi.mock("fs", () => ({
 import {
   PROVIDER_PRESETS,
   addProvider,
+  backfillRegisteredModelReasoningLevels,
   deleteProvider,
   getProvider,
   inferContextWindow,
@@ -46,8 +47,10 @@ import {
   testProviderConnection,
   toPublicProvider,
   updateProvider,
+  type DiscoveredModel,
   type ProviderConfig,
 } from "./providers.js";
+import { loadModelLibrary, saveModelLibrary } from "./model-library.js";
 
 function makeProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
@@ -448,5 +451,116 @@ describe("testProviderConnection (aucun appel réseau réel)", () => {
     expect(stored?.connectionStatus).toBe("error");
     expect(stored?.connectionError).toBe("ECONNREFUSED simulé");
     expect(stored?.lastTestedAt).toBeTruthy();
+  });
+});
+
+// ── Backfill des niveaux de réflexion (rétro-renseignement) ──
+
+describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
+  const fetchMock = vi.fn();
+
+  /** Sème un modèle DÉJÀ enregistré dans model-library.json (simulé). */
+  function seedRegisteredModel(extra: Record<string, unknown> = {}): void {
+    saveModelLibrary({
+      models: [{
+        id: "m1",
+        providerId: "p1",
+        modelId: "deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        isDefault: true,
+        reasoning: true,
+        vision: false,
+        contextWindow: 128000,
+        maxTokens: 16384,
+        ...extra,
+      }],
+      defaultModelId: "m1",
+      projectModes: {},
+    } as any);
+  }
+
+  beforeEach(() => {
+    fsState.files = {};
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("modèle sans reasoningLevels + /api/show [false,'low','high','max'] → persisté ['off','low','high','max'] + défaut 'high'", async () => {
+    const provider = makeProvider();
+    saveProviders([provider]);
+    seedRegisteredModel();
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/show")) {
+        return {
+          ok: true,
+          json: async () => ({ thinking: { values: [false, "low", "high", "max"], default: "high" } }),
+        };
+      }
+      return { ok: true, json: async () => ({ data: [{ id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" }] }) };
+    });
+
+    const result = await testProviderConnection(provider);
+    expect(result.ok).toBe(true);
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.reasoningLevels).toEqual(["off", "low", "high", "max"]);
+    expect(persisted.reasoningDefault).toBe("high");
+  });
+
+  it("provider injoignable (aucune capacité découverte) → donnée INCHANGÉE (aucun effacement)", async () => {
+    const provider = makeProvider();
+    seedRegisteredModel({ reasoningLevels: ["low", "high"], reasoningDefault: "low" });
+
+    // Aucune capacité découverte (équivaut à /api/show injoignable).
+    const changed = await backfillRegisteredModelReasoningLevels(provider, []);
+    expect(changed).toBe(0);
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.reasoningLevels).toEqual(["low", "high"]);
+    expect(persisted.reasoningDefault).toBe("low");
+  });
+
+  it("une valeur existante n'est JAMAIS écrasée par la découverte", async () => {
+    const provider = makeProvider();
+    seedRegisteredModel({ reasoningLevels: ["low", "high"], reasoningDefault: "low" });
+
+    const discovered: DiscoveredModel[] = [{
+      id: "deepseek-v4.1-flash",
+      name: "DeepSeek V4.1 Flash",
+      reasoning: true,
+      reasoningLevels: ["off", "low", "high", "max"],
+      reasoningDefault: "high",
+    }];
+    const changed = await backfillRegisteredModelReasoningLevels(provider, discovered);
+    expect(changed).toBe(0);
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.reasoningLevels).toEqual(["low", "high"]);
+    expect(persisted.reasoningDefault).toBe("low");
+  });
+
+  it("provider non-Ollama → no-op (aucune lecture/écriture)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1" });
+    seedRegisteredModel();
+    const changed = await backfillRegisteredModelReasoningLevels(provider, [
+      { id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] },
+    ]);
+    expect(changed).toBe(0);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
+  });
+
+  it("modèle non enregistré auprès du provider → rien à faire (0)", async () => {
+    const provider = makeProvider();
+    seedRegisteredModel({ providerId: "autre" });
+    const changed = await backfillRegisteredModelReasoningLevels(provider, [
+      { id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] },
+    ]);
+    expect(changed).toBe(0);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
   });
 });

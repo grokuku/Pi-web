@@ -11,8 +11,6 @@ import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { MAX_PROVIDER_LIMIT, effectiveProviderCalls, normalizeProviderCallsInput } from "../../utils/concurrency";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
-
 // ── Props ─────────────────────────────────────────────────
 
 interface Props {
@@ -572,6 +570,18 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
           if (dm.contextWindow && dm.contextWindow !== model.contextWindow) updates.contextWindow = dm.contextWindow;
           if (dm.vision !== undefined && dm.vision !== model.vision) updates.vision = dm.vision;
           if (dm.reasoning !== undefined && dm.reasoning !== model.reasoning) updates.reasoning = dm.reasoning;
+          // Niveaux de réflexion supportés (Ollama /api/show → objet `thinking`) :
+          // rétro-renseigne les modèles existants pour que le sélecteur n'expose
+          // QUE les niveaux réellement déclarés. Comme le backfill backend, on ne
+          // remplit QUE si l'information manque (jamais d'écrasement).
+          if (
+            !(Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0) &&
+            Array.isArray(dm.reasoningLevels) &&
+            dm.reasoningLevels.length > 0
+          ) {
+            updates.reasoningLevels = dm.reasoningLevels as string[];
+            if (typeof dm.reasoningDefault === "string") updates.reasoningDefault = dm.reasoningDefault;
+          }
           if (Object.keys(updates).length > 0) {
             updatedExisting++;
             try {

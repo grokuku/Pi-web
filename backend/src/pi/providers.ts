@@ -545,6 +545,14 @@ export function parseOllamaThinking(
   };
 }
 
+/**
+ * Vrai si le provider expose l'API NATIVE Ollama (`POST /api/show` → objet
+ * `thinking`), seul endpoint capable de DÉCLARER les niveaux de réflexion.
+ */
+function isNativeOllamaProvider(provider: Pick<ProviderConfig, "type" | "baseUrl">): boolean {
+  return provider.type === "ollama" || /ollama\.com|:11434/i.test(provider.baseUrl || "");
+}
+
 /** Derive the native Ollama API base URL from the OpenAI-compatible base URL. */
 function deriveNativeOllamaUrl(baseUrl: string): string {
   // Remove trailing /v1 or /v1/
@@ -623,10 +631,78 @@ async function enrichWithOllamaCapabilities(
           const m = params.match(/num_ctx\s+(\d+)/i);
           if (m) model.contextWindow = parseInt(m[1], 10);
         }
-      } catch {
-        // Native API not available – that's OK, heuristics will fill in
+      } catch (e: any) {
+        // API native indisponible pour CE modèle (provider injoignable, modèle
+        // absent…) : capacité de réflexion INCONNUE → on ne change rien, on
+        // journalise un avertissement et les heuristiques prennent le relais.
+        console.warn(
+          `[providers] /api/show indisponible pour ${model.id} — capacités de réflexion laissées inchangées (${e?.message || e})`,
+        );
+        // Native API not available for this model – heuristics will fill in.
       }
     }));
+  }
+}
+
+/**
+ * Rétro-renseignement (backfill) des niveaux de réflexion supportés sur les
+ * modèles DÉJÀ ENREGISTRÉS d'un provider, à partir des capacités fraîchement
+ * découvertes (`enrichWithOllamaCapabilities` → objet `thinking`).
+ *
+ * DÉCLENCHEUR : à chaque découverte/scan RÉUSSI d'un provider Ollama
+ * (`testProviderConnection`, appelé par `POST /api/providers/:id/test` →
+ * `handleScanAll`). Le coût réseau `POST /api/show` (concurrence 5, timeout 15 s)
+ * est donc DÉJÀ payé par `enrichWithOllamaCapabilities` ; ce backfill ne fait que
+ * persister la donnée (lecture + écriture de model-library.json).
+ *
+ * RÈGLES :
+ *  - jamais d'ÉCRASEMENT d'une valeur existante (`reasoningLevels` déjà présent) ;
+ *  - provider injoignable / `thinking` absent → aucune capacité découverte → les
+ *    modèles enregistrés restent INCHANGÉS (repli « tous les niveaux ») ;
+ *  - best-effort : toute erreur est journalisée mais ne fait jamais échouer le scan.
+ *
+ * @returns nombre de modèles rétro-renseignés (0 = aucune écriture).
+ */
+export async function backfillRegisteredModelReasoningLevels(
+  provider: ProviderConfig,
+  models: DiscoveredModel[],
+): Promise<number> {
+  if (!isNativeOllamaProvider(provider)) return 0;
+  try {
+    const { loadModelLibrary, saveModelLibrary } = await import("./model-library.js");
+    const library = loadModelLibrary();
+    const candidates = library.models.filter((m) => m.providerId === provider.id);
+    if (candidates.length === 0) return 0;
+
+    // Index des capacités découvertes : seuls les modèles dont le provider
+    // déclare EXPLICITEMENT des niveaux sont candidats au backfill.
+    const discovered = new Map<string, DiscoveredModel>();
+    for (const m of models) {
+      if (Array.isArray(m.reasoningLevels) && m.reasoningLevels.length > 0) discovered.set(m.id, m);
+    }
+    if (discovered.size === 0) {
+      console.warn(
+        `[providers] Backfill réflexion (${provider.name || provider.id}) : aucune capacité « thinking » découverte — modèles enregistrés inchangés`,
+      );
+      return 0;
+    }
+
+    let changed = 0;
+    for (const model of candidates) {
+      // Ne JAMAIS écraser une valeur déjà présente.
+      if (Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0) continue;
+      const dm = discovered.get(model.modelId);
+      if (!dm?.reasoningLevels?.length) continue;
+      model.reasoningLevels = [...dm.reasoningLevels];
+      if (dm.reasoningDefault) model.reasoningDefault = dm.reasoningDefault;
+      changed++;
+    }
+    if (changed > 0) saveModelLibrary(library);
+    return changed;
+  } catch (e: any) {
+    // Best-effort : ne jamais faire échouer la découverte des modèles.
+    console.warn("[providers] Backfill des niveaux de réflexion échoué :", e?.message || e);
+    return 0;
   }
 }
 
@@ -698,6 +774,11 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
     if (provider.type === "ollama" || provider.type === "openai-compatible") {
       await enrichWithOllamaCapabilities(provider, models);
     }
+
+    // ── Backfill best-effort des niveaux de réflexion des modèles DÉJÀ
+    // enregistrés (le coût /api/show est déjà payé ci-dessus). Ne bloque jamais
+    // le scan : toute erreur est absorbée. Voir la fonction pour les règles. ──
+    await backfillRegisteredModelReasoningLevels(provider, models);
 
     // Update provider status
     updateProvider(provider.id, {
