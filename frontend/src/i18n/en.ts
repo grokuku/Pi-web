@@ -379,6 +379,14 @@ export const en = {
       linkedElsewhereBadge: (n: number) => `linked ×${n}`,
       linkedElsewhereHint: (name: string, n: number) =>
         `"${name}" is already grouped in ${n} other linked project(s). Adding it here will create a multiple membership.`,
+      // Candidate-list checkbox (checked by default): hides projects already
+      // members of ANOTHER linked group — unchecked, they reappear with the
+      // "linked ×N" badge. The label describes the CHECKED-state effect.
+      hideAlreadyLinked: "Hide projects already in a linked group",
+      hiddenCount: (n: number) => `${n} hidden`,
+      allHidden:
+        "No eligible project outside linked groups — uncheck the box to show already-linked projects.",
+      noMatch: "No match",
     },
     streaming: "Streaming",
     streamingStalled: "Streaming stalled",

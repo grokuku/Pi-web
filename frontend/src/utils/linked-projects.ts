@@ -38,20 +38,30 @@ function currentLinkedIds(group: Project, projects: Project[]): string[] {
 /**
  * Construit la liste des projets proposables pour « Lier un projet… ».
  *
- * Exclusions : le groupe lui-même (auto-lien), les membres du groupe COURANT
- * (doublon refusé par le backend) et les stockages non éligibles (ssh, ou un
- * autre placeholder → pas d'imbrication, donc pas de cycle possible).
- * Un projet déjà membre d'AUTRES groupes est proposé, avec son compte de
- * groupes pour transparence (multi-appartenance autorisée par le backend).
+ * Exclusions INVARIANTES (quel que soit `hideAlreadyLinked`) : le groupe
+ * lui-même (auto-lien), les membres du groupe COURANT (doublon refusé par le
+ * backend) et les stockages non éligibles (ssh, ou un autre placeholder → pas
+ * d'imbrication, donc pas de cycle possible).
+ *
+ * `hideAlreadyLinked` (case de l'UI, cochée par défaut) : quand il vaut true,
+ * exclut EN PLUS les projets déjà membres d'un AUTRE groupe lié. Quand il vaut
+ * false (comportement historique du helper), ces projets restent proposés avec
+ * leur compte de groupes pour transparence (multi-appartenance autorisée par
+ * le backend).
  */
-export function buildLinkCandidates(group: Project, projects: Project[]): LinkCandidate[] {
+export function buildLinkCandidates(
+  group: Project,
+  projects: Project[],
+  hideAlreadyLinked = false
+): LinkCandidate[] {
   const alreadyLinked = new Set(currentLinkedIds(group, projects));
   return projects
     .filter(
       (p) =>
         p.id !== group.id &&
         !alreadyLinked.has(p.id) &&
-        isLinkableStorage(p.storage)
+        isLinkableStorage(p.storage) &&
+        !(hideAlreadyLinked && countLinkedGroups(p.id, projects, group.id) > 0)
     )
     .map((p) => ({
       project: p,

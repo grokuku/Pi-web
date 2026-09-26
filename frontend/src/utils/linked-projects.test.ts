@@ -128,6 +128,37 @@ describe("buildLinkCandidates", () => {
   });
 });
 
+describe("buildLinkCandidates — filtre « masquer les projets déjà liés »", () => {
+  it("hideAlreadyLinked=true exclut les projets membres d'un AUTRE groupe", () => {
+    const hiddenIds = buildLinkCandidates(targetGroup, allProjects, true).map((c) => c.project.id);
+    expect(hiddenIds).not.toContain(holafLib.id); // membre de 2 autres groupes
+    // Décochée (false) : les mêmes projets restent proposés (comportement historique).
+    const visibleIds = buildLinkCandidates(targetGroup, allProjects, false).map((c) => c.project.id);
+    expect(visibleIds).toContain(holafLib.id);
+  });
+
+  it("hideAlreadyLinked=false propose le projet déjà lié ailleurs AVEC son compte de groupes", () => {
+    const holaf = buildLinkCandidates(targetGroup, allProjects, false).find((c) => c.project.id === holafLib.id);
+    expect(holaf).toBeDefined();
+    expect(holaf?.linkedGroupCount).toBe(2);
+    // Le candidat masqué ne doit plus apparaître du tout quand la case est cochée.
+    expect(buildLinkCandidates(targetGroup, allProjects, true).some((c) => c.project.id === holafLib.id)).toBe(false);
+  });
+
+  it("les exclusions invariantes restent vraies quel que soit le paramètre", () => {
+    for (const hideAlreadyLinked of [true, false]) {
+      const ids = buildLinkCandidates(linkedHomyEtLibs, allProjects, hideAlreadyLinked).map((c) => c.project.id);
+      expect(ids).not.toContain(linkedHomyEtLibs.id); // le groupe lui-même (auto-lien)
+      expect(ids).not.toContain(homy.id);             // membre du groupe COURANT
+      expect(ids).not.toContain(holafLib.id);         // membre du groupe COURANT
+      expect(ids).not.toContain(yukiAndLibs.id);      // placeholder (pas d'imbrication)
+      expect(ids).not.toContain(targetGroup.id);      // placeholder (pas d'imbrication)
+      expect(ids).not.toContain(sshProject.id);       // stockage ssh non éligible
+      expect(ids).toContain(smbProject.id);           // SMB monté toujours éligible
+    }
+  });
+});
+
 describe("countLinkedGroups", () => {
   it("compte les groupes contenant le projet, en excluant le groupe courant", () => {
     const projects = [linkedHomyEtLibs, yukiAndLibs];

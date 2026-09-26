@@ -380,6 +380,14 @@ export const fr = {
       linkedElsewhereBadge: (n: number) => `lié ×${n}`,
       linkedElsewhereHint: (name: string, n: number) =>
         `« ${name} » est déjà regroupé dans ${n} autre(s) projet(s) lié(s). L'ajouter ici créera une appartenance multiple.`,
+      // Case de la liste des candidats (cochée par défaut) : masque les projets
+      // déjà membres d'un AUTRE groupe lié — décochée, ils réapparaissent avec
+      // le badge « lié ×N ». Le libellé décrit l'effet de l'état COCHÉ.
+      hideAlreadyLinked: "Masquer les projets déjà liés à un groupe",
+      hiddenCount: (n: number) => `${n} masqué${n > 1 ? "s" : ""}`,
+      allHidden:
+        "Aucun projet éligible hors groupes liés — décochez la case pour afficher les projets déjà liés.",
+      noMatch: "Aucun résultat",
     },
     streaming: "Diffusion en cours",
     streamingStalled: "Diffusion bloquée",
