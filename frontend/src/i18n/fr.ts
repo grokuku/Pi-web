@@ -725,6 +725,12 @@ export const fr = {
     errSummaryProtected: "Suppression refusée : checkpoint de compaction (type « summary ») géré par l'extension compaction-checkpoint.",
   },
 
+  // ── Rendu markdown (chat + explorateur) ──
+  markdown: {
+    loadExternalImage: "Cliquer pour charger l'image",
+    imageLoadFailed: "Échec du chargement de l'image",
+  },
+
   // ── Thinking Block ──
   thinkingBlock: {
     copy: "Copier",

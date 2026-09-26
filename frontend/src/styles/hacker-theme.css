@@ -281,13 +281,6 @@ body {
   padding: 8px;
 }
 
-/* ─── Code blocks in chat ───────────────────── */
-.chat-code-block {
-  background: var(--surface) !important;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-
 /* ─── ReactMarkdown prose (assistant final responses) ─── */
 .prose-hacker {
   font-size: 0.8rem;
@@ -329,6 +322,14 @@ body {
   padding: 0;
   border-radius: 0;
   color: inherit;
+}
+/* Bloc de code COLORÉ (react-syntax-highlighter rend un <div>): neutralise le
+   style « code inline » de .prose-hacker code sur le <code> interne. */
+.prose-hacker .markdown-code-highlight code {
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
 }
 .prose-hacker a {
   color: var(--info);
@@ -553,19 +554,6 @@ body {
 }
 .scroll-to-bottom-btn:hover {
   box-shadow: 0 0 16px rgba(var(--accent-rgb, 100, 255, 100), 0.15);
-}
-
-/* ── Markdown chat content ─────────────────── */
-.markdown-chat {
-  font-variant-numeric: tabular-nums;
-}
-
-/* Fix ReactMarkdown's default paragraph spacing inside pre-wrap */
-.markdown-chat p {
-  margin: 0;
-}
-.markdown-chat p + p {
-  margin-top: 0.5rem;
 }
 
 /* ─── Sidebar accent stripe ────────────────── */

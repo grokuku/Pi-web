@@ -724,6 +724,12 @@ export const en = {
     errSummaryProtected: "Deletion refused: compaction checkpoint (\"summary\" type) managed by the compaction-checkpoint extension.",
   },
 
+  // ── Markdown rendering (chat + file explorer) ──
+  markdown: {
+    loadExternalImage: "Click to load image",
+    imageLoadFailed: "Image failed to load",
+  },
+
   // ── Thinking Block ──
   thinkingBlock: {
     copy: "Copy",

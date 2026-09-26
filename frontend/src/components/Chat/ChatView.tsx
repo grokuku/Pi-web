@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type ComponentPropsWithoutRef, type RefObject } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Copy, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type RefObject } from "react";
+import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
+import { MarkdownContent } from "../Markdown/markdown";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
@@ -14,7 +13,6 @@ import { ToolCallTimer } from "./ToolCallTimer";
 import { buildToolSummaryFromCall, formatToolDuration } from "../../utils/toolSummaries";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import { useTranslation } from "../../i18n";
-import { copyToClipboard } from "../../utils/clipboard";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useIsMobile } from "../../hooks/useMediaQuery";
 // Brique HolafViewport (holaf-lib v0.1.3) — copie pinnée dans vendor/holaf.
@@ -43,73 +41,6 @@ function useThrottledValue<T>(value: T, delay = 45): T {
   }, [value, delay]);
   return throttled;
 }
-
-// ── Bloc de code markdown avec bouton « copier » ──────────────────────────
-// Remplace le <pre> par défaut de react-markdown (blocs ``` → <pre><code>) :
-// enveloppe le <pre> dans un conteneur relative et ajoute un bouton overlay
-// top-right, visible au survol du bloc, qui copie le contenu TEXTUEL du code
-// (textContent du <pre>, pas le HTML) via le helper clipboard robuste
-// (fallback execCommand pour le http LAN non sécurisé).
-// - State « copied » local par bloc : un composant dédié évite les states
-//   dans le map des messages ; le state survit au re-render de streaming
-//   (même position dans l'arbre).
-// - Le <pre> garde son overflow-x (CSS .prose-hacker) : le bouton est posé
-//   sur le conteneur, il ne participe pas au scroll horizontal du code.
-const CodeBlockWithCopy = memo(function CodeBlockWithCopy({
-  node: _node, // hast node passé par react-markdown — ignoré, ne doit pas fuir vers le DOM
-  children,
-  ...rest
-}: ComponentPropsWithoutRef<"pre"> & { node?: unknown }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Nettoyage du timer de feedback si le bloc est démonté
-  useEffect(() => () => { if (resetTimerRef.current) clearTimeout(resetTimerRef.current); }, []);
-
-  const handleCopy = useCallback(async () => {
-    const text = preRef.current?.textContent ?? "";
-    if (!text) return;
-    const ok = await copyToClipboard(text);
-    if (!ok) return;
-    setCopied(true);
-    // Feedback « Copié ✓ » pendant 2s puis retour à l'icône copier
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    resetTimerRef.current = setTimeout(() => setCopied(false), 2000);
-  }, []);
-
-  return (
-    <div className="relative group/code">
-      <pre ref={preRef} {...rest}>{children}</pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        title={copied ? t('chat.copied') : t('chat.copyCode')}
-        aria-label={copied ? t('chat.copied') : t('chat.copyCode')}
-        className="absolute top-1.5 right-1.5 z-10 flex items-center justify-center rounded border border-hacker-border bg-hacker-bg/80 px-1.5 py-1 text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 transition-opacity duration-150 cursor-pointer"
-      >
-        {copied ? <span className="text-[10px] leading-none font-mono">{t('chat.copied')}</span> : <Copy size={12} />}
-      </button>
-    </div>
-  );
-});
-
-// ── Memoized ReactMarkdown ──
-const MemoizedReactMarkdown = memo(function MemoizedReactMarkdown({ children }: { children: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        // Blocs ``` → <pre><code> : le <pre> est remplacé par CodeBlockWithCopy
-        // (conteneur relative + bouton « copier » en overlay).
-        pre: CodeBlockWithCopy,
-      }}
-    >
-      {children}
-    </ReactMarkdown>
-  );
-});
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1969,9 +1900,11 @@ const CompactionRow = memo(function CompactionRow({ message }: { message: Displa
 // des hooks dans le map de messages. Le contenu du message EN STREAMING est
 // throttlé (re-parse markdown limité à ~45ms) ; les messages finis gardent
 // leur contenu direct. Le curseur cursor-blink reste rendu indépendamment.
+// `streaming` est transmis au rendu markdown partagé : il désactive la
+// coloration des blocs de code tant que le message n'est pas terminé.
 const AssistantContent = memo(function AssistantContent({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   const display = isStreaming ? useThrottledValue(content, 45) : content;
-  return <MemoizedReactMarkdown>{display}</MemoizedReactMarkdown>;
+  return <MarkdownContent content={display} streaming={isStreaming} />;
 });
 
 // ── (chronologie) Segments d'affichage d'un message assistant ─────────────

@@ -5,10 +5,9 @@ import {
   CheckCheck,
 } from "lucide-react";
 import { useTranslation } from "../../i18n";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { MarkdownContent } from "../Markdown/markdown";
 import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 
 interface FileEntry {
@@ -646,28 +645,13 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
                 />
               ) : MARKDOWN_EXTS.has(fileContent.ext) ? (
                 <div className="prose-hacker p-4">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}
-                    components={{
-                      code({ className, children, ...props }) {
-                        const match = /language-(\w+)/.exec(className || "");
-                        const codeStr = String(children).replace(/\n$/, "");
-                        if (match) {
-                          return (
-                            <SyntaxHighlighter style={atomOneDark} language={match[1]} PreTag="div" className="rounded-sm my-2 !text-xs">
-                              {codeStr}
-                            </SyntaxHighlighter>
-                          );
-                        }
-                        return <code className={className} {...props}>{children}</code>;
-                      },
-                    }}
-                  >
-                    {fileContent.content}
-                  </ReactMarkdown>
+                  {/* Rendu markdown partagé avec le chat : coloration Prism
+                      (thème One Dark) + blocage des images externes. */}
+                  <MarkdownContent content={fileContent.content} />
                 </div>
               ) : CODE_EXTS.has(fileContent.ext) || !fileContent.ext ? (
                 <SyntaxHighlighter
-                  style={atomOneDark}
+                  style={oneDark}
                   language={getLangFromExt(fileContent.ext) || "text"}
                   showLineNumbers wrapLines PreTag="div"
                   className="!m-0 !rounded-none !text-xs !leading-relaxed"
