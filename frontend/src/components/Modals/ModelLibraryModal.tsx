@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
-import { PROVIDER_PRESETS } from "../../types";
+import { PROVIDER_PRESETS, resolveModelCapability } from "../../types";
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { MAX_PROVIDER_LIMIT, effectiveProviderCalls, normalizeProviderCallsInput } from "../../utils/concurrency";
@@ -440,6 +440,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
   const [editMaxTokens, setEditMaxTokens] = useState("");
   const [editVisionOverride, setEditVisionOverride] = useState<"auto" | "yes" | "no">("auto");
   const [editAudioOverride, setEditAudioOverride] = useState<"auto" | "yes" | "no">("auto");
+  const [editReasoningOverride, setEditReasoningOverride] = useState<"auto" | "yes" | "no">("auto");
   // Provider filters: separate for Available and Selected columns
   const [providerFilterAvailable, setProviderFilterAvailable] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
   const [providerFilterSelected, setProviderFilterSelected] = useState<Set<string>>(() => new Set(providers.map(p => p.id)));
@@ -617,6 +618,10 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         // Overrides manuels : "auto" (détection) à l'ajout — modifiable dans l'édition inline
         visionOverride: "auto",
         audioOverride: "auto",
+        reasoningOverride: "auto",
+        // Niveaux de réflexion découverts via l'API du provider (Ollama /api/show)
+        reasoningLevels: dm?.reasoningLevels,
+        reasoningDefault: dm?.reasoningDefault,
       });
     }
     await onAdd(models);
@@ -803,6 +808,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                 // Capacités résolues : override manuel d'abord, inférence sinon
                 const resolvedVision = m.visionOverride === "yes" ? true : m.visionOverride === "no" ? false : m.vision === true;
                 const resolvedAudio = m.audioOverride === "yes" ? true : m.audioOverride === "no" ? false : m.audio === true;
+                const resolvedReasoning = resolveModelCapability(m, "reasoning");
                 return (
                   <div key={m.id}>
                     <button onClick={() => toggleConfigured(m.id)}
@@ -818,7 +824,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                       <span className="flex items-center gap-1 shrink-0">
                         {resolvedVision && <span className="text-[0.6875rem]" title={t('modelLibrary.vision')}>👁️</span>}
                         {resolvedAudio && <span className="text-[0.6875rem]" title={t('modelLibrary.audio')}>🔊</span>}
-                        {m.reasoning && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
+                        {resolvedReasoning && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
                         <span className="text-[0.6875rem] text-hacker-text-dim/70" title={t('modelLibrary.contextWindow')}>{fmtCtx(m.contextWindow)}</span>
                         <Edit2 size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
                           onClick={(e) => {
@@ -831,6 +837,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                               setEditMaxTokens(String(m.maxTokens || ""));
                               setEditVisionOverride(m.visionOverride || "auto");
                               setEditAudioOverride(m.audioOverride || "auto");
+                              setEditReasoningOverride(m.reasoningOverride || "auto");
                             }
                           }}
                         />
@@ -875,6 +882,17 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                           <option value="yes">{t('modelLibrary.overrideYes')}</option>
                           <option value="no">{t('modelLibrary.overrideNo')}</option>
                         </select>
+                        {/* Raisonnement : détection par nom fragile (ex. deepseek-v4.1-flash) — l'override prime */}
+                        <label className="text-hacker-text-dim whitespace-nowrap" title={t('modelLibrary.capabilitiesHelp')}>{t('modelLibrary.reasoning')}</label>
+                        <select
+                          value={editReasoningOverride}
+                          onChange={(e) => setEditReasoningOverride(e.target.value as "auto" | "yes" | "no")}
+                          className="bg-hacker-bg border border-hacker-border rounded px-1.5 py-0.5 text-hacker-text-bright focus:border-hacker-accent focus:outline-none"
+                        >
+                          <option value="auto">{t('modelLibrary.overrideAuto')}</option>
+                          <option value="yes">{t('modelLibrary.overrideYes')}</option>
+                          <option value="no">{t('modelLibrary.overrideNo')}</option>
+                        </select>
                         <button
                           onClick={async () => {
                             const updates: Partial<RegisteredModel> = {};
@@ -884,6 +902,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                             if (max && max > 0 && max !== m.maxTokens) updates.maxTokens = max;
                             if (editVisionOverride !== (m.visionOverride || "auto")) updates.visionOverride = editVisionOverride;
                             if (editAudioOverride !== (m.audioOverride || "auto")) updates.audioOverride = editAudioOverride;
+                            if (editReasoningOverride !== (m.reasoningOverride || "auto")) updates.reasoningOverride = editReasoningOverride;
                             if (Object.keys(updates).length > 0) {
                               await onUpdate(m.id, updates);
                             }
@@ -931,7 +950,11 @@ function formatSize(bytes: number): string {
 
 function inferReasoning(modelId: string): boolean {
   const name = modelId.toLowerCase();
-  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
+  // ⚠️ HEURISTIQUE DE NOM (miroir de backend/src/pi/providers.ts#inferReasoning) :
+  // simple DÉFAUT, à mettre à jour au fil des sorties. L'override manuel
+  // (`reasoningOverride`) et la détection autoritaire du provider (Ollama /api/show)
+  // PRIMENT. Ajouts récents : DeepSeek v3/v3.1/v4 (pas `deepseek-chat`), Qwen 3, GPT-OSS, GLM 4/5.
+  return /deepseek.*(?:r1|v[34])|qwq|qwen.*think|qwen-?3|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|gpt[-_]?oss|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
 }
 
 function inferVision(modelId: string): boolean {

@@ -80,6 +80,12 @@ router.post("/models", async (req: Request, res: Response) => {
         contextWindow: m.contextWindow || inferContextWindow(m.modelId),
         maxTokens: m.maxTokens || 16384,
         thinkingLevel: m.thinkingLevel || "medium",
+        // Overrides manuels ("auto" = détection) + niveaux de réflexion découverts
+        visionOverride: m.visionOverride || "auto",
+        audioOverride: m.audioOverride || "auto",
+        reasoningOverride: m.reasoningOverride || "auto",
+        reasoningLevels: Array.isArray(m.reasoningLevels) ? m.reasoningLevels : undefined,
+        reasoningDefault: typeof m.reasoningDefault === "string" ? m.reasoningDefault : undefined,
       }));
 
       const library = addModels(entries);
@@ -89,7 +95,7 @@ router.post("/models", async (req: Request, res: Response) => {
     } else {
       // Single add
       const { providerId, modelId, name, reasoning, vision, contextWindow, maxTokens,
-              thinkingLevel, isDefault } = req.body;
+              thinkingLevel, isDefault, reasoningOverride } = req.body;
 
       if (!providerId || !modelId) {
         return res.status(400).json({ error: "providerId and modelId required" });
@@ -105,6 +111,7 @@ router.post("/models", async (req: Request, res: Response) => {
         contextWindow: contextWindow || inferContextWindow(modelId),
         maxTokens: maxTokens || 16384,
         thinkingLevel: thinkingLevel || "medium",
+        reasoningOverride: reasoningOverride || "auto",
       });
 
       await syncToModelsJson();

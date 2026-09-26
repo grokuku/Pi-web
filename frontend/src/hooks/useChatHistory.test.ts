@@ -229,3 +229,63 @@ describe("convertHistoryToDisplayMessages — timestamps ISO normalisés", () =>
     expect(run.toolCallId).toBe("tc1");
   });
 });
+
+// ── Tests : filet de sécurité « réflexion seule ⇒ réponse » (historique) ─────
+// La MÊME règle que le live doit s'appliquer à la conversion pi_history, sinon
+// un rechargement de page re-déclasserait en réflexion un tour que le live a
+// promu en réponse.
+describe("convertHistoryToDisplayMessages — promotion réflexion seule", () => {
+  beforeEach(() => {
+    resetSubagentRuns();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  const thinkingOnly = {
+    id: "a-promo",
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "abc", thinkingSignature: "reasoning" }],
+    timestamp: 1,
+    stopReason: "stop",
+  };
+
+  it("thinking seul → content = réflexion, thinking vidé, bloc texte", () => {
+    const display = convertHistoryToDisplayMessages([thinkingOnly] as any);
+    expect(display).toHaveLength(1);
+    expect(display[0].content).toBe("abc");
+    expect(display[0].thinking).toBe("");
+    expect(display[0].blocks).toEqual([{ kind: "text", text: "abc" }]);
+    // Pas de duplication : contenu ≠ réflexion (vide).
+    expect(display[0].content).not.toBe(display[0].thinking);
+  });
+
+  it("non-régression : [thinking, text] inchangé", () => {
+    const display = convertHistoryToDisplayMessages([{
+      id: "a2", role: "assistant", timestamp: 1,
+      content: [{ type: "thinking", thinking: "r" }, { type: "text", text: "t" }],
+    }] as any);
+    expect(display[0].content).toBe("t");
+    expect(display[0].thinking).toBe("r");
+    expect(display[0].blocks).toEqual([
+      { kind: "thinking", text: "r" },
+      { kind: "text", text: "t" },
+    ]);
+  });
+
+  it("non-régression : [thinking, toolCall] → aucune promotion", () => {
+    const display = convertHistoryToDisplayMessages([{
+      id: "a3", role: "assistant", timestamp: 1,
+      content: [{ type: "thinking", thinking: "abc" }, { type: "toolCall", id: "tc1", name: "read" }],
+    }] as any);
+    expect(display[0].content).toBe("");
+    expect(display[0].thinking).toBe("abc");
+    expect(display[0].toolCalls).toHaveLength(1);
+  });
+
+  it("non-régression : stopReason error + thinking seul → aucune promotion", () => {
+    const display = convertHistoryToDisplayMessages([
+      { ...thinkingOnly, id: "a4", stopReason: "error" },
+    ] as any);
+    expect(display[0].content).toBe("");
+    expect(display[0].thinking).toBe("abc");
+  });
+});

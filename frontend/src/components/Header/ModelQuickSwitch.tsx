@@ -6,7 +6,7 @@ import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
-import { THINKING_LEVELS } from "../../types";
+import { THINKING_LEVELS, resolveModelCapability } from "../../types";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -306,7 +306,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                             <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                             <span className="truncate flex-1">{m.name}</span>
                             {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0 hidden sm:inline">({getProviderName(m.providerId)})</span>}
-                            <span className="flex items-center gap-1 shrink-0">{m.vision && <span className="text-[10px]" title="Vision">👁️</span>}{m.reasoning && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
+                            <span className="flex items-center gap-1 shrink-0">{resolveModelCapability(m, "vision") && <span className="text-[10px]" title="Vision">👁️</span>}{resolveModelCapability(m, "reasoning") && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
                             {isModelSelected && <span className={`${cfg.color} text-[10px] shrink-0`}>●</span>}
                           </button>
                           {/* Niveau de réflexion DÉFAUT du modèle (mode harness uniquement —

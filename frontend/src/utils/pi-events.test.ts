@@ -375,6 +375,60 @@ describe("applyPiEvent — tool_execution après message_end (correctif silence 
   });
 });
 
+// ── Tests : filet de sécurité « réflexion seule ⇒ réponse » ────────────────
+// Un provider peut renvoyer tout le texte dans `reasoning` (content vide) : le
+// tour doit être PROMU en réponse, sans duplication, et jamais quand il porte un
+// outil ou une erreur.
+describe("applyPiEvent — filet de sécurité: réflexion seule promue en réponse", () => {
+  function endWith(content: any[], stopReason?: string): PiEvent {
+    return { type: "message_end", message: { role: "assistant", id: "asst-1", content, stopReason } };
+  }
+
+  it("thinking seul (content vide) → promu en réponse, réflexion vidée", () => {
+    const { msgs } = run([messageStart("asst-1"), endWith([{ type: "thinking", thinking: "abc", thinkingSignature: "reasoning" }], "stop")]);
+    expect(msgs[0].content).toBe("abc");
+    expect(msgs[0].thinking).toBe("");
+    expect(msgs[0].blocks).toEqual([{ kind: "text", text: "abc" }]);
+    // Pas de duplication : le texte n'existe pas à la fois en réflexion et réponse.
+    expect(msgs[0].toolCalls).toHaveLength(0);
+  });
+
+  it("non-régression: [thinking, text] inchangé", () => {
+    const { msgs } = run([messageStart("asst-1"), endWith([
+      { type: "thinking", thinking: "r" },
+      { type: "text", text: "t" },
+    ], "stop")]);
+    expect(msgs[0].content).toBe("t");
+    expect(msgs[0].thinking).toBe("r");
+    expect(msgs[0].blocks).toEqual([
+      { kind: "thinking", text: "r" },
+      { kind: "text", text: "t" },
+    ]);
+  });
+
+  it("non-régression: [thinking, toolCall] → AUCUNE promotion", () => {
+    const { msgs } = run([messageStart("asst-1"), endWith([
+      { type: "thinking", thinking: "abc" },
+      { type: "toolCall", id: "tc-1", name: "read" },
+    ], "toolUse")]);
+    expect(msgs[0].content).toBe("");
+    expect(msgs[0].thinking).toBe("abc");
+    expect(msgs[0].toolCalls).toHaveLength(1);
+  });
+
+  it("non-régression: stopReason error + thinking seul → PAS de promotion", () => {
+    const { msgs } = run([messageStart("asst-1"), endWith([{ type: "thinking", thinking: "abc" }], "error")]);
+    expect(msgs[0].content).toBe("");
+    expect(msgs[0].thinking).toBe("abc");
+    expect(msgs[0].stopReason).toBe("error");
+  });
+
+  it("réflexion vide → PAS de promotion", () => {
+    const { msgs } = run([messageStart("asst-1"), endWith([{ type: "thinking", thinking: "   " }], "stop")]);
+    expect(msgs[0].content).toBe("");
+  });
+});
+
 // ── Tests unitaires : findPendingUserMessages (filet de secours 6210d1c) ──
 // Un pi_history construit AVANT le commit du message de l'utilisateur ne doit
 // pas faire disparaître le message tout juste tapé de l'affichage.

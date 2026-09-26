@@ -52,6 +52,9 @@ export interface DiscoveredModel {
   contextWindow?: number;  // real context window in tokens (from model_info)
   reasoning?: boolean;     // real reasoning support
   vision?: boolean;        // real vision support
+  /** Niveaux de réflexion supportés / défaut (Ollama /api/show → objet `thinking`). */
+  reasoningLevels?: string[];
+  reasoningDefault?: string;
 }
 
 /** Vue publique d'un provider : la clé API n'est jamais renvoyée. */
@@ -287,7 +290,34 @@ export function getProvider(id: string): ProviderConfig | undefined {
 
 export function inferReasoning(modelId: string, family?: string): boolean {
   const name = (family || modelId).toLowerCase();
-  return /deepseek.*r1|qwq|qwen.*think|qwen3[._-]?[5]|qwen3-|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
+  // ⚠️ HEURISTIQUE DE NOM : simple DÉFAUT, à mettre à jour au fil des sorties de modèles.
+  // Ce n'est PAS la source de vérité : l'override manuel (`reasoningOverride` dans la
+  // Model Library) et la détection AUTORITAIRE du provider (Ollama `POST /api/show`,
+  // objet `thinking`) PRIMENT sur cette liste. Ajouts récents (doc Ollama/DeepSeek) :
+  // DeepSeek v3/v3.1/v4 (mais PAS `deepseek-chat`, non-raisonneur), Qwen 3, GPT-OSS,
+  // GLM 4/5 — en plus des motifs historiques (R1, QwQ, o1/o3/o4, Claude 3.5+/4,
+  // Gemini 2.5, Kimi, Llama-4 Maverick, Phi-4 reasoning…).
+  return /deepseek.*(?:r1|v[34])|qwq|qwen.*think|qwen-?3|openthinker|deepscaler|marco-o1|glm[-_]?[45]|glm.*think|gpt[-_]?oss|o1(?=[-_]|$)|o3(?=[-_]|$)|o4(?=[-_]|mini|$)|claude.*3[._-]?5.*sonnet|claude.*4|gemini.*2[._-]?5|gemini.*think|kimi|reason|llama-?4.*maverick|phi-?4.*reason/i.test(name);
+}
+
+/**
+ * Options de modèle à injecter pour les providers Ollama (endpoint
+ * OpenAI-compatible `/v1/chat/completions`, celui que Pi-Web utilise).
+ *
+ * Constat SDK (pi-ai `api/openai-completions.js`) : quand le niveau de réflexion
+ * vaut "off", le SDK ne pose `reasoning_effort` QUE si `model.thinkingLevelMap.off`
+ * est une chaîne (branche finale « openai »). Sans cette table, RIEN n'est envoyé —
+ * or Ollama **active le thinking de lui-même** quand `reasoning_effort` est absent.
+ * Le contrôle « off » est donc un contrôle FANTÔME pour Ollama. La doc Ollama indique
+ * que `reasoning_effort: "none"` DÉSACTIVE le thinking : on l'expose via la table.
+ * (Contournement côté Pi-Web, sans modifier le SDK.)
+ */
+export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?: string }): {
+  thinkingLevelMap?: Record<string, string>;
+} {
+  const isOllama =
+    provider.type === "ollama" || /ollama\.com|:11434/i.test(provider.baseUrl || "");
+  return isOllama ? { thinkingLevelMap: { off: "none" } } : {};
 }
 
 export function inferVision(modelId: string, family?: string): boolean {
@@ -424,6 +454,28 @@ export function inferContextWindow(modelId: string, family?: string): number {
 
 // ── Ollama native API enrichment ────────────────────
 
+/**
+ * Analyse l'objet `thinking` renvoyé par `POST /api/show` d'Ollama.
+ *  - absent / malformé  → `null` (capacité INCONNUE : repli sur l'heuristique) ;
+ *  - `values: [false]`  → `{ enabled: false }` (thinking non supporté) ;
+ *  - `values` non vide  → `{ enabled: true, levels, default }` (modèle raisonneur).
+ */
+export function parseOllamaThinking(
+  thinking: unknown,
+): { enabled: boolean; levels: string[]; default?: string } | null {
+  if (!thinking || typeof thinking !== "object" || !Array.isArray((thinking as any).values)) {
+    return null;
+  }
+  const values: unknown[] = (thinking as any).values;
+  const levels = values.filter((v): v is string => typeof v === "string" && v.length > 0);
+  const enabled = levels.length > 0 || values.some((v) => v === true);
+  return {
+    enabled,
+    levels,
+    default: typeof (thinking as any).default === "string" ? (thinking as any).default : undefined,
+  };
+}
+
 /** Derive the native Ollama API base URL from the OpenAI-compatible base URL. */
 function deriveNativeOllamaUrl(baseUrl: string): string {
   // Remove trailing /v1 or /v1/
@@ -481,10 +533,19 @@ async function enrichWithOllamaCapabilities(
           if (/llava|bakllava|moondream|minicpm|pixtral|vision|multimodal|vl/i.test(arch)) {
             model.vision = true;
           }
-          // Reasoning detection from architecture
+          // Reasoning detection from architecture (repli historique)
           if (/reasoning|think|r1|o1|o3|o4/i.test(arch)) {
             model.reasoning = true;
           }
+        }
+
+        // ── Capacité de raisonnement AUTORITAIRE : objet `thinking` ──
+        // Ollama renvoie `{ thinking: { values: [...], default: "medium" } }`.
+        const parsedThinking = parseOllamaThinking((data as any).thinking);
+        if (parsedThinking) {
+          model.reasoning = parsedThinking.enabled;
+          if (parsedThinking.levels.length > 0) model.reasoningLevels = parsedThinking.levels;
+          if (parsedThinking.default) model.reasoningDefault = parsedThinking.default;
         }
 
         // Also extract num_ctx from parameters as fallback

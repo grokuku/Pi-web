@@ -75,6 +75,51 @@ function blocksFromContent(content: unknown): AssistantBlock[] | undefined {
   return blocks.length > 0 ? blocks : undefined;
 }
 
+// ── (filet de sécurité) Promotion « réflexion seule ⇒ réponse » ─────────
+// Certains providers renvoient TOUT le texte dans le champ de raisonnement en
+// laissant `content` vide (cas constaté : Ollama-Cloud + deepseek-v4.1-flash).
+// Le SDK convertit alors légitimement ce flux en un unique bloc `thinking`,
+// aucun texte : l'UI n'affichait qu'un « Réflexion » sans corps de réponse.
+// On promeut ce tour en RÉPONSE, avec un critère STRICT pour ne jamais
+// reclasser du vrai raisonnement :
+//   - TOUS les blocs sont de type `thinking` (aucun texte, aucun outil) ;
+//   - le texte de réflexion est non vide (après trim) ;
+//   - aucun toolCall ;
+//   - stopReason !== "error" (un échec doit rester visible comme tel).
+// Le texte devient alors le CONTENU de réponse et la réflexion est vidée
+// (aucune duplication). Règle appliquée À L'IDENTIQUE au live (message_end) ET
+// à la conversion d'historique : sinon un rechargement de page re-déclasserait
+// ce que le live a corrigé.
+export interface ThinkingOnlyAnswer {
+  content: string;
+  thinking: string;
+  blocks: AssistantBlock[];
+}
+
+export function promoteThinkingOnlyAnswer(input: {
+  blocks: AssistantBlock[] | undefined;
+  contentText: string;
+  thinkingText: string;
+  hasToolCalls: boolean;
+  stopReason?: string;
+}): ThinkingOnlyAnswer | null {
+  const { blocks, contentText, thinkingText, hasToolCalls, stopReason } = input;
+  if (hasToolCalls || stopReason === "error") return null;
+  if (!thinkingText.trim()) return null;
+  // « tous les blocs sont de type thinking » : on exige des blocs explicites et
+  // tous `thinking`. Repli (blocs absents) : aucun texte agrégé → équivalent.
+  const allThinking = blocks && blocks.length > 0
+    ? blocks.every((b) => b.kind === "thinking")
+    : contentText.trim() === "";
+  if (!allThinking) return null;
+  return {
+    content: thinkingText,
+    thinking: "",
+    // La réflexion était l'unique contenu : un seul bloc texte la remplace.
+    blocks: [{ kind: "text", text: thinkingText }],
+  };
+}
+
 // ── (dédup) Append de message avec déduplication par id ──────────────
 // Même sémantique que useChatHistory.appendMessage (dédup par id) : si un
 // message du même id existe déjà, le tableau est renvoyé tel quel. Appliqué
@@ -499,6 +544,21 @@ export function applyPiEvent(
               toolCalls = tcs;
             }
             if (!blocks || blocks.length === 0) blocks = blocksFromContent(content);
+          }
+          // (filet de sécurité) Tour « réflexion seule » → promu en réponse :
+          // sinon le texte (renvoyé par le provider dans `reasoning`) n'apparaît
+          // que comme « Réflexion » et il n'y a AUCUN corps de réponse.
+          const promoted = promoteThinkingOnlyAnswer({
+            blocks,
+            contentText,
+            thinkingText,
+            hasToolCalls: toolCalls.length > 0,
+            stopReason: evt.message?.stopReason,
+          });
+          if (promoted) {
+            contentText = promoted.content;
+            thinkingText = promoted.thinking;
+            blocks = promoted.blocks;
           }
           msgs[targetIdx] = {
             ...ex,

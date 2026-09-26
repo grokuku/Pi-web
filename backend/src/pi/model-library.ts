@@ -50,13 +50,25 @@ export interface RegisteredModel {
   // et PRIME sur toute détection (fiable quand l'inférence par nom échoue, ex. GLM5)
   visionOverride?: "auto" | "yes" | "no";
   audioOverride?: "auto" | "yes" | "no";
+  reasoningOverride?: "auto" | "yes" | "no";
+
+  // Niveaux de réflexion réellement supportés + défaut, découverts via l'API du
+  // provider (Ollama POST /api/show → objet `thinking`). Optionnel : absent =
+  // capacité inconnue (on retombe sur `reasoning`/l'heuristique).
+  reasoningLevels?: string[];
+  reasoningDefault?: string;
 }
 
 /**
- * Capacité RÉSOLUE d'un modèle : l'override manuel prime, sinon le champ inféré.
- * Utilisé partout où on doit décider « ce modèle voit-il / entend-il ? ».
+ * Capacité RÉSOLUE d'un modèle.
+ * Priorité de résolution (raisonnement) : override manuel > détection autoritaire
+ * du provider / heuristique (portée par le champ `reasoning`) — cf. reasoningOverride.
+ * Utilisé partout où on doit décider « ce modèle voit-il / entend-il / raisonne-t-il ? ».
  */
-export function resolveModelCapability(m: RegisteredModel, cap: "vision" | "audio"): boolean {
+export function resolveModelCapability(
+  m: RegisteredModel,
+  cap: "vision" | "audio" | "reasoning",
+): boolean {
   if (cap === "vision") {
     if (m.visionOverride === "yes") return true;
     if (m.visionOverride === "no") return false;
@@ -66,6 +78,13 @@ export function resolveModelCapability(m: RegisteredModel, cap: "vision" | "audi
     if (m.audioOverride === "yes") return true;
     if (m.audioOverride === "no") return false;
     return m.audio === true;
+  }
+  if (cap === "reasoning") {
+    if (m.reasoningOverride === "yes") return true;
+    if (m.reasoningOverride === "no") return false;
+    // `reasoning` porte la détection AUTORITAIRE du provider quand elle existe,
+    // sinon l'heuristique de nom (appliquée à l'ajout / à la migration).
+    return m.reasoning === true;
   }
   return false;
 }
@@ -410,7 +429,14 @@ function migrateModel(m: any): RegisteredModel {
     // Overrides manuels : "auto" par défaut pour rester sur l'inférence existante
     visionOverride: m.visionOverride || "auto",
     audioOverride: m.audioOverride || "auto",
+    reasoningOverride: m.reasoningOverride || "auto",
   };
+  // Niveaux de réflexion découverts via le provider (facultatif, best-effort)
+  if (Array.isArray(m.reasoningLevels)) {
+    const levels = m.reasoningLevels.filter((l: unknown): l is string => typeof l === "string" && l.length > 0);
+    if (levels.length > 0) model.reasoningLevels = levels;
+  }
+  if (typeof m.reasoningDefault === "string") model.reasoningDefault = m.reasoningDefault;
   // `thinkingLevel` conservé SEULEMENT s'il est valide ; absent/invalide → clé
   // OMISE = « défaut » (le niveau de réflexion du MODE s'applique). Rétro-compatible :
   // une config historique sans thinkingLevel reste valide.
@@ -611,6 +637,10 @@ export function updateModel(id: string, updates: Partial<RegisteredModel>): Mode
   // `thinkingLevel` : valeur invalide ou `null` (option « défaut » de l'UI) →
   // la clé est supprimée pour laisser le niveau de réflexion du MODE s'appliquer.
   if (!isThinkingLevel((next as any).thinkingLevel)) delete (next as any).thinkingLevel;
+  // `reasoningOverride` : valeur invalide → repli sur "auto" (détection).
+  if (next.reasoningOverride && !["auto", "yes", "no"].includes(next.reasoningOverride)) {
+    next.reasoningOverride = "auto";
+  }
   library.models[idx] = next;
 
   // If setting as default, unset others

@@ -354,6 +354,9 @@ export interface DiscoveredModel {
   contextWindow?: number;
   reasoning?: boolean;
   vision?: boolean;
+  /** Niveaux de réflexion supportés / défaut (Ollama /api/show → objet `thinking`). */
+  reasoningLevels?: string[];
+  reasoningDefault?: string;
 }
 
 export const PROVIDER_PRESETS: Record<ProviderType, {
@@ -403,12 +406,16 @@ export interface RegisteredModel {
   // Overrides manuels (UI) : prime sur la détection "auto"
   visionOverride?: "auto" | "yes" | "no";
   audioOverride?: "auto" | "yes" | "no";
+  reasoningOverride?: "auto" | "yes" | "no";
+  // Niveaux de réflexion supportés / défaut (Ollama /api/show → objet `thinking`)
+  reasoningLevels?: string[];
+  reasoningDefault?: string;
 }
 
 /** Capacité résolue : override manuel d'abord, champ inféré sinon. */
 export function resolveModelCapability(
   m: RegisteredModel,
-  cap: "vision" | "audio"
+  cap: "vision" | "audio" | "reasoning"
 ): boolean {
   if (cap === "vision") {
     if (m.visionOverride === "yes") return true;
@@ -419,6 +426,11 @@ export function resolveModelCapability(
     if (m.audioOverride === "yes") return true;
     if (m.audioOverride === "no") return false;
     return m.audio === true;
+  }
+  if (cap === "reasoning") {
+    if (m.reasoningOverride === "yes") return true;
+    if (m.reasoningOverride === "no") return false;
+    return m.reasoning === true;
   }
   return false;
 }

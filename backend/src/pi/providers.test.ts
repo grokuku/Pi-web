@@ -36,6 +36,8 @@ import {
   inferReasoning,
   inferVision,
   loadProviders,
+  ollamaReasoningModelOptions,
+  parseOllamaThinking,
   saveProviders,
   testProviderConnection,
   toPublicProvider,
@@ -115,6 +117,15 @@ describe("inferReasoning", () => {
     ["glm-4:cloud", true],
     ["o1", true],
     ["qwq:32b", true],
+    // Familles récentes (doc Ollama/DeepSeek) : le motif exact qui ratait PEH.
+    ["deepseek-v4.1-flash", true],
+    ["deepseek-v3.1", true],
+    ["deepseek-v3", true],
+    ["qwen3:8b", true],
+    ["gpt-oss:20b", true],
+    ["glm-4.7", true],
+    // Non-raisonneurs : `deepseek-chat` ne doit PAS être capté par les motifs v3/v4.
+    ["deepseek-chat", false],
     ["llama3.1:8b", false],
     ["mistral-7b", false],
   ])("infère reasoning=%s → %s", (modelId, expected) => {
@@ -124,6 +135,45 @@ describe("inferReasoning", () => {
   it("utilise la famille en priorité sur l'id du modèle", () => {
     // L'id est quelconque mais la famille trahit un modèle de raisonnement.
     expect(inferReasoning("custom-build", "Qwen3-8B")).toBe(true);
+  });
+});
+
+// ── Détection autoritaire : objet `thinking` d'Ollama (/api/show) ─────────
+describe("parseOllamaThinking", () => {
+  it("values nommés → raisonneur + niveaux + défaut", () => {
+    expect(parseOllamaThinking({ values: ["low", "medium", "high"], default: "medium" }))
+      .toEqual({ enabled: true, levels: ["low", "medium", "high"], default: "medium" });
+  });
+
+  it("values: [false] → thinking NON supporté", () => {
+    expect(parseOllamaThinking({ values: [false] })).toEqual({ enabled: false, levels: [], default: undefined });
+  });
+
+  it("values booléens (true) → raisonneur", () => {
+    expect(parseOllamaThinking({ values: [true, false] })?.enabled).toBe(true);
+  });
+
+  it("objet absent / malformé → null (capacité inconnue, repli heuristique)", () => {
+    expect(parseOllamaThinking(undefined)).toBeNull();
+    expect(parseOllamaThinking({})).toBeNull();
+    expect(parseOllamaThinking({ values: "high" })).toBeNull();
+  });
+});
+
+// ── Contrôle « off » réel sur Ollama (thinkingLevelMap.off = "none") ────────
+describe("ollamaReasoningModelOptions", () => {
+  it("Ollama (type) → table de niveau posant reasoning_effort:'none' à off", () => {
+    expect(ollamaReasoningModelOptions({ type: "ollama", baseUrl: "https://ollama.com/v1" }))
+      .toEqual({ thinkingLevelMap: { off: "none" } });
+  });
+
+  it("Ollama détecté par l'URL (openai-compatible) → idem", () => {
+    expect(ollamaReasoningModelOptions({ baseUrl: "http://localhost:11434/v1" }))
+      .toEqual({ thinkingLevelMap: { off: "none" } });
+  });
+
+  it("autre provider → aucune option (non-régression)", () => {
+    expect(ollamaReasoningModelOptions({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1" })).toEqual({});
   });
 });
 

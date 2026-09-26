@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
-import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
+import { inferContextWindow, ollamaReasoningModelOptions } from "./providers.js";
 import { resolveModelCapability } from "./model-library.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 
@@ -65,8 +65,10 @@ export async function writeModelsJson(
 
     if (models.length > 0) {
       piProvider.models = models.map((m) => {
-        // Apply inference for any zero/empty/missing values
-        const reasoning = m.reasoning ?? inferReasoning(m.modelId);
+        // Capacité de raisonnement RÉSOLUE : override manuel > détection autoritaire
+        // (Ollama /api/show) > heuristique de nom. C'est ce champ que le SDK lit
+        // pour gater les niveaux de réflexion (reasoning=false ⇒ ["off"]).
+        const reasoning = resolveModelCapability(m, "reasoning");
         const contextWindow = m.contextWindow > 0 ? m.contextWindow : inferContextWindow(m.modelId);
         // Capacités RÉSOLUES (vue > détection) : c'est ce champ "input" que le SDK
         // charge depuis models.json — un champ "input": ["text"] pour un modèle
@@ -85,6 +87,9 @@ export async function writeModelsJson(
           contextWindow,
           maxTokens: m.maxTokens > 0 ? m.maxTokens : 16384,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          // Ollama : rend le contrôle « off » RÉEL (reasoning_effort:"none"),
+          // sinon Ollama ré-active le thinking de lui-même (contrôle fantôme).
+          ...ollamaReasoningModelOptions(provider),
         };
       });
     }

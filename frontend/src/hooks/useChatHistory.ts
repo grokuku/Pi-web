@@ -1,6 +1,10 @@
 import { useRef, useCallback, useEffect } from "react";
 import type { AssistantBlock, DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
 import { registerArchivedRuns, runFromActivity, toEpochMs } from "../stores/subagentRuns";
+// Filet de sécurité partagé « réflexion seule ⇒ réponse » : la MÊME règle doit
+// s'appliquer au live et à la conversion d'historique (sinon un rechargement
+// re-déclasserait ce que le live a promu).
+import { promoteThinkingOnlyAnswer } from "../utils/pi-events";
 
 // ─────────────────────────────────────────────────────────────
 // Per-project chat history store
@@ -193,8 +197,21 @@ export function convertHistoryToDisplayMessages(
         }
       }
 
-      const text = textParts.join("\n");
-      const thinking = thinkParts.join("\n");
+      const joinedText = textParts.join("\n");
+      const joinedThinking = thinkParts.join("\n");
+
+      // (filet de sécurité) Tour « réflexion seule » → promu en réponse, comme
+      // en live : un provider qui renvoie tout dans `reasoning` laisse
+      // `content` vide. On ne promeut jamais un tour avec outil ni une erreur.
+      const promoted = promoteThinkingOnlyAnswer({
+        blocks,
+        contentText: joinedText,
+        thinkingText: joinedThinking,
+        hasToolCalls: toolCalls.length > 0,
+        stopReason: (msg as any).stopReason,
+      });
+      const text = promoted ? promoted.content : joinedText;
+      const thinking = promoted ? promoted.thinking : joinedThinking;
 
       // Debug: log block types when no tool calls found but we have content blocks
       if (toolCalls.length === 0 && contentBlocks.length > 0) {
@@ -214,7 +231,7 @@ export function convertHistoryToDisplayMessages(
         content: text,
         thinking,
         toolCalls,
-        blocks: blocks.length > 0 ? blocks : undefined,
+        blocks: promoted ? promoted.blocks : (blocks.length > 0 ? blocks : undefined),
         timestamp: ts,
         usage: msg.usage ? {
           input: msg.usage.input || 0,

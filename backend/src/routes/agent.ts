@@ -17,6 +17,7 @@ import {
   getModeModel,
   getProjectModeConfig,
   setProjectModeModel,
+  resolveModelCapability,
 } from "../pi/model-library.js";
 import { loadProviders } from "../pi/providers.js";
 import {
@@ -385,8 +386,8 @@ router.get("/models", (_req: Request, res: Response) => {
         providerId: m.providerId,
         modelId: m.modelId,
         providerName: provider?.name || provider?.type || m.providerId,
-        reasoning: m.reasoning,
-        vision: m.vision,
+        reasoning: resolveModelCapability(m, "reasoning"),
+        vision: resolveModelCapability(m, "vision"),
         contextWindow: m.contextWindow,
         maxTokens: m.maxTokens,
       };

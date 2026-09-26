@@ -19,6 +19,7 @@ import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
+import { ollamaReasoningModelOptions } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
@@ -2128,9 +2129,12 @@ async function applyModelAndThinking(
     const piModel = sharedModelRegistry!.find(model.providerId, model.modelId);
 
     if (piModel) {
+      // Capacité de raisonnement RÉSOLUE : override manuel > détection autoritaire
+      // (Ollama /api/show) > heuristique. Sert aussi au re-enregistrement ci-dessous.
+      const resolvedReasoning = resolveModelCapability(model, "reasoning");
       // Check if we need to override model capabilities (reasoning, contextWindow)
       const needsOverride = (
-        (model.reasoning !== undefined && piModel.reasoning !== model.reasoning) ||
+        piModel.reasoning !== resolvedReasoning ||
         (model.contextWindow !== undefined && piModel.contextWindow !== model.contextWindow) ||
         (model.maxTokens !== undefined && piModel.maxTokens !== model.maxTokens)
       );
@@ -2155,11 +2159,13 @@ async function applyModelAndThinking(
               id: m.id,
               name: m.name || m.id,
               api: m.api || providerApi,
-              reasoning: model.reasoning ?? m.reasoning ?? false,
+              reasoning: resolvedReasoning,
               input: m.input || (resolveModelCapability(model, "vision") ? ["text", "image"] : ["text"]),
               contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
               maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
               cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              // Ollama : contrôle « off » réel (voir ollamaReasoningModelOptions).
+              ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
             };
           }
           return {
@@ -2180,11 +2186,12 @@ async function applyModelAndThinking(
             id: piModel.id || model.modelId,
             name: piModel.name || model.name || model.modelId,
             api: providerApi,
-            reasoning: model.reasoning ?? piModel.reasoning ?? false,
+            reasoning: resolvedReasoning,
             input: (piModel as any).input || (resolveModelCapability(model, "vision") ? ["text", "image"] : ["text"]),
             contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
             maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
             cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
           });
         }
 
