@@ -216,4 +216,52 @@ describe("ProjectSwitcher — case « masquer les projets déjà liés »", () =
     expect(onSelectProject.mock.calls[0][0].id).toBe(talky.id);
     expect(screen.queryByLabelText("Search a project\u2026")).toBeNull();
   });
+
+  /** Noms affichés, dans l'ordre du DOM (options du dropdown). */
+  function optionNames(): string[] {
+    return screen.getAllByRole("option").map((el) => el.textContent ?? "");
+  }
+
+  it("affiche les projets par ordre alphabétique insensible à la casse (après filtres)", () => {
+    renderSwitcher();
+    openSwitcher();
+
+    // Case cochée : groupes liés + projet actif/libre, triés alphabétiquement.
+    // « LINKED AI Helper » avant « Linked Homy et libs » (casse ignorée),
+    // et « Talky » avant « Yuki and Libs ».
+    expect(optionNames()).toEqual([
+      "LINKED AI Helper",
+      "Linked Homy et libs",
+      "Talky",
+      "Yuki and Libs",
+    ]);
+
+    // Case décochée : tous les projets, toujours triés (holaf-lib entre
+    // ComfyUI-AI-Helper et Homy).
+    fireEvent.click(screen.getByTestId("switcher-hide-already-linked"));
+    expect(optionNames()).toEqual([
+      "AI-Helper",
+      "ComfyUI-AI-Helper",
+      "holaf-lib",
+      "Homy",
+      "LINKED AI Helper",
+      "Linked Homy et libs",
+      "Talky",
+      "Yuki",
+      "Yuki and Libs",
+    ]);
+  });
+
+  it("applique le tri APRÈS la recherche (résultat filtré et ordonné)", async () => {
+    renderSwitcher();
+    openSwitcher();
+
+    // Recherche « i » (casse ignorée) sur la liste complète (case décochée).
+    fireEvent.click(screen.getByTestId("switcher-hide-already-linked"));
+    fireEvent.change(await screen.findByLabelText("Search a project\u2026"), { target: { value: "i" } });
+    const names = optionNames();
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" })));
+    expect(names).toContain("holaf-lib");
+    expect(names).not.toContain("Talky");
+  });
 });

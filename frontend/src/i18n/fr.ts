@@ -368,6 +368,16 @@ export const fr = {
     linkedMenu: {
       menuHint: "Projet lié — cliquez pour gérer les sous-projets",
       linkProject: "Lier un projet…",
+      // Renommage du projet lié (saisie inline dans le même menu).
+      rename: "Renommer",
+      renameTitle: (name: string) => `Renommer « ${name} »`,
+      renameLabel: "Nom du projet",
+      renamePlaceholder: "Nom du projet",
+      renameSave: "Enregistrer",
+      renameEmpty: "Le nom ne peut pas être vide",
+      renameTooLong: (max: number) => `Le nom doit comporter au maximum ${max} caractères`,
+      renameDuplicate: "Un autre projet porte déjà ce nom",
+      renameError: (m: string) => `Échec du renommage : ${m}`,
       pickTitle: (name: string) => `Lier un projet à « ${name} »`,
       pickBack: "Retour",
       unlinkSection: "Délier",

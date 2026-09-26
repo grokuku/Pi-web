@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen, Link2 } from "lucide-react";
 import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
 import { useTranslation } from "../../i18n";
+import { sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
 
 interface Props {
@@ -59,9 +60,14 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
 
   // Candidats au liage : projets locaux OU SMB (le mount est un chemin local
   // du container, /mnt/smb/… — les symlinks fonctionnent). Jamais de liés
-  // (1 niveau max) ni de ssh (fichiers absents de ce disque).
-  const linkedCandidates = availableProjects.filter(
-    (p) => p.storage === "local" || p.storage === "smb"
+  // (1 niveau max) ni de ssh (fichiers absents de ce disque). Triés par nom
+  // (insensible casse/accents) pour un parcours alphabétique.
+  const linkedCandidates = useMemo(
+    () =>
+      sortProjectsByName(
+        availableProjects.filter((p) => p.storage === "local" || p.storage === "smb")
+      ),
+    [availableProjects]
   );
 
   // Charger la liste des projets existants (candidats au liage)

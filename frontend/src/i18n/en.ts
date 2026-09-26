@@ -367,6 +367,16 @@ export const en = {
     linkedMenu: {
       menuHint: "Linked project — click to manage sub-projects",
       linkProject: "Link a project…",
+      // Rename the linked project (inline input in the same menu).
+      rename: "Rename",
+      renameTitle: (name: string) => `Rename "${name}"`,
+      renameLabel: "Project name",
+      renamePlaceholder: "Project name",
+      renameSave: "Save",
+      renameEmpty: "Name cannot be empty",
+      renameTooLong: (max: number) => `Name must be at most ${max} characters`,
+      renameDuplicate: "Another project already uses this name",
+      renameError: (m: string) => `Failed to rename: ${m}`,
       pickTitle: (name: string) => `Link a project to "${name}"`,
       pickBack: "Back",
       unlinkSection: "Unlink",

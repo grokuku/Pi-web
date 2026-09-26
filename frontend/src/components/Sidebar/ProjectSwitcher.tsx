@@ -29,6 +29,7 @@ import { Check, ChevronDown, Folder, Link2, Trash2 } from "lucide-react";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { buildSwitcherCandidates } from "../../utils/linked-projects";
+import { sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
 
 const MENU_WIDTH = 260;
@@ -146,16 +147,21 @@ export function ProjectSwitcher({
   }, [open]);
 
   // Liste affichée = filtre de la case (membres de groupes liés) PUIS recherche
-  // par nom ; les deux se cumulent et l'ordre backend (ordre persisté) est
-  // préservé. `hiddenCount` ne compte que les retraits de la case.
+  // par nom ; les deux se cumulent. `hiddenCount` ne compte que les retraits
+  // de la case. Le tri alphabétique (insensible casse/accents, numérique
+  // naturel) s'applique EN DERNIER — après tous les filtres — et porte aussi
+  // sur le projet actif : celui-ci n'est PAS épinglé en tête, il reste
+  // identifiable par son marqueur (✓ + couleur accent).
   const { projects: candidates, hiddenCount } = useMemo(
     () => buildSwitcherCandidates(projects, activeProject?.id, hideAlreadyLinked),
     [projects, activeProject?.id, hideAlreadyLinked]
   );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return candidates;
-    return candidates.filter((p) => p.name.toLowerCase().includes(q));
+    const visible = q
+      ? candidates.filter((p) => p.name.toLowerCase().includes(q))
+      : candidates;
+    return sortProjectsByName(visible);
   }, [candidates, search]);
 
   return (
@@ -252,7 +258,7 @@ export function ProjectSwitcher({
             </label>
           </div>
 
-          {/* Liste de TOUS les projets (l'ordre backend est conservé) */}
+          {/* Liste de TOUS les projets, triés par nom (casse/accents ignorés) */}
           <div className="flex-1 min-h-0 overflow-y-auto" role="listbox">
             {filtered.map((p) => {
               const isCurrent = activeProject?.id === p.id;

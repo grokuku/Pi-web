@@ -511,6 +511,15 @@ function App() {
       }
       setProjects(data);
       setProjectsError(null);
+      // Le projet actif est un état PROPRE (objet), pas une dérivée de
+      // `projects` : après un renommage (ou tout rafraîchissement), on le
+      // resynchronise depuis la liste fraîche pour que son libellé se mette à
+      // jour partout (en-tête, menus, sidebar) sans changer d'identité.
+      setActiveProject((prev) => {
+        if (!prev) return prev;
+        const fresh = data.find((p: Project) => p.id === prev.id);
+        return fresh ? { ...prev, ...fresh } : prev;
+      });
       // No auto-activation — welcome page is shown on load/refresh
       // User picks a project from the welcome page or sidebar
     } catch (e) {

@@ -7,6 +7,7 @@ import { GitPanel } from "./GitPanel";
 import { LinkedProjectMenu } from "./LinkedProjectMenu";
 import { ProjectSwitcher, SessionDots, type ProjectSessionInfo } from "./ProjectSwitcher";
 import { PastConversations } from "./PastConversations";
+import { sortProjectsByName } from "../../utils/project-sort";
 import { PastConversationViewer } from "../Chat/PastConversationViewer";
 import { usePastSessions } from "../../hooks/usePastSessions";
 import { DeleteProjectModal } from "../Modals/DeleteProjectModal";
@@ -150,9 +151,12 @@ export function Sidebar({
   // le toggle pi-web.hide-linked-origins du LinkedProjectMenu.
   const linkedSubProjects = useMemo(() => {
     if (!activeProject || activeProject.storage !== "linked" || !Array.isArray(activeProject.linkedProjectIds)) return [];
-    return activeProject.linkedProjectIds
+    const subs = activeProject.linkedProjectIds
       .map((id) => projects.find((p) => p.id === id))
       .filter((p): p is Project => !!p);
+    // Même ordre alphabétique que les autres listes de projets (casse/accents
+    // ignorés) — appliqué après résolution des sous-projets.
+    return sortProjectsByName(subs);
   }, [activeProject, projects]);
 
   const handleDeleteConfirm = (deleteFiles: boolean) => {

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { X, RefreshCw, FolderOpen, Code, FileText, Image, Settings, AlertTriangle } from "lucide-react";
 import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useTranslation } from "../../i18n";
+import { sortProjectsByName } from "../../utils/project-sort";
 
 interface Props {
   onClose: () => void;
@@ -126,10 +127,11 @@ export function CbmStatsModal({ onClose }: Props) {
     try {
       const res = await fetch("/api/projects");
       const data = await res.json();
-      const list = (Array.isArray(data) ? data : data.projects || data.data || [])
-        .filter((p: any) => p.cwd)
-        .map((p: any) => ({ name: p.name || p.id, cwd: p.cwd }))
-        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+      const list = sortProjectsByName<{ name: string; cwd: string }>(
+        (Array.isArray(data) ? data : data.projects || data.data || [])
+          .filter((p: any) => p.cwd)
+          .map((p: any) => ({ name: String(p.name || p.id), cwd: String(p.cwd) }))
+      );
       setProjects(list);
       // Select all by default
       setSelectedPaths(list.map((p: { cwd: string }) => p.cwd));

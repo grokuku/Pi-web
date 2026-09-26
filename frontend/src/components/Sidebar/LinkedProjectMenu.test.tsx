@@ -10,6 +10,7 @@
  * une liaison.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../i18n";
 import { LinkedProjectMenu } from "./LinkedProjectMenu";
@@ -225,5 +226,143 @@ describe("LinkedProjectMenu — liste des candidats à lier", () => {
     fireEvent.change(searchInput, { target: { value: "zzz" } });
     expect(screen.queryByText("holaf-lib")).toBeNull();
     expect(screen.getByText("No match")).toBeTruthy();
+  });
+});
+
+// ── Renommage du projet lié ──────────────────────────────────────────────
+// Le menu réutilise le mécanisme GÉNÉRIQUE de mise à jour d'un projet
+// (PUT /api/projects/:id) en n'envoyant QUE le nom. Le rafraîchissement
+// (onProjectsChanged) propage le nouveau libellé (simulé par le harnais qui
+// met à jour la liste, donc le libellé d'en-tête).
+describe("LinkedProjectMenu — renommage du projet lié", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    localStorage.setItem("pi-web-language", "en");
+    fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  // Harnais : la liste est un état local, le projet passé au menu est dérivé de
+  // cette liste — un rafraîchissement met donc à jour le libellé d'en-tête.
+  function RenameHarness({
+    anchor,
+    onProjectsChanged,
+  }: {
+    anchor: HTMLElement;
+    onProjectsChanged: () => void;
+  }) {
+    const [list, setList] = useState<Project[]>(projects);
+    const group = list.find((p) => p.id === targetGroup.id) as Project;
+    const refresh = () => {
+      setList((prev) =>
+        prev.map((p) => (p.id === targetGroup.id ? { ...p, name: "Renamed Group" } : p))
+      );
+      onProjectsChanged();
+    };
+    return (
+      <>
+        <div data-testid="header-label">{group.name}</div>
+        <LinkedProjectMenu
+          project={group}
+          projects={list}
+          anchor={anchor}
+          onClose={() => {}}
+          onProjectsChanged={refresh}
+          showOrigins={false}
+          onToggleShowOrigins={() => {}}
+        />
+      </>
+    );
+  }
+
+  async function openRename(): Promise<HTMLInputElement> {
+    fireEvent.click(screen.getByText("Rename"));
+    return (await screen.findByLabelText("Project name")) as HTMLInputElement;
+  }
+
+  it("enregistre le nouveau nom (PUT /api/projects/:id) puis propage le libellé après rafraîchissement", async () => {
+    const anchor = document.createElement("button");
+    document.body.appendChild(anchor);
+    const onProjectsChanged = vi.fn();
+    render(
+      <I18nProvider>
+        <RenameHarness anchor={anchor} onProjectsChanged={onProjectsChanged} />
+      </I18nProvider>
+    );
+
+    const input = await openRename();
+    // Le brouillon est pré-rempli avec le nom courant.
+    expect(input.value).toBe("LINKED AI Helper");
+    fireEvent.change(input, { target: { value: "  Renamed Group  " } });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(onProjectsChanged).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/g-target",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ name: "Renamed Group" }), // espaces superflus nettoyés
+      })
+    );
+    // Propagation : le libellé d'en-tête reflète le nouveau nom.
+    await waitFor(() => expect(screen.getByTestId("header-label").textContent).toBe("Renamed Group"));
+  });
+
+  it("refuse un nom vide ou fait uniquement d'espaces (aucun appel réseau)", async () => {
+    const anchor = document.createElement("button");
+    document.body.appendChild(anchor);
+    render(
+      <I18nProvider>
+        <RenameHarness anchor={anchor} onProjectsChanged={() => {}} />
+      </I18nProvider>
+    );
+
+    const input = await openRename();
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.click(screen.getByText("Save"));
+
+    expect(await screen.findByText("Name cannot be empty")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuse un nom trop long", async () => {
+    const anchor = document.createElement("button");
+    document.body.appendChild(anchor);
+    render(
+      <I18nProvider>
+        <RenameHarness anchor={anchor} onProjectsChanged={() => {}} />
+      </I18nProvider>
+    );
+
+    const input = await openRename();
+    fireEvent.change(input, { target: { value: "x".repeat(65) } });
+    fireEvent.click(screen.getByText("Save"));
+
+    expect(await screen.findByText(/at most 64 characters/)).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuse un nom déjà utilisé par un autre projet (casse ignorée)", async () => {
+    const anchor = document.createElement("button");
+    document.body.appendChild(anchor);
+    render(
+      <I18nProvider>
+        <RenameHarness anchor={anchor} onProjectsChanged={() => {}} />
+      </I18nProvider>
+    );
+
+    const input = await openRename();
+    fireEvent.change(input, { target: { value: "talky" } });
+    fireEvent.click(screen.getByText("Save"));
+
+    expect(await screen.findByText("Another project already uses this name")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

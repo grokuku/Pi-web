@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PiLogo } from "../common/PiLogo";
 import { Package, AlertTriangle, CheckCircle, Clock, Cpu, FolderOpen, Plus, RefreshCw, ArrowUpCircle } from "lucide-react";
 import { useTranslation } from "../../i18n";
+import { sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
 
 // ── Types ──────────────────────────────────────────────
@@ -49,6 +50,9 @@ interface Props {
 
 export function WelcomeView({ projects, loadError, onSelectProject, onAddProject }: Props) {
   const { t } = useTranslation();
+  // Grille de projets triée par nom (insensible casse/accents, numérique
+  // naturel) — même règle que le sélecteur de sidebar.
+  const sortedProjects = useMemo(() => sortProjectsByName(projects), [projects]);
   const [status, setStatus] = useState<StatusInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -226,7 +230,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
             </div>
           ) : (
             <div className="grid gap-1.5 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
-              {projects.map(project => (
+              {sortedProjects.map(project => (
                 <button
                   key={project.id}
                   onClick={() => onSelectProject(project)}

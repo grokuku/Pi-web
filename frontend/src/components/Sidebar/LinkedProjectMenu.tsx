@@ -10,10 +10,18 @@
 //      décochée, un projet déjà membre d'un AUTRE groupe reste proposable
 //      avec le badge « lié ×N »)
 //      → POST /api/projects/:id/linked { subProjectId }
-//   2. « Délier » : un item par sous-projet regroupé
+//   2. « Renommer » → mode rename : saisie inline du nouveau nom (validation :
+//      non vide, espaces nettoyés, longueur bornée, pas de doublon de nom),
+//      puis PUT /api/projects/:id { name }. Réutilise le mécanisme GÉNÉRIQUE
+//      de mise à jour d'un projet en n'envoyant que le nom (cwd et
+//      linkedProjectIds intacts).
+//   3. « Délier » : un item par sous-projet regroupé
 //      → DELETE /api/projects/:id/linked/:subId
-//   3. Toggle « Afficher les origines masquées » (état persisté côté Sidebar,
+//   4. Toggle « Afficher les origines masquées » (état persisté côté Sidebar,
 //      clé localStorage pi-web.hide-linked-origins).
+//
+// Les listes de candidats sont triées par nom (insensible casse/accents,
+// numérique naturel) APRÈS application de la case + de la recherche.
 //
 // Rendu via createPortal(document.body) en position FIXED ancrée sous le bord
 // bas-GAUCHE de la ligne : la sidebar est étroite, un ancrage à droite ferait
@@ -24,13 +32,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, Link2, Unlink, X } from "lucide-react";
+import { ChevronLeft, Link2, Pencil, Unlink, X } from "lucide-react";
 import { useTranslation } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
 import { buildLinkCandidates } from "../../utils/linked-projects";
+import { compareProjectsByName, projectNamesMatch, sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
 
 const MENU_WIDTH = 240;
+// Longueur maximale acceptée pour un nom de projet (garde-fou UI : le backend
+// n'impose pas de limite, on évite les noms illisibles dans la sidebar).
+const MAX_NAME_LENGTH = 64;
 
 interface Props {
   project: Project;              // placeholder lié concerné
@@ -52,16 +64,22 @@ export function LinkedProjectMenu({
   onToggleShowOrigins,
 }: Props) {
   const { t } = useTranslation();
-  // mode "main" : actions ; mode "pick" : choix du projet à lier.
-  const [mode, setMode] = useState<"main" | "pick">("main");
-  const [busyId, setBusyId] = useState<string | null>(null); // link/unlink en cours
+  // mode "main" : actions ; mode "pick" : choix du projet à lier ;
+  // mode "rename" : saisie du nouveau nom du projet lié.
+  const [mode, setMode] = useState<"main" | "pick" | "rename">("main");
+  const [busyId, setBusyId] = useState<string | null>(null); // link/unlink/rename en cours
   const [search, setSearch] = useState(""); // filtre par nom dans le mode pick
+  // Renommage : brouillon + erreur de validation locale (nom vide, trop long,
+  // doublon…). Réinitialisés à chaque entrée dans le mode « rename ».
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState("");
   // Case « Masquer les projets déjà liés à un groupe » — cochée par défaut.
   // Le menu est démonté à sa fermeture (Sidebar : rendu conditionnel `&&`), donc
   // l'état est recréé (= coché) à chaque ouverture ; volontairement NON persisté
   // (filtre de confort, pas une préférence d'application).
   const [hideAlreadyLinked, setHideAlreadyLinked] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
+  const renameRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Position « fixed » (top/left + hauteur max) — recalculée au scroll en
@@ -108,17 +126,29 @@ export function LinkedProjectMenu({
   }, [onClose]);
 
   // À l'entrée en mode pick, le champ de recherche prend le focus (clavier
-  // immédiatement opérationnel — même pattern que ProjectSwitcher).
+  // immédiatement opérationnel — même pattern que ProjectSwitcher). En mode
+  // rename, le champ de saisie prend le focus et son contenu est sélectionné.
   useEffect(() => {
-    if (mode !== "pick") return;
-    const raf = requestAnimationFrame(() => searchRef.current?.focus());
-    return () => cancelAnimationFrame(raf);
+    if (mode === "pick") {
+      const raf = requestAnimationFrame(() => searchRef.current?.focus());
+      return () => cancelAnimationFrame(raf);
+    }
+    if (mode === "rename") {
+      const raf = requestAnimationFrame(() => {
+        renameRef.current?.focus();
+        renameRef.current?.select();
+      });
+      return () => cancelAnimationFrame(raf);
+    }
   }, [mode]);
 
-  // Sous-projets regroupés (objets résolus depuis la liste complète).
-  const subs = (project.linkedProjectIds || [])
-    .map((id) => projects.find((p) => p.id === id))
-    .filter((p): p is Project => !!p);
+  // Sous-projets regroupés (objets résolus depuis la liste complète), triés
+  // par nom (même ordre alphabétique que les autres listes).
+  const subs = sortProjectsByName(
+    (project.linkedProjectIds || [])
+      .map((id) => projects.find((p) => p.id === id))
+      .filter((p): p is Project => !!p)
+  );
 
   // Candidats à la liaison (logique pure testée dans utils/linked-projects.ts) :
   // contraintes backend (local ou SMB monté, pas un placeholder — l'imbrication
@@ -139,11 +169,14 @@ export function LinkedProjectMenu({
     () => allCandidates.filter((c) => c.linkedGroupCount > 0).length,
     [allCandidates]
   );
-  // Recherche par nom appliquée PAR-DESSUS le filtrage métier + case.
+  // Recherche par nom appliquée PAR-DESSUS le filtrage métier + case, puis tri
+  // alphabétique (insensible casse/accents, numérique naturel) en DERNIER.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return candidates;
-    return candidates.filter((c) => c.project.name.toLowerCase().includes(q));
+    const visible = q
+      ? candidates.filter((c) => c.project.name.toLowerCase().includes(q))
+      : candidates;
+    return [...visible].sort((a, b) => compareProjectsByName(a.project, b.project));
   }, [candidates, search]);
   // Message d'état vide : sans recherche, distingue « aucun projet éligible »
   // de « tout est masqué par la case » (sinon le message serait trompeur).
@@ -195,6 +228,62 @@ export function LinkedProjectMenu({
     }
   };
 
+  // Entrée en mode renommage : brouillon initialisé au nom courant.
+  const openRename = () => {
+    setRenameDraft(project.name);
+    setRenameError("");
+    setMode("rename");
+  };
+
+  // Renommage du projet lié. Réutilise le mécanisme GÉNÉRIQUE de mise à jour
+  // d'un projet (PUT /api/projects/:id) en n'envoyant QUE le nom : ni le cwd ni
+  // les linkedProjectIds ne sont touchés (ils ne figurent pas dans le corps).
+  const handleRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busyId) return;
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      setRenameError(t('sidebar.linkedMenu.renameEmpty'));
+      return;
+    }
+    if (trimmed.length > MAX_NAME_LENGTH) {
+      setRenameError(t('sidebar.linkedMenu.renameTooLong', MAX_NAME_LENGTH));
+      return;
+    }
+    // Nom inchangé (aux espaces près) : rien à enregistrer.
+    if (trimmed === project.name) {
+      onClose();
+      return;
+    }
+    // Doublon gênant : un AUTRE projet porte déjà ce nom (casse/accents ignorés).
+    if (projects.some((p) => p.id !== project.id && projectNamesMatch(p.name, trimmed))) {
+      setRenameError(t('sidebar.linkedMenu.renameDuplicate'));
+      return;
+    }
+    setBusyId("__rename__");
+    setRenameError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      // Rafraîchit la liste : le nouveau libellé se propage partout (sidebar,
+      // en-tête, menus) puisque App met à jour `projects` ET `activeProject`.
+      await onProjectsChanged();
+      onClose();
+    } catch (err: any) {
+      console.error("[LinkedProjectMenu] Rename failed:", err);
+      setRenameError(t('sidebar.linkedMenu.renameError', err?.message ?? String(err)));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return createPortal(
     <div
       ref={dropdownRef}
@@ -228,6 +317,15 @@ export function LinkedProjectMenu({
           >
             <Link2 size={12} className="shrink-0" />
             {t('sidebar.linkedMenu.linkProject')}
+          </button>
+
+          {/* Renommer le projet lié → bascule en mode « rename ». */}
+          <button
+            onClick={openRename}
+            className="w-full text-left px-3 py-2 text-xs text-hacker-text-dim hover:bg-hacker-accent/5 hover:text-hacker-text flex items-center gap-1.5"
+          >
+            <Pencil size={12} className="shrink-0" />
+            {t('sidebar.linkedMenu.rename')}
           </button>
 
           {/* Délier — un item par sous-projet regroupé */}
@@ -268,7 +366,7 @@ export function LinkedProjectMenu({
             <span className="truncate">{t('sidebar.linkedMenu.showOrigins')}</span>
           </button>
         </div>
-      ) : (
+      ) : mode === "pick" ? (
         <>
           {/* Mode pick : choisir un projet à lier */}
           <div className="px-2 pt-2 pb-1 flex items-center gap-1 shrink-0">
@@ -353,6 +451,54 @@ export function LinkedProjectMenu({
               </div>
             )}
           </div>
+        </>
+      ) : (
+        <>
+          {/* Mode rename : saisie du nouveau nom du projet lié */}
+          <div className="px-2 pt-2 pb-1 flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => setMode("main")}
+              className="p-0.5 text-hacker-text-dim hover:text-hacker-accent"
+              title={t('sidebar.linkedMenu.pickBack')}
+              aria-label={t('sidebar.linkedMenu.pickBack')}
+            >
+              <ChevronLeft size={12} />
+            </button>
+            <span className="text-[10px] text-hacker-text-dim font-bold tracking-wider truncate">
+              {t('sidebar.linkedMenu.renameTitle', project.name)}
+            </span>
+          </div>
+
+          <form onSubmit={handleRename} className="px-2 pb-2 flex flex-col gap-1.5">
+            <input
+              ref={renameRef}
+              value={renameDraft}
+              onChange={(e) => { setRenameDraft(e.target.value); if (renameError) setRenameError(""); }}
+              maxLength={MAX_NAME_LENGTH}
+              placeholder={t('sidebar.linkedMenu.renamePlaceholder')}
+              className="w-full bg-hacker-bg border border-hacker-border px-2 py-1 text-xs text-hacker-text placeholder:text-hacker-text-dim/50 focus:outline-none focus:border-hacker-accent/50"
+              aria-label={t('sidebar.linkedMenu.renameLabel')}
+            />
+            {renameError && (
+              <div className="text-[10px] text-hacker-error leading-tight">{renameError}</div>
+            )}
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => setMode("main")}
+                className="px-2 py-1 text-[11px] text-hacker-text-dim hover:text-hacker-text border border-hacker-border"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={!!busyId}
+                className="px-2 py-1 text-[11px] text-hacker-accent border border-hacker-accent/50 hover:bg-hacker-accent/10 disabled:opacity-40"
+              >
+                {busyId === "__rename__" ? "…" : t('sidebar.linkedMenu.renameSave')}
+              </button>
+            </div>
+          </form>
         </>
       )}
     </div>,

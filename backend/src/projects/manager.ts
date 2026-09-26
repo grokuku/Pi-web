@@ -410,6 +410,26 @@ export async function removeLinkedProject(id: string, subId: string): Promise<Pr
   });
 }
 
+// Fusionne un patch dans un projet existant : champs non modifiables (id,
+// createdAt) préservés, `updatedAt` horodaté. Pure et exportée pour être
+// testable — garantit notamment qu'un RENOMMAGE (patch { name }) ne touche ni
+// le cwd ni les linkedProjectIds (ils sont recopiés tels quels via le spread).
+// Aucune restriction de type de stockage : un projet `linked` peut être
+// renommé comme n'importe quel autre.
+export function mergeProjectUpdate(
+  current: Project,
+  updates: Partial<Omit<Project, "id" | "createdAt">>,
+  updatedAt: string
+): Project {
+  return {
+    ...current,
+    ...updates,
+    id: current.id,
+    createdAt: current.createdAt,
+    updatedAt,
+  };
+}
+
 export async function updateProject(
   id: string,
   updates: Partial<Omit<Project, "id" | "createdAt">>
@@ -425,13 +445,7 @@ export async function updateProject(
       throw new Error("Working directory must be within an allowed root (/projects, /mnt/smb)");
     }
 
-    projects[index] = {
-      ...projects[index],
-      ...updates,
-      id: projects[index].id,
-      createdAt: projects[index].createdAt,
-      updatedAt: new Date().toISOString(),
-    };
+    projects[index] = mergeProjectUpdate(projects[index], updates, new Date().toISOString());
 
     // Sécurité : ne jamais persister de credentials dans le remote stocké.
     if (projects[index].git?.remote) {
