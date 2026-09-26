@@ -1,18 +1,12 @@
 /**
  * Concurrency Manager for Pi-Web
  *
- * Two independent pools:
- * - LLM slots : limite les appels provider simultanés (RPM/TPM),
- *   PAR PROVIDER — chaque provider a ses propres slots et sa propre
- *   file d'attente, avec une limite effective = override par provider
- *   (providerMaxLLMSlots[providerId]) ?? maxLLMSlots (défaut global).
- * - Agent slots : limite les sessions Pi SDK simultanées (RAM),
- *   reste GLOBAL (non segmenté par provider).
- *
- * Chaque agent consomme un agent slot au démarrage, et un LLM slot
- * seulement pendant les appels provider. Les files d'attente sont
- * gérées par promesse — la tâche suivante est débloquée quand un
- * slot se libère, dans la file du MÊME provider uniquement.
+ * Un seul pool : les slots LLM, qui limitent les appels provider
+ * simultanés (RPM/TPM), PAR PROVIDER — chaque provider a ses propres
+ * slots et sa propre file d'attente, avec une limite effective = override
+ * par provider (providerMaxLLMSlots[providerId]) ?? maxLLMSlots (défaut
+ * global). Les files d'attente sont gérées par promesse — la tâche suivante
+ * est débloquée quand un slot se libère, dans la file du MÊME provider.
  *
  * BUG-59 : la réentrance était basée sur projectId, ce qui causait
  * un bug : les agents harness partageaient le slot de la session
@@ -32,7 +26,6 @@ import {
 
 export interface ConcurrencyConfig {
   maxLLMSlots: number;    // limite LLM par DÉFAUT (globale, utilisée pour tout provider sans override)
-  maxAgentSlots: number;  // sessions Pi SDK simultanées max (global, non segmenté par provider)
   providerMaxLLMSlots?: Record<string, number>;  // limite LLM par provider (override du défaut global)
   queueTimeoutMs?: number;  // délai max d'attente en file avant rejet (ms)
   streamSilenceTimeoutMs?: number;  // détecteur de silence de flux (ms ; 0 = illimité)
@@ -68,7 +61,6 @@ const LLM_SLOT_WATCHDOG_INTERVAL_MS = 60_000;
 
 export const DEFAULT_CONFIG: ConcurrencyConfig = {
   maxLLMSlots: 3,
-  maxAgentSlots: 5,
   queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
   streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
   agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
@@ -148,20 +140,15 @@ class ConcurrencyManager {
 
   // Map key = slotKey (unique par appel) ; SlotInfo porte le providerId.
   private llmSlots: Map<string, SlotInfo> = new Map();
-  private agentSlots: Map<string, SlotInfo> = new Map();
 
   // Files d'attente LLM PAR PROVIDER : libérer un slot d'un provider ne
   // réveille que la file de CE provider (isolation des limites RPM/TPM).
   private llmQueues: Map<string, QueuedTask[]> = new Map();
-  private agentQueue: QueuedTask[] = [];
 
   /** Met à jour la configuration (thread-safe car synchrone) */
   setConfig(config: Partial<ConcurrencyConfig>): void {
     if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) {
       this.config.maxLLMSlots = config.maxLLMSlots;
-    }
-    if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) {
-      this.config.maxAgentSlots = config.maxAgentSlots;
     }
     // Map de limites par provider : remplacée ENTIÈREMENT quand elle est
     // fournie (permet de supprimer un override en envoyant une map réduite
@@ -202,7 +189,7 @@ class ConcurrencyManager {
     return this.providerLimits[providerId] ?? this.config.maxLLMSlots;
   }
 
-  /** Délai d'attente effectif dans les files (LLM et agent), en millisecondes. */
+  /** Délai d'attente effectif dans la file LLM, en millisecondes. */
   getQueueTimeoutMs(): number {
     return this.config.queueTimeoutMs ?? DEFAULT_QUEUE_TIMEOUT_MS;
   }
@@ -249,10 +236,8 @@ class ConcurrencyManager {
     }
     return {
       llmSlots: { used: this.llmSlots.size, max: this.config.maxLLMSlots, queue: llmQueued },
-      agentSlots: { used: this.agentSlots.size, max: this.config.maxAgentSlots, queue: this.agentQueue.length },
       llmByProvider,
       active: [...this.llmSlots.values()],
-      agents: [...this.agentSlots.values()],
     };
   }
 
@@ -366,55 +351,6 @@ class ConcurrencyManager {
     return stale.map((s) => s.slotKey);
   }
 
-  // ── Agent Slots ──
-
-  /**
-   * Acquiert un slot agent (session Pi SDK). Bloque si tous les
-   * slots sont pris, avec timeout de file (queueTimeoutMs).
-   *
-   * @param slotKey Identifiant unique par appel (ex: "projectId::auto-review")
-   * @param label   Libellé pour affichage/stats
-   */
-  async acquireAgentSlot(slotKey: string, label: string): Promise<void> {
-    if (this.agentSlots.has(slotKey)) return;
-
-    if (this.agentSlots.size < this.config.maxAgentSlots) {
-      this.agentSlots.set(slotKey, { slotKey, label, providerId: DEFAULT_LLM_PROVIDER, acquiredAt: Date.now() });
-      return;
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      const task: QueuedTask = {
-        slotKey,
-        label,
-        providerId: DEFAULT_LLM_PROVIDER,
-        resolve,
-        reject,
-        timestamp: Date.now(),
-        aborted: false,
-        timer: undefined as any,
-      };
-      const timeoutMs = this.getQueueTimeoutMs();
-      task.timer = setTimeout(() => {
-        task.aborted = true;
-        const idx = this.agentQueue.indexOf(task);
-        if (idx >= 0) this.agentQueue.splice(idx, 1);
-        reject(new Error(
-          `[concurrency] Agent slot acquisition timed out after ${timeoutMs / 1000}s ` +
-          `(slotKey=${slotKey}, ${this.agentSlots.size}/${this.config.maxAgentSlots} slots used, ` +
-          `${this.agentQueue.length} en attente)`
-        ));
-      }, timeoutMs);
-      this.agentQueue.push(task);
-    });
-  }
-
-  /** Libère un slot agent (session terminée) */
-  releaseAgentSlot(slotKey: string): void {
-    this.agentSlots.delete(slotKey);
-    this.drainAgentQueue();
-  }
-
   // ── Helpers ──
 
   /** Drain FIFO de la file d'un provider : servi tant que SA limite effective n'est pas atteinte. */
@@ -437,22 +373,11 @@ class ConcurrencyManager {
     if (queue.length === 0) this.llmQueues.delete(providerId);
   }
 
-  private drainAgentQueue(): void {
-    while (this.agentQueue.length > 0 && this.agentSlots.size < this.config.maxAgentSlots) {
-      const next = this.agentQueue.shift()!;
-      if (next.aborted) continue;
-      clearTimeout(next.timer);
-      this.agentSlots.set(next.slotKey, { slotKey: next.slotKey, label: next.label, providerId: DEFAULT_LLM_PROVIDER, acquiredAt: Date.now() });
-      next.resolve();
-    }
-  }
-
   private drainQueues(): void {
     // Drain LLM : chaque provider ne débloque que sa propre file.
     for (const providerId of [...this.llmQueues.keys()]) {
       this.drainLLMQueue(providerId);
     }
-    this.drainAgentQueue();
   }
 }
 

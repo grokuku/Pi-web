@@ -3,7 +3,7 @@
  *
  * Isolée de la route express pour être testable sans I/O ni serveur HTTP.
  * Règles :
- * - slots (défaut global, agent, override par provider) : ENTIERS 1..MAX_SLOTS
+ * - slots (défaut global, override par provider) : ENTIERS 1..MAX_SLOTS
  *   (plafond volontairement large : un provider peut avoir une limite très
  *   haute, ex. 2500) ; 0, floats, chaînes et clés JS réservées sont rejetés ;
  * - queueTimeoutMs : ENTIER dans [MIN_QUEUE_TIMEOUT_MS, MAX_QUEUE_TIMEOUT_MS] ;
@@ -29,7 +29,6 @@ const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export interface ConcurrencyPayload {
   maxLLMSlots?: number;
-  maxAgentSlots?: number;
   providerMaxLLMSlots?: Record<string, number>;
   queueTimeoutMs?: number;
   streamSilenceTimeoutMs?: number;
@@ -49,14 +48,11 @@ export function validateConcurrencyPayload(
   body: unknown
 ): { error: string } | { value: ConcurrencyPayload } {
   const raw = (body ?? {}) as Record<string, unknown>;
-  const { maxLLMSlots, maxAgentSlots, providerMaxLLMSlots, queueTimeoutMs } = raw;
+  const { maxLLMSlots, providerMaxLLMSlots, queueTimeoutMs } = raw;
   const { streamSilenceTimeoutMs, agentHardTimeoutMs } = raw;
 
   if (maxLLMSlots !== undefined && !isValidSlotCount(maxLLMSlots)) {
     return { error: `maxLLMSlots must be an integer between 1 and ${MAX_SLOTS}` };
-  }
-  if (maxAgentSlots !== undefined && !isValidSlotCount(maxAgentSlots)) {
-    return { error: `maxAgentSlots must be an integer between 1 and ${MAX_SLOTS}` };
   }
   if (providerMaxLLMSlots !== undefined) {
     if (
@@ -112,7 +108,6 @@ export function validateConcurrencyPayload(
   return {
     value: {
       maxLLMSlots: maxLLMSlots as number | undefined,
-      maxAgentSlots: maxAgentSlots as number | undefined,
       providerMaxLLMSlots: providerMaxLLMSlots as Record<string, number> | undefined,
       queueTimeoutMs: queueTimeoutMs as number | undefined,
       streamSilenceTimeoutMs: streamSilenceTimeoutMs as number | undefined,

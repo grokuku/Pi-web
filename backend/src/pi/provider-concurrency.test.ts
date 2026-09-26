@@ -53,7 +53,7 @@ function seedLibrary(providerMaxLLMSlots: Record<string, number> = {}): void {
     "model-library.json",
     JSON.stringify({
       models: [],
-      concurrency: { maxLLMSlots: 3, maxAgentSlots: 5, providerMaxLLMSlots, queueTimeoutMs: 600_000 },
+      concurrency: { maxLLMSlots: 3, providerMaxLLMSlots, queueTimeoutMs: 600_000 },
     })
   );
 }

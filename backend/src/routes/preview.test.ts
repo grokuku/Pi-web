@@ -6,12 +6,14 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
+import express from "express";
 import {
   storeInlineHtml,
   getInlineHtml,
   mimeForPath,
   resolveProjectFile,
 } from "./preview.js";
+import previewRouter from "./preview.js";
 
 // Mock du gestionnaire de projets pour contrôler le cwd sans dépendre du disque.
 const { getProjectMock } = vi.hoisted(() => ({ getProjectMock: vi.fn() }));
@@ -132,5 +134,48 @@ describe("mimeForPath", () => {
 
   it("retombe sur application/octet-stream pour une extension inconnue", () => {
     expect(mimeForPath("a.xyz")).toBe("application/octet-stream");
+  });
+});
+
+// ── (SEC-05) CSP d'isolation sur les réponses de preview ──
+
+describe("preview — CSP sandbox (SEC-05)", () => {
+  /** Démarre un mini serveur Express montant le router, exécute `fn`, ferme. */
+  async function withServer<T>(fn: (base: string) => Promise<T>): Promise<T> {
+    const app = express();
+    app.use("/api", previewRouter);
+    const server = app.listen(0);
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      return await fn(`http://127.0.0.1:${port}`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  it("pose un CSP sandbox SANS allow-same-origin mais AVEC allow-scripts sur un fichier projet", async () => {
+    fs.writeFileSync(path.join(PROJ, "index.html"), "<h1>ok</h1>");
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/preview/projA/index.html`);
+      expect(res.status).toBe(200);
+      const csp = res.headers.get("content-security-policy") ?? "";
+      expect(csp).toContain("sandbox");
+      expect(csp).toContain("allow-scripts");
+      expect(csp).not.toContain("allow-same-origin");
+    });
+  });
+
+  it("pose le même CSP sur les mockups inline (chemin nouvel onglet inclus)", async () => {
+    const id = storeInlineHtml("<script>document.title='x'</script>");
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/preview-inline/${id}`);
+      expect(res.status).toBe(200);
+      const csp = res.headers.get("content-security-policy") ?? "";
+      expect(csp).toContain("sandbox");
+      expect(csp).toContain("allow-scripts");
+      expect(csp).not.toContain("allow-same-origin");
+    });
   });
 });

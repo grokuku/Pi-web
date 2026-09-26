@@ -25,13 +25,12 @@ import {
   LLM_SLOT_WATCHDOG_MIN_MS,
 } from "./concurrency.js";
 
-/** Vide les deux pools (chaque release draine la file → boucle jusqu'à stabilité). */
-function vidangerPools(): void {
+/** Vide le pool LLM (chaque release draine la file → boucle jusqu'à stabilité). */
+function vidangerPool(): void {
   for (;;) {
     const stats = manager.getStats();
-    if (stats.active.length === 0 && stats.agents.length === 0) break;
+    if (stats.active.length === 0) break;
     for (const slot of stats.active) manager.releaseLLMSlot(slot.slotKey);
-    for (const slot of stats.agents) manager.releaseAgentSlot(slot.slotKey);
   }
 }
 
@@ -40,9 +39,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vidangerPools();
+  vidangerPool();
   manager.setConfig({ ...DEFAULT_CONFIG, providerMaxLLMSlots: {} });
-  vidangerPools();
+  vidangerPool();
 });
 
 describe("pont globalThis __piWebConcurrency (consommé par l'extension jiti)", () => {

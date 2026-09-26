@@ -166,8 +166,6 @@ export const fr = {
         title: "CONCURRENCE",
         description: "Limite le nombre d'appels LLM et de sessions agent simultanés. Les appels en attente sont mis en file d'attente.",
         llmSlots: "☎️ LLM slots max (défaut global)",
-        agentSlots: "🔧 Agent slots max",
-        agentSlotsNotApplied: "⚠️ Non appliqué actuellement — ce réglage est conservé mais sans effet.",
         queueTimeout: "⏳ Délai d'attente en file (secondes)",
         queueTimeoutHint: "Temps max qu'un appel attend dans la file avant d'être abandonné (5 s à 12 h / 43200 s). Défaut : 3600 s (1 h).",
         durationsTitle: "⏱ DURÉES & LIMITES",
@@ -183,8 +181,6 @@ export const fr = {
           `${provider} · ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
         statsLlm: (used: number, max: number, queue: number) =>
           `☎️ LLM (défaut global) : ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
-        statsAgents: (used: number, max: number, queue: number) =>
-          `🔧 Agents : ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
         saveError: "Échec de l'enregistrement de la concurrence",
       },
       additional: "Des paramètres supplémentaires seront ajoutés ici si nécessaire.",

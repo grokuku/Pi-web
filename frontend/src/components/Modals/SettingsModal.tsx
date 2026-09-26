@@ -268,7 +268,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
 
   // ── Concurrency state ──
   const [maxLLMSlots, setMaxLLMSlots] = useState(3);
-  const [maxAgentSlots, setMaxAgentSlots] = useState(5);
   // Délai d'attente en file, stocké en millisecondes (affiché en secondes).
   const [queueTimeoutMs, setQueueTimeoutMs] = useState(3_600_000);
   // Détecteur de silence de flux (stocké en ms, affiché en minutes ; 0 = illimité).
@@ -361,7 +360,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       const res = await fetch("/api/settings/concurrency");
       const data = await res.json();
       setMaxLLMSlots(data.config.maxLLMSlots ?? 3);
-      setMaxAgentSlots(data.config.maxAgentSlots ?? 5);
       setQueueTimeoutMs(data.config.queueTimeoutMs ?? 3_600_000);
       setStreamSilenceTimeoutMs(data.config.streamSilenceTimeoutMs ?? 900000);
       setAgentHardTimeoutMs(data.config.agentHardTimeoutMs ?? 0);
@@ -390,7 +388,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         // écraser la map moteur dérivée des providers.
         body: JSON.stringify({
           maxLLMSlots,
-          maxAgentSlots,
           queueTimeoutMs,
           streamSilenceTimeoutMs,
           agentHardTimeoutMs,
@@ -1098,22 +1095,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                         className="input-hacker w-full text-xs py-1.5 px-2"
                       />
                     </div>
-                    <div>
-                      <label className="text-hacker-text-dim text-xs block mb-1">
-                        {t('settings.general.concurrency.agentSlots')}
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={MAX_PROVIDER_LIMIT}
-                        value={maxAgentSlots}
-                        onChange={e => setMaxAgentSlots(Math.max(1, Math.min(MAX_PROVIDER_LIMIT, parseInt(e.target.value) || 1)))}
-                        className="input-hacker w-full text-xs py-1.5 px-2"
-                      />
-                      <div className="text-[10px] text-hacker-text-dim/70 mt-1 italic">
-                        {t('settings.general.concurrency.agentSlotsNotApplied')}
-                      </div>
-                    </div>
                   </div>
 
                   {/* Délai d'attente en file — affiché en secondes, stocké en ms */}
@@ -1197,7 +1178,6 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   {concurrencyStats && (
                     <div className="text-[10px] text-hacker-text-dim space-y-1 mt-2 pt-2 border-t border-hacker-border/30">
                       <div>{t('settings.general.concurrency.statsLlm', concurrencyStats.llmSlots.used, concurrencyStats.llmSlots.max, concurrencyStats.llmSlots.queue)}</div>
-                      <div>{t('settings.general.concurrency.statsAgents', concurrencyStats.agentSlots.used, concurrencyStats.agentSlots.max, concurrencyStats.agentSlots.queue)}</div>
                       {/* Utilisation live par provider (rafraîchie toutes les 3 s) */}
                       <div className="pt-1 mt-1 border-t border-hacker-border/20">
                         <div className="font-bold">{t('settings.general.concurrency.usageByProvider')}</div>

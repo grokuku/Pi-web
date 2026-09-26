@@ -8,11 +8,23 @@
  *   - GET /api/preview-inline/:id        → sert un HTML stocké en mémoire
  *     (Map, TTL 10 min, max 500KB, id random hex 32).
  *
- * Sécurité iframe : l'app ne pose AUCUN header X-Frame-Options global (ni CSP
- * frame-ancestors) — seuls les fichiers uploadés (attachments) et le preview du
- * File Explorer posent CSP:sandbox. Ces routes preview sont donc iframe-ables
- * sans exception supplémentaire (même-origin). On conserve néanmoins
- * X-Content-Type-Options: nosniff pour éviter le MIME-sniffing.
+ * Sécurité iframe (correctif SEC-05) : ces routes posent un CSP `sandbox` qui
+ * FORCE l'origine opaque du document servi, y compris via « ouvrir dans un
+ * nouvel onglet » (le CSP s'applique au document de premier niveau, là où
+ * l'attribut sandbox de l'iframe ne s'applique pas). On autorise explicitement
+ * `allow-scripts allow-forms allow-modals allow-popups` — sans
+ * `allow-same-origin` — pour que les maquettes interactives continuent de
+ * fonctionner tout en perdant l'accès au stockage local et aux appels API
+ * same-origin (but du correctif).
+ *
+ * Note : contrairement aux routes files/attachments (`CSP: sandbox` nu, qui
+ * bloque les scripts), on NE PEUT PAS reprendre le CSP nu ici car il casserait
+ * toute maquette avec JS. Le `sandbox` sans `allow-same-origin` suffit à
+ * garantir l'origine opaque ; les directives `default-src`/`script-src` ne sont
+ * volontairement pas posées pour ne pas casser les CDN externes éventuels.
+ *
+ * L'app ne pose aucun X-Frame-Options global : ces routes restent iframe-ables
+ * (même origine apparente), le sandbox assurant l'isolation réelle.
  */
 
 import { Router, type Request, type Response } from "express";
@@ -25,6 +37,11 @@ import { isPathAllowed } from "../utils/path-security.js";
 // ─── Config ──────────────────────────────────────────────
 const INLINE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INLINE_MAX_SIZE = 500 * 1024;  // 500 KB
+
+// CSP appliqué à TOUTES les réponses de preview (documents HTML surtout).
+// `sandbox` sans `allow-same-origin` → origine opaque + scripts autorisés.
+// Cf. commentaire d'en-tête (correctif SEC-05).
+export const PREVIEW_CSP = "sandbox allow-scripts allow-forms allow-modals allow-popups";
 
 // ─── Stockage mémoire des mockups inline ─────────────────
 interface InlineEntry {
@@ -131,6 +148,9 @@ router.get("/preview/:projectId/*", (req: Request, res: Response) => {
 
   res.setHeader("Content-Type", result.mime);
   res.setHeader("X-Content-Type-Options", "nosniff");
+  // SEC-05 : origine opaque pour le document (aucun effet sur les sous-
+  // ressources CSS/JS/images, qui restent chargées en relatif).
+  res.setHeader("Content-Security-Policy", PREVIEW_CSP);
   res.sendFile(result.absPath);
 });
 
@@ -147,6 +167,8 @@ router.get("/preview-inline/:id", (req: Request, res: Response) => {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("X-Content-Type-Options", "nosniff");
+  // SEC-05 : mockups inline isolés (origine opaque) tout en gardant les scripts.
+  res.setHeader("Content-Security-Policy", PREVIEW_CSP);
   res.send(html);
 });
 

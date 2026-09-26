@@ -109,7 +109,6 @@ export interface ModelLibrary {
   projectModes: Record<string, ProjectModeConfig>;  // projectId → mode config
   concurrency: {                          // Concurrency Manager config
     maxLLMSlots: number;                  // limite LLM par DÉFAUT (globale)
-    maxAgentSlots: number;                // sessions Pi SDK simultanées max (global)
     providerMaxLLMSlots: Record<string, number>;  // override de limite LLM par providerId
     queueTimeoutMs: number;               // délai max d'attente en file (ms)
     streamSilenceTimeoutMs?: number;      // détecteur de silence de flux (ms ; 0 = illimité)
@@ -179,7 +178,6 @@ function createDefaultProjectMode(): ProjectModeConfig {
 // Défauts du bloc concurrency (factored pour getConcurrencyConfig/setConcurrencyConfig)
 const DEFAULT_CONCURRENCY: ModelLibrary["concurrency"] = {
   maxLLMSlots: 3,
-  maxAgentSlots: 5,
   providerMaxLLMSlots: {},
   queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
   streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
@@ -226,7 +224,6 @@ function normalizeConcurrency(c: any): ModelLibrary["concurrency"] {
   }
   return {
     maxLLMSlots: typeof c.maxLLMSlots === "number" && c.maxLLMSlots > 0 ? c.maxLLMSlots : DEFAULT_CONCURRENCY.maxLLMSlots,
-    maxAgentSlots: typeof c.maxAgentSlots === "number" && c.maxAgentSlots > 0 ? c.maxAgentSlots : DEFAULT_CONCURRENCY.maxAgentSlots,
     // Délai de file : entier dans [5 s, 12 h], sinon repli sur le défaut ;
     // l'ancien défaut (10 min) est migré vers le nouveau (cf. commentaire ci-dessus).
     queueTimeoutMs:
@@ -255,7 +252,6 @@ function getDefaultLibrary(): ModelLibrary {
     projectModes: {},
     concurrency: {
       maxLLMSlots: 3,
-      maxAgentSlots: 5,
       providerMaxLLMSlots: {},
       queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
       streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
@@ -298,7 +294,6 @@ export function getConcurrencyConfig(): ModelLibrary["concurrency"] {
 
 export async function setConcurrencyConfig(config: {
   maxLLMSlots?: number;
-  maxAgentSlots?: number;
   providerMaxLLMSlots?: Record<string, number>;
   queueTimeoutMs?: number;
   streamSilenceTimeoutMs?: number;
@@ -307,7 +302,6 @@ export async function setConcurrencyConfig(config: {
   const lib = loadModelLibrary();
   if (!lib.concurrency) lib.concurrency = { ...DEFAULT_CONCURRENCY, providerMaxLLMSlots: {} };
   if (config.maxLLMSlots !== undefined && config.maxLLMSlots > 0) lib.concurrency.maxLLMSlots = config.maxLLMSlots;
-  if (config.maxAgentSlots !== undefined && config.maxAgentSlots > 0) lib.concurrency.maxAgentSlots = config.maxAgentSlots;
   // Délai de file : entier dans [5 s, 12 h], sinon repli sur le défaut.
   if (config.queueTimeoutMs !== undefined) {
     const valid =

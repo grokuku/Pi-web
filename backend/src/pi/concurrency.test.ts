@@ -19,9 +19,7 @@
  *  - timeout de file : délai configurable (queueTimeoutMs) honoré, rejet à
  *    expiration, tâche aborted ignorée par le drain, timer annulé pour une
  *    tâche servie avant expiration, repli sur le défaut si valeur invalide ;
- *  - drain via setConfig : augmenter une limite débloque la file ;
- *  - slots agent : même sémantique, pools indépendants ;
- *  - charge mixte : Promise.all de tâches LLM et agent simultanées.
+ *  - drain via setConfig : augmenter une limite débloque la file.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { concurrencyManager as manager, DEFAULT_CONFIG, DEFAULT_QUEUE_TIMEOUT_MS } from "./concurrency.js";
@@ -33,7 +31,6 @@ import {
 /** Forme attendue de la config par défaut (détecteur de silence inclus). */
 const DEFAULTS = {
   maxLLMSlots: 3,
-  maxAgentSlots: 5,
   queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
   streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,
   agentHardTimeoutMs: DEFAULT_AGENT_HARD_TIMEOUT_MS,
@@ -51,46 +48,41 @@ afterEach(() => {
   // absente = no-op) puis restaure la configuration par défaut.
   // IMPORTANT : chaque release draine la file — une tâche servie devient un
   // NOUVEAU slot actif absent de la snapshot initiale. On boucle donc jusqu'à
-  // vidage complet des deux pools (terminaison garantie : chaque passe relâche
-  // au moins un slot). Idem après setConfig, dont le drain peut encore servir
-  // des tâches en file.
-  const vidangerPools = () => {
+  // vidage complet (terminaison garantie : chaque passe relâche au moins un
+  // slot). Idem après setConfig, dont le drain peut encore servir des tâches.
+  const vidangerPool = () => {
     for (;;) {
       const llm = manager.getStats().active;
-      const agents = manager.getStats().agents;
-      if (llm.length === 0 && agents.length === 0) break;
+      if (llm.length === 0) break;
       for (const slot of llm) manager.releaseLLMSlot(slot.slotKey);
-      for (const slot of agents) manager.releaseAgentSlot(slot.slotKey);
     }
   };
-  vidangerPools();
+  vidangerPool();
   manager.setConfig({ ...DEFAULT_CONFIG, providerMaxLLMSlots: {} });
-  vidangerPools();
+  vidangerPool();
 });
 
 describe("configuration", () => {
-  it("expose la configuration par défaut (3 slots LLM, 5 slots agent)", () => {
+  it("expose la configuration par défaut (3 slots LLM)", () => {
     expect(DEFAULT_CONFIG).toEqual(DEFAULTS);
     expect(manager.getConfig()).toEqual(DEFAULTS);
     expect(manager.getStats().llmSlots.max).toBe(3);
-    expect(manager.getStats().agentSlots.max).toBe(5);
   });
 
   it("getConfig retourne une copie : muter le résultat ne modifie pas l'état interne", () => {
     const cfg = manager.getConfig();
     cfg.maxLLMSlots = 99;
-    cfg.maxAgentSlots = 99;
     expect(manager.getConfig()).toEqual(DEFAULTS);
   });
 
   it("setConfig accepte une mise à jour partielle", () => {
-    manager.setConfig({ maxAgentSlots: 7 });
-    expect(manager.getConfig().maxAgentSlots).toBe(7);
-    expect(manager.getConfig().maxLLMSlots).toBe(3); // inchangé
+    manager.setConfig({ maxLLMSlots: 7 });
+    expect(manager.getConfig().maxLLMSlots).toBe(7);
+    expect(manager.getConfig().queueTimeoutMs).toBe(DEFAULT_QUEUE_TIMEOUT_MS); // inchangé
   });
 
   it("setConfig ignore les valeurs invalides (0, négatif)", () => {
-    manager.setConfig({ maxLLMSlots: 0, maxAgentSlots: -1 });
+    manager.setConfig({ maxLLMSlots: 0 });
     expect(manager.getConfig()).toEqual(DEFAULTS);
     manager.setConfig({});
     expect(manager.getConfig()).toEqual(DEFAULTS);
@@ -247,9 +239,7 @@ describe("slots LLM", () => {
 
   it("release sur une clé inconnue est un no-op silencieux", () => {
     expect(() => manager.releaseLLMSlot("inconnu")).not.toThrow();
-    expect(() => manager.releaseAgentSlot("inconnu")).not.toThrow();
     expect(manager.getStats().llmSlots.used).toBe(0);
-    expect(manager.getStats().agentSlots.used).toBe(0);
   });
 });
 
@@ -429,110 +419,6 @@ describe("drain de file via setConfig", () => {
 
     expect(manager.getStats().llmSlots.used).toBe(4);
     expect(manager.getStats().llmSlots.queue).toBe(0);
-  });
-});
-
-describe("slots agent (pool indépendant)", () => {
-  it("les deux pools sont indépendants : des slots LLM pleins ne bloquent pas les agents", async () => {
-    await manager.acquireLLMSlot("llm-a", "A");
-    await manager.acquireLLMSlot("llm-b", "B");
-    await manager.acquireLLMSlot("llm-c", "C");
-
-    await manager.acquireAgentSlot("agent-1", "Agent 1");
-
-    const stats = manager.getStats();
-    expect(stats.llmSlots.used).toBe(3);
-    expect(stats.llmSlots.queue).toBe(0);
-    expect(stats.agentSlots.used).toBe(1);
-  });
-
-  it("file d'attente et FIFO propres au pool agent", async () => {
-    manager.setConfig({ maxAgentSlots: 1 });
-    await manager.acquireAgentSlot("agent-1", "Agent 1");
-
-    const order: number[] = [];
-    const p2 = manager.acquireAgentSlot("agent-2", "Agent 2").then(() => order.push(2));
-    const p3 = manager.acquireAgentSlot("agent-3", "Agent 3").then(() => order.push(3));
-    await Promise.resolve();
-    expect(manager.getStats().agentSlots.queue).toBe(2);
-
-    // Promesses chaînées : ordre FIFO observable de façon déterministe.
-    // Un seul slot : chaque release sert exactement une tâche de la file.
-    manager.releaseAgentSlot("agent-1");
-    await p2;
-    expect(order).toEqual([2]);
-
-    manager.releaseAgentSlot("agent-2");
-    await p3;
-    expect(order).toEqual([2, 3]);
-  });
-
-  it("garantit l'exclusion mutuelle sur 2 slots agent simultanés", async () => {
-    manager.setConfig({ maxAgentSlots: 2 });
-
-    let concurrent = 0;
-    let maxObserved = 0;
-    const session = async (key: string) => {
-      await manager.acquireAgentSlot(key, key);
-      concurrent++;
-      maxObserved = Math.max(maxObserved, concurrent);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      concurrent--;
-      manager.releaseAgentSlot(key);
-    };
-
-    await Promise.all([
-      session("agent-1"),
-      session("agent-2"),
-      session("agent-3"),
-      session("agent-4"),
-    ]);
-
-    expect(maxObserved).toBe(2);
-    expect(manager.getStats().agentSlots.used).toBe(0);
-  });
-});
-
-describe("charge mixte (intégration)", () => {
-  it("Promise.all de tâches LLM et agent : chaque pool respecte sa propre limite", async () => {
-    manager.setConfig({ maxLLMSlots: 2, maxAgentSlots: 3 });
-
-    let llmConcurrent = 0;
-    let llmMax = 0;
-    let agentConcurrent = 0;
-    let agentMax = 0;
-
-    const llmTask = async (i: number) => {
-      const key = `llm-mix-${i}`;
-      await manager.acquireLLMSlot(key, key);
-      llmConcurrent++;
-      llmMax = Math.max(llmMax, llmConcurrent);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      llmConcurrent--;
-      manager.releaseLLMSlot(key);
-    };
-
-    const agentTask = async (i: number) => {
-      const key = `agent-mix-${i}`;
-      await manager.acquireAgentSlot(key, key);
-      agentConcurrent++;
-      agentMax = Math.max(agentMax, agentConcurrent);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      agentConcurrent--;
-      manager.releaseAgentSlot(key);
-    };
-
-    await Promise.all([
-      llmTask(1), llmTask(2), llmTask(3), llmTask(4),
-      agentTask(1), agentTask(2), agentTask(3), agentTask(4), agentTask(5),
-    ]);
-
-    expect(llmMax).toBeLessThanOrEqual(2);
-    expect(agentMax).toBeLessThanOrEqual(3);
-    expect(manager.getStats().llmSlots.used).toBe(0);
-    expect(manager.getStats().agentSlots.used).toBe(0);
-    expect(manager.getStats().llmSlots.queue).toBe(0);
-    expect(manager.getStats().agentSlots.queue).toBe(0);
   });
 });
 
@@ -730,7 +616,6 @@ describe("setConfig avec map de limites par provider", () => {
     manager.setConfig({ maxLLMSlots: 4 });
     expect(manager.getConfig()).toEqual({
       maxLLMSlots: 4,
-      maxAgentSlots: 5,
       providerMaxLLMSlots: { "prov-a": 2 },
       queueTimeoutMs: DEFAULT_QUEUE_TIMEOUT_MS,
       streamSilenceTimeoutMs: DEFAULT_STREAM_SILENCE_TIMEOUT_MS,

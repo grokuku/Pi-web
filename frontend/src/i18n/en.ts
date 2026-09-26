@@ -166,8 +166,6 @@ export const en = {
         title: "CONCURRENCY",
         description: "Limits the number of simultaneous LLM calls and agent sessions. Pending calls are queued.",
         llmSlots: "☎️ LLM slots max (global default)",
-        agentSlots: "🔧 Agent slots max",
-        agentSlotsNotApplied: "⚠️ Not currently applied — kept but has no effect.",
         queueTimeout: "⏳ Queue wait timeout (seconds)",
         queueTimeoutHint: "Max time a call waits in the queue before being abandoned (5 s to 12 h / 43200 s). Default: 3600 s (1 h).",
         durationsTitle: "⏱ DURATIONS & LIMITS",
@@ -183,8 +181,6 @@ export const en = {
           `${provider} · ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
         statsLlm: (used: number, max: number, queue: number) =>
           `☎️ LLM (global default): ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
-        statsAgents: (used: number, max: number, queue: number) =>
-          `🔧 Agents: ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
         saveError: "Failed to save concurrency settings",
       },
       additional: "Additional parameters will be added here as needed.",

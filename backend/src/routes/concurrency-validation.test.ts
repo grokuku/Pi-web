@@ -21,9 +21,9 @@ describe("validateConcurrencyPayload — acceptance", () => {
     expect(parsed).toEqual({ value: { providerMaxLLMSlots: { deepseek: 2500 } } });
   });
 
-  it("accepte maxLLMSlots/maxAgentSlots élevés et le plafond exact", () => {
+  it("accepte maxLLMSlots élevé et le plafond exact", () => {
     expect(validateConcurrencyPayload({ maxLLMSlots: 2500 })).toEqual({ value: { maxLLMSlots: 2500 } });
-    expect(validateConcurrencyPayload({ maxAgentSlots: MAX_SLOTS })).toEqual({ value: { maxAgentSlots: MAX_SLOTS } });
+    expect(validateConcurrencyPayload({ maxLLMSlots: MAX_SLOTS })).toEqual({ value: { maxLLMSlots: MAX_SLOTS } });
   });
 
   it("accepte un queueTimeoutMs dans les bornes (défaut 3600000, max 12 h)", () => {
@@ -35,7 +35,7 @@ describe("validateConcurrencyPayload — acceptance", () => {
 
   it("corps vide → update partiel (champs indéfinis)", () => {
     expect(validateConcurrencyPayload({})).toEqual({
-      value: { maxLLMSlots: undefined, maxAgentSlots: undefined, providerMaxLLMSlots: undefined, queueTimeoutMs: undefined },
+      value: { maxLLMSlots: undefined, providerMaxLLMSlots: undefined, queueTimeoutMs: undefined },
     });
   });
 });
@@ -46,8 +46,6 @@ describe("validateConcurrencyPayload — rejets", () => {
     expect(expectError({ maxLLMSlots: "12" })).toMatch(/maxLLMSlots/);
     expect(expectError({ maxLLMSlots: 12.5 })).toMatch(/maxLLMSlots/);
     expect(expectError({ maxLLMSlots: MAX_SLOTS + 1 })).toMatch(/maxLLMSlots/);
-    expect(expectError({ maxAgentSlots: 0 })).toMatch(/maxAgentSlots/);
-    expect(expectError({ maxAgentSlots: 1.5 })).toMatch(/maxAgentSlots/);
   });
 
   it("rejette les valeurs invalides dans providerMaxLLMSlots", () => {

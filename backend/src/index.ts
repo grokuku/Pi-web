@@ -79,6 +79,8 @@ import {
   getTerminalBuffer,
   terminalEvents,
 } from "./terminal/pty.js";
+// SEC-07 : filtrage serveur des événements de terminal par abonnement.
+import { sendTerminalData, sendTerminalExit } from "./terminal/terminal-broadcast.js";
 import { getProject, getAllProjects } from "./projects/manager.js";
 import { isCwdAllowed, isPathAllowed } from "./utils/path-security.js";
 import { resolveEffectiveAllowedOrigins, isOriginEffectivelyAllowed, isAllowedOrigin } from "./utils/origins.js";
@@ -311,11 +313,28 @@ async function cbmProxy(req: any, res: any) {
 }
 
 // Main UI page (iframe src)
-app.use("/cbm-ui", cbmProxy);
+//
+// ── SEC-03 : apiAuth devant les routes CBM hors /api ──────────────────
+// /cbm-ui, /assets et /rpc étaient montés HORS du préfixe /api et ne
+// traversaient donc PAS apiAuth. On les protège maintenant explicitement.
+//
+// ⚠️ INOPÉRANT TANT QUE LES ORIGINES SONT EN `*` : `isBrowserRequest()`
+// renvoie `true` inconditionnellement en mode allow-all (cf.
+// middleware/api-auth.ts), donc `ALLOWED_ORIGINS=*`/`WS_ALLOWED_ORIGINS=*
+// laisse tout passer. Ce durcissement ne bloque donc rien aujourd'hui : il est
+// POSÉ MAINTENANT (future-proof) pour devenir effectif dès qu'une restriction
+// d'origines explicite sera configurée. Le vrai levier contre l'exposition de
+// /rpc (surface MCP complète) reste RÉSEAU : ne pas publier le port, le
+// protéger par reverse-proxy/firewall.
+//
+// L'UI CBM (servie sur ce même serveur) est iframe same-origin : ses GET
+// /assets passent apiAuth sans jeton, et ses POST /rpc envoient l'Origin du
+// Pi-Web (à inclure dans la liste explicite le jour où on restreint).
+app.use("/cbm-ui", apiAuth, cbmProxy);
 // CBM UI assets (Vite builds to /assets/)
-app.use("/assets", cbmProxy);
+app.use("/assets", apiAuth, cbmProxy);
 // CBM MCP RPC endpoint (used by the UI for graph queries)
-app.use("/rpc", cbmProxy);
+app.use("/rpc", apiAuth, cbmProxy);
 // Les routes CBM proxy /api/* sont déjà montées plus haut (avant apiAuth, BUG-48 fix)
 
 // ── Read VERSION file once at startup ──
@@ -653,17 +672,16 @@ wss.on("connection", (ws: ExtendedWS) => {
   });
 
   // ── Subscribe to terminal events ──
-  const onTermData = (data: { projectId: string; data: string }) => {
-    if (ws.readyState === ws.OPEN) {
-      // Only send terminal data for the project this client is interested in
-      // (or send all and let the frontend filter)
-      ws.send(JSON.stringify({ type: "terminal_data", ...data }));
-    }
+  // (SEC-07) Un event de terminal n'est envoyé QUE si ce socket est abonné au
+  // projet concerné (même modèle que les events Pi ci-dessus). Sans ce
+  // filtrage, la sortie d'un terminal fuyait vers tous les sockets.
+  // La course « sortie avant l'abonnement » est traitée dans terminal_create
+  // (auto-abonnement + rejeu du tampon via createTerminal).
+  const onTermData = (data: { projectId: string; data: string; isBuffer?: boolean }) => {
+    sendTerminalData(ws, data);
   };
   const onTermExit = (data: { projectId: string; exitCode: number; signal: number }) => {
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: "terminal_exit", ...data }));
-    }
+    sendTerminalExit(ws, data);
   };
 
   terminalEvents.on("data", onTermData);
@@ -1218,6 +1236,12 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         break;
       }
 
+      // (SEC-07) Anti-course : le client qui crée/ouvre le terminal est par
+      // définition intéressé par ce projet. On l'abonne AVANT createTerminal
+      // pour que le rejeu de tampon (emit "data" synchrone) et la première
+      // sortie du pty soient bien routés — même si le {type:"subscribe"}
+      // explicite (ChatView) n'a pas encore été traité.
+      ws.subscribedProjects.add(pid);
       createTerminal(pid, termCwd);
       break;
     }

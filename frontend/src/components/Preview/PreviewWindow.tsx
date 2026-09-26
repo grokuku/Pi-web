@@ -13,7 +13,11 @@ import { useTranslation } from "../../i18n";
 // - Mode popup : bouton 🪟 (géré par le parent via props) qui ouvre la preview
 //   dans une fenêtre de navigateur séparée.
 // - L'iframe charge l'URL de preview (contenu = code du projet de l'utilisateur)
-//   avec un sandbox permissif (scripts/forms/modals/popups/same-origin).
+//   avec un sandbox permissif SANS `allow-same-origin` (correctif SEC-05) : le
+//   contenu s'exécute dans une origine OPAQUE. Combiné au CSP `sandbox` posé
+//   par les routes backend, l'aperçu ne peut donc PAS lire le DOM parent, ni
+//   `localStorage`, ni appeler `/api/*`/`/rpc` en same-origin. Les scripts,
+//   formulaires, modales et popups restent autorisés pour les maquettes.
 
 interface PreviewWindowProps {
   url: string;
@@ -230,7 +234,7 @@ export function PreviewWindow({ url, title, onClose, popupActive, onTogglePopup 
           <iframe
             key={reloadKey}
             src={url}
-            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups"
             title={title}
             style={{ width: iframeWidth, height: "100%", border: "none", background: "#fff", flexShrink: 0 }}
           />
