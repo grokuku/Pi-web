@@ -331,6 +331,15 @@ body {
   padding: 0;
   border-radius: 0;
 }
+/* Conteneur du bloc coloré : le fond et les couleurs de jetons viennent du
+   thème Prism inline (oneDark/oneLight, adaptatif), on ajoute seulement une
+   bordure alignée sur le thème courant — lisible en clair comme en sombre.
+   Le débordement horizontal du code long est déjà borné par le style Prism
+   (overflow:auto) ; la bordure ne doit pas élargir la mise en page. */
+.markdown-code-highlight {
+  border: 1px solid var(--border);
+  max-width: 100%;
+}
 .prose-hacker a {
   color: var(--info);
   text-decoration: underline;

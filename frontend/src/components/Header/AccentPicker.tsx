@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "../../i18n";
+import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 
 // Les labels affichables sont i18nisés via le namespace accentColors.* (clé = id)
 const ACCENT_PRESETS = [
@@ -21,15 +23,26 @@ interface AccentPickerProps {
 export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanlinesToggle }: AccentPickerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement>(null);      // wrapper bouton (clic extérieur)
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  // Position « fixed » du menu porté dans <body> — calculée depuis le bouton et
+  // re-suivie au scroll/resize tant que le menu est ouvert (pattern
+  // ModelQuickSwitch/MobileHeaderMenu).
+  const pos = useAnchorPosition(() => buttonRef.current, open);
 
+  // Fermeture au clic extérieur : on vérifie le wrapper du bouton ET le menu
+  // porté (hors du wrapper, dans <body>).
   useEffect(() => {
+    if (!open) return;
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      const inside =
+        (ref.current && ref.current.contains(target)) ||
+        (dropdownRef.current && dropdownRef.current.contains(target));
+      if (!inside) setOpen(false);
     };
-    if (open) document.addEventListener("mousedown", handleClick);
+    document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
@@ -39,6 +52,7 @@ export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanl
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={buttonRef}
         onClick={() => setOpen(!open)}
         className="btn-hacker text-xs px-1.5 py-0.5 flex items-center gap-1"
         title={t('header.accentColor')}
@@ -50,8 +64,15 @@ export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanl
         />
       </button>
 
-      {open && (
-        <div className="absolute top-full right-0 mt-1 p-2 border border-hacker-border bg-hacker-surface-raised shadow-lg z-50 space-y-2 min-w-[140px]">
+      {/* Menu porté dans <body> (createPortal) : sans ça, le header étant en
+          `overflow-x-auto`, le menu absolu débordait de la barre et y faisait
+          apparaître une barre de défilement. */}
+      {open && pos && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 60 }}
+          className="p-2 border border-hacker-border bg-hacker-surface-raised shadow-lg space-y-2 min-w-[140px]"
+        >
           {/* Scanlines toggle */}
           <button
             onClick={onScanlinesToggle}
@@ -88,7 +109,8 @@ export function AccentPicker({ theme, accent, scanlines, onAccentChange, onScanl
               );
             })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -12,9 +12,9 @@
  *     jointes.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../i18n";
-import { MarkdownContent, isExternalImageSrc } from "./markdown";
+import { MarkdownContent, isExternalImageSrc, readThemeMode } from "./markdown";
 
 beforeEach(() => {
   // Langue déterministe pour les libellés i18n du substitut d'image.
@@ -136,5 +136,45 @@ describe("MarkdownContent — images externes non chargées automatiquement", ()
     const { container } = renderMd("![x](./local.png)");
     expect(container.querySelector("button")).toBeNull();
     expect(container.querySelector("img")?.getAttribute("src")).toBe("./local.png");
+  });
+});
+
+describe("MarkdownContent — thème de coloration adaptatif", () => {
+  const root = document.documentElement;
+  afterEach(() => { root.className = ""; });
+
+  /** Fond inline posé par le thème Prism sur le conteneur coloré. */
+  function highlightBg(container: HTMLElement): string {
+    const el = container.querySelector<HTMLElement>(".markdown-code-highlight");
+    return el ? el.style.background : "";
+  }
+
+  it("readThemeMode suit la classe light/dark de <html>", () => {
+    root.className = "dark";
+    expect(readThemeMode()).toBe("dark");
+    root.className = "light";
+    expect(readThemeMode()).toBe("light");
+  });
+
+  it("applique un fond clair en mode clair et sombre en mode sombre", () => {
+    root.className = "dark";
+    const dark = renderMd("```js\nconst x = 1;\n```");
+    const darkBg = highlightBg(dark.container);
+    cleanup();
+    root.className = "light";
+    const light = renderMd("```js\nconst x = 1;\n```");
+    const lightBg = highlightBg(light.container);
+    expect(darkBg).not.toBe("");
+    expect(lightBg).not.toBe("");
+    expect(lightBg).not.toBe(darkBg);
+  });
+
+  it("change de style immédiatement quand le thème bascule en direct", async () => {
+    root.className = "dark";
+    const { container } = renderMd("```js\nconst x = 1;\n```");
+    const before = highlightBg(container);
+    // Simule la bascule App.tsx (classList.toggle sur documentElement).
+    root.className = "light";
+    await waitFor(() => expect(highlightBg(container)).not.toBe(before));
   });
 });

@@ -1,14 +1,15 @@
 // ── Rendu markdown partagé (chat + explorateur de fichiers) ────────────────
 // Centralise la bibliothèque (react-markdown + remark-gfm), la coloration des
-// blocs de code (react-syntax-highlighter, Prism + thème « One Dark ») et la
+// blocs de code (react-syntax-highlighter, Prism + thème adaptatif) et la
 // politique de chargement des images. Un seul composant <MarkdownContent> est
 // consommé par ChatView et FileExplorer pour garantir un rendu identique.
 //
-// Coloration : le thème importé est la variante **prism** (`oneDark`) — et non
-// la variante hljs (`atomOneDark`) : le composant rendu est `Prism`, dont les
-// classes de jetons (`token keyword`…) ne se résolvent QUE contre un style
-// prism. L'ancien import hljs laissait le fond sombre mais aucune coloration
-// de jetons.
+// Coloration : le thème importé est la variante **prism** (`oneDark`/`oneLight`)
+// — et non la variante hljs (`atomOneDark`) : le composant rendu est `Prism`,
+// dont les classes de jetons (`token keyword`…) ne se résolvent QUE contre un
+// style prism. L'ancien import hljs laissait le fond sombre mais aucune
+// coloration de jetons. Le thème suit le mode clair/sombre de l'application
+// (cf. useMarkdownTheme), en direct.
 
 import {
   createContext,
@@ -25,7 +26,7 @@ import {
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Copy, ImageOff } from "lucide-react";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
@@ -36,6 +37,49 @@ import { copyToClipboard } from "../../utils/clipboard";
 // code incomplet à chaque rafraîchissement (~45 ms). Ils sont colorés une fois
 // le message terminé (voir MarkdownCodeBlock).
 const MarkdownStreamingContext = createContext(false);
+
+// ── Thème d'application (clair / sombre) ───────────────────────────────────
+// Pi-Web pilote son thème via la classe `light`/`dark` posée sur <html>
+// (App.tsx, effet sur l'état `theme`). Le module markdown étant partagé par le
+// chat et l'explorateur — qui ne reçoivent PAS le thème en props — on observe
+// directement cette classe : la coloration suit les bascules EN DIRECT, sans
+// prop drilling. Repli sur localStorage (préférence persistée) tant que le DOM
+// n'est pas encore marqué (premier rendu).
+export type MarkdownTheme = "dark" | "light";
+
+/** Lit le thème courant depuis la classe de <html>, avec repli localStorage. */
+export function readThemeMode(): MarkdownTheme {
+  if (typeof document !== "undefined") {
+    const classes = document.documentElement.classList;
+    if (classes.contains("light")) return "light";
+    if (classes.contains("dark")) return "dark";
+  }
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem("pi-web-theme") === "light") {
+      return "light";
+    }
+  } catch { /* stockage indisponible (mode privé) → défaut sombre */ }
+  return "dark";
+}
+
+/**
+ * Renvoie le thème applicatif et se met à jour à chaque bascule en observant
+ * l'attribut `class` de <html> (MutationObserver). Réactif même si le thème
+ * change après le montage du bloc de code.
+ */
+export function useMarkdownTheme(): MarkdownTheme {
+  const [theme, setTheme] = useState<MarkdownTheme>(readThemeMode);
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setTheme(readThemeMode());
+    sync(); // resynchronise si le thème a changé entre l'init et cet effet
+    if (typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
 
 // ── Utilitaires ────────────────────────────────────────────────────────────
 
@@ -106,6 +150,8 @@ const MarkdownCodeBlock = memo(function MarkdownCodeBlock({
 }: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
   const { t } = useTranslation();
   const streaming = useContext(MarkdownStreamingContext);
+  // Thème adaptatif : oneLight en mode clair, oneDark sinon (réactif).
+  const theme = useMarkdownTheme();
   const [copied, setCopied] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,7 +186,7 @@ const MarkdownCodeBlock = memo(function MarkdownCodeBlock({
         {highlight ? (
           <SyntaxHighlighter
             language={language}
-            style={oneDark}
+            style={theme === "light" ? oneLight : oneDark}
             PreTag="div"
             className="markdown-code-highlight !text-xs !my-2"
             customStyle={{ borderRadius: "4px" }}
@@ -153,7 +199,7 @@ const MarkdownCodeBlock = memo(function MarkdownCodeBlock({
       </div>
       <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
         {language ? (
-          <span className="text-[10px] leading-none font-mono text-hacker-text-dim/70 select-none">
+          <span className="rounded bg-hacker-surface/80 px-1 py-0.5 text-[10px] leading-none font-mono text-hacker-text-dim select-none">
             {language}
           </span>
         ) : null}

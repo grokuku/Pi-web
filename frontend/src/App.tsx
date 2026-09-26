@@ -1001,7 +1001,7 @@ function App() {
         >
           {connected ? "●" : "○"}
         </span>
-        <span className="text-[10px] text-hacker-text-dim hidden md:inline">
+        <span className="text-[10px] text-hacker-text-dim hidden lg:inline">
           {connected ? t('header.connected') : t('header.offline')}
         </span>
 
@@ -1018,7 +1018,7 @@ function App() {
         <div className="flex-1" />
 
         {/* Mode chips — Modèle par défaut / ROUTING */}
-        <div className="hidden md:block">
+        <div className="hidden md:block min-w-0">
           <ModelQuickSwitch
             activeMode={activeMode}
             activeProjectId={activeProject?.id}
@@ -1040,7 +1040,7 @@ function App() {
         {renderPanelSwitch("terminal", "TERM")}
         {renderPanelSwitch("files", "FILES")}
 
-        <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
+        <div className="w-px h-4 bg-hacker-border-right hidden lg:block" />
 
         {/* Preview button — rouvre la dernière preview (grisé si aucune).
             Respecte le mode courant : popup si actif, sinon fenêtre interne. */}
@@ -1051,7 +1051,7 @@ function App() {
             else setPreviewOpen(true);
           }}
           disabled={!lastPreview}
-          className={`hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+          className={`hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
             lastPreview
               ? "border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
               : "border-transparent text-hacker-text-dim/40 cursor-not-allowed"
@@ -1065,7 +1065,7 @@ function App() {
         {/* Graph 3D button */}
         <button
           onClick={() => setShowGraph3D(true)}
-          className="hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
           title={t('header.graph3d')}
           aria-label={t('header.graph3d')}
         >
@@ -1074,19 +1074,19 @@ function App() {
         {/* CBM stats button */}
         <button
           onClick={() => setShowCbmStats(true)}
-          className="hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+          className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
           title={t('header.cbmStats')}
           aria-label={t('header.cbmStats')}
         >
           📈
         </button>
 
-        <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
+        <div className="w-px h-4 bg-hacker-border-right hidden lg:block" />
 
         {/* Zoom buttons */}
-        <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1 hidden md:inline-flex" title={t('common.zoomOut')} aria-label={t('common.zoomOut')}>−</button>
-        <span className="text-xs text-hacker-text-dim min-w-[28px] text-center hidden md:inline">{Math.round(zoomLevel * 100)}%</span>
-        <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1 hidden md:inline-flex" title={t('common.zoomIn')} aria-label={t('common.zoomIn')}>+</button>
+        <button onClick={zoomOut} className="btn-hacker text-xs px-1.5 py-1 hidden lg:inline-flex" title={t('common.zoomOut')} aria-label={t('common.zoomOut')}>−</button>
+        <span className="text-xs text-hacker-text-dim min-w-[28px] text-center hidden lg:inline">{Math.round(zoomLevel * 100)}%</span>
+        <button onClick={zoomIn} className="btn-hacker text-xs px-1.5 py-1 hidden lg:inline-flex" title={t('common.zoomIn')} aria-label={t('common.zoomIn')}>+</button>
 
         <button onClick={toggleTheme} className="btn-hacker text-xs px-2 py-1" title={t('header.toggleTheme')} aria-label={t('header.toggleTheme')}>
           {theme === "dark" ? "☀" : "☾"}

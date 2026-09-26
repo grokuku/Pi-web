@@ -198,7 +198,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
   return (
     <>
-    <div ref={ref} className="flex items-center gap-1.5">
+    <div ref={ref} className="flex items-center gap-1.5 min-w-0">
       {modes.map((mode) => {
         const cfg = MODE_CONFIG[mode];
         const model = getModelForMode(mode);
@@ -258,7 +258,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   {t('modelSwitch.' + mode)}
                 </span>
                 {isVisuallyActive && (
-                  <span className="text-xs text-hacker-text-dim">{getShortModelName(model)}</span>
+                  <span className="text-xs text-hacker-text-dim max-w-[9rem] truncate">{getShortModelName(model)}</span>
                 )}
                 <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
               </div>
