@@ -79,7 +79,9 @@ router.post("/models", async (req: Request, res: Response) => {
         vision: m.vision ?? inferVision(m.modelId),
         contextWindow: m.contextWindow || inferContextWindow(m.modelId),
         maxTokens: m.maxTokens || 16384,
-        thinkingLevel: m.thinkingLevel || "medium",
+        // Pas de niveau figé par défaut : clé absente = « défaut » (niveau du mode).
+        // Évite un thinkingLevel (ex. "medium") absent des niveaux DÉCLARÉS par le provider.
+        thinkingLevel: m.thinkingLevel || undefined,
         // Overrides manuels ("auto" = détection) + niveaux de réflexion découverts
         visionOverride: m.visionOverride || "auto",
         audioOverride: m.audioOverride || "auto",
@@ -95,7 +97,7 @@ router.post("/models", async (req: Request, res: Response) => {
     } else {
       // Single add
       const { providerId, modelId, name, reasoning, vision, contextWindow, maxTokens,
-              thinkingLevel, isDefault, reasoningOverride } = req.body;
+              thinkingLevel, isDefault, reasoningOverride, reasoningLevels, reasoningDefault } = req.body;
 
       if (!providerId || !modelId) {
         return res.status(400).json({ error: "providerId and modelId required" });
@@ -110,8 +112,13 @@ router.post("/models", async (req: Request, res: Response) => {
         vision: vision ?? inferVision(modelId),
         contextWindow: contextWindow || inferContextWindow(modelId),
         maxTokens: maxTokens || 16384,
-        thinkingLevel: thinkingLevel || "medium",
+        // Clé absente = « défaut » (niveau du mode) — jamais un niveau figé.
+        thinkingLevel: thinkingLevel || undefined,
         reasoningOverride: reasoningOverride || "auto",
+        // Niveaux de réflexion découverts via le provider (Ollama /api/show),
+        // persistés avec le modèle (comme le chemin bulk).
+        reasoningLevels: Array.isArray(reasoningLevels) ? reasoningLevels : undefined,
+        reasoningDefault: typeof reasoningDefault === "string" ? reasoningDefault : undefined,
       });
 
       await syncToModelsJson();

@@ -614,7 +614,9 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         audio: (dm as any)?.audio ?? false,
         contextWindow: dm?.contextWindow || inferContextWindow(modelId),
         maxTokens: 16384,
-        thinkingLevel: "medium",
+        // Pas de thinkingLevel par défaut : « défaut » = niveau de réflexion du
+        // mode. Évite de figer un niveau (ex. "medium") que le provider ne déclare
+        // pas forcément (voir thinkingLevelsForModel).
         // Overrides manuels : "auto" (détection) à l'ajout — modifiable dans l'édition inline
         visionOverride: "auto",
         audioOverride: "auto",

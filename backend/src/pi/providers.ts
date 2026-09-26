@@ -301,6 +301,69 @@ export function inferReasoning(modelId: string, family?: string): boolean {
 }
 
 /**
+ * Valeur EXACTE de `reasoning_effort` qui DÉSACTIVE la réflexion côté Ollama.
+ *
+ * Mesuré sur Ollama Cloud (`deepseek-v4.1-flash`, `/v1/chat/completions`) : seule
+ * la chaîne exacte "none" (minuscule, sans espace) coupe la réflexion. "NONE",
+ * "none ", "disabled", "false"… sont acceptés SANS erreur mais laissent la
+ * réflexion ACTIVE en silence (« contrôle fantôme »). Toute normalisation doit
+ * donc converger sur cette valeur unique, centralisée ici.
+ */
+export const OLLAMA_DISABLE_REASONING_VALUE = "none";
+
+/** Synonymes (et valeurs non-string) considérés comme « extinction » (repli sûr). */
+const REASONING_OFF_ALIASES = new Set(["none", "off", "disabled", "disable", "false", "no", "0"]);
+
+/**
+ * Normalise une valeur destinée à `reasoning_effort` AVANT transmission :
+ * trim + minuscules, et repli sur la valeur canonique d'extinction
+ * (`OLLAMA_DISABLE_REASONING_VALUE`) pour toute valeur « équivalente à off »
+ * ou NON-STRING (un nombre/booléen ferait rejeter la requête : HTTP 400).
+ * Garantit qu'AUCUNE variante (casse/espaces/synonyme) ne parte telle quelle.
+ */
+export function normalizeReasoningEffortValue(raw: unknown): string {
+  if (typeof raw !== "string") return OLLAMA_DISABLE_REASONING_VALUE;
+  const v = raw.trim().toLowerCase();
+  if (v === "" || REASONING_OFF_ALIASES.has(v)) return OLLAMA_DISABLE_REASONING_VALUE;
+  return v;
+}
+
+/**
+ * Correspondance niveau SDK → `reasoning_effort` RÉELLE d'Ollama.
+ *
+ * Mesuré sur Ollama Cloud (`deepseek-v4.1-flash`, POST /api/show) :
+ *   thinking = { values: [false, "low", "high", "max"], default: "high" }.
+ * Le provider ne déclare QUE low/high/max (+ extinction via `false`) ; "minimal",
+ * "medium" et "xhigh" NE SONT PAS déclarés. On les replie donc, pour Ollama
+ * UNIQUEMENT, sur le niveau déclaré le plus proche (plutôt que d'envoyer une
+ * valeur non déclarée au sens arbitraire) et on coupe via la chaîne exacte "none".
+ */
+export const OLLAMA_THINKING_LEVEL_MAP: Record<string, string> = {
+  off: OLLAMA_DISABLE_REASONING_VALUE, // "none" — seule chaîne qui coupe réellement
+  minimal: "low", // non déclaré → replié sur low
+  low: "low",
+  medium: "high", // non déclaré → replié sur high
+  high: "high",
+  xhigh: "high", // non déclaré → replié sur high
+  max: "max",
+};
+
+/**
+ * Construit une table de niveaux NORMALISÉE : chaque valeur est la chaîne exacte
+ * attendue par le provider. Mutualise la normalisation pour éviter toute
+ * divergence entre les chemins d'écriture (models.json / re-register session).
+ */
+export function buildOllamaThinkingLevelMap(
+  source: Record<string, unknown> = OLLAMA_THINKING_LEVEL_MAP,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [level, raw] of Object.entries(source)) {
+    out[level] = normalizeReasoningEffortValue(raw);
+  }
+  return out;
+}
+
+/**
  * Options de modèle à injecter pour les providers Ollama (endpoint
  * OpenAI-compatible `/v1/chat/completions`, celui que Pi-Web utilise).
  *
@@ -308,8 +371,9 @@ export function inferReasoning(modelId: string, family?: string): boolean {
  * vaut "off", le SDK ne pose `reasoning_effort` QUE si `model.thinkingLevelMap.off`
  * est une chaîne (branche finale « openai »). Sans cette table, RIEN n'est envoyé —
  * or Ollama **active le thinking de lui-même** quand `reasoning_effort` est absent.
- * Le contrôle « off » est donc un contrôle FANTÔME pour Ollama. La doc Ollama indique
- * que `reasoning_effort: "none"` DÉSACTIVE le thinking : on l'expose via la table.
+ * Le contrôle « off » est donc un contrôle FANTÔME pour Ollama. La table couvre
+ * TOUS les niveaux SDK avec les valeurs RÉELLES du provider (voir
+ * OLLAMA_THINKING_LEVEL_MAP) pour ne jamais envoyer de niveau « inventé ».
  * (Contournement côté Pi-Web, sans modifier le SDK.)
  */
 export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?: string }): {
@@ -317,7 +381,7 @@ export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?:
 } {
   const isOllama =
     provider.type === "ollama" || /ollama\.com|:11434/i.test(provider.baseUrl || "");
-  return isOllama ? { thinkingLevelMap: { off: "none" } } : {};
+  return isOllama ? { thinkingLevelMap: buildOllamaThinkingLevelMap() } : {};
 }
 
 export function inferVision(modelId: string, family?: string): boolean {
@@ -469,9 +533,14 @@ export function parseOllamaThinking(
   const values: unknown[] = (thinking as any).values;
   const levels = values.filter((v): v is string => typeof v === "string" && v.length > 0);
   const enabled = levels.length > 0 || values.some((v) => v === true);
+  // `false` dans `values` = extinction supportée par le provider : on l'expose
+  // comme niveau SDK "off" pour que le sélecteur frontend ne propose "off" QUE
+  // si le provider le déclare réellement (voir thinkingLevelsForModel).
+  const offSupported = values.some((v) => v === false);
+  const exposed = offSupported ? ["off", ...levels.filter((l) => l !== "off")] : levels;
   return {
     enabled,
-    levels,
+    levels: exposed,
     default: typeof (thinking as any).default === "string" ? (thinking as any).default : undefined,
   };
 }

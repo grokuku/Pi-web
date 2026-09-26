@@ -6,7 +6,7 @@ import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
 import { RoutingConfigModal } from "../Modals/RoutingConfigModal";
-import { THINKING_LEVELS, resolveModelCapability } from "../../types";
+import { thinkingLevelsForModel, resolveModelCapability } from "../../types";
 import type { ModelLibrary, RegisteredModel, AgentMode, ProjectModeConfig, ProviderConfig, RoutingConfig } from "../../types";
 
 const MODE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string; activeBg: string; activeBorder: string }> = {
@@ -291,6 +291,12 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                     {[...library.models].sort((a, b) => a.name.localeCompare(b.name)).map((m) => {
                       const isModelSelected = m.id === (pm as any)[mode]?.modelId;
                       const isDefault = m.id === library.defaultModelId;
+                      // Niveaux PROPOSÉS limités à ceux déclarés par le provider (info
+                      // inconnue = tous les niveaux). Voir thinkingLevelsForModel.
+                      const levels = thinkingLevelsForModel(m);
+                      const selectedThinking = m.thinkingLevel && (levels as readonly string[]).includes(m.thinkingLevel)
+                        ? m.thinkingLevel
+                        : "";
                       return (
                         <div
                           key={m.id}
@@ -313,7 +319,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                               les catégories de routage peuvent le surcharger). */}
                           {mode === "harness" && (
                             <select
-                              value={m.thinkingLevel || ""}
+                              value={selectedThinking}
                               onClick={(e) => e.stopPropagation()}
                               onChange={(e) => handleSetModelThinking(m.id, e.target.value || null)}
                               aria-label={`${t('modelSwitch.thinkingByModel')} — ${m.name}`}
@@ -321,7 +327,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                               className="w-[86px] shrink-0 bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[10px] px-1 py-0.5 rounded focus:border-hacker-accent outline-none"
                             >
                               <option value="">{t('modelSwitch.thinkingDefault')}</option>
-                              {THINKING_LEVELS.map(level => (
+                              {levels.map(level => (
                                 <option key={level} value={level}>{t(`routingModal.thinkingLevels.${level}`)}</option>
                               ))}
                             </select>

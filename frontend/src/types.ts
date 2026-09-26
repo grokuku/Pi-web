@@ -482,6 +482,34 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = [
   "max",
 ];
 
+/**
+ * Niveaux de réflexion PROPOSABLES dans les sélecteurs pour un modèle donné.
+ *
+ * Source de vérité : les niveaux DÉCLARÉS par le provider (Ollama /api/show →
+ * `thinking.values`, persistés en `reasoningLevels` ; « off » y est inclus quand
+ * le provider accepte `false`). On n'expose donc QUE ces niveaux — jamais un niveau
+ * « inventé » (minimal/medium/xhigh) auquel le provider donnerait un sens
+ * arbitraire. Le défaut du provider est toujours proposé.
+ *
+ * Information INCONNUE (`reasoningLevels` absent) → TOUS les niveaux : on conserve
+ * le comportement historique pour ne rien casser.
+ */
+export function thinkingLevelsForModel(m: RegisteredModel): readonly ThinkingLevel[] {
+  const declared = Array.isArray(m.reasoningLevels)
+    ? m.reasoningLevels.map(l => String(l).trim().toLowerCase())
+    : [];
+  if (declared.length === 0) return THINKING_LEVELS;
+  const allowed = new Set(declared);
+  const levels = THINKING_LEVELS.filter(l => allowed.has(l));
+  // Défaut du provider : l'inclure s'il est un niveau SDK valide et absent de la
+  // liste déclarée (le provider le documente légitimement via `thinking.default`).
+  const def = typeof m.reasoningDefault === "string" ? (m.reasoningDefault.trim().toLowerCase() as ThinkingLevel) : ("" as ThinkingLevel);
+  if (def && (THINKING_LEVELS as readonly string[]).includes(def) && !levels.includes(def)) {
+    return [...levels, def];
+  }
+  return levels.length > 0 ? levels : THINKING_LEVELS;
+}
+
 export interface CategoryConfig {
   modelId: string | null;
   /** Absent/undefined = « défaut » : niveau de réflexion du MODE conservé. */

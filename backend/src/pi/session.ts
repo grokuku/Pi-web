@@ -23,6 +23,7 @@ import { ollamaReasoningModelOptions } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
+import { warnIfThinkingOnlyTruncatedTurn } from "./response-guard.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
@@ -328,6 +329,10 @@ function flushDeltaBuffer(projectId: string): void {
 // emitToSubscribers (qui fusionne les deltas par type — inadapté aux events
 // structurés hétérogènes). Le comportement existant est inchangé.
 export function rawEmitToSubscribers(event: AgentSessionEvent, projectId: string) {
+  // Garde-fou « réponse vide » : avertit (log) quand un tour assistant terminé
+  // n'a produit QUE de la réflexion, tronquée par le budget (cause racine PEH).
+  // Pur log — aucune émission ni reprompt (pas de double facturation).
+  warnIfThinkingOnlyTruncatedTurn(event, projectId);
   for (const cb of eventCallbacks) {
     try { cb(event, projectId); } catch (e) { console.error("Event callback error:", e); }
   }

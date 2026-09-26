@@ -36,6 +36,10 @@ import {
   inferReasoning,
   inferVision,
   loadProviders,
+  OLLAMA_DISABLE_REASONING_VALUE,
+  OLLAMA_THINKING_LEVEL_MAP,
+  buildOllamaThinkingLevelMap,
+  normalizeReasoningEffortValue,
   ollamaReasoningModelOptions,
   parseOllamaThinking,
   saveProviders,
@@ -145,8 +149,17 @@ describe("parseOllamaThinking", () => {
       .toEqual({ enabled: true, levels: ["low", "medium", "high"], default: "medium" });
   });
 
-  it("values: [false] → thinking NON supporté", () => {
-    expect(parseOllamaThinking({ values: [false] })).toEqual({ enabled: false, levels: [], default: undefined });
+  it("values: [false] → thinking NON supporté (off exposé comme niveau SDK)", () => {
+    expect(parseOllamaThinking({ values: [false] })).toEqual({ enabled: false, levels: ["off"], default: undefined });
+  });
+
+  it("values: [false,'low','high','max'] → off + SEULS les niveaux déclarés", () => {
+    expect(parseOllamaThinking({ values: [false, "low", "high", "max"], default: "high" }))
+      .toEqual({ enabled: true, levels: ["off", "low", "high", "max"], default: "high" });
+  });
+
+  it("values nommés SANS false → aucun 'off' exposé", () => {
+    expect(parseOllamaThinking({ values: ["low", "high"], default: "high" })?.levels).toEqual(["low", "high"]);
   });
 
   it("values booléens (true) → raisonneur", () => {
@@ -160,16 +173,59 @@ describe("parseOllamaThinking", () => {
   });
 });
 
-// ── Contrôle « off » réel sur Ollama (thinkingLevelMap.off = "none") ────────
+// ── Contrôle « off » réel sur Ollama (thinkingLevelMap) ──────
+describe("normalizeReasoningEffortValue", () => {
+  it("toute variante d'extinction converge sur la chaîne EXACTE 'none'", () => {
+    for (const raw of ["none", "NONE", "None", "none ", " none", "off", "OFF", "disabled", "false", "no", "0", ""]) {
+      expect(normalizeReasoningEffortValue(raw)).toBe(OLLAMA_DISABLE_REASONING_VALUE);
+    }
+    expect(OLLAMA_DISABLE_REASONING_VALUE).toBe("none");
+  });
+
+  it("valeur NON-STRING → repli sûr sur 'none' (jamais transmise telle quelle : HTTP 400)", () => {
+    expect(normalizeReasoningEffortValue(false)).toBe("none");
+    expect(normalizeReasoningEffortValue(true)).toBe("none");
+    expect(normalizeReasoningEffortValue(3)).toBe("none");
+    expect(normalizeReasoningEffortValue(null)).toBe("none");
+    expect(normalizeReasoningEffortValue(undefined)).toBe("none");
+  });
+
+  it("un niveau réel est trimé/minusculisé mais conservé", () => {
+    expect(normalizeReasoningEffortValue(" High ")).toBe("high");
+    expect(normalizeReasoningEffortValue("max")).toBe("max");
+  });
+});
+
+describe("OLLAMA_THINKING_LEVEL_MAP", () => {
+  it("couvre TOUS les niveaux SDK et respecte les valeurs réelles du provider", () => {
+    // Mesuré sur Ollama Cloud deepseek-v4.1-flash : thinking.values=[false,'low','high','max'].
+    expect(OLLAMA_THINKING_LEVEL_MAP).toEqual({
+      off: "none",
+      minimal: "low",
+      low: "low",
+      medium: "high",
+      high: "high",
+      xhigh: "high",
+      max: "max",
+    });
+  });
+
+  it("buildOllamaThinkingLevelMap normalise chaque valeur", () => {
+    const built = buildOllamaThinkingLevelMap({ off: "NONE ", low: " Low", medium: false as any });
+    expect(built).toEqual({ off: "none", low: "low", medium: "none" });
+  });
+});
+
 describe("ollamaReasoningModelOptions", () => {
-  it("Ollama (type) → table de niveau posant reasoning_effort:'none' à off", () => {
-    expect(ollamaReasoningModelOptions({ type: "ollama", baseUrl: "https://ollama.com/v1" }))
-      .toEqual({ thinkingLevelMap: { off: "none" } });
+  it("Ollama (type) → table COMPLÈTE normalisée (off = 'none')", () => {
+    const opts = ollamaReasoningModelOptions({ type: "ollama", baseUrl: "https://ollama.com/v1" });
+    expect(opts).toEqual({ thinkingLevelMap: OLLAMA_THINKING_LEVEL_MAP });
+    expect(opts.thinkingLevelMap!.off).toBe("none");
   });
 
   it("Ollama détecté par l'URL (openai-compatible) → idem", () => {
     expect(ollamaReasoningModelOptions({ baseUrl: "http://localhost:11434/v1" }))
-      .toEqual({ thinkingLevelMap: { off: "none" } });
+      .toEqual({ thinkingLevelMap: OLLAMA_THINKING_LEVEL_MAP });
   });
 
   it("autre provider → aucune option (non-régression)", () => {
