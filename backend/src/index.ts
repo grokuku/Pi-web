@@ -1390,6 +1390,22 @@ httpServer.listen(PORT, async () => {
     console.warn("[startup] concurrency sync failed:", e.message);
   }
 
+  // Rétro-renseigner les niveaux de réflexion supportés des modèles DÉJÀ
+  // enregistrés, à partir des capacités CACHÉES du dernier scan des providers
+  // Ollama (aucun appel réseau). Évite de dépendre d'un scan manuel : un
+  // utilisateur dont les modèles ont été ajoutés avant cette fonctionnalité
+  // obtient les bons niveaux dès le prochain redémarrage. Best-effort :
+  // n'échoue jamais et n'écrase jamais une valeur existante.
+  try {
+    const { backfillAllOllamaProvidersReasoningLevels } = await import("./pi/providers.js");
+    const filled = await backfillAllOllamaProvidersReasoningLevels();
+    if (filled > 0) {
+      console.log(`[startup] niveaux de réflexion rétro-renseignés pour ${filled} modèle(s)`);
+    }
+  } catch (e: any) {
+    console.warn("[startup] reasoning levels backfill failed:", e.message);
+  }
+
   // Auto-mount SMB projects
   try {
     const projects = getAllProjects();

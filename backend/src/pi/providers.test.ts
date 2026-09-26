@@ -30,12 +30,14 @@ vi.mock("fs", () => ({
 import {
   PROVIDER_PRESETS,
   addProvider,
+  backfillAllOllamaProvidersReasoningLevels,
   backfillRegisteredModelReasoningLevels,
   deleteProvider,
   getProvider,
   inferContextWindow,
   inferReasoning,
   inferVision,
+  isOllamaProvider,
   loadProviders,
   OLLAMA_DISABLE_REASONING_VALUE,
   OLLAMA_THINKING_LEVEL_MAP,
@@ -561,6 +563,80 @@ describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
       { id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] },
     ]);
     expect(changed).toBe(0);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
+  });
+
+  it("provider openai-compatible → ollama.com : critère Ollama reconnu (cas utilisateur Ollama-Cloud)", () => {
+    expect(isOllamaProvider({ type: "openai-compatible", baseUrl: "https://ollama.com/v1" })).toBe(true);
+    // Les autres providers ne sont PAS touchés.
+    expect(isOllamaProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com" })).toBe(false);
+    expect(isOllamaProvider({ type: "ollama", baseUrl: "" })).toBe(true);
+  });
+
+  it("openai-compatible + https://ollama.com/v1 + /api/show → backfill EXÉCUTÉ (URL native dérivée sans /v1)", async () => {
+    // Reproduit EXACTEMENT le provider du user (OpenAI-compatible sur Ollama Cloud).
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://ollama.com/v1" });
+    saveProviders([provider]);
+    seedRegisteredModel();
+
+    const showUrls: string[] = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/show")) {
+        showUrls.push(String(url));
+        return {
+          ok: true,
+          json: async () => ({ thinking: { values: [false, "low", "high", "max"], default: "high" } }),
+        };
+      }
+      return { ok: true, json: async () => ({ data: [{ id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" }] }) };
+    });
+
+    const result = await testProviderConnection(provider);
+    expect(result.ok).toBe(true);
+    // /api/show est bien construit depuis https://ollama.com/v1 → https://ollama.com/api/show
+    expect(showUrls).toContain("https://ollama.com/api/show");
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.reasoningLevels).toEqual(["off", "low", "high", "max"]);
+    expect(persisted.reasoningDefault).toBe("high");
+  });
+
+  it("backfillAllOllamaProvidersReasoningLevels : capacités CACHÉES du dernier scan, SANS appel réseau", async () => {
+    const provider = makeProvider({
+      type: "openai-compatible",
+      baseUrl: "https://ollama.com/v1",
+      discoveredModels: [{
+        id: "deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        reasoning: true,
+        reasoningLevels: ["off", "low", "high", "max"],
+        reasoningDefault: "high",
+      }],
+    });
+    saveProviders([provider]);
+    seedRegisteredModel();
+
+    const filled = await backfillAllOllamaProvidersReasoningLevels();
+    expect(filled).toBe(1);
+    // Aucun appel réseau : on réutilise le cache de découverte du provider.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.reasoningLevels).toEqual(["off", "low", "high", "max"]);
+    expect(persisted.reasoningDefault).toBe("high");
+  });
+
+  it("backfillAll… : provider non-Ollama jamais touché, même avec des niveaux en cache", async () => {
+    const provider = makeProvider({
+      type: "openai-compatible",
+      baseUrl: "https://api.openai.com/v1",
+      discoveredModels: [{ id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] }],
+    });
+    saveProviders([provider]);
+    seedRegisteredModel();
+
+    const filled = await backfillAllOllamaProvidersReasoningLevels();
+    expect(filled).toBe(0);
     expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
   });
 });

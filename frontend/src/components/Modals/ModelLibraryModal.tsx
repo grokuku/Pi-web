@@ -134,7 +134,14 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
               setLoading={setLoading}
               setError={setError}
               setStatus={setStatus}
-              refreshLibrary={async () => { await loadLibrary(); }}
+              refreshLibrary={async () => {
+                // Recharge la bibliothèque de la modale ET notifie l'app : après
+                // un scan, le sélecteur d'en-tête (ModelQuickSwitch) doit relire
+                // les niveaux de réflexion fraîchement rétro-renseignés, sinon il
+                // conserve sa liste périmée (« tous les niveaux »).
+                await loadLibrary();
+                onModelApplied?.();
+              }}
             />
           )}
         </div>

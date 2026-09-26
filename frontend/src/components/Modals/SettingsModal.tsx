@@ -528,7 +528,12 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   setLoading={setLoading}
                   setError={setError}
                   setStatus={setStatus}
-                  refreshLibrary={async () => { await loadLibrary(); }}
+                  refreshLibrary={async () => {
+                    // Idem ModelLibraryModal : après un scan, notifier l'app pour
+                    // que le sélecteur d'en-tête relise les niveaux supportés.
+                    await loadLibrary();
+                    onModelApplied?.();
+                  }}
                 />
               )}
             </div>

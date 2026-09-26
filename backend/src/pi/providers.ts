@@ -379,9 +379,7 @@ export function buildOllamaThinkingLevelMap(
 export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?: string }): {
   thinkingLevelMap?: Record<string, string>;
 } {
-  const isOllama =
-    provider.type === "ollama" || /ollama\.com|:11434/i.test(provider.baseUrl || "");
-  return isOllama ? { thinkingLevelMap: buildOllamaThinkingLevelMap() } : {};
+  return isOllamaProvider(provider) ? { thinkingLevelMap: buildOllamaThinkingLevelMap() } : {};
 }
 
 export function inferVision(modelId: string, family?: string): boolean {
@@ -546,10 +544,19 @@ export function parseOllamaThinking(
 }
 
 /**
- * Vrai si le provider expose l'API NATIVE Ollama (`POST /api/show` → objet
- * `thinking`), seul endpoint capable de DÉCLARER les niveaux de réflexion.
+ * Critère UNIQUE « provider Ollama ».
+ *
+ * Un provider est Ollama soit par son TYPE natif (`type: "ollama"`), soit par son
+ * URL : Ollama Cloud (`ollama.com`) ou une instance locale (`:11434`). Le provider
+ * de l'utilisateur est typiquement `openai-compatible` + `https://ollama.com/v1` :
+ * il DOIT être reconnu, sinon la découverte `/api/show` et le backfill sont sautés.
+ *
+ * Mutualisé volontairement : le `thinkingLevelMap` (voir
+ * `ollamaReasoningModelOptions`) et la découverte/backfill des niveaux de
+ * réflexion partagent ainsi EXACTEMENT le même critère — jamais deux définitions
+ * divergentes.
  */
-function isNativeOllamaProvider(provider: Pick<ProviderConfig, "type" | "baseUrl">): boolean {
+export function isOllamaProvider(provider: { type?: string; baseUrl?: string }): boolean {
   return provider.type === "ollama" || /ollama\.com|:11434/i.test(provider.baseUrl || "");
 }
 
@@ -667,7 +674,7 @@ export async function backfillRegisteredModelReasoningLevels(
   provider: ProviderConfig,
   models: DiscoveredModel[],
 ): Promise<number> {
-  if (!isNativeOllamaProvider(provider)) return 0;
+  if (!isOllamaProvider(provider)) return 0;
   try {
     const { loadModelLibrary, saveModelLibrary } = await import("./model-library.js");
     const library = loadModelLibrary();
@@ -704,6 +711,49 @@ export async function backfillRegisteredModelReasoningLevels(
     console.warn("[providers] Backfill des niveaux de réflexion échoué :", e?.message || e);
     return 0;
   }
+}
+
+// ── Backfill global (déclencheur sans geste manuel) ──
+
+/**
+ * Déclencheur SIMPLE du backfill, indépendant d'un geste manuel : parcourt les
+ * providers CONNUS (fichier providers.json) et rétro-renseigne les niveaux de
+ * réflexion des modèles DÉJÀ enregistrés à partir des capacités CACHÉES du
+ * dernier scan (`provider.discoveredModels`).
+ *
+ * Aucun appel réseau : c'est la contrepartie « gratuite » du backfill déclenché
+ * par un scan/test de provider. Elle couvre le cas d'un utilisateur qui a scanné
+ * AVANT que le backfill n'existe (donc dont les modèles enregistrés n'ont jamais
+ * reçu leurs niveaux) : un simple redémarrage du backend suffit alors, sans
+ * rescanner ni passer par l'UI.
+ *
+ * Best-effort et borné : jamais d'exception, jamais d'écrasement d'une valeur
+ * existante (règles portées par `backfillRegisteredModelReasoningLevels`).
+ *
+ * @returns nombre total de modèles rétro-renseignés.
+ */
+export async function backfillAllOllamaProvidersReasoningLevels(): Promise<number> {
+  let total = 0;
+  try {
+    for (const provider of loadProviders()) {
+      // Seuls les providers Ollama exposent l'objet `thinking` (niveaux déclarés).
+      if (!isOllamaProvider(provider)) continue;
+      const cached = provider.discoveredModels || [];
+      if (cached.length === 0) continue;
+      try {
+        total += await backfillRegisteredModelReasoningLevels(provider, cached);
+      } catch (e: any) {
+        // Backfill déjà best-effort : on isole chaque provider pour continuer.
+        console.warn(
+          `[providers] Backfill réflexion (${provider.name || provider.id}) échoué :`,
+          e?.message || e,
+        );
+      }
+    }
+  } catch (e: any) {
+    console.warn("[providers] Backfill global des niveaux de réflexion échoué :", e?.message || e);
+  }
+  return total;
 }
 
 // ── Test connection ───────────────────────────────────
