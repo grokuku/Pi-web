@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { buildLinkCandidates, countLinkedGroups, isLinkableStorage } from "./linked-projects";
+import {
+  buildLinkCandidates,
+  buildSwitcherCandidates,
+  countLinkedGroups,
+  isLinkedMember,
+  isLinkableStorage,
+  linkedMemberIds,
+} from "./linked-projects";
 import type { Project } from "../types";
 
 // ── Tests de buildLinkCandidates ──────────────────────────────────────────
@@ -169,5 +176,79 @@ describe("countLinkedGroups", () => {
 
   it("renvoie 0 pour un projet non lié", () => {
     expect(countLinkedGroups(sshProject.id, [linkedHomyEtLibs, yukiAndLibs])).toBe(0);
+  });
+});
+
+// ── Sélecteur GÉNÉRAL de projets (ProjectSwitcher) ────────────────────────
+// La case du sélecteur (cochée par défaut) masque les projets de base
+// membres d'un groupe lié. Invariants : les projets liés eux-mêmes et le
+// projet actif restent TOUJOURS listés.
+describe("buildSwitcherCandidates — sélecteur général de projets", () => {
+  it("hideAlreadyLinked=true retire les membres de groupes liés, mais garde les groupes liés", () => {
+    const { projects: visible, hiddenCount } = buildSwitcherCandidates(allProjects, null, true);
+    const ids = visible.map((p) => p.id);
+    expect(ids).not.toContain(homy.id);    // membre de « Linked Homy et libs »
+    expect(ids).not.toContain(holafLib.id); // membre de 2 groupes
+    expect(ids).not.toContain(yuki.id);    // membre de « Yuki and Libs »
+    // Les projets liés sont des entrées de premier niveau : toujours listés.
+    expect(ids).toContain(linkedHomyEtLibs.id);
+    expect(ids).toContain(yukiAndLibs.id);
+    expect(ids).toContain(targetGroup.id);
+    // Projets libres et non concernés : toujours listés.
+    expect(ids).toContain(smbProject.id);
+    expect(ids).toContain(sshProject.id);
+    // 3 projets de la liste sont réellement membres (holaf-lib compté 1 fois).
+    expect(hiddenCount).toBe(3);
+  });
+
+  it("hideAlreadyLinked=false renvoie la liste complète (même référence) et hiddenCount=0", () => {
+    const { projects: visible, hiddenCount } = buildSwitcherCandidates(allProjects, null, false);
+    expect(visible).toBe(allProjects);
+    expect(hiddenCount).toBe(0);
+  });
+
+  it("un projet actif membre d'un groupe reste visible, case cochée comme décochée", () => {
+    for (const hideAlreadyLinked of [true, false]) {
+      const { projects: visible } = buildSwitcherCandidates(allProjects, holafLib.id, hideAlreadyLinked);
+      expect(visible.map((p) => p.id)).toContain(holafLib.id);
+    }
+    // Le projet actif n'est PAS compté comme masqué (il est affiché).
+    expect(buildSwitcherCandidates(allProjects, holafLib.id, true).hiddenCount).toBe(2);
+  });
+
+  it("ne masque jamais un projet de type linked, même cité dans les linkedProjectIds d'un autre", () => {
+    // Donnée anormale (imbrication refusée par le backend) : la règle « les
+    // projets liés sont toujours listés » prime.
+    const weirdGroup = makeProject({
+      id: "grp-nest",
+      name: "Weird group",
+      storage: "linked",
+      cwd: "/projects/Weird group",
+      linkedProjectIds: [linkedHomyEtLibs.id],
+    });
+    const { projects: visible } = buildSwitcherCandidates([...allProjects, weirdGroup], null, true);
+    expect(visible.map((p) => p.id)).toContain(linkedHomyEtLibs.id);
+  });
+
+  it("préserve l'ordre d'origine de la liste", () => {
+    const { projects: visible } = buildSwitcherCandidates(allProjects, null, true);
+    const expected = allProjects.filter((p) => visible.includes(p)).map((p) => p.id);
+    expect(visible.map((p) => p.id)).toEqual(expected);
+  });
+});
+
+describe("linkedMemberIds / isLinkedMember", () => {
+  it("linkedMemberIds rassemble les membres de tous les groupes, sans doublon", () => {
+    const ids = linkedMemberIds(allProjects);
+    expect(ids.has(homy.id)).toBe(true);
+    expect(ids.has(holafLib.id)).toBe(true);   // 2 groupes → une seule entrée dans le Set
+    expect(ids.has(yuki.id)).toBe(true);
+    expect(ids.has(smbProject.id)).toBe(false);
+    expect(ids.has(linkedHomyEtLibs.id)).toBe(false); // un groupe n'est pas membre
+  });
+
+  it("isLinkedMember répond sur un projet précis", () => {
+    expect(isLinkedMember(holafLib.id, allProjects)).toBe(true);
+    expect(isLinkedMember(smbProject.id, allProjects)).toBe(false);
   });
 });

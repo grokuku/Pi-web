@@ -3,6 +3,10 @@
 // chevron ▾. Le clic ouvre un dropdown listant TOUS les projets, avec :
 //   - champ de recherche (filtrage par nom — indispensable au-delà de ~20
 //     projets) ;
+//   - case « Masquer les projets déjà liés à un groupe » sous le champ :
+//     cochée par défaut à chaque ouverture, elle retire les projets membres
+//     d'un groupe lié — les projets liés eux-mêmes et le projet actif restent
+//     toujours listés (cf. buildSwitcherCandidates) ;
 //   - l'actuel marqué ✓ ;
 //   - une dot d'état par projet (diffusion en cours / bloquée, session
 //     active) issue de `projectSessions` : l'état des sessions par projet est
@@ -24,6 +28,7 @@ import { createPortal } from "react-dom";
 import { Check, ChevronDown, Folder, Link2, Trash2 } from "lucide-react";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
+import { buildSwitcherCandidates } from "../../utils/linked-projects";
 import type { Project } from "../../types";
 
 const MENU_WIDTH = 260;
@@ -86,6 +91,11 @@ export function ProjectSwitcher({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // Case « Masquer les projets déjà liés à un groupe » : état par défaut
+  // COCHÉ, recréé à chaque ouverture (cf. useEffect ci-dessous) — le dropdown
+  // n'est pas démonté, l'état ne doit donc pas persister d'une ouverture à
+  // l'autre (même règle que le menu « Lier un projet… », lui démonté).
+  const [hideAlreadyLinked, setHideAlreadyLinked] = useState(true);
   const wrapperRef = useRef<HTMLDivElement>(null);   // bloc (pour clic extérieur)
   const buttonRef = useRef<HTMLButtonElement>(null); // zone cliquable ancre
   const dropdownRef = useRef<HTMLDivElement>(null);  // dropdown porté dans <body>
@@ -124,22 +134,29 @@ export function ProjectSwitcher({
     };
   }, [open]);
 
-  // À l'ouverture : recherche réinitialisée + focus du champ (après montage
-  // du portail) — le clavier est immédiatement opérationnel.
+  // À l'ouverture : recherche et case réinitialisées (état par défaut coché,
+  // recréé à chaque ouverture) + focus du champ (après montage du portail) —
+  // le clavier est immédiatement opérationnel.
   useEffect(() => {
     if (!open) return;
     setSearch("");
+    setHideAlreadyLinked(true);
     const raf = requestAnimationFrame(() => searchRef.current?.focus());
     return () => cancelAnimationFrame(raf);
   }, [open]);
 
-  // Filtrage par nom (insensible à la casse) — l'ordre de la liste backend
-  // (ordre persisté) est préservé.
+  // Liste affichée = filtre de la case (membres de groupes liés) PUIS recherche
+  // par nom ; les deux se cumulent et l'ordre backend (ordre persisté) est
+  // préservé. `hiddenCount` ne compte que les retraits de la case.
+  const { projects: candidates, hiddenCount } = useMemo(
+    () => buildSwitcherCandidates(projects, activeProject?.id, hideAlreadyLinked),
+    [projects, activeProject?.id, hideAlreadyLinked]
+  );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return projects;
-    return projects.filter((p) => p.name.toLowerCase().includes(q));
-  }, [projects, search]);
+    if (!q) return candidates;
+    return candidates.filter((p) => p.name.toLowerCase().includes(q));
+  }, [candidates, search]);
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -201,7 +218,7 @@ export function ProjectSwitcher({
           }}
           className="flex flex-col bg-hacker-surface border border-hacker-border-bright shadow-lg"
         >
-          {/* Recherche (filtre par nom) */}
+          {/* Recherche (filtre par nom) + case de masquage juste en dessous */}
           <div className="p-1.5 border-b border-hacker-border/50 shrink-0">
             <input
               ref={searchRef}
@@ -211,6 +228,28 @@ export function ProjectSwitcher({
               className="w-full bg-hacker-bg border border-hacker-border px-2 py-1 text-xs text-hacker-text placeholder:text-hacker-text-dim/50 focus:outline-none focus:border-hacker-accent/50"
               aria-label={t('sidebar.searchProject')}
             />
+            {/* Case cochée par défaut : retire les membres de groupes liés. Le
+                libellé (partagé avec le menu « Lier un projet… ») décrit
+                l'effet de l'état coché ; le compteur n'apparaît que si des
+                projets sont effectivement masqués. */}
+            <label className="mt-1.5 flex items-start gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideAlreadyLinked}
+                onChange={(e) => setHideAlreadyLinked(e.target.checked)}
+                className="mt-px accent-hacker-accent shrink-0"
+                data-testid="switcher-hide-already-linked"
+              />
+              <span className="text-[10px] leading-tight text-hacker-text-dim">
+                {t('sidebar.linkedMenu.hideAlreadyLinked')}
+                {hideAlreadyLinked && hiddenCount > 0 && (
+                  <span className="text-hacker-warn/80">
+                    {" · "}
+                    {t('sidebar.linkedMenu.hiddenCount', hiddenCount)}
+                  </span>
+                )}
+              </span>
+            </label>
           </div>
 
           {/* Liste de TOUS les projets (l'ordre backend est conservé) */}
@@ -252,7 +291,14 @@ export function ProjectSwitcher({
             })}
             {filtered.length === 0 && (
               <div className="px-3 py-2 text-[11px] italic text-hacker-text-dim">
-                {t('sidebar.noProjects')}
+                {/* État vide NON trompeur : la recherche primant sur la case,
+                    on distingue « aucun résultat » de « tout est masqué » et
+                    du vrai « aucun projet ». */}
+                {search.trim()
+                  ? t('sidebar.linkedMenu.noMatch')
+                  : hideAlreadyLinked && hiddenCount > 0
+                    ? t('sidebar.linkedMenu.allHidden')
+                    : t('sidebar.noProjects')}
               </div>
             )}
           </div>

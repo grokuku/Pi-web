@@ -88,3 +88,62 @@ export function countLinkedGroups(
   }
   return count;
 }
+
+// ── Sélecteur GÉNÉRAL de projets (ProjectSwitcher, sidebar) ────────────────
+// Le sélecteur de la sidebar liste TOUS les projets (chaque projet lié est une
+// entrée de premier niveau). Sa case « Masquer les projets déjà liés à un
+// groupe » (cochée par défaut) retire les projets de BASE regroupés dans un
+// projet lié — la multi-appartenance autorisée par le backend allonge d'autant
+// la liste. Deux exceptions INVARIANTES, quel que soit l'état de la case :
+// les projets liés eux-mêmes et le projet ACTIF (l'utilisateur doit toujours
+// voir où il se trouve, même si ce projet est membre d'un groupe).
+
+/** Résultat de `buildSwitcherCandidates` : liste affichée + compteur de masqués. */
+export interface SwitcherCandidates {
+  /** Projets à afficher, dans l'ordre d'origine. */
+  projects: Project[];
+  /** Projets retirés par la case (jamais par la recherche). */
+  hiddenCount: number;
+}
+
+/**
+ * Ids des projets membres d'AU MOINS un groupe lié (lus dans `linkedProjectIds`).
+ * Calcul en une passe : le sélecteur masque potentiellement chaque projet, un
+ * balayage complet par projet (countLinkedGroups) serait quadratique.
+ */
+export function linkedMemberIds(projects: Project[]): Set<string> {
+  const ids = new Set<string>();
+  for (const group of projects) {
+    if (group.storage !== "linked" || !Array.isArray(group.linkedProjectIds)) continue;
+    for (const id of group.linkedProjectIds) ids.add(id);
+  }
+  return ids;
+}
+
+/** true si `projectId` est membre d'au moins un projet lié. */
+export function isLinkedMember(projectId: string, projects: Project[]): boolean {
+  return countLinkedGroups(projectId, projects) > 0;
+}
+
+/**
+ * Construit la liste affichée par le sélecteur général de projets.
+ *
+ * `hideAlreadyLinked` (case de l'UI, cochée par défaut) retire les membres de
+ * groupes liés. Sont TOUJOURS conservés, dans les deux états : les projets de
+ * type `linked` (entrées de premier niveau) et le projet actif. À false, la
+ * liste est renvoyée telle quelle (même référence) et `hiddenCount` vaut 0.
+ */
+export function buildSwitcherCandidates(
+  projects: Project[],
+  activeProjectId: string | null | undefined,
+  hideAlreadyLinked: boolean
+): SwitcherCandidates {
+  if (!hideAlreadyLinked) return { projects, hiddenCount: 0 };
+  const members = linkedMemberIds(projects);
+  const visible = projects.filter((p) => {
+    if (p.storage === "linked") return true;
+    if (activeProjectId != null && p.id === activeProjectId) return true;
+    return !members.has(p.id);
+  });
+  return { projects: visible, hiddenCount: projects.length - visible.length };
+}
