@@ -10,6 +10,7 @@ import {
   computeDurationMs,
   formatToolDuration,
   countLines,
+  detectUnavailableToolError,
 } from "./toolSummaries";
 import type { ToolCallInfo } from "../types";
 
@@ -285,5 +286,77 @@ describe("buildToolSummaryFromCall (branchement ToolCallRow)", () => {
     const s = buildToolSummaryFromCall(call, NOW);
     expect(s.failed).toBe(false);
     expect(s.text).toBe("bash top");
+  });
+
+  it("propage le libellé localisé d'outil indisponible", () => {
+    const call = tc({ name: "bash", args: { command: "ls" }, output: "Tool bash not found", isError: true });
+    const s = buildToolSummaryFromCall(call, undefined, {
+      unavailableTool: (d) => `LABEL:${d.kind}:${d.toolName}`,
+    });
+    expect(s.failed).toBe(true);
+    expect(s.text).toBe("LABEL:execution:bash");
+    expect(s.unavailable).toEqual({ toolName: "bash", kind: "execution" });
+  });
+});
+
+// ── Outil indisponible (erreur SDK « Tool <nom> not found ») ──────────────
+// Le SDK pi-agent-core émet EXACTEMENT ce message quand l'outil n'est pas dans
+// la liste active du tour (mode harness : bash/read/… retirés). Détection au
+// rendu → couvre le live ET l'historique rechargé (où isError est perdu).
+describe("detectUnavailableToolError", () => {
+  it("message exact du SDK → détecté + nom extrait", () => {
+    expect(detectUnavailableToolError("Tool bash not found")).toEqual({ toolName: "bash", kind: "execution" });
+  });
+
+  it("variantes : casse, espaces, guillemets, préfixe Error:, point final", () => {
+    expect(detectUnavailableToolError("  tool   `read`   NOT   FOUND  ")).toEqual({ toolName: "read", kind: "execution" });
+    expect(detectUnavailableToolError('Error: Tool "grep" not found.')).toEqual({ toolName: "grep", kind: "execution" });
+    expect(detectUnavailableToolError("Tool f.ts not found")).toEqual({ toolName: "f.ts", kind: "unknown" });
+  });
+
+  it("familles : delegate → mode code ; outil inconnu → générique", () => {
+    expect(detectUnavailableToolError("Tool delegate not found")).toEqual({ toolName: "delegate", kind: "delegate" });
+    expect(detectUnavailableToolError("Tool firecrawl_scrape not found")).toEqual({ toolName: "firecrawl_scrape", kind: "unknown" });
+  });
+
+  it("texte explicatif MENTIONNANT le message → non détecté (pas de faux positif)", () => {
+    expect(detectUnavailableToolError("L'erreur Tool bash not found survient quand l'outil est inactif.")).toBeNull();
+    expect(detectUnavailableToolError("Tool bash not found\n(voir le guide de délégation)")).toBeNull();
+    expect(detectUnavailableToolError("Tool bash not found and then we delegate")).toBeNull();
+    expect(detectUnavailableToolError("⚠ Tool bash not found")).toBeNull();
+  });
+
+  it("sortie d'outil normale ou texte vide / non-string → non détecté", () => {
+    expect(detectUnavailableToolError("hello world")).toBeNull();
+    expect(detectUnavailableToolError("")).toBeNull();
+    expect(detectUnavailableToolError(undefined)).toBeNull();
+    expect(detectUnavailableToolError(42)).toBeNull();
+  });
+});
+
+describe("buildToolSummary — outil indisponible", () => {
+  it("détecté même sans isError (historique rechargé) → failed + libellé + exit inconnu", () => {
+    const s = buildToolSummary(
+      { name: "bash", args: { command: "ls" }, output: "Tool bash not found" },
+      undefined,
+      { unavailableTool: (d) => `LABEL:${d.kind}:${d.toolName}` },
+    );
+    expect(s.failed).toBe(true);
+    expect(s.unavailable).toEqual({ toolName: "bash", kind: "execution" });
+    expect(s.text).toBe("LABEL:execution:bash");
+    expect(s.exitCode).toBeUndefined();
+    expect(s.segments).toEqual([]);
+  });
+
+  it("fallback neutre (nom seul) sans libellés fournis", () => {
+    const s = buildToolSummary({ name: "read", args: { path: "x" }, output: "Tool read not found", isError: true });
+    expect(s.text).toBe("⚠ read");
+  });
+
+  it("sortie normale non affectée", () => {
+    const s = buildToolSummary({ name: "bash", args: { command: "ls" }, output: "ok" });
+    expect(s.failed).toBe(false);
+    expect(s.unavailable).toBeUndefined();
+    expect(s.text).toBe("bash ls · exit 0 · 1 lignes");
   });
 });

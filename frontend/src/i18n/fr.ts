@@ -57,6 +57,12 @@ export const fr = {
     // ── Aperçu d'output des tool calls (streaming) ──
     toolOutput: "Sortie de l'outil",
     toolOutputChars: (chars: string) => `${chars} caractères`,
+    // ── Outil indisponible dans le mode courant (erreur SDK « Tool X not found ») ──
+    // Famille déduite du nom : outil d'exécution → mode harness (déléguer) ;
+    // « delegate » → mode code (travail direct) ; autre → générique.
+    toolUnavailableExecution: (name: string) => `⚠ Outil « ${name} » indisponible en mode harness — l'orchestrateur doit déléguer`,
+    toolUnavailableDelegate: (name: string) => `⚠ Outil « ${name} » indisponible en mode code — faites le travail directement`,
+    toolUnavailableGeneric: (name: string) => `⚠ Outil « ${name} » indisponible dans ce mode`,
     // ── Pseudo bloc sous-agent (tool delegate, LOT 1) ──
     subAgent: "sous-agent",
     // ── LOT 2 : activité live du sous-agent ──

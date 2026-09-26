@@ -57,6 +57,12 @@ export const en = {
     // ── Tool call output preview (streaming) ──
     toolOutput: "Tool output",
     toolOutputChars: (chars: string) => `${chars} chars`,
+    // ── Tool unavailable in the current mode (SDK error “Tool X not found”) ──
+    // Family inferred from the name: execution tool → harness mode (delegate);
+    // “delegate” → code mode (work directly); otherwise → generic.
+    toolUnavailableExecution: (name: string) => `⚠ Tool "${name}" unavailable in harness mode — the orchestrator must delegate`,
+    toolUnavailableDelegate: (name: string) => `⚠ Tool "${name}" unavailable in code mode — do the work directly`,
+    toolUnavailableGeneric: (name: string) => `⚠ Tool "${name}" unavailable in this mode`,
     // ── Sub-agent pseudo block (delegate tool, LOT 1) ──
     subAgent: "sub-agent",
     // ── LOT 2: live sub-agent activity ──

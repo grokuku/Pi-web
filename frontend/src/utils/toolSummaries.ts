@@ -39,6 +39,28 @@ export interface ToolSummaryInput {
   endedAt?: number;
 }
 
+/** Famille d'un outil indisponible, déduite du nom absent du message SDK. */
+export type UnavailableToolKind = "execution" | "delegate" | "unknown";
+
+/** Résultat de la détection « Tool <nom> not found » (erreur SDK). */
+export interface UnavailableToolDetection {
+  /** Nom de l'outil extrait du message (ex. « bash »). */
+  toolName: string;
+  /**
+   * Famille UI : « execution » (outil d'exécution retiré en mode harness →
+   * déléguer), « delegate » (retiré en mode code → travailler directement),
+   * « unknown » (outil halluciné / hors mode). Miroir de
+   * buildUnavailableToolGuidance (backend/src/pi/harness-stream.ts).
+   */
+  kind: UnavailableToolKind;
+}
+
+/** Libellés fournis par l'UI (le helper pur ne connaît pas la langue). */
+export interface ToolSummaryLabels {
+  /** Libellé localisé d'un résultat « outil introuvable ». */
+  unavailableTool?: (detection: UnavailableToolDetection) => string;
+}
+
 export interface ToolSummary {
   /** Verbe court (read, write, bash, « cbm search »…). */
   verb: string;
@@ -56,6 +78,8 @@ export interface ToolSummary {
   exitCode?: number;
   /** Nombre de lignes de l'output (0 si vide). */
   lineCount: number;
+  /** Détection « outil introuvable » (SDK) — cf. detectUnavailableToolError. */
+  unavailable?: UnavailableToolDetection;
 }
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -65,6 +89,20 @@ const BASH_CMD_MAX_CHARS = 50;
 const ERROR_LINE_MAX_CHARS = 120;
 
 const PATH_ARG_KEYS = ["file_path", "path", "filePath", "filepath"];
+
+/**
+ * Message SDK d'un outil absent de la liste active du tour
+ * (pi-agent-core/dist/agent-loop.js : `Tool ${toolCall.name} not found`).
+ * Motif ANCRÉ sur TOUT le texte (après trim) : le message constitue à lui seul
+ * le contenu du toolResult → une explication qui le MENTIONNE au milieu d'une
+ * phrase, ou un contenu multi-lignes, ne déclenche PAS la détection.
+ * Variantes couvertes : casse, espaces multiples, guillemets autour du nom,
+ * préfixe « Error: » éventuel, point final.
+ */
+const TOOL_NOT_FOUND_RE = /^(?:error:\s*)?tool\s+["'`]?([\w.-]+)["'`]?\s+not\s+found\.?$/i;
+
+/** Outils d'exécution retirés en mode harness (miroir de EXECUTION_TOOL_NAMES backend). */
+const EXECUTION_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -195,9 +233,27 @@ function firstNonEmptyLine(output: string | undefined): string {
   return "";
 }
 
+/**
+ * Détecte un résultat d'outil « outil introuvable » (erreur émise par le SDK
+ * quand l'outil n'est pas dans la liste active du tour) et en extrait le nom +
+ * la famille. PUR ; miroir frontend de isToolNotFoundError
+ * (backend/src/pi/harness-stream.ts:375) — le frontend ne peut PAS importer le
+ * backend, la détection est réimplémentée ici. Évaluée au RENDU → couvre le
+ * live (pi-events.ts) ET l'historique rechargé (useChatHistory.ts).
+ */
+export function detectUnavailableToolError(text: unknown): UnavailableToolDetection | null {
+  if (typeof text !== "string") return null;
+  const m = TOOL_NOT_FOUND_RE.exec(text.trim());
+  if (!m) return null;
+  const toolName = m[1];
+  if (toolName === "delegate") return { toolName, kind: "delegate" };
+  if (EXECUTION_TOOL_NAMES.includes(toolName)) return { toolName, kind: "execution" };
+  return { toolName, kind: "unknown" };
+}
+
 // ── Builder principal ────────────────────────────────────────────────────────
 
-export function buildToolSummary(input: ToolSummaryInput, now?: number): ToolSummary {
+export function buildToolSummary(input: ToolSummaryInput, now?: number, labels?: ToolSummaryLabels): ToolSummary {
   const { name, args, output = "", details, isError = false, isStreaming = false } = input;
   const durationMs = computeDurationMs(input, now);
   const lineCount = countLines(output);
@@ -312,6 +368,14 @@ export function buildToolSummary(input: ToolSummaryInput, now?: number): ToolSum
     }
   }
 
+  // Outil indisponible (message SDK « Tool <nom> not found ») : détecté sur le
+  // TEXTE seul, indépendamment de isError — l'historique rechargé perd isError
+  // (serializeMessagesForUi ne le sérialise pas) et le texte est alors la seule
+  // preuve disponible. L'UI substitue un libellé actionnable i18n (labels) ;
+  // l'erreur technique brute reste dans le bloc déplié (output).
+  const unavailable = detectUnavailableToolError(output) ?? undefined;
+  if (unavailable) failed = true;
+
   // Règle d'erreur UNIFORME (tous outils) : « ⚠ <1re ligne, 120c> ».
   // Le CollapsibleBlock auto-déplie le bloc (failed → isError).
   if (failed) {
@@ -321,11 +385,16 @@ export function buildToolSummary(input: ToolSummaryInput, now?: number): ToolSum
       verb,
       target,
       segments: [],
-      text: `⚠ ${label}`,
+      // Outil indisponible → libellé localisé fourni par l'UI ; fallback neutre
+      // (nom seul) pour les usages purs sans traductions.
+      text: unavailable
+        ? (labels?.unavailableTool ? labels.unavailableTool(unavailable) : `⚠ ${unavailable.toolName}`)
+        : `⚠ ${label}`,
       durationMs,
       failed: true,
-      exitCode,
+      exitCode: unavailable ? undefined : exitCode,
       lineCount,
+      unavailable,
     };
   }
 
@@ -340,7 +409,7 @@ export function buildToolSummary(input: ToolSummaryInput, now?: number): ToolSum
 }
 
 /** Résumé à partir d'un ToolCallInfo complet (branchement ToolCallRow). */
-export function buildToolSummaryFromCall(tc: ToolCallInfo, now?: number): ToolSummary {
+export function buildToolSummaryFromCall(tc: ToolCallInfo, now?: number, labels?: ToolSummaryLabels): ToolSummary {
   return buildToolSummary(
     {
       name: tc.name,
@@ -353,5 +422,6 @@ export function buildToolSummaryFromCall(tc: ToolCallInfo, now?: number): ToolSu
       endedAt: tc.endedAt,
     },
     now,
+    labels,
   );
 }

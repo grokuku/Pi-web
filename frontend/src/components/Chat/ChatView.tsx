@@ -10,7 +10,7 @@ import { CollapsibleBlock, CollapseProvider, useCollapsible } from "./Collapsibl
 import { SubAgentBlock } from "./SubAgentBlock";
 import { ParallelSubAgents } from "./ParallelSubAgents";
 import { ToolCallTimer } from "./ToolCallTimer";
-import { buildToolSummaryFromCall, formatToolDuration } from "../../utils/toolSummaries";
+import { buildToolSummaryFromCall, formatToolDuration, type UnavailableToolKind, type ToolSummaryLabels } from "../../utils/toolSummaries";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import { useTranslation } from "../../i18n";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
@@ -1623,6 +1623,18 @@ function shortName(name: string): string {
 
 const toolName = (tc: ToolCallInfo) => shortName(tc.name || tc.id || "tool");
 
+// ── Outil indisponible dans le mode courant (erreur SDK « Tool X not found ») ─
+// Clés i18n par famille détectée (miroir de buildUnavailableToolGuidance,
+// backend/src/pi/harness-stream.ts) : l'UI ne connaît pas le mode courant, mais
+// le nom de l'outil manquant suffit (outil d'exécution → mode harness ;
+// « delegate » → mode code ; autre → générique).
+
+const UNAVAILABLE_TOOL_LABEL_KEYS: Record<UnavailableToolKind, string> = {
+  execution: "chat.toolUnavailableExecution",
+  delegate: "chat.toolUnavailableDelegate",
+  unknown: "chat.toolUnavailableGeneric",
+};
+
 // Formate un nombre de caractères en taille lisible (ex. 1234 → "1.2k").
 function formatChars(n: number): string {
   if (n < 1000) return `${n}`;
@@ -1645,7 +1657,7 @@ function formatChars(n: number): string {
 //   override utilisateur.
 // - Erreur → auto-dépli forcé (isError, exit≠0 bash, ou turn LLM échoué).
 // - Aperçu type tail -f : les 8 DERNIÈRES lignes de l'output, auto-scroll bas.
-const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, isLastRunning = false }: {
+export const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, isLastRunning = false }: {
   toolCall: ToolCallInfo;
   blockId: string;
   // Vrai si le turn LLM porteur a échoué (stopReason error / errorMessage).
@@ -1656,8 +1668,17 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, i
   const { t } = useTranslation();
   const hasOutput = !!toolCall.output && toolCall.output.trim().length > 0;
   const running = toolCall.isStreaming;
-  // Résumé d'outil (pur, sans LLM) : recalculé seulement quand le toolCall change.
-  const summary = useMemo(() => buildToolSummaryFromCall(toolCall), [toolCall]);
+  // Résumé d'outil (pur, sans LLM) : recalculé quand le toolCall ou la langue
+  // change. Le libellé « outil indisponible » est localisé ici (le helper pur
+  // ne connaît pas la langue).
+  const summaryLabels = useMemo<ToolSummaryLabels>(
+    () => ({ unavailableTool: (d) => t(UNAVAILABLE_TOOL_LABEL_KEYS[d.kind], d.toolName) }),
+    [t],
+  );
+  const summary = useMemo(
+    () => buildToolSummaryFromCall(toolCall, undefined, summaryLabels),
+    [toolCall, summaryLabels],
+  );
   const failed = summary.failed;
   const preRef = useRef<HTMLPreElement>(null);
 
@@ -1751,10 +1772,18 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall, blockId, turnFailed, i
 // Résultat d'outil ORPHELIN (toolCall absent de l'historique, ex. antérieur à
 // une compaction). Réutilise les résumés d'outils (lot 1) sur les details
 // historiques (isError, diff… ; durées absentes → omises).
-const ToolResultRow = memo(function ToolResultRow({ message }: { message: DisplayMessage }) {
+export const ToolResultRow = memo(function ToolResultRow({ message }: { message: DisplayMessage }) {
   const { t } = useTranslation();
   const tr = message.toolResult!;
-  const summary = useMemo(() => buildToolSummaryFromCall(tr), [tr]);
+  // Libellé « outil indisponible » localisé (le helper pur ne connaît pas la langue).
+  const summaryLabels = useMemo<ToolSummaryLabels>(
+    () => ({ unavailableTool: (d) => t(UNAVAILABLE_TOOL_LABEL_KEYS[d.kind], d.toolName) }),
+    [t],
+  );
+  const summary = useMemo(
+    () => buildToolSummaryFromCall(tr, undefined, summaryLabels),
+    [tr, summaryLabels],
+  );
   const hasOutput = !!tr.output && tr.output.trim().length > 0;
   const failed = summary.failed;
   const blockId = `${message.id}:toolresult`;
