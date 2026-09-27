@@ -311,19 +311,24 @@ export const en = {
     cyan: "Cyan",
     rose: "Rose",
   },
-  // ── Current activity (StatusBar) ──
+  // ── Current activity (composer status line + StatusBar) ──
   activity: {
     inProgress: "In progress…",
     thinking: "Thinking…",
     tool: "Running a tool…",
     generating: "Generating response…",
-    stalled: "stalled",
+    // Delegated work (tool `delegate`): the main session stays silent for the
+    // whole sub-agent run — this label is the honest source.
+    delegating: "Delegation in progress…",
+    // Silence of the MAIN run beyond the watchdog threshold (App.tsx, 60s).
+    stalled: "no activity for 60s",
+    stalledTooltip: "No event from the main run for 60s — click ABORT to interrupt if needed.",
     routingPrefix: "Routing: ",
     planning: "Planning",
     execute: "Executing",
     review: "Reviewing",
     integrate: "Integrating",
-    tooltip: "The agent is processing your request (ROUTING mode)",
+    tooltip: "The agent is processing your request",
   },
   // ── Routing configuration (RoutingConfigModal) ──
   routingModal: {

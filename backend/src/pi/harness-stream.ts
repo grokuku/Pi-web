@@ -210,11 +210,82 @@ export function emitSubagentEvent(
   }
 }
 
+// ── Messages injectés « NON conversationnels » ──────────────────
+// Un message injecté (sendCustomMessage) est AFFICHÉ dans le fil de chat mais
+// ne doit JAMAIS être interprété par le modèle comme une entrée de conversation.
+//
+// POURQUOI : avec `triggerTurn:false` PENDANT un stream, le SDK diffère le
+// message (_pendingCustomMessages) puis le flushe en FIN de tour (juste après
+// le toolResult). Il devient alors le DERNIER élément du contexte : le modèle
+// croit que l'utilisateur lui a « envoyé » la capture/notification et répond à
+// celle-ci au lieu de relire le résultat d'outil qui précède (incident 26/09).
+//
+// Ces messages restent donc INCHANGÉS pour l'UI et la session persistée ; seul
+// le contexte envoyé au provider les retire (wrapper convertToLlm de session.ts).
+
 /**
- * Filtre les entrées `custom` de type subagent_activity du contexte LLM.
- * Pur — utilisé par session.ts dans le wrapper convertToLlm : le résumé
- * d'activité persiste dans la session (survit au rechargement) SANS coût
- * LLM (les détails vivent dans `details`, jamais envoyés au modèle).
+ * Clé posée dans `details` pour MARQUER explicitement un message injecté comme
+ * non conversationnel au moment de l'injection. `details` n'est jamais envoyé
+ * au LLM (seul `content` l'est) mais il SURVIT à la persistance de session : le
+ * filtre lit donc le marqueur même après un rechargement.
+ */
+export const NON_CONVERSATIONAL_DETAILS_KEY = "__nonConversational";
+
+/**
+ * SOURCE DE VÉRITÉ UNIQUE des `customType` d'AFFICHAGE SEUL : les messages
+ * injectés de ces types ne doivent jamais être vus par le modèle comme une
+ * entrée de conversation. Toute nouvelle injection purement visuelle DOIT être
+ * ajoutée ici (et marquée via `withNonConversationalMark`).
+ *
+ * Repli : le SDK reconstruit l'AgentMessage à l'ingestion (sendCustomMessage) et
+ * n'en conserve que role/customType/content/display/details/timestamp — il est
+ * donc impossible de transporter un champ « non conversationnel » dédié. Le
+ * filtre s'appuie donc sur (1) le marqueur `details.__nonConversational` (robuste
+ * et explicite) PUIS (2) cette liste de `customType` (filet pour les entrées
+ * déjà persistées sans marqueur, ex. sessions existantes).
+ *
+ * NB : `design_context` (envoi volontaire du canvas vers le chat),
+ * `cbm_exploration_nudge`, `compaction-checkpoint-save-memories` sont
+ * INTENTIONNELLEMENT destinés au modèle : à NE PAS inclure ici.
+ */
+export const NON_CONVERSATIONAL_CUSTOM_TYPES: readonly string[] = [
+  "screenshot",
+  "subagent_activity",
+  "git_notification",
+];
+
+const NON_CONVERSATIONAL_CUSTOM_TYPE_SET = new Set(NON_CONVERSATIONAL_CUSTOM_TYPES);
+
+/**
+ * Marque explicitement `details` comme non conversationnel. À utiliser à CHAQUE
+ * injection d'affichage (cf. NON_CONVERSATIONAL_CUSTOM_TYPES) : le filtre ne
+ * dépend alors plus d'une liste de `customType` recopiée aux quatre coins du code.
+ */
+export function withNonConversationalMark<T extends Record<string, unknown> | undefined>(
+  details?: T,
+): Record<string, unknown> {
+  return { ...(details ?? {}), [NON_CONVERSATIONAL_DETAILS_KEY]: true };
+}
+
+/**
+ * Un AgentMessage est-il un message injecté NON conversationnel ?
+ * Vrai si (1) marqué explicitement dans `details`, ou (2) de type d'affichage
+ * seul (repli pour les messages déjà persistés sans marqueur). Pure.
+ */
+export function isNonConversationalMessage(m: unknown): boolean {
+  try {
+    const anyM = m as any;
+    if (anyM?.role !== "custom") return false;
+    if (anyM?.details?.[NON_CONVERSATIONAL_DETAILS_KEY] === true) return true;
+    return typeof anyM?.customType === "string" && NON_CONVERSATIONAL_CUSTOM_TYPE_SET.has(anyM.customType);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prédicat historique (subagent_activity). Conservé pour les appelants/tests
+ * existants — s'appuie désormais sur la définition centralisée ci-dessus.
  */
 export function isSubagentActivityMessage(m: unknown): boolean {
   try {
@@ -225,6 +296,27 @@ export function isSubagentActivityMessage(m: unknown): boolean {
   }
 }
 
+/**
+ * Retire les messages injectés NON conversationnels du contexte LLM. Pur : ne
+ * mute ni le tableau ni les messages (l'UI et la session persistée sont intactes).
+ */
+export function filterNonConversationalFromContext(messages: unknown[]): unknown[] {
+  try {
+    return messages.filter((m) => !isNonConversationalMessage(m));
+  } catch {
+    return messages;
+  }
+}
+
+/**
+ * Filtre les entrées `custom` de type subagent_activity du contexte LLM.
+ * Pur — utilisé par session.ts dans le wrapper convertToLlm : le résumé
+ * d'activité persiste dans la session (survit au rechargement) SANS coût
+ * LLM (les détails vivent dans `details`, jamais envoyés au modèle).
+ *
+ * @deprecated Remplacé par `filterNonConversationalFromContext` (généralisé à
+ * toutes les injections d'affichage). Conservé pour compatibilité.
+ */
 export function filterSubagentActivityFromContext(messages: unknown[]): unknown[] {
   try {
     return messages.filter((m) => !isSubagentActivityMessage(m));

@@ -14,6 +14,7 @@ import {
   getDatedDetachedRuns,
   getOrphanRuns,
   getRun,
+  hasActiveRun,
   insertDatedRuns,
   isRunActive,
   isRunConcurrent,
@@ -161,6 +162,36 @@ describe("applySubagentEvent — fonction PURE d'application d'événement", () 
     expect(ko.isError).toBe(true);
     expect(ko.attempt).toBe(2);
     expect(ko.end?.cause).toBe(null);
+  });
+
+  it("tool_execution_* TARDIFS après subagent_end → le statut terminal est préservé (pas de résurrection)", () => {
+    let run = applySubagentEvent(undefined, env({ type: "subagent_start" }), 0);
+    run = applySubagentEvent(run, env({ type: "subagent_end", status: "success", durationMs: 5 }), 10);
+    expect(run.status).toBe("done");
+
+    // End d'outil arrivé APRÈS la fin du run (coupure WS, flush tardif…) :
+    // l'action est tracée mais le run ne redevient PAS `running`.
+    run = applySubagentEvent(run, env({
+      type: "tool_execution_end",
+      toolCallId: "t-late",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "tardif" }] },
+    }), 20);
+    expect(run.status).toBe("done");
+    expect(run.isError).toBe(false);
+    expect(run.currentOutput).toBe("tardif");
+
+    run = applySubagentEvent(run, env({ type: "tool_execution_start", toolCallId: "t-late2", toolName: "grep", args: { pattern: "x" } }), 30);
+    expect(run.status).toBe("done");
+    run = applySubagentEvent(run, env({ type: "tool_execution_update", toolCallId: "t-late2", partialResult: { content: [{ type: "text", text: "maj" }] } }), 40);
+    expect(run.status).toBe("done");
+
+    // Idem pour un run en ÉCHEC : il reste `failed` (jamais ressuscité).
+    let ko = applySubagentEvent(undefined, env({ type: "subagent_end", status: "error" }), 0);
+    expect(ko.status).toBe("failed");
+    ko = applySubagentEvent(ko, env({ type: "tool_execution_end", toolCallId: "t-ko", toolName: "bash", isError: true, result: { content: [{ type: "text", text: "boom" }] } }), 5);
+    expect(ko.status).toBe("failed");
+    expect(ko.isError).toBe(true);
   });
 
   it("pure : le run précédent n'est jamais muté", () => {
@@ -459,6 +490,44 @@ describe("registerArchivedRuns — rattachement RETENTÉ d'un orphelin", () => {
     registerArchivedRuns([run], []);
     registerArchivedRuns([run], []);
     expect(getAllRuns().filter((r) => r.id === "d-dup")).toHaveLength(1);
+  });
+});
+
+// ── FIN PERDUE d'un run local (fix « réglage de repli ignoré ») ──────────────
+// Un run dont le subagent_end s'est perdu (coupure WS, abort sans événement…)
+// restait « running » jusqu'au seuil de blocage — donc auto-déplié à tort. Sa
+// version ARCHIVÉE terminale (relue depuis l'activité persistée) doit l'emporter.
+describe("registerArchivedRuns — rattrapage d'un run local encore `running`", () => {
+  it("écrase le run local `running` par sa version archivée TERMINALE", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "d-lost" }), [], 1_000);
+    expect(getRun("d-lost")?.status).toBe("running");
+
+    registerArchivedRuns([
+      runFromActivity({ delegateRunId: "d-lost", function: "execute", status: "success", durationMs: 500 }, 2_000)!,
+    ], []);
+
+    const run = getRun("d-lost")!;
+    expect(run.status).toBe("done");
+    expect(run.isError).toBe(false);
+    expect(run.end).toMatchObject({ status: "success", durationMs: 500 });
+    expect(isRunActive(run)).toBe(false);
+  });
+
+  it("un run local TERMINAL n'est jamais remplacé par une version archivée moins avancée", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "d-term" }), [], 1_000);
+    routeSubagentEnvelope(
+      env({ type: "subagent_end", status: "success", responsePreview: "live" }, { delegateRunId: "d-term" }),
+      [], 1_500,
+    );
+
+    registerArchivedRuns([
+      runFromActivity({ delegateRunId: "d-term", function: "execute", status: "success", responsePreview: "archivé" }, 2_000)!,
+    ], []);
+
+    const run = getRun("d-term")!;
+    expect(run.status).toBe("done");
+    expect(run.end?.responsePreview).toBe("live"); // version locale conservée
+    expect(run.archived).toBeUndefined();
   });
 });
 
@@ -845,5 +914,46 @@ describe("ancrage par appel `delegate` (jamais après la réponse finale)", () =
     expect(concurrentWallAnchor([], 200)).toBeNull();
     // Deux runs actifs sans date exploitable → null (l'appelant retombe en fin de fil).
     expect(concurrentWallAnchor([makeRun("a"), makeRun("b")], 200)).toBeNull();
+  });
+});
+
+// ── hasActiveRun — source « délégation en cours » de l'indicateur d'activité ─
+// L'indicateur du composer s'appuie sur ce sélecteur quand la session
+// principale est muette (tool `delegate` bloquant) ou pas en streaming.
+describe("hasActiveRun — travail délégué EN COURS", () => {
+  it("vrai tant qu'un run est `running` (même sans event texte)", () => {
+    const run = routeSubagentEnvelope(env({ type: "subagent_start" }), [], 1_000, "A");
+    expect(run?.status).toBe("running");
+    expect(hasActiveRun("A", 1_100)).toBe(true);
+  });
+
+  it("faux dès que le run est terminé (subagent_end)", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }), [], 1_000, "A");
+    const run = routeSubagentEnvelope(env({ type: "subagent_end", status: "success" }), [], 2_000, "A");
+    expect(run?.status).toBe("done");
+    expect(hasActiveRun("A", 2_100)).toBe(false);
+  });
+
+  it("faux quand le run est bloqué (silence > STUCK_RUN_TIMEOUT_MS)", () => {
+    const run = routeSubagentEnvelope(env({ type: "subagent_start" }), [], 1_000, "A");
+    expect(hasActiveRun("A", 1_000 + STUCK_RUN_TIMEOUT_MS + 1)).toBe(false);
+    expect(isRunStuck(run!, 1_000 + STUCK_RUN_TIMEOUT_MS + 1)).toBe(true);
+  });
+
+  it("étanchéité inter-projets : le run du projet A ne compte pas pour B", () => {
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "ra", projectId: "A" }), [], 1_000, "A");
+    expect(hasActiveRun("A", 1_100)).toBe(true);
+    expect(hasActiveRun("B", 1_100)).toBe(false);
+    // Sans projectId → tous projets confondus (compat).
+    expect(hasActiveRun(undefined, 1_100)).toBe(true);
+  });
+
+  it("les runs ARCHIVÉS (historique) ne comptent jamais comme actifs", () => {
+    registerArchivedRuns(
+      [{ ...makeRun("arch"), archived: true, status: "running" }],
+      [],
+      "A",
+    );
+    expect(hasActiveRun("A", 1_000)).toBe(false);
   });
 });

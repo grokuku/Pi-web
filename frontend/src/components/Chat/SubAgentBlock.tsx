@@ -243,14 +243,17 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
   // Run BLOQUÉ (running sans fin au-delà du seuil) : il n'est plus une colonne
   // (selectConcurrentRuns l'exclut) → rendu inline à sa place avec un marqueur.
   const stuck = run ? isRunStuck(run) : false;
-  // Statut : le run (store) prime une fois connu ; sinon dérivé du toolCall.
+  // Statut d'affichage : le run (store) prime une fois connu ; sinon dérivé du
+  // toolCall. Un run TERMINÉ ne `running` plus, et un run resté `running` mais
+  // BLOQUÉ (`stuck`) non plus : aucun des deux ne doit s'auto-déplier à tort.
   const running = run ? run.status === "running" && !stuck : toolCall.isStreaming;
   const failed = run ? run.isError : isSubAgentFailed(toolCall);
-  // AUTO-DÉPLI : un sous-agent EN COURS est DÉPLIÉ par défaut pour montrer son
-  // activité (exigence « plus de silence »). Contrairement aux outils simples,
-  // on n'exige NI « dernier actif » NI output présent : une délégation
-  // long-running est l'activité principale du tour. TRANSITOIRE : une fois
-  // terminé, la règle normale (réglage global / erreur) reprend, sauf override.
+  // AUTO-DÉPLI : un sous-agent EN COURS (et NON bloqué) est DÉPLIÉ par défaut
+  // pour montrer son activité (exigence « plus de silence »). Contrairement aux
+  // outils simples, on n'exige NI « dernier actif » NI output présent : une
+  // délégation long-running est l'activité principale du tour. TRANSITOIRE :
+  // une fois terminé (ou bloqué), `running` est faux → la règle normale
+  // (réglage global / erreur) reprend, sauf override utilisateur.
   // NB : l'en-tête porte aussi un indicateur d'activité visible même replié
   // (cf. SubAgentHeader.preview).
   const autoRunning = running;

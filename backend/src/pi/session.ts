@@ -37,7 +37,8 @@ import { filterImagesForModel } from "./image-budget.js";
 // coût LLM). Voir harness-stream.ts pour la note sur le pont globalThis.
 import {
   registerSubagentEmitter,
-  filterSubagentActivityFromContext,
+  filterNonConversationalFromContext,
+  withNonConversationalMark,
   normalizeLegacyDelegateToolNames,
   neutralizeUnavailableToolErrors,
   DELEGATE_TOOL_NAME,
@@ -667,16 +668,18 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
     // (toolResult/assistant, ex. web_screenshot) ne repartent jamais au modèle,
     // et seules les images du DERNIER message user sont conservées. Rien n'est
     // supprimé de l'UI / de la session (cf. pi/image-budget.ts).
-    // LOT 2a : on en profite pour retirer du contexte LLM les entrées custom
-    // `subagent_activity` (résumés d'activité des sous-agents, persistés pour
-    // l'UI) — elles survivent au rechargement SANS coût LLM ; leur résumé
-    // structuré vit dans `details`, jamais envoyé au modèle.
+    // LOT 2a (refonte chat) : on en profite pour retirer du contexte LLM TOUS
+    // les messages injectés « non conversationnels » (résumés d'activité des
+    // sous-agents, captures, notifications git…) — persistés pour l'UI mais
+    // AFFICHAGE SEUL : le modèle ne doit JAMAIS les prendre pour une saisie
+    // utilisateur. Source de vérité : NON_CONVERSATIONAL_CUSTOM_TYPES
+    // (harness-stream.ts). Défense aussi le cas du flush en fin de tour du SDK. 
     try {
       const agent = (session as any).agent;
       if (agent && typeof agent.convertToLlm === "function") {
         const origConvertToLlm = agent.convertToLlm.bind(agent);
         // Le wrapper réécrit le contexte AVANT conversion provider :
-        //  1. filtre les entrées custom `subagent_activity` (résumés UI persistés) ;
+        //  1. retire les messages injectés NON conversationnels (affichage seul) ;
         //  2. normalise les appels HISTORIQUES `delegate_to_expert` → `delegate` ;
         //  3. neutralise les erreurs « Tool X not found » des outils INDISPONIBLES
         //     (bash/edit/read… en harness ; delegate en code) en message actionnable.
@@ -688,7 +691,7 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
           // Outils RÉELLEMENT actifs au moment de l'envoi (source de vérité : SDK).
           const activeTools: string[] = (session as any).getActiveToolNames?.() ?? [];
           const contextualized = neutralizeUnavailableToolErrors(
-            normalizeLegacyDelegateToolNames(filterSubagentActivityFromContext(messages)),
+            normalizeLegacyDelegateToolNames(filterNonConversationalFromContext(messages)),
             activeTools,
           );
           return filterImagesForModel(await origConvertToLlm(contextualized));
@@ -1815,7 +1818,9 @@ export async function injectSessionNotification(
         customType: "git_notification",
         content: notification,
         display: true,
-        details,
+        // Marqué NON conversationnel : affiché dans le fil, jamais envoyé au
+        // modèle comme entrée de conversation (cf. harness-stream.ts).
+        details: withNonConversationalMark(details),
       },
       { triggerTurn: false }
     );
@@ -1869,7 +1874,9 @@ export async function injectAttachmentToChat(
         customType: "screenshot",
         content,
         display: true,
-        details: { attachmentRefs },
+        // `attachmentRefs` pour la miniature UI + marqueur NON conversationnel :
+        // la capture parvient déjà au modèle via le RÉSULTAT du tool web_screenshot.
+        details: withNonConversationalMark({ attachmentRefs }),
       },
       { triggerTurn: false }
     );
@@ -1933,7 +1940,9 @@ export async function injectSubagentActivity(
         customType: "subagent_activity",
         content,
         display: false,
-        details: activity,
+        // Marqué NON conversationnel : résumé affiché via le bloc sous-agent,
+        // jamais envoyé au modèle (cf. harness-stream.ts).
+        details: withNonConversationalMark(activity),
       },
       { triggerTurn: false }
     );

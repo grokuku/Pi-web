@@ -27,6 +27,7 @@ import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
 import { mergeServerSessionState } from "./utils/session-sync";
+import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
 
 // ── Error boundary to prevent white/dark screen of death ──
 class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean; error: string}> {
@@ -185,6 +186,10 @@ function App() {
   const session = activeSessionState?.session ?? null;
   const stats = activeSessionState?.stats ?? null;
   const activeActivity = activeSessionState?.activity ?? null;
+  // Délégation EN COURS pour le projet actif (store sous-agents, snapshot
+  // stable) : la barre d'état l'affiche et n'indique plus « stalled » à tort
+  // pendant qu'un sous-agent travaille (run principal muet).
+  const activeSubAgent = useHasActiveSubAgentRun(activeProject?.id);
 
   // Modals
   const [showAddProject, setShowAddProject] = useState(false);
@@ -960,6 +965,7 @@ function App() {
                   activeMode={activeMode}
                   connected={connected}
                   pendingMessages={queueSize}
+                  activity={activeActivity}
                 />
               </div>
             </div>
@@ -1200,7 +1206,7 @@ function App() {
                 sizes={layoutCfg.sizes}
                 panelContent={{
                   pi: (
-                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} streamingStalled={streamingStalled} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} />
+                    <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} streamingStalled={streamingStalled} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} activity={activeActivity} />
                   ),
                   terminal: (
                     <TerminalView send={send} on={on} activeProject={activeProject} isActive={panels.terminal?.visible && !panels.terminal?.floating} />
@@ -1221,6 +1227,7 @@ function App() {
                 activeProject={activeProject}
                 isStreaming={isStreaming}
                 streamingStalled={streamingStalled}
+                subAgentActive={activeSubAgent}
                 stats={stats}
                 session={session}
                 connected={connected}
@@ -1236,7 +1243,7 @@ function App() {
       {/* FLOATING PANELS (Windows) */}
       {panels.pi?.visible && panels.pi?.floating && (
         <Window id="pi-float" title="PI" icon={<PiLogo className="w-4 h-4 text-hacker-accent" />} onClose={() => hidePanel("pi")} onDock={() => dockPanel("pi")}>
-          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} />
+          <ChatView send={send} on={on} activeProject={activeProject} isStreaming={isStreaming} session={session} projectId={activeProject?.id || ""} activeMode={activeMode} connected={connected} pendingMessages={queueSize} onQuit={handleQuit} activity={activeActivity} />
         </Window>
       )}
       {panels.terminal?.visible && panels.terminal?.floating && (

@@ -25,6 +25,7 @@ import type {
   SubAgentEndStatus,
   SubAgentRun,
   SubAgentRunMessage,
+  SubAgentRunStatus,
 } from "../types";
 import { buildToolSummary } from "../utils/toolSummaries";
 
@@ -165,6 +166,20 @@ export function applySubagentEvent(
   const meta = envelopeMeta(env, base, now);
   const ev = env.event || {};
 
+  // Statut à porter par un événement d'OUTIL : si le run porte déjà une fin
+  // (`end` de subagent_end, ou statut terminal), un événement d'outil TARDIF
+  // (arrivé après abort/timeout/coupure WS) ne doit jamais le ressusciter en
+  // `running` — sinon le run redevient « actif » (auto-déplié, remis dans le
+  // mur des colonnes) alors qu'il est terminé.
+  const toolStatus: SubAgentRunStatus =
+    base.status !== "running"
+      ? base.status
+      : base.end !== undefined
+        ? base.isError
+          ? "failed"
+          : "done"
+        : "running";
+
   switch (ev.type) {
     case "subagent_start":
       return { ...base, ...meta, status: "running", startedAt: base.startedAt ?? now };
@@ -173,7 +188,7 @@ export function applySubagentEvent(
       const toolCallId = ev.toolCallId;
       // Idempotent : rejoue un start déjà vu (reconnexion) sans doublon.
       if (toolCallId && base.actions.some((a) => a.toolCallId === toolCallId)) {
-        return { ...base, ...meta, status: "running" };
+        return { ...base, ...meta, status: toolStatus };
       }
       const action: SubAgentAction = {
         seq: base.actions.length + 1,
@@ -186,7 +201,7 @@ export function applySubagentEvent(
         output: "",
         args: ev.args,
       };
-      return { ...base, ...meta, status: "running", currentOutput: "", actions: [...base.actions, action] };
+      return { ...base, ...meta, status: toolStatus, currentOutput: "", actions: [...base.actions, action] };
     }
 
     case "tool_execution_update": {
@@ -194,7 +209,7 @@ export function applySubagentEvent(
       const actions = base.actions.map((a) =>
         a.toolCallId === ev.toolCallId ? { ...a, output: text } : a,
       );
-      return { ...base, ...meta, status: "running", currentOutput: text, actions };
+      return { ...base, ...meta, status: toolStatus, currentOutput: text, actions };
     }
 
     case "tool_execution_end": {
@@ -222,7 +237,7 @@ export function applySubagentEvent(
           summary,
         };
       });
-      return { ...base, ...meta, status: "running", currentOutput: text, actions };
+      return { ...base, ...meta, status: toolStatus, currentOutput: text, actions };
     }
 
     case "message_end": {
@@ -586,7 +601,10 @@ export function routeSubagentEnvelope(
 
 /**
  * Enregistre des runs « archivés » (relecture historique) puis les rattache
- * aux tool calls `delegate` de la liste convertie. Idempotent (dédup par id).
+ * aux tool calls `delegate` de la liste convertie. Dédup par id, avec UNE
+ * exception : un run local encore `running` est REMPLACÉ par sa version
+ * archivée TERMINALE (fin perdue — coupure WS…), sinon il resterait actif à
+ * tort jusqu'au seuil de blocage.
  * ÉTANCHÉITÉ : `projectId` (conversation qui relit ces runs) est marqué sur
  * chaque run avant stockage et borne le rattachement — un run archivé ne peut
  * jamais apparaître ni s'accrocher dans une conversation d'un autre projet.
@@ -604,9 +622,32 @@ export function registerArchivedRuns(
 ): void {
   let added = false;
   for (const r of list) {
-    if (!r || runs.has(r.id)) continue;
-    // Marque le projet d'appartenance (relecture = conversation courante).
-    runs.set(r.id, projectId && !r.projectId ? { ...r, projectId } : r);
+    if (!r) continue;
+    const local = runs.get(r.id);
+    if (local) {
+      // Un run local encore `running` alors que sa version ARCHIVÉE est
+      // TERMINALE (subagent_end perdu : coupure WS, abort sans événement…) ne
+      // doit pas rester « actif » : la fin persistée fait foi → REMPLACEMENT
+      // par la version archivée. Sans cela, le run restait `running` jusqu'au
+      // seuil de blocage (STUCK_RUN_TIMEOUT_MS) — donc auto-déplié à tort.
+      // Dans TOUS les autres cas, on conserve la version locale : un run local
+      // terminal ne doit jamais être rétrogradé par une version archivée moins
+      // avancée (elle-même terminale, réenregistrée à chaque relecture).
+      const archivedTerminal =
+        r.status === "done" || r.status === "failed" || r.end !== undefined;
+      if (!(local.status === "running" && archivedTerminal)) continue;
+      const mergedProjectId = local.projectId ?? r.projectId ?? projectId;
+      runs.set(r.id, {
+        ...r,
+        ...(mergedProjectId ? { projectId: mergedProjectId } : {}),
+        // Le rattachement (toolCallId) est un savoir LOCAL : conservé, la fin
+        // terminale ne le remet pas en cause.
+        ...(local.toolCallId ? { toolCallId: local.toolCallId } : {}),
+      });
+    } else {
+      // Marque le projet d'appartenance (relecture = conversation courante).
+      runs.set(r.id, projectId && !r.projectId ? { ...r, projectId } : r);
+    }
     added = true;
   }
   // Rattachement (re)tenté pour TOUS les runs fournis — pas seulement les
@@ -1059,6 +1100,62 @@ export function useDatedDetachedRuns(projectId?: string): SubAgentRun[] {
     subscribeRuns,
     () => getDatedDetachedSnapshot(projectId),
     () => getDatedDetachedSnapshot(projectId),
+  );
+}
+
+// ── Travail délégué EN COURS (indicateur d'activité du composer) ─────────────
+/**
+ * Vrai si AU MOINS UN run du projet est encore actif (`running`) et frais —
+ * un run silencieux au-delà de STUCK_RUN_TIMEOUT_MS (fin d'événement perdue)
+ * ne compte plus. PURE (now injectable).
+ */
+export function hasActiveRun(projectId?: string, now: number = Date.now()): boolean {
+  for (const run of getAllRuns(projectId)) {
+    if (!run.archived && isRunActive(run) && !isRunStuck(run, now)) return true;
+  }
+  return false;
+}
+
+let activeSnapVersion = -1;
+let activeSnapProject: string | undefined;
+let activeSnapBucket = -1;
+let activeSnapValue = false;
+
+/**
+ * Snapshot STABLE (primitive) pour `useSyncExternalStore` : les events LIVE
+ * des sous-agents ne re-rendent donc PAS le fil (la valeur ne change qu'au
+ * passage actif↔inactif) ; le « bucket » de 30 s réévalue le seuil de blocage
+ * même sans nouvel événement.
+ */
+export function getActiveRunSnapshot(projectId?: string): boolean {
+  const bucket = Math.floor(Date.now() / 30_000);
+  if (
+    activeSnapVersion === version &&
+    activeSnapProject === projectId &&
+    activeSnapBucket === bucket
+  ) {
+    return activeSnapValue;
+  }
+  activeSnapVersion = version;
+  activeSnapProject = projectId;
+  activeSnapBucket = bucket;
+  activeSnapValue = hasActiveRun(projectId);
+  return activeSnapValue;
+}
+
+/**
+ * Hook : un travail délégué est-il EN COURS pour ce projet ? Utilisé par la
+ * ligne d'état du composer pour afficher « Délégation en cours… » quand la
+ * session principale est muette (tool `delegate` bloquant) ou n'est pas en
+ * streaming (batch harness).
+ */
+export function useHasActiveSubAgentRun(projectId?: string): boolean {
+  // Horloge : réévalue le seuil de blocage tant que des runs sont actifs.
+  useActiveRunsClock();
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => getActiveRunSnapshot(projectId),
+    () => getActiveRunSnapshot(projectId),
   );
 }
 

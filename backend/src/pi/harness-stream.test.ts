@@ -25,8 +25,10 @@ import {
   createSubagentEventGate,
   decideExplorationNudge,
   emitSubagentEvent,
+  filterNonConversationalFromContext,
   filterSubagentActivityFromContext,
   firstLine,
+  isNonConversationalMessage,
   isSubagentActivityMessage,
   isToolNotFoundError,
   makeDelegateRunId,
@@ -38,6 +40,7 @@ import {
   summarizeToolAction,
   summarizeToolArgs,
   truncateChars,
+  withNonConversationalMark,
   type RawSubagentEmitter,
   type SubagentEventBase,
 } from "./harness-stream.js";
@@ -190,13 +193,75 @@ describe("isSubagentActivityMessage / filterSubagentActivityFromContext", () => 
       { role: "user", content: "hello" },
       { role: "custom", customType: "subagent_activity", content: "résumé" },
       { role: "assistant", content: "hi" },
-      { role: "custom", customType: "git_notification", content: "push ok" },
+      { role: "custom", customType: "design_context", content: "design" },
     ];
     const filtered = filterSubagentActivityFromContext(messages) as any[];
     expect(filtered).toHaveLength(3);
     expect(filtered.some((m) => m.customType === "subagent_activity")).toBe(false);
     // L'original n'est pas muté.
     expect(messages).toHaveLength(4);
+  });
+});
+
+describe("messages injectés NON conversationnels (filterNonConversationalFromContext)", () => {
+  it("retire du contexte les injections d'affichage (screenshot, git_notification, subagent_activity)", () => {
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+      { role: "custom", customType: "screenshot", content: "📸 capture.png", details: { attachmentRefs: [] } },
+      { role: "custom", customType: "git_notification", content: "push ok" },
+      { role: "custom", customType: "subagent_activity", content: "résumé" },
+    ];
+    const filtered = filterNonConversationalFromContext(messages) as any[];
+    // Seuls le user et l'assistant survivent.
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((m) => m.role)).toEqual(["user", "assistant"]);
+    // Pas de mutation de l'entrée.
+    expect(messages).toHaveLength(5);
+  });
+
+  it("ne touche JAMAIS un message utilisateur ou assistant", () => {
+    const messages = [
+      { role: "user", content: "question" },
+      { role: "assistant", content: "réponse" },
+    ];
+    expect(filterNonConversationalFromContext(messages)).toEqual(messages);
+    expect(isNonConversationalMessage(messages[0])).toBe(false);
+    expect(isNonConversationalMessage(messages[1])).toBe(false);
+  });
+
+  it("conserve un custom_message NON d'affichage seul (design_context, nudge…)", () => {
+    const messages = [
+      { role: "custom", customType: "design_context", content: "## Current Design" },
+      { role: "custom", customType: "cbm_exploration_nudge", content: "utilise cbm_*" },
+    ];
+    expect(filterNonConversationalFromContext(messages)).toEqual(messages);
+  });
+
+  it("honore le marqueur explicite details.__nonConversational (customType inconnu)", () => {
+    const marked = { role: "custom", customType: "future_injection", content: "x", details: withNonConversationalMark({ foo: 1 }) };
+    expect(isNonConversationalMessage(marked)).toBe(true);
+    expect(filterNonConversationalFromContext([
+      { role: "user", content: "q" },
+      marked,
+    ])).toHaveLength(1);
+    // Sans marqueur et hors liste, le message reste dans le contexte.
+    expect(isNonConversationalMessage({ role: "custom", customType: "future_injection", content: "x" })).toBe(false);
+  });
+
+  it("reproduit le cas réel : l'injection flushée en fin de tour n'est pas vue par l'inférence suivante", () => {
+    // Séquence : délégation → toolResult du sous-agent → injection screenshot flushée
+    // en TOUT DERNIER (comportement SDK _flushPendingCustomMessages).
+    const context = [
+      { role: "user", content: "fais X" },
+      { role: "assistant", content: [{ type: "text", text: "je délègue" }, { type: "toolCall", name: "delegate" }] },
+      { role: "toolResult", content: "rapport du sous-agent" },
+      { role: "custom", customType: "screenshot", content: "📸 capture", details: withNonConversationalMark({ attachmentRefs: [] }) },
+    ];
+    const filtered = filterNonConversationalFromContext(context) as any[];
+    // Le dernier élément vu par le modèle est bien le toolResult, PAS l'injection.
+    expect(filtered[filtered.length - 1].role).toBe("toolResult");
+    expect(filtered.some((m) => (m as any).customType === "screenshot")).toBe(false);
   });
 });
 

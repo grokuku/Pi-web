@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type RefObject } from "react";
 import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
 import { MarkdownContent } from "../Markdown/markdown";
-import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock } from "../../types";
+import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock, Activity } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { ModalDialog } from "../common/ModalDialog";
 import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ChatStatusLine } from "./ChatStatusLine";
 import { CollapsibleBlock, CollapseProvider, useCollapsible } from "./CollapsibleBlock";
 import { SubAgentBlock } from "./SubAgentBlock";
 import { ParallelSubAgents } from "./ParallelSubAgents";
@@ -23,7 +24,7 @@ import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, mergeHistoryWithPending, prependHistoryBatch } from "../../utils/pi-events";
-import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, type SubagentEnvelope } from "../../stores/subagentRuns";
+import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, useHasActiveSubAgentRun, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
@@ -122,6 +123,9 @@ interface Props {
   session: any;
   projectId: string;
   activeMode?: string;
+  // Activité fine du run principal (App.tsx : routage/réflexion/outil/
+  // génération) — affichée par la ligne d'état du composer.
+  activity?: Activity | null;
   // Lot B : état connexion WS + taille de la file d'attente d'envoi,
   // pour la bannière « connexion perdue » en haut des messages.
   connected: boolean;
@@ -185,7 +189,7 @@ const RESYNC_MASSIVE_MIN = 100;           // seuil « massif en soi » : > 100 m
 const RESYNC_MASSIVE_DELTA = 50;          // seuil « rattrapage » : > 50 de plus que l'affiché actuel
 const RESYNC_TOAST_DURATION_MS = 4500;
 
-export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, connected, pendingMessages, onQuit }: Props) {
+export function ChatView({ send, on, activeProject, isStreaming, streamingStalled, session, projectId, activeMode, connected, pendingMessages, onQuit, activity = null }: Props) {
   const { t } = useTranslation();
 
   // ── State ──
@@ -238,6 +242,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const lastResyncToastAtRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatHistory = useChatHistory(projectId);
+  // Travail délégué EN COURS (tool `delegate`) : source honnête quand la
+  // session principale est MUETTE (bloquée sur l'appel delegate, aucun texte /
+  // réflexion) ou pas en streaming (batch harness). Snapshot STABLE : les
+  // events LIVE des sous-agents ne re-rendent pas le fil.
+  const subAgentActive = useHasActiveSubAgentRun(projectId);
 
   // ── Chargement par lots (fix de fond « messages récents manquants ») ──
   // Le backend n'envoie plus l'historique COMPLET dans pi_history (un payload
@@ -1246,6 +1255,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         projectId={projectId}
         isStreaming={isStreaming}
         streamingStalled={streamingStalled}
+        subAgentActive={subAgentActive}
+        activity={activity}
         gitBranch={activeProject?.git?.branch}
         setError={setError}
         onKeystroke={(latency: number) => {
@@ -2092,9 +2103,10 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
   );
 });
 
-// ── ChatInputArea (unchanged) ──
-const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, gitBranch, projectId, setError, onKeystroke }: {
+// ── ChatInputArea — saisie + ligne d'état (raccourcis, git, activité) ──
+const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming, streamingStalled, subAgentActive, activity, gitBranch, projectId, setError, onKeystroke }: {
   onSend: (text:string, attachments:Attachment[]) => void; onAbort: () => void; isStreaming: boolean; streamingStalled?: boolean;
+  subAgentActive?: boolean; activity?: Activity | null;
   gitBranch?: string; projectId: string; setError: (e:string) => void;
   onKeystroke?: (latency: number) => void;
 }) {
@@ -2142,7 +2154,13 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
     <div className="border-t border-hacker-border-bright bg-hacker-surface p-3" onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setIsDragOver(true)}} onDragLeave={()=>setIsDragOver(false)} onPaste={handlePaste}>
       {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">{t('chat.dropFiles')}</div></div>}
       {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1" title={t('chat.removeAttachment')} aria-label={t('chat.removeAttachment')}><X size={12}/></button></div>)}</div>}
-      <div className="text-hacker-text-dim text-[0.6875rem] mb-1 flex justify-between"><span className="hidden md:block">{t('chat.keyboardHints')}</span><span className="flex items-center gap-2 ml-auto">{gitBranch&&<span>git:{gitBranch}</span>}{isStreaming&&!streamingStalled&&<span className="text-hacker-accent flex items-center gap-1"><span className="pulse-dot w-1.5 h-1.5"/> {t('common.loading')}</span>}{isStreaming&&streamingStalled&&<span className="text-hacker-warn flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-hacker-warn"/> {t('activity.stalled')}</span>}</span></div>
+      <ChatStatusLine
+        gitBranch={gitBranch}
+        isStreaming={isStreaming}
+        streamingStalled={streamingStalled}
+        subAgentActive={subAgentActive}
+        activity={activity}
+      />
       <div className="flex gap-2">
         <textarea
           ref={inputRef}

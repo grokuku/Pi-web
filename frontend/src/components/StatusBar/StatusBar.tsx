@@ -1,6 +1,7 @@
 import type { Project, Activity } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
+import { resolveActivityDisplay } from "../../utils/activity-label";
 
 interface Props {
   activeProject: Project | null;
@@ -11,6 +12,9 @@ interface Props {
   connected: boolean;
   activeMode?: string;
   activity?: Activity | null;
+  // Sous-agent (`delegate`) encore actif pour ce projet : travail réel pendant
+  // le silence de la session principale (évite un faux « stalled »).
+  subAgentActive?: boolean;
   onOpenUsage?: () => void;
 }
 
@@ -23,6 +27,7 @@ export function StatusBar({
   connected,
   activeMode = "code",
   activity = null,
+  subAgentActive = false,
   onOpenUsage,
 }: Props) {
   const { t } = useTranslation();
@@ -30,20 +35,13 @@ export function StatusBar({
   const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
 
   // ── Libellé d'activité dynamique ──
-  // Affiche CE QUE l'agent fait (fonction de routage, réflexion, outil, réponse)
-  // au lieu d'un « chargement » générique.
-  const routingFn = activity && activity.type === "routing" ? activity.routingFunction : undefined;
-  const routingLabel = routingFn ? t(`activity.${routingFn}`) : undefined;
-  const activityLabel =
-    !activity
-      ? t('activity.inProgress')
-      : activity.type === "routing"
-        ? `${t('activity.routingPrefix')}${routingLabel ?? t('activity.inProgress')}`
-        : activity.type === "thinking"
-          ? t('activity.thinking')
-          : activity.type === "tool"
-            ? t('activity.tool')
-            : t('activity.generating');
+  // Affiche CE QUE l'agent fait (routage, réflexion, outil, réponse) et couvre
+  // les délégations actives (subAgentActive) — décision partagée avec la ligne
+  // d'état du composer (utils/activity-label).
+  const activityDisplay = resolveActivityDisplay(
+    { activity, isStreaming, streamingStalled, subAgentActive },
+    t,
+  );
 
   return (
     <div className="h-8 status-glow bg-hacker-surface flex items-center px-3 gap-3 text-[11px] shrink-0">
@@ -116,20 +114,18 @@ export function StatusBar({
         </>
       )}
 
-      {/* Streaming */}
-      {isStreaming && !streamingStalled && (
+      {/* Streaming / délégation en cours / run principal silencieux */}
+      {activityDisplay.visible && (
         <>
-          <span className="text-hacker-accent flex items-center gap-1" title={t('activity.tooltip')}>
-            <span className="pulse-dot w-1.5 h-1.5" /> {activityLabel}
-          </span>
-          <span className="text-hacker-border-bright">│</span>
-        </>
-      )}
-      {isStreaming && streamingStalled && (
-        <>
-          <span className="text-hacker-warn flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn" /> {t('activity.stalled')}
-          </span>
+          {activityDisplay.kind === "busy" ? (
+            <span className="text-hacker-accent flex items-center gap-1" title={activityDisplay.tooltip}>
+              <span className="pulse-dot w-1.5 h-1.5" /> {activityDisplay.label}
+            </span>
+          ) : (
+            <span className="text-hacker-warn flex items-center gap-1" title={activityDisplay.tooltip}>
+              <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn" /> {activityDisplay.label}
+            </span>
+          )}
           <span className="text-hacker-border-bright">│</span>
         </>
       )}
