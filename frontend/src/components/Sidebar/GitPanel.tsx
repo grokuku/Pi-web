@@ -122,14 +122,16 @@ function CompactStateBadges({ status, t }: { status: GitStatus | null; t: TFunct
 // Ligne compacte (chevron + nom + badge branche cyan + badges d'état) qui
 // sert de toggle manuel, et détail au dépliage (meta, trio, fichiers, actions).
 // Le statut est chargé au montage (pour les badges + l'auto-dépliage), au
-// dépliage et à chaque refresh global ; le polling 30 s ne concerne que le
-// projet principal.
+// dépliage et à chaque refreshKey incrémenté par le parent (⟳ manuel, fins
+// d'activité de l'agent sur pi_event, retour au premier plan). Le polling 30 s
+// ne concerne que le projet principal.
 function GitProjectSection({
   project,
   isMain,
   isOpen,
   onToggle,
   onStatusChange,
+  onLoadingChange,
   activeProjectId,
   refreshKey,
 }: {
@@ -138,6 +140,9 @@ function GitProjectSection({
   isOpen: boolean;
   onToggle: () => void;
   onStatusChange: (status: GitStatus) => void;
+  // Remonte l'état de chargement au parent : le spinner ⟳ reflète ainsi un
+  // chargement RÉEL (et s'arrête à la fin), quel qu'en soit le déclencheur.
+  onLoadingChange: (projectId: string, loading: boolean) => void;
   // Projet AFFICHÉ (session active) : cible du résumé de push injecté dans le chat.
   // = projet du GitPanel (placeholder lié) pour une section LIÉE, = projet sinon.
   activeProjectId: string;
@@ -180,6 +185,13 @@ function GitProjectSection({
   const fetchRef = useRef(fetchStatus);
   useEffect(() => { fetchRef.current = fetchStatus; });
 
+  // Notifie le parent à chaque transition de chargement (et à l'unmount) :
+  // le parent compte les sections en vol pour le spinner ⟳.
+  useEffect(() => {
+    onLoadingChange(project.id, loading);
+    return () => onLoadingChange(project.id, false);
+  }, [onLoadingChange, project.id, loading]);
+
   // Seed au montage : renseigne le badge d'état et permet l'auto-dépliage,
   // y compris pour une section repliée (une seule requête, aucun polling).
   useEffect(() => {
@@ -187,20 +199,35 @@ function GitProjectSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Dépliage (manuel ou auto) et refresh global (⟳) : refait un statut.
-  // Le refresh réapplique l'auto aux sections sans override (côté parent).
+  // Dépliage (manuel ou auto) et refreshKey (⟳ manuel, événements, focus) :
+  // refait un statut. On compare au refreshKey PRÉCÉDENT (et non à 0) pour ne
+  // pas doubler le seed au montage quand le parent a déjà rafraîchi.
+  // Un dépliage AUTO (statut dirty reçu) suit un fetch frais : inutile de
+  // refetch. Seul un clic utilisateur sur la ligne justifie un refetch à
+  // l'ouverture (fraîcheur demandée explicitement).
   const wasOpen = useRef(isOpen);
+  const lastRefreshKey = useRef(refreshKey);
+  const userToggledRef = useRef(false);
   useEffect(() => {
     const justOpened = isOpen && !wasOpen.current;
     wasOpen.current = isOpen;
-    if (justOpened || refreshKey > 0) fetchRef.current();
+    const userToggled = userToggledRef.current;
+    userToggledRef.current = false;
+    const refreshTriggered = refreshKey !== lastRefreshKey.current;
+    lastRefreshKey.current = refreshKey;
+    if (refreshTriggered || (justOpened && userToggled)) fetchRef.current();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, refreshKey]);
 
-  // Polling 30 s : projet principal uniquement (comportement historique).
+  // Polling 30 s : projet principal uniquement (comportement historique),
+  // suspendu tant que l'onglet est caché (sonder un UI invisible est inutile ;
+  // le retour au premier plan déclenche déjà un refetch côté parent).
   useEffect(() => {
     if (!isMain) return;
-    const interval = setInterval(() => fetchRef.current(), 30_000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      fetchRef.current();
+    }, 30_000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMain]);
@@ -269,7 +296,12 @@ function GitProjectSection({
   // ── Ligne compacte : chevron + nom + badge branche (cyan) + badges d'état ──
   const header = (
     <div
-      onClick={onToggle}
+      onClick={() => {
+        // Marque l'ouverture comme pilotée par l'utilisateur (refetch au
+        // dépliage) — à l'inverse de l'auto-dépliage consécutif à un statut.
+        userToggledRef.current = true;
+        onToggle();
+      }}
       role="button"
       title={isOpen ? t("gitPanel.collapseSection") : t("gitPanel.expandSection")}
       className="flex items-center gap-1.5 group cursor-pointer hover:bg-hacker-border/40 mt-1 py-1 px-1 rounded transition-colors select-none"
@@ -287,6 +319,19 @@ function GitProjectSection({
         {branchBadge}
       </span>
       <CompactStateBadges status={status} t={t} />
+      {/* Échec de chargement : indicateur visible MÊME replié — sinon un seed
+          en échec (ex. NetworkError INFRA-01) restait totalement silencieux.
+          Le retry est automatique (prochain pi_event / retour au premier plan)
+          ou via le ⟳ du panneau. */}
+      {!isOpen && error && (
+        <span
+          className="text-hacker-error flex items-center shrink-0"
+          title={error}
+          aria-label={t("gitPanel.fetchError")}
+        >
+          <AlertTriangle size={10} />
+        </span>
+      )}
     </div>
   );
 
@@ -541,9 +586,13 @@ function formatTimeAgo(iso: string, t: TFunction): string {
 interface Props {
   project: Project;
   // Projets LIÉS du projet actif (résolus par la Sidebar) — une section
-  // accordéon par projet, statut chargé sans polling.
+  // accordéon par projet, statut rafraîchi par événements (pi_event) et au
+  // retour au premier plan, sans polling périodique propre.
   linkedProjects?: Project[];
   onRefresh?: () => void;
+  // Abonnement WS fourni par App (même contrat que FileExplorer) : sert à
+  // refetch les statuts sur les fins d'activité de l'agent (pi_event).
+  on?: (type: string, cb: (msg: any) => void) => () => void;
 }
 
 // Clé sessionStorage versionnée : contient désormais les OVERRIDES manuels
@@ -556,16 +605,41 @@ function loadOverrides(): Record<string, boolean> {
     // Purge l'ancienne clé (état brut) pour éviter toute confusion de schéma.
     sessionStorage.removeItem(LEGACY_EXPANDED_KEY);
     const raw = sessionStorage.getItem(EXPANDED_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    // Ne restaure QUE les overrides « déplié » (true) : un « replié » (false)
+    // écrit par une version antérieure masquerait un projet dirty après un F5
+    // (cf. règle de persistance ci-dessous).
+    const restored: Record<string, boolean> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (value === true) restored[id] = true;
+    }
+    return restored;
   } catch {
     return {};
   }
 }
 
-export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
+// Fenêtre de coalescing des rafales de pi_event (fin de tour / fin de run) :
+// un seul refetch par rafale.
+const REFRESH_COALESCE_MS = 1200;
+
+export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props) {
   const { t } = useTranslation();
   const [refreshKey, setRefreshKey] = useState(0);
   const [showPushAllModal, setShowPushAllModal] = useState(false);
+
+  // ── Sections en chargement (ids projet) : le spinner ⟳ de l'en-tête reflète
+  // un chargement RÉEL au lieu de rester bloqué sur « refreshKey > 0 » ──
+  const loadingIdsRef = useRef<Set<string>>(new Set());
+  const [isAnySectionLoading, setIsAnySectionLoading] = useState(false);
+  const handleLoadingChange = useCallback((projectId: string, loading: boolean) => {
+    const ids = loadingIdsRef.current;
+    if (loading) ids.add(projectId);
+    else ids.delete(projectId);
+    setIsAnySectionLoading(ids.size > 0);
+  }, []);
 
   // Un projet LIÉ est un placeholder (dossier de symlinks), PAS un dépôt git
   // indépendant. Sa « section principale » ne doit jamais être rendue comme
@@ -583,13 +657,32 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
   // Dernière catégorie (autoExpandFor) vue par projet : détecte dirty↔clean.
   const prevAutoRef = useRef<Record<string, boolean>>({});
 
+  // ── Persistance des overrides (règle du correctif 3) ──
+  // 1) Un override est purgé dès que la catégorie auto change (dirty↔clean),
+  //    dans handleStatusChange ci-dessous : la section reprend l'auto-dépliage
+  //    du nouvel état. Un dirty après une parenthèse clean se déplie donc à
+  //    nouveau, même si l'utilisateur l'avait pliée pendant l'épisode dirty
+  //    précédent.
+  // 2) Seuls les overrides « DÉPLIÉ » (true) sont persistés en sessionStorage.
+  //    Un « replié » (false) est une intention ponctuelle pour la session en
+  //    cours : s'il survivait à un F5 alors que le projet est (re)devenu dirty,
+  //    la section resterait repliée à vie — le bug à éviter. En mémoire, le pli
+  //    manuel reste respecté tant que la catégorie ne change pas.
   useEffect(() => {
-    try { sessionStorage.setItem(EXPANDED_KEY, JSON.stringify(overrides)); } catch {}
+    try {
+      const persisted: Record<string, boolean> = {};
+      for (const [id, expanded] of Object.entries(overrides)) {
+        if (expanded) persisted[id] = true;
+      }
+      sessionStorage.setItem(EXPANDED_KEY, JSON.stringify(persisted));
+    } catch {}
   }, [overrides]);
 
   // Rapport de statut d'une section : met à jour les badges, et purge
   // l'override quand le projet change de catégorie (dirty↔clean). Sans purge,
-  // le polling 30 s ré-ouvrirait/refermerait la section sous les yeux.
+  // le polling/refresh ré-ouvrirait ou refermerait la section sous les yeux de
+  // l'utilisateur ; avec, un dirty APRÈS une parenthèse clean se déplie à
+  // nouveau (règle 1 documentée avec la persistance ci-dessus).
   const handleStatusChange = useCallback((id: string, status: GitStatus) => {
     setStatuses((prev) => ({ ...prev, [id]: status }));
     const auto = autoExpandFor(status);
@@ -613,9 +706,77 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
     setOverrides((prev) => ({ ...prev, [id]: !isExpanded(id) }));
   };
 
+  // Refetch des STATUTS uniquement (aucun git/sync, aucun rechargement de la
+  // liste des projets) : chaque section re-teste son statut et réapplique
+  // l'auto (celles sans override actif).
+  const refreshSections = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  // ── Rafales : les fins d'activité émettent plusieurs pi_event rapprochés
+  // (turn_end puis agent_end puis agent_settled) → UN SEUL refetch par rafale.
+  // Dé-bounce « trailing » : chaque nouvel événement repousse l'échéance, donc
+  // aucun refetch pendant le streaming (uniquement à la fin) et un seul pour
+  // des événements groupés. Pas de polling propre aux sections liées. ──
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefreshSections = useCallback(() => {
+    if (refreshTimerRef.current !== null) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshSections();
+    }, REFRESH_COALESCE_MS);
+  }, [refreshSections]);
+
+  // Nettoyage du timer de coalescing au démontage.
+  useEffect(() => () => {
+    if (refreshTimerRef.current !== null) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+  }, []);
+
+  // ── TEMPS RÉEL : refetch sur les fins d'ACTIVITÉ de l'agent (pi_event) ──
+  // Un workspace LIÉ est une session ouverte sur le projet PLACEHOLDER : les
+  // frames pi_event portent le projectId du placeholder, PAS celui des
+  // sous-projets. On filtre donc sur project.id et on refetch TOUTES les
+  // sections affichées (impossible de rattacher le changement à un sous-projet).
+  // Écoutés uniquement : turn_end (fin de tour), agent_end et agent_settled
+  // (VRAIE fin du run, BUG-72) — jamais les chunks de streaming.
+  useEffect(() => {
+    if (!on) return;
+    const unsub = on("pi_event", (msg: any) => {
+      if (msg?.projectId !== project.id) return;
+      const type = msg?.event?.type;
+      if (type === "turn_end" || type === "agent_end" || type === "agent_settled") {
+        scheduleRefreshSections();
+      }
+    });
+    return () => unsub();
+  }, [on, project.id, scheduleRefreshSections]);
+
+  // ── Filet de sécurité peu coûteux : au retour au premier plan (onglet
+  // redevenu visible) ou au focus fenêtre — le WS a pu manquer des frames
+  // pendant l'arrière-plan, et un seed en échec doit pouvoir réessayer.
+  // Passe par le même dé-bounce (visible + focus rapprochés = un seul refetch).
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") scheduleRefreshSections();
+    };
+    const onFocus = () => scheduleRefreshSections();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [scheduleRefreshSections]);
+
   const refreshAll = () => {
-    // Incrémente la clé : chaque section re-teste son statut et réapplique
-    // l'auto (celles sans override actif).
+    // ⟳ manuel : annule un refetch automatique en attente pour ne pas doubler
+    // les requêtes, puis incrémente la clé (chaque section re-teste son statut
+    // et réapplique l'auto, celles sans override actif) + git/sync des projets.
+    if (refreshTimerRef.current !== null) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
     setRefreshKey((k) => k + 1);
     onRefresh?.();
   };
@@ -639,7 +800,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
           className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
           title={t('gitPanel.refresh')}
         >
-          <RefreshCw size={10} className={refreshKey > 0 && hasAnySection ? "animate-spin" : ""} />
+          <RefreshCw size={10} className={isAnySectionLoading ? "animate-spin" : ""} />
         </button>
       </div>
 
@@ -652,6 +813,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
           isOpen={isExpanded(project.id)}
           onToggle={() => toggleSection(project.id)}
           onStatusChange={(s) => handleStatusChange(project.id, s)}
+          onLoadingChange={handleLoadingChange}
           activeProjectId={project.id}
           refreshKey={refreshKey}
         />
@@ -672,6 +834,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh }: Props) {
               isOpen={isExpanded(lp.id)}
               onToggle={() => toggleSection(lp.id)}
               onStatusChange={(s) => handleStatusChange(lp.id, s)}
+              onLoadingChange={handleLoadingChange}
               activeProjectId={project.id}
               refreshKey={refreshKey}
             />

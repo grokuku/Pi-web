@@ -228,7 +228,7 @@ export function Sidebar({
 
       {/* ── Git panel ── */}
       {activeProject && (activeProject.git?.remote || activeProject.storage === "linked") && (
-        <GitPanel project={activeProject} linkedProjects={linkedSubProjects} onRefresh={onRefreshGit} />
+        <GitPanel project={activeProject} linkedProjects={linkedSubProjects} onRefresh={onRefreshGit} on={on} />
       )}
 
       {/* ── Commands ── */}

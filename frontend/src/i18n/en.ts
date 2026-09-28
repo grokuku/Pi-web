@@ -683,6 +683,7 @@ export const en = {
     expandSection: "Expand section",
     collapseSection: "Collapse section",
     loading: "Loading...",
+    fetchError: "Failed to load git status",
     upToDate: "Up to date",
     workingChanges: "Pending changes",
     lastFetch: "Status freshness",

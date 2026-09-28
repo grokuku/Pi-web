@@ -684,6 +684,7 @@ export const fr = {
     expandSection: "Déplier la section",
     collapseSection: "Replier la section",
     loading: "Chargement...",
+    fetchError: "Échec du chargement du statut git",
     upToDate: "À jour",
     workingChanges: "Modifications en attente",
     lastFetch: "Fraîcheur du statut",
