@@ -29,6 +29,11 @@
 
 /** Budget par défaut de la carte injectée (~1k tokens ≈ 4000 chars). */
 export const REPO_MAP_BUDGET_CHARS = 4000;
+/**
+ * Budget par défaut de la carte FÉDÉRÉE d'un workspace lié (plus large : elle
+ * agrège plusieurs sous-projets, ~1.5k tokens ≈ 6000 chars).
+ */
+export const REPO_MAP_LINKED_BUDGET_CHARS = 6000;
 /** Marqueur de début du bloc injecté dans le prompt système du sous-agent. */
 export const REPO_MAP_MARKER_START = "<!-- PI_REPO_MAP -->";
 /** Marqueur de fin du bloc injecté dans le prompt système du sous-agent. */
@@ -504,4 +509,77 @@ export function buildRepoMap(data: RepoMapData, options: BuildRepoMapOptions = {
   //    de tout jeter en passant directement à l'arborescence.
   const sections = buildSections("signatures", ranked, lineMax);
   return fitSectionsToBudget(renderHeader(ranked, "signatures"), sections, budget);
+}
+
+// ── Carte FÉDÉRÉE (workspaces liés) ───────────────────────
+
+/** Une section de carte nommée : un sous-projet et sa carte (déjà rendue). */
+export interface LinkedRepoMapSection {
+  /** Nom du sous-projet (étiquette de provenance, ex. « holaf-lib »). */
+  name: string;
+  /** Carte rendue du sous-projet (sortie de buildRepoMap). */
+  text: string;
+}
+
+/**
+ * Reduit un texte de section à `max` caractères en gardant des lignes ENTIÈRES
+ * (jamais de coupe au milieu d'une ligne), suffixé d'un marqueur « … ».
+ */
+function truncateSectionText(text: string, max: number): string {
+  if (max <= 0) return "";
+  if (text.length <= max) return text;
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let len = 0;
+  // On réserve 2 caractères pour le séparateur « \n… ».
+  const room = Math.max(0, max - 2);
+  for (const line of lines) {
+    const add = (kept.length > 0 ? 1 : 0) + line.length;
+    if (len + add > room) break;
+    kept.push(line);
+    len += add;
+  }
+  if (kept.length === 0) return truncateLine(text, max);
+  return kept.join("\n") + "\n…";
+}
+
+/**
+ * Rend la carte FÉDÉRÉE d'un workspace lié : un bloc `## [nom]` par sous-projet,
+ * dans l'ORDRE FOURNI (l'appelant garantit un ordre DÉTERMINISTE → prompt-cache
+ * stable), borné à un budget TOTAL réparti entre les sections.
+ *
+ * Garanties :
+ *  - 0 section (ou toutes vides) → "" (rien à injecter) ;
+ *  - 1 section → son texte BRUT (non-régression projets non liés) ;
+ *  - N sections → blocs `## [nom]` joints par une ligne vide, budget respecté ;
+ *  - la troncature éventuelle se fait par SECTION (lignes entières), jamais au
+ *    milieu d'une ligne.
+ */
+export function renderLinkedRepoMapSections(
+  sections: LinkedRepoMapSection[],
+  options: { budget?: number } = {},
+): string {
+  const valid = (Array.isArray(sections) ? sections : []).filter(
+    (s): s is LinkedRepoMapSection =>
+      !!s && typeof s.name === "string" && typeof s.text === "string" && s.text.trim().length > 0,
+  );
+  if (valid.length === 0) return "";
+  if (valid.length === 1) return valid[0].text;
+
+  const budget =
+    Number.isFinite(options?.budget as number) && (options.budget as number) > 0
+      ? (options.budget as number)
+      : REPO_MAP_LINKED_BUDGET_CHARS;
+  const sep = "\n\n";
+  const headers = valid.map((s) => `## [${s.name}]`);
+  // Budget réservé aux en-têtes, séparateurs, sauts de ligne et « \n… ». Chaque
+  // section reçoit une part ÉGALE du reste → réduction symétrique et stable.
+  const overhead =
+    headers.reduce((n, h) => n + h.length, 0) + sep.length * (valid.length - 1) + 2 * valid.length;
+  const per = Math.max(1, Math.floor((budget - overhead) / valid.length));
+  const blocks = valid.map((s, i) => `${headers[i]}\n${truncateSectionText(s.text, per)}`);
+  const out = blocks.join(sep);
+  // Filet de sécurité (l'en-tête lui-même dépasse le budget) : on ne coupe que
+  // sur la ligne finale, jamais au milieu d'une section si le budget le permet.
+  return out.length <= budget ? out : truncateLine(out, budget);
 }

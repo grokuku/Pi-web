@@ -9,6 +9,8 @@ import { encryptSmbPassword } from "./smb.js";
 import { deleteAttachmentsForProject } from "../routes/attachments.js";
 import { purgeProjectNotes } from "../pi/exploration-notes.js";
 import { sanitizeRemoteUrl } from "./remote-url.js";
+import { selectLinkedSubprojects } from "./linked-subprojects.js";
+import type { LinkedSubprojectRef } from "../pi/cbm-project-resolution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = path.join(__dirname, "..", "..", "..", ".data", "projects.json");
@@ -135,6 +137,36 @@ export function getProject(id: string): Project | undefined {
 export function getProjectByName(name: string): Project | undefined {
   return loadProjects().find((p) => p.name === name);
 }
+
+// ── Pont global : sous-projets ORDONNÉS d'un workspace lié ─────────────────
+// L'extension codebase-memory (chargée par jiti, MÊME process) doit énumérer
+// les sous-projets d'un composite de façon DÉTERMINISTE (ordre linkedProjectIds)
+// pour la fédération, l'indexation et la carte du repo. Le fichier
+// projects.json vit dans /app/.data (hors repo) et l'extension ne doit PAS le
+// lire directement : elle consomme ce pont publié au chargement du module, dans
+// le même style que `__piWebResolveProjectIdByCwd__` (backend/src/pi/session.ts).
+// Repli de l'extension si le pont est absent : énumération triée des symlinks.
+const LINKED_SUBPROJECTS_KEY = "__piWebGetLinkedSubprojects__";
+
+/** Sous-projets ordonnés du projet lié dont le cwd correspond exactement. */
+export function getLinkedSubprojectsByCwd(cwd: string): LinkedSubprojectRef[] {
+  if (!cwd) return [];
+  let target = cwd;
+  try {
+    target = path.resolve(cwd);
+  } catch {}
+  const projects = loadProjects();
+  const project = projects.find((p) => {
+    let pc = p.cwd;
+    try {
+      pc = path.resolve(p.cwd);
+    } catch {}
+    return pc === target;
+  });
+  return selectLinkedSubprojects(project, projects);
+}
+
+(globalThis as any)[LINKED_SUBPROJECTS_KEY] = getLinkedSubprojectsByCwd;
 
 /**
  * Résout les cibles d'un commit+push à partir d'un projet.

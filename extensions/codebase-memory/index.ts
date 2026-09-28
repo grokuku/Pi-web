@@ -29,7 +29,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import { join } from "path";
 import { execSync, spawn, type ChildProcess } from "child_process";
 import { homedir, tmpdir } from "os";
@@ -43,6 +43,8 @@ import { dirname } from "path";
 // ici ne vivent que l'extraction agrégée du graphe et le pont globalThis.
 import {
   buildRepoMap,
+  renderLinkedRepoMapSections,
+  type LinkedRepoMapSection,
   type RepoMapData,
   type RepoMapRoute,
   type RepoMapSymbol,
@@ -52,9 +54,22 @@ import {
 import {
   parseProjectList,
   resolveCbmProjectName,
+  resolveLinkedTargets,
   normalizeRootPath,
   type IndexedProject,
+  type LinkedSubprojectRef,
+  type LinkedTarget,
 } from "../../backend/src/pi/cbm-project-resolution.js";
+// Fédération CBM (pure, testée par vitest) : fusion des parts d'un workspace
+// lié (en-têtes `## [sous-projet]`), inférence du sous-projet visé par un chemin,
+// message d'erreur des cibles. Logique pure → hors extension (non couverte par
+// vitest).
+import {
+  inferTargetFromPath,
+  listTargetsHint,
+  mergeFederatedParts,
+  type FederatedPart,
+} from "../../backend/src/pi/cbm-federation.js";
 // Persistance CUMULÉE des compteurs d'observabilité (défaut 2) : le module pur
 // sait charger/écrire .data/cbm-stats.json et agréger les compteurs.
 import {
@@ -64,6 +79,18 @@ import {
   persistCbmStats,
   type CbmCumulativeStats,
 } from "../../backend/src/pi/cbm-stats.js";
+// Support PUR des tools CBM (testé par vitest) : exclusion mutuelle
+// query/semantic_query de search_graph, repli « symbol not found » de
+// get_code_snippet, politique de re-tentative du registre des projets.
+import {
+  buildProjectUnresolvedError,
+  buildQualifiedNamePattern,
+  buildSearchGraphArgs,
+  buildSnippetAmbiguityMessage,
+  parseSearchGraphRows,
+  pickSearchGraphCandidate,
+  shouldRetryEmptyRegistry,
+} from "../../backend/src/pi/cbm-tool-support.js";
 
 /**
  * Les projets LIÉS de Pi-Web (placeholder avec symlinks vers plusieurs dépôts)
@@ -757,23 +784,256 @@ async function mcpCall(
   return JSON.stringify(data, null, 2);
 }
 
-/** Call an MCP tool with the correct project parameter injected. */
+/**
+ * Appelle un tool MCP pour un projet CBM DÉJÀ résolu (nom explicite). Cœur
+ * commun de `mcpCallForProject` (résolution depuis le cwd) et de la fédération
+ * (chaque sous-projet a son propre nom CBM). Gère la comptabilité et le repli
+ * UNIQUE (`retryArgsBuilder`).
+ */
+async function mcpCallWithProject(
+  toolName: string,
+  project: string,
+  cwd: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+  retryArgsBuilder?: (error: Error, project: string) => Promise<Record<string, unknown> | null>
+): Promise<string> {
+  let callArgs = args;
+  for (;;) {
+    try {
+      const result = await mcpCall(toolName, { ...callArgs, project }, signal);
+      trackCall(toolName);
+      return result;
+    } catch (e: any) {
+      let retry: Record<string, unknown> | null = null;
+      if (retryArgsBuilder) {
+        try {
+          retry = await retryArgsBuilder(e, project);
+        } catch (fallbackError: any) {
+          trackFail(toolName);
+          recordCbmFailure(toolName, cwd, project, fallbackError);
+          throw fallbackError;
+        }
+        retryArgsBuilder = undefined; // une seule tentative de repli
+      }
+      if (!retry) {
+        trackFail(toolName);
+        recordCbmFailure(toolName, cwd, project, e);
+        throw e;
+      }
+      callArgs = retry;
+    }
+  }
+}
+
+/**
+ * Call an MCP tool with the correct project parameter injected.
+ *
+ * `retryArgsBuilder` (optionnel) : repli UNIQUE après un échec (ex.
+ * `get_code_snippet` « symbol not found » → résolution du qualified_name via
+ * `search_graph`). La comptabilité ne retient que l'issue FINALE : un repli
+ * réussi n'est pas compté comme un échec, un repli échoué compte une fois.
+ */
 async function mcpCallForProject(
   toolName: string,
   cwd: string,
   args: Record<string, unknown>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  retryArgsBuilder?: (error: Error, project: string) => Promise<Record<string, unknown> | null>
 ): Promise<string> {
-  const project = await resolveProjectForCwd(cwd);
+  let project = "";
   try {
-    const result = await mcpCall(toolName, { ...args, project }, signal);
-    trackCall(toolName);
-    return result;
+    project = await resolveProjectForCwd(cwd, signal);
   } catch (e: any) {
+    // Résolution locale impossible (registre CBM vide après re-tentative) :
+    // comptée comme indisponibilité serveur (BUG #2), jamais silencieuse.
     trackFail(toolName);
-    recordCbmFailure(toolName, cwd, project, e);
+    recordCbmFailure(
+      toolName,
+      cwd,
+      project,
+      e,
+      e?.name === "CbmProjectUnresolvedError" ? "server_unavailable" : undefined
+    );
     throw e;
   }
+  return mcpCallWithProject(toolName, project, cwd, args, signal, retryArgsBuilder);
+}
+
+// ── Fédération des outils (workspaces liés) ─────────────
+// Une cible = un sous-projet : `name` (étiquette de provenance, en-tête) +
+// `project` (nom CBM à interroger). Pour un projet NON lié, la liste contient
+// UNE cible de nom vide → sortie BRUTE (aucun en-tête ajouté, aucun appel en
+// plus) : comportement strictement identique à l'existant.
+type FederationTarget = LinkedTarget;
+
+const ALL_TARGETS = "all";
+
+/** Filtre les cibles selon `target` (nom de dossier, nom CBM, ou "all"). */
+function selectTargets(targets: FederationTarget[], targetParam?: string): FederationTarget[] {
+  const t = String(targetParam ?? "").trim();
+  if (!t || t.toLowerCase() === ALL_TARGETS) return targets;
+  const match = targets.find(
+    (x) =>
+      x.name === t ||
+      x.name.toLowerCase() === t.toLowerCase() ||
+      x.project === t ||
+      x.project === `projects-${t}`,
+  );
+  if (!match) {
+    // Erreur ACTIONNABLE : liste les cibles valides pour correction immédiate.
+    throw new Error(`Cible CBM inconnue : « ${t} » — ${listTargetsHint(targets.map((x) => x.name))}`);
+  }
+  return [match];
+}
+
+/**
+ * Résout la liste des noms CBM à interroger depuis un cwd et un `target`
+ * optionnel. Projet NON lié → une cible (nom vide) ; workspace lié → les
+ * sous-projets résolus (fédération). Peut jeter une erreur actionnable (cible
+ * inconnue, ou aucun sous-projet indexé).
+ */
+async function resolveTargets(
+  cwd: string,
+  targetParam?: string,
+  signal?: AbortSignal
+): Promise<FederationTarget[]> {
+  const subs = listLinkedSubprojects(cwd);
+  if (subs.length === 0) {
+    const project = await resolveProjectForCwd(cwd, signal);
+    return [{ name: "", project }];
+  }
+  await refreshIndexedProjects(false, signal);
+  const indexed: IndexedProject[] = [...indexedProjects.entries()].map(([rootPath, name]) => ({
+    rootPath,
+    name,
+  }));
+  let targets = resolveLinkedTargets(indexed, subs);
+  if (targets.length === 0 && shouldRetryEmptyRegistry(indexedProjects.size)) {
+    // Registre vide (daemon CBM en respawn) : UNE re-tentative bornée, comme
+    // pour la résolution à cible unique (BUG #2).
+    await sleep(REGISTRY_EMPTY_RETRY_DELAY_MS);
+    await refreshIndexedProjects(true, signal);
+    const refreshed: IndexedProject[] = [...indexedProjects.entries()].map(([rootPath, name]) => ({
+      rootPath,
+      name,
+    }));
+    targets = resolveLinkedTargets(refreshed, subs);
+  }
+  if (targets.length === 0) {
+    if (shouldRetryEmptyRegistry(indexedProjects.size)) throw buildProjectUnresolvedError(cwd);
+    throw new Error(
+      `CBM : aucun sous-projet indexé pour « ${cwd} » — l'indexation d'un workspace lié ` +
+        `n'a pas encore abouti. Réessayez dans quelques secondes (l'indexation se fait ` +
+        `automatiquement à l'ouverture de la session).`
+    );
+  }
+  return selectTargets(targets, targetParam);
+}
+
+/**
+ * Appelle un tool MCP sur TOUTES les cibles puis fusionne (provenance annotée).
+ *  - 1 cible (ou moins) → appel direct : la sortie BRUTE est préservée à
+ *    l'octet près (projets non liés, ou `target` ciblant un seul sous-projet) ;
+ *  - N cibles → appels CONCURRENTS (allSettled), une erreur de sous-projet ne
+ *    masque pas les autres parts, fusion via `mergeFederatedParts`.
+ */
+async function mcpCallForTargets(
+  toolName: string,
+  cwd: string,
+  args: Record<string, unknown>,
+  targets: FederationTarget[],
+  signal?: AbortSignal,
+  retryArgsBuilder?: (error: Error, project: string) => Promise<Record<string, unknown> | null>
+): Promise<string> {
+  if (targets.length <= 1) {
+    const t = targets[0];
+    return mcpCallWithProject(toolName, t.project, cwd, args, signal, retryArgsBuilder);
+  }
+  const settled = await Promise.allSettled(
+    targets.map((t) => mcpCallWithProject(toolName, t.project, cwd, args, signal, retryArgsBuilder))
+  );
+  const parts: FederatedPart[] = targets.map((t, i) => {
+    const r = settled[i];
+    if (r.status === "fulfilled") return { name: t.name, text: r.value };
+    const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+    return { name: t.name, text: "", error: msg };
+  });
+  return mergeFederatedParts(parts);
+}
+
+/**
+ * Analyse d'impact d'UN dépôt : lit le diff git de `repoDir`, puis retrouve les
+ * symboles affectés via query_graph (nœuds dont `file_path` correspond au
+ * fichier modifié). Factorisé pour être appelé par sous-projet (fédération) ou
+ * une seule fois (projet non lié). `project` (optionnel) force le nom CBM
+ * interrogé ; sinon il est résolu depuis `repoDir`.
+ */
+async function runDiffForRepo(
+  repoDir: string,
+  signal?: AbortSignal,
+  project?: string
+): Promise<string> {
+  // BUG : le serveur MCP CBM ne fournit AUCUN tool `detect_changes` (vérifié via
+  // tools/list : 8 tools seulement, aucun équivalent diff). Fallback LOCAL : lire
+  // le diff git, puis retrouver les symboles affectés via query_graph.
+  let files: string[] = [];
+  try {
+    // Fichiers modifiés/supprimés vs HEAD (staged + unstaged)
+    const diffOut = execSync("git diff --name-only HEAD", {
+      cwd: repoDir,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    // Fichiers untracked (ligne porcelain "?? chemin")
+    const statusOut = execSync("git status --porcelain", {
+      cwd: repoDir,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    const set = new Set<string>();
+    diffOut.split("\n").forEach((l) => { const t = l.trim(); if (t) set.add(t); });
+    statusOut.split("\n").forEach((l) => {
+      // Format porcelain : 2 lettres d'état + espace + chemin ("??" = untracked)
+      const p = l.length > 3 ? l.slice(3).trim() : "";
+      if (p) set.add(p);
+    });
+    files = [...set];
+  } catch (e: any) {
+    return (
+      `cbm_diff : impossible de lire le diff git dans "${repoDir}" — ${e.message}. ` +
+      "Vérifiez que ce chemin est un dépôt git valide."
+    );
+  }
+  if (files.length === 0) {
+    return "cbm_diff : aucune modification détectée (working tree propre).";
+  }
+  const lines: string[] = [`Modifications détectées (${files.length} fichier(s)) :`];
+  for (const file of files) {
+    lines.push(`\n## ${file}`);
+    // Échapper les guillemets du chemin pour la requête Cypher
+    const safePath = file.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const cypher =
+      `MATCH (n) WHERE n.file_path = "${safePath}" ` +
+      "RETURN n.name, n.label, n.start_line ORDER BY n.start_line";
+    try {
+      const res = project
+        ? await mcpCallWithProject("query_graph", project, repoDir, { query: cypher }, signal)
+        : await mcpCallForProject("query_graph", repoDir, { query: cypher }, signal);
+      const parsed = JSON.parse(res);
+      const rows: unknown[][] = parsed.rows || [];
+      if (rows.length === 0) {
+        lines.push("  (aucun symbole indexé pour ce fichier)");
+      } else {
+        for (const r of rows) {
+          lines.push(`  - ${r[1]} ${r[0]} (ligne ${r[2]})`);
+        }
+      }
+    } catch (e: any) {
+      lines.push(`  (recherche de symboles impossible : ${e.message})`);
+    }
+  }
+  return lines.join("\n");
 }
 
 // ── Carte du Repo (P1) : extraction agrégée + pont globalThis ──
@@ -922,6 +1182,30 @@ async function getRepoMapData(cwd: string): Promise<RepoMapData> {
 }
 
 /**
+ * Carte du repo FÉDÉRÉE (workspace lié) : une carte par sous-projet, rendues en
+ * sections `## [nom]` dans l'ORDRE DÉTERMINISTE des sous-projets. Le cache est
+ * partagé avec le mode simple via `getRepoMapData` (clé = racine RÉELLE du
+ * sous-projet), donc une même extraction ne sert qu'une fois par fenêtre TTL.
+ *
+ * Un sous-projet dont la carte est vide (non indexé) est simplement omis.
+ */
+async function buildCompositeRepoMap(
+  subs: LinkedSubprojectRef[],
+  options: { rank: "stable" | "task"; task?: string; context?: string },
+): Promise<string> {
+  const sections: LinkedRepoMapSection[] = [];
+  for (const sub of subs) {
+    try {
+      const data = await getRepoMapData(sub.rootPath);
+      sections.push({ name: sub.name, text: buildRepoMap(data, options) });
+    } catch (e: any) {
+      console.warn(`[cbm] carte du sous-projet ${sub.name} indisponible : ${e?.message || e}`);
+    }
+  }
+  return renderLinkedRepoMapSections(sections);
+}
+
+/**
  * Construit la carte du repo STABLE (P3) pour un cwd : classement par
  * centralité seule, SANS hint de tâche (`rank: "stable"`). Le texte ne dépend
  * donc QUE du projet — condition du prompt caching cross-délégation.
@@ -933,6 +1217,13 @@ async function getRepoMapData(cwd: string): Promise<RepoMapData> {
 export async function buildRepoMapCached(cwd: string): Promise<string | null> {
   try {
     if (!cwd) return null;
+    const subs = listLinkedSubprojects(cwd);
+    if (subs.length > 0) {
+      // Workspace lié : carte FÉDÉRÉE (sections `## [sous-projet]`, ordre stable).
+      const text = await buildCompositeRepoMap(subs, { rank: "stable" });
+      trackRepoMapOutcome(!!text);
+      return text ? text : null;
+    }
     const data = await getRepoMapData(cwd);
     const text = buildRepoMap(data, { rank: "stable" });
     // Compte chaque délégation servie/vide (P1 : adoption de la carte).
@@ -962,6 +1253,12 @@ export async function buildRepoMapAnnexCached(
 ): Promise<string | null> {
   try {
     if (!cwd) return null;
+    const subs = listLinkedSubprojects(cwd);
+    if (subs.length > 0) {
+      const text = await buildCompositeRepoMap(subs, { rank: "task", task, context });
+      trackRepoMapOutcome(!!text);
+      return text ? text : null;
+    }
     const data = await getRepoMapData(cwd);
     const text = buildRepoMap(data, { task, context, rank: "task" });
     trackRepoMapOutcome(!!text);
@@ -986,9 +1283,14 @@ const REPO_MAP_ANNEX_BRIDGE_KEY = "__cbmRepoMapAnnex";
 // ── Project mapping ─────────────────────────────────────
 // Maps cwd → { projectName: string, lastIndexedAt: number }
 // The project name is discovered via list_projects after indexing.
+// `resolved: false` = repli « nom de dossier » : le cache sert alors seulement
+// à éviter les ré-indexations répétées, JAMAIS à résoudre un projet pour un
+// appel cbm_* (BUG #2).
 interface ProjectInfo {
   projectName: string;
   lastIndexedAt: number;
+  /** false = repli « nom de dossier » (pas une correspondance du registre). */
+  resolved: boolean;
 }
 const projectByCwd = new Map<string, ProjectInfo>();
 const REINDEX_INTERVAL_MS = 5 * 60 * 1000; // 5 min — keeps index fresh without being too expensive
@@ -1007,23 +1309,91 @@ let indexedProjectsLastAttemptAt = 0;
 // Backoff des tentatives quand le registre reste vide (serveur indisponible) :
 // évite de marteler list_projects à chaque appel cbm_*.
 const REGISTRY_RETRY_MS = 30_000;
+// Re-tentative UNIQUE quand le registre est VIDE au moment de résoudre un
+// projet (BUG #2) : court délai borné, le temps qu'un daemon CBM en respawn
+// (« last_committed_client_disconnected ») réponde. Jamais appliqué si le
+// registre est déjà rempli → zéro latence sur le chemin nominal.
+const REGISTRY_EMPTY_RETRY_DELAY_MS = 1_500;
 
-/** Cibles réelles des symlinks d'un workspace lié (vide si cwd non lié). */
-function listLinkedTargets(cwd: string): string[] {
+/**
+ * Lecture du pont backend `__piWebGetLinkedSubprojects__` (ordre linkedProjectIds).
+ * Renvoie null si le pont est absent/illisible → repli sur l'énumération disque.
+ */
+function linkedSubprojectsFromBridge(cwd: string): LinkedSubprojectRef[] | null {
   try {
-    if (!existsSync(join(cwd, ".pi-web-linked"))) return [];
-    const targets: string[] = [];
+    const bridge = (globalThis as any).__piWebGetLinkedSubprojects__;
+    if (typeof bridge !== "function") return null;
+    const res = bridge(cwd);
+    if (!Array.isArray(res)) return null;
+    return res
+      .map((s: any) => ({ name: String(s?.name ?? ""), rootPath: String(s?.rootPath ?? "") }))
+      .filter((s: LinkedSubprojectRef) => s.name && s.rootPath);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Énumération DÉTERMINISTE des sous-projets d'un workspace lié.
+ *
+ * Ordre de préférence :
+ *   1. pont backend (ordre choisi par l'utilisateur = linkedProjectIds) ;
+ *   2. repli : symlinks du composite (les vrais sous-projets ; on ignore les
+ *      fichiers et dossiers parasites éventuels), triés par comparateur
+ *      CODE-UNIT FIXE (PAS localeCompare → ordre stable quelle que soit la
+ *      locale). On passe la racine RÉELLE (realpath) : CBM n'indexe PAS les
+ *      symlinks (un dossier de symlinks donne un graphe vide).
+ *
+ * Renvoie [] si `cwd` n'est pas un workspace lié (aucun coût pour les projets
+ * non liés, sinon un simple `existsSync`).
+ */
+function listLinkedSubprojects(cwd: string): LinkedSubprojectRef[] {
+  if (!cwd || !existsSync(join(cwd, ".pi-web-linked"))) return [];
+  const fromBridge = linkedSubprojectsFromBridge(cwd);
+  if (fromBridge && fromBridge.length > 0) return fromBridge;
+  try {
+    const out: LinkedSubprojectRef[] = [];
     for (const entry of readdirSync(cwd)) {
+      const full = join(cwd, entry);
+      let real: string;
       try {
-        targets.push(realpathSync(join(cwd, entry)));
+        if (!lstatSync(full).isSymbolicLink()) continue;
+        real = realpathSync(full);
       } catch {
-        /* symlink cassé → ignoré */
+        continue; // symlink cassé → ignoré
       }
+      out.push({ name: entry, rootPath: real });
     }
-    return targets;
+    // Comparateur code-unit FIXE (jamais localeCompare) : ordre stable.
+    out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return out;
   } catch {
     return [];
   }
+}
+
+/** Cibles réelles des symlinks d'un workspace lié (vide si cwd non lié). */
+function listLinkedTargets(cwd: string): string[] {
+  return listLinkedSubprojects(cwd).map((s) => s.rootPath);
+}
+
+/**
+ * Résolution du nom CBM SANS repli : cache (résolutions réelles uniquement)
+ * puis règles du registre. Renvoie null si rien ne correspond — l'appelant
+ * décide du repli (erreur explicite pour les tools, nom de dossier pour les
+ * logs internes).
+ */
+function resolveProjectNameOrNull(cwd: string): string | null {
+  if (!cwd) return null;
+  // Chemin rapide : uniquement une entrée RÉSOLUE. Un repli « nom de dossier »
+  // mémorisé ne doit pas court-circuiter la re-tentative du registre (BUG #2).
+  const cached = projectByCwd.get(cwd);
+  if (cached?.resolved) return cached.projectName;
+  const indexed: IndexedProject[] = [...indexedProjects.entries()].map(([rootPath, name]) => ({
+    rootPath,
+    name,
+  }));
+  return resolveCbmProjectName(cwd, indexed, { linkedTargets: listLinkedTargets(cwd) });
 }
 
 /** Get the CBM project name for a given cwd, or derive a fallback. */
@@ -1032,16 +1402,10 @@ function getProjectName(cwd: string): string {
     console.warn("[cbm] getProjectName called with empty cwd, using fallback 'default'");
     return "default";
   }
-  // Chemin rapide : entrée exacte posée après indexation/résolution.
-  const cached = projectByCwd.get(cwd);
-  if (cached) return cached.projectName;
-  const indexed: IndexedProject[] = [...indexedProjects.entries()].map(([rootPath, name]) => ({
-    rootPath,
-    name,
-  }));
-  const resolved = resolveCbmProjectName(cwd, indexed, { linkedTargets: listLinkedTargets(cwd) });
-  // Repli historique (nom de dossier) conservé pour ne rien casser.
-  return resolved || cwd.split("/").pop() || cwd;
+  // Repli historique (nom de dossier) conservé pour les appelants INTERNES
+  // (logs, découverte, indexation) ; le chemin des tools passe par
+  // resolveProjectForCwd, qui ne retombe plus silencieusement dessus (BUG #2).
+  return resolveProjectNameOrNull(cwd) || cwd.split("/").pop() || cwd;
 }
 
 // ── Project discovery ───────────────────────────────────
@@ -1049,7 +1413,7 @@ function getProjectName(cwd: string): string {
 // projectByCwd est vide. Il faut découvrir le nom CBM sans ré-indexer.
 
 /** Remplit le registre root_path → nom depuis `list_projects` (TTL 5 min). */
-async function refreshIndexedProjects(force = false): Promise<void> {
+async function refreshIndexedProjects(force = false, signal?: AbortSignal): Promise<void> {
   const fresh =
     indexedProjects.size > 0 && Date.now() - indexedProjectsFetchedAt < REINDEX_INTERVAL_MS;
   if (!force && fresh) return;
@@ -1058,7 +1422,7 @@ async function refreshIndexedProjects(force = false): Promise<void> {
   try {
     // `list_projects` renvoie une TABLE TEXTE (pas du JSON) : parseProjectList
     // gère les deux formats (l'ancien JSON.parse échouait toujours).
-    const raw = await mcpCall("list_projects", {});
+    const raw = await mcpCall("list_projects", {}, signal);
     let count = 0;
     for (const p of parseProjectList(raw)) {
       indexedProjects.set(normalizeRootPath(p.rootPath), p.name);
@@ -1089,9 +1453,27 @@ g.__cbmRefreshProjectRegistry = refreshIndexedProjects;
  * Résolution ASYNCHRONE : garantit le registre (le projet LIÉ n'est jamais
  * indexé par session_start, et la Map mémoire est vide après un restart) puis
  * applique la règle de la plus spécifique à la plus large.
+ *
+ * BUG #2 : si le registre est VIDE au moment de l'appel (list_projects en
+ * échec — daemon CBM souvent en respawn), UNE re-tentative forcée avec court
+ * délai borné est faite ; si ça échoue encore, erreur EXPLICITE au lieu
+ * d'envoyer un nom de dossier qui produira un `project_not_found` opaque.
+ * Registre déjà rempli → aucune latence ajoutée.
  */
-async function resolveProjectForCwd(cwd: string): Promise<string> {
-  await refreshIndexedProjects();
+async function resolveProjectForCwd(cwd: string, signal?: AbortSignal): Promise<string> {
+  await refreshIndexedProjects(false, signal);
+  let resolved = resolveProjectNameOrNull(cwd);
+  if (!resolved && shouldRetryEmptyRegistry(indexedProjects.size)) {
+    await sleep(REGISTRY_EMPTY_RETRY_DELAY_MS);
+    await refreshIndexedProjects(true, signal);
+    resolved = resolveProjectNameOrNull(cwd);
+  }
+  if (resolved) return resolved;
+  if (shouldRetryEmptyRegistry(indexedProjects.size)) {
+    throw buildProjectUnresolvedError(cwd);
+  }
+  // Registre renseigné mais aucune correspondance : repli historique (nom de
+  // dossier, alias accepté par CBM pour certaines racines/symlinks).
   return getProjectName(cwd);
 }
 
@@ -1102,8 +1484,15 @@ async function discoverProjectName(cwd: string): Promise<void> {
 
   try {
     await refreshIndexedProjects();
-    const name = getProjectName(cwd);
-    projectByCwd.set(cwd, { projectName: name, lastIndexedAt: Date.now() });
+    // Le repli éventuel est mémorisé (pour l'anti-re-indexation) mais marqué
+    // `resolved: false` afin qu'il ne masque jamais un registre vide (BUG #2).
+    const resolved = resolveProjectNameOrNull(cwd);
+    const name = resolved || cwd.split("/").pop() || cwd;
+    projectByCwd.set(cwd, {
+      projectName: name,
+      lastIndexedAt: Date.now(),
+      resolved: resolved !== null,
+    });
     console.log(`[cbm] Discovered project name: ${name} for cwd ${cwd}`);
   } catch (e: any) {
     console.warn(`[cbm] discoverProjectName failed: ${e.message}`);
@@ -1113,10 +1502,11 @@ async function discoverProjectName(cwd: string): Promise<void> {
 // ── Index ────────────────────────────────────────────────
 
 async function indexProject(cwd: string): Promise<void> {
-  // Projets LIÉS : jamais indexés (le placeholder n'est pas un dépôt, et
-  // l'indexation suivrait les symlinks en mélangeant les sous-projets).
+  // Projets LIÉS : le placeholder n'a pas de graphe propre (CBM n'indexe pas les
+  // symlinks) → on indexe à la place CHAQUE sous-projet à sa racine réelle.
   if (isLinkedProject(cwd)) {
-    console.log(`[cbm] Indexing skipped for linked project: ${cwd}`);
+    console.log(`[cbm] Linked workspace: indexing subprojects instead of the composite (${cwd})`);
+    ensureLinkedIndexes(cwd);
     return;
   }
   status.indexing = true;
@@ -1136,9 +1526,17 @@ async function indexProject(cwd: string): Promise<void> {
     // compteur d'INDEXATIONS de session, trompeur) ; il reflète désormais la
     // taille réelle du registre, posée par refreshIndexedProjects().
     await refreshIndexedProjects(true);
-    const resolved = indexedProjects.get(normalizeRootPath(cwd)) || getProjectName(cwd);
-    projectByCwd.set(cwd, { projectName: resolved, lastIndexedAt: Date.now() });
-    console.log(`[cbm] Project name: ${resolved}`);
+    // Résolution réelle si possible ; le repli éventuel est marqué
+    // `resolved: false` pour ne pas masquer un registre vide au prochain appel
+    // (BUG #2) tout en gardant l'anti-re-indexation de session_start.
+    const resolved = resolveProjectNameOrNull(cwd);
+    const name = resolved || cwd.split("/").pop() || cwd;
+    projectByCwd.set(cwd, {
+      projectName: name,
+      lastIndexedAt: Date.now(),
+      resolved: resolved !== null,
+    });
+    console.log(`[cbm] Project name: ${name}`);
   } catch (e: any) {
     console.warn("[cbm] Indexing failed:", e.message);
     status.error = `Indexing failed: ${e.message}`;
@@ -1147,7 +1545,119 @@ async function indexProject(cwd: string): Promise<void> {
   }
 }
 
+// ── Indexation des sous-projets d'un workspace lié (fédération, lot 2) ──────
+// Un workspace lié est un dossier de symlinks : CBM NE SUIT PAS les symlinks
+// (un dossier de symlinks donne un graphe vide, prouvé en direct). On indexe
+// donc chaque sous-projet à sa racine RÉELLE (realpath), jamais au chemin du
+// symlink. Anti-boucle : TTL par racine (REINDEX_INTERVAL_MS), dédup in-flight
+// (Map<racine, Promise>), backoff d'échec 60 s, file SÉQUENTIELLE (une
+// indexation à la fois) et compteur d'indexations en cours.
+const linkedIndexLastAt = new Map<string, number>(); // racine réelle → dernière indexation OK
+const linkedIndexInflight = new Map<string, Promise<void>>();
+const linkedIndexFailedAt = new Map<string, number>(); // racine réelle → dernier échec
+const LINKED_INDEX_FAIL_BACKOFF_MS = 60_000;
+// Throttle court pour la ré-indexation incrémentale sur édition de fichier.
+const LINKED_EDIT_THROTTLE_MS = 5_000;
+let indexingCount = 0;
+let linkedIndexQueue: Promise<void> = Promise.resolve();
+
+/** Met à jour le compteur réel d'indexations en cours (jauge status.indexing). */
+function setIndexing(delta: number): void {
+  indexingCount = Math.max(0, indexingCount + delta);
+  status.indexing = indexingCount > 0;
+}
+
+/** Racine RÉELLE d'un chemin (realpath), ou le chemin tel quel en cas d'échec. */
+function realRootOf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/** Sérialise une indexation (une à la fois) pour ne pas saturer CBM. */
+function enqueueLinkedIndex(task: () => Promise<void>): Promise<void> {
+  const run = linkedIndexQueue.then(task, task);
+  linkedIndexQueue = run.catch(() => {});
+  return run;
+}
+
+/** Indexe UNE racine réelle (moderate), met à jour TTL/backoff et le registre. */
+async function indexLinkedRoot(root: string): Promise<void> {
+  const real = realRootOf(root);
+  setIndexing(1);
+  console.log(`[cbm] Indexing linked subproject: ${real}`);
+  try {
+    await mcpCall("index_repository", { repo_path: real, mode: "moderate" });
+    linkedIndexLastAt.set(real, Date.now());
+    linkedIndexFailedAt.delete(real);
+    await refreshIndexedProjects(true);
+    console.log(`[cbm] Linked subproject indexed: ${real}`);
+  } catch (e: any) {
+    linkedIndexFailedAt.set(real, Date.now());
+    console.warn(`[cbm] Indexing linked subproject failed (${real}): ${e.message}`);
+    status.error = `Indexing failed: ${e.message}`;
+  } finally {
+    setIndexing(-1);
+  }
+}
+
+/**
+ * Garantit (non bloquant, idempotent) la fraîcheur de l'index d'un sous-projet.
+ * Renvoie la promesse PARTAGÉE si une indexation est déjà en vol pour cette
+ * racine (dédup), no-op si l'index est frais (TTL) ou en backoff d'échec.
+ */
+function ensureLinkedIndex(root: string, minIntervalMs = REINDEX_INTERVAL_MS): Promise<void> {
+  const real = realRootOf(root);
+  const now = Date.now();
+  if (now - (linkedIndexLastAt.get(real) ?? 0) < minIntervalMs) return Promise.resolve();
+  if (now - (linkedIndexFailedAt.get(real) ?? 0) < LINKED_INDEX_FAIL_BACKOFF_MS) {
+    return Promise.resolve();
+  }
+  const inflight = linkedIndexInflight.get(real);
+  if (inflight) return inflight;
+  const p = enqueueLinkedIndex(() => indexLinkedRoot(real)).finally(() => {
+    linkedIndexInflight.delete(real);
+  });
+  linkedIndexInflight.set(real, p);
+  return p;
+}
+
+/**
+ * Indexe (fire-and-forget, séquentiel) TOUS les sous-projets d'un workspace
+ * lié. No-op si `cwd` n'est pas lié. `minIntervalMs` court (5 s) pour la
+ * ré-indexation après édition d'un fichier.
+ */
+function ensureLinkedIndexes(cwd: string, minIntervalMs = REINDEX_INTERVAL_MS): void {
+  const subs = listLinkedSubprojects(cwd);
+  if (subs.length === 0) return;
+  console.log(`[cbm] Linked workspace: ensuring ${subs.length} subproject index(es) for ${cwd}`);
+  for (const sub of subs) {
+    // fire-and-forget : jamais attendu sur le chemin d'ouverture de session.
+    void ensureLinkedIndex(sub.rootPath, minIntervalMs);
+  }
+}
+
 // ── Tool Definitions ─────────────────────────────────────
+
+/**
+ * Paramètre optionnel `target` commun aux 8 outils CBM.
+ *
+ * Dans un workspace LIÉ (composite de sous-projets), chaque outil interroge TOUS
+ * les sous-projets et fusionne les résultats sous des en-têtes de provenance
+ * « ## [sous-projet] ». `target` = nom de dossier d'un sous-projet (ex.
+ * « holaf-lib ») pour n'interroger que celui-ci, ou « all » (défaut). Hors
+ * workspace lié, `target` est ignoré (comportement à cible unique inchangé).
+ */
+const targetParam = {
+  type: "string",
+  description:
+    "Fédération CBM. Dans un workspace lié (composite de sous-projets), l'outil interroge TOUS les " +
+    "sous-projets et fusionne les résultats sous des en-têtes « ## [sous-projet] ». `target` = nom de " +
+    "dossier d'un sous-projet (ex. « holaf-lib ») pour n'interroger que celui-ci, ou « all » (défaut). " +
+    "Hors workspace lié, `target` est ignoré.",
+};
 
 const searchParams = {
   type: "object",
@@ -1156,7 +1666,8 @@ const searchParams = {
       type: "string",
       description:
         "Search query. Can be a function/class name, regex pattern, or semantic query (e.g. 'retry backoff'). " +
-        "For semantic search, use natural language describing the concept.",
+        "For semantic search, use natural language describing the concept. " +
+        "Mutually exclusive with semantic_query (which takes precedence when both are provided).",
     },
     labels: {
       type: "array",
@@ -1170,7 +1681,9 @@ const searchParams = {
     semantic_query: {
       type: "array",
       items: { type: "string" },
-      description: "Keywords for semantic/vector search (finds code by meaning, not just name). Optional.",
+      description:
+        "Keywords for semantic/vector search (finds code by meaning, not just name). Optional. " +
+        "Mutually exclusive with query (takes precedence when both are provided).",
     },
     limit: {
       type: "integer",
@@ -1180,6 +1693,7 @@ const searchParams = {
       type: "string",
       description: "Filter results to files matching this substring pattern. Optional.",
     },
+    target: targetParam,
   },
 };
 
@@ -1199,6 +1713,7 @@ const traceParams = {
       type: "integer",
       description: "Max traversal depth (1-5). Default: 3.",
     },
+    target: targetParam,
   },
   required: ["function_name", "direction"],
 };
@@ -1214,6 +1729,7 @@ const codeParams = {
       type: "string",
       description: "File path to look in. Optional, but helps disambiguate.",
     },
+    target: targetParam,
   },
   required: ["name"],
 };
@@ -1233,6 +1749,7 @@ const searchCodeParams = {
       type: "integer",
       description: "Max results. Default: 20.",
     },
+    target: targetParam,
   },
   required: ["query"],
 };
@@ -1244,6 +1761,7 @@ const diffParams = {
       type: "string",
       description: "Path to the git repository. Defaults to project root.",
     },
+    target: targetParam,
   },
 };
 
@@ -1254,6 +1772,7 @@ const archParams = {
       type: "string",
       description: "Path to the project. Defaults to project root.",
     },
+    target: targetParam,
   },
 };
 
@@ -1264,13 +1783,14 @@ const cypherParams = {
       type: "string",
       description: "Cypher query to run against the knowledge graph (read-only). Example: MATCH (f:Function)-[:CALLS]->(g:Function) RETURN f.name, g.name LIMIT 10",
     },
+    target: targetParam,
   },
   required: ["query"],
 };
 
 const schemaParams = {
   type: "object",
-  properties: {},
+  properties: { target: targetParam },
 };
 
 // ── Extension Entry Point ────────────────────────────────
@@ -1298,7 +1818,8 @@ export default async function (pi: ExtensionAPI) {
           console.log("[cbm] session_start: binaire téléchargé, poursuite de l'init");
         }
         if (isLinkedProject(ctx.cwd)) {
-          console.log(`[cbm] session_start: linked project, skipping CBM init for ${ctx.cwd}`);
+          console.log(`[cbm] session_start: linked workspace — indexing subprojects (fédération) for ${ctx.cwd}`);
+          ensureLinkedIndexes(ctx.cwd);
           return;
         }
         if (!status.running) {
@@ -1341,7 +1862,8 @@ export default async function (pi: ExtensionAPI) {
           console.log("[cbm] before_agent_start: binaire téléchargé, poursuite de l'init");
         }
         if (isLinkedProject(ctx.cwd)) {
-          console.log(`[cbm] before_agent_start: linked project, skipping CBM init for ${ctx.cwd}`);
+          console.log(`[cbm] before_agent_start: linked workspace — indexing subprojects (fédération) for ${ctx.cwd}`);
+          ensureLinkedIndexes(ctx.cwd);
           return;
         }
         if (!status.running) {
@@ -1362,15 +1884,47 @@ export default async function (pi: ExtensionAPI) {
     })();
   });
 
+  // ── tool_execution_start: mémorise les args des edit/write ──
+  // Le SDK 0.87.1 n'expose PAS `args` sur ToolExecutionEndEvent (vérifié dans
+  // types.d.ts) : pour cibler la ré-indexation incrémentale sur le FICHIER
+  // touché, on mémorise les args par toolCallId au `start`, puis on les relit au
+  // `end`. Borné (50) pour ne pas fuir sur une très longue session.
+  const pendingEditArgs = new Map<string, any>();
+  pi.on("tool_execution_start", (event) => {
+    if (event.toolName !== "edit" && event.toolName !== "write") return;
+    pendingEditArgs.set(event.toolCallId, event.args);
+    if (pendingEditArgs.size > 50) {
+      const first = pendingEditArgs.keys().next().value;
+      if (first !== undefined) pendingEditArgs.delete(first);
+    }
+  });
+
   // ── tool_execution_end: re-index after file edits ──
   // When Pi edits or writes a file, the CBM index becomes stale.
   // We trigger a fast incremental re-index so the next cbm_* call sees fresh data.
   pi.on("tool_execution_end", (event, ctx) => {
     // Only react to file-modifying tools
     if (event.toolName !== "edit" && event.toolName !== "write") return;
-
-    // Avoid re-index storm (multiple edits in quick succession)
     if (!ctx.cwd) return;
+    const args = pendingEditArgs.get(event.toolCallId);
+    pendingEditArgs.delete(event.toolCallId);
+
+    // Workspace LIÉ : ne ré-indexer QUE le sous-projet touché (throttle 5 s).
+    const subs = listLinkedSubprojects(ctx.cwd);
+    if (subs.length > 0) {
+      const touched = args && typeof args.path === "string" ? args.path : "";
+      const name = inferTargetFromPath(touched, ctx.cwd, subs);
+      const sub = name ? subs.find((s) => s.name === name) : undefined;
+      if (sub) {
+        void ensureLinkedIndex(sub.rootPath, LINKED_EDIT_THROTTLE_MS);
+      } else {
+        ensureLinkedIndexes(ctx.cwd, LINKED_EDIT_THROTTLE_MS);
+      }
+      return;
+    }
+
+    // Projet normal : comportement inchangé (throttle 5 s sur le cwd).
+    // Avoid re-index storm (multiple edits in quick succession)
     const projInfo = projectByCwd.get(ctx.cwd);
     if (projInfo && Date.now() - projInfo.lastIndexedAt < 5_000) return; // max once per 5s
 
@@ -1408,19 +1962,13 @@ export default async function (pi: ExtensionAPI) {
     ],
     parameters: searchParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const args: Record<string, unknown> = { query: params.query };
-      // BUG : le serveur `search_graph` attend `label` (string), pas `labels` (array).
-      // Un tableau `labels` est silencieusement ignoré (vérifié via curl : filtrage inopérant).
-      // Le serveur ne gère qu'un seul label par appel → on envoie le premier élément.
-      // (le join par virgule renvoie 0 résultat : "No nodes with this label").
-      if (Array.isArray(params.labels) && params.labels.length > 0) {
-        args.label = String(params.labels[0]);
-      }
-      if (params.name_pattern) args.name_pattern = params.name_pattern;
-      if (params.semantic_query) args.semantic_query = params.semantic_query;
-      if (params.limit) args.limit = params.limit;
-      if (params.file_pattern) args.file_pattern = params.file_pattern;
-      const result = await mcpCallForProject("search_graph", ctx.cwd, args, signal);
+      // BUG : `query` (BM25) et `semantic_query` (vectoriel) sont EXCLUSIFS
+      // côté serveur (« query and semantic_query are mutually exclusive »,
+      // 13 échecs cumulés). buildSearchGraphArgs n'en envoie jamais deux :
+      // semantic_query l'emporte quand les deux sont fournis.
+      const args = buildSearchGraphArgs(params);
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("search_graph", ctx.cwd, args, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1438,11 +1986,13 @@ export default async function (pi: ExtensionAPI) {
     parameters: traceParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
       // BUG : le serveur expose `trace_path`, pas `trace_call_path` (vérifié via tools/list).
-      const result = await mcpCallForProject("trace_path", ctx.cwd, {
+      const args = {
         function_name: params.function_name,
         direction: params.direction,
         depth: params.depth || 3,
-      }, signal);
+      };
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("trace_path", ctx.cwd, args, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1465,7 +2015,46 @@ export default async function (pi: ExtensionAPI) {
         qualified_name: params.name,
       };
       if (params.file) args.file = params.file;
-      const result = await mcpCallForProject("get_code_snippet", ctx.cwd, args, signal);
+      // Repli « symbol not found » : le serveur répond ça quand le nom brut
+      // n'est pas un qualified_name exact (32 échecs cumulés). Sur cet échec
+      // seulement, on résout le nom via search_graph(name_pattern=…) puis on
+      // retente UNE fois le snippet — zéro coût sur le chemin nominal.
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets(
+        "get_code_snippet",
+        ctx.cwd,
+        args,
+        targets,
+        signal,
+        async (error, project) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/symbol not found/i.test(message)) return null;
+          const namePattern = buildQualifiedNamePattern(params.name);
+          if (!namePattern) return null;
+          let raw: string;
+          try {
+            raw = await mcpCall(
+              "search_graph",
+              {
+                name_pattern: namePattern,
+                limit: 20,
+                ...(params.file ? { file_pattern: params.file } : {}),
+                project,
+              },
+              signal
+            );
+          } catch {
+            return null; // repli impossible → erreur d'origine (déjà actionnable)
+          }
+          const rows = parseSearchGraphRows(raw);
+          const picked = pickSearchGraphCandidate(rows, { name: params.name, file: params.file });
+          if (picked) return { qualified_name: picked.qualifiedName };
+          if (rows.length > 1) {
+            throw new Error(buildSnippetAmbiguityMessage(params.name, rows));
+          }
+          return null;
+        }
+      );
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1485,7 +2074,8 @@ export default async function (pi: ExtensionAPI) {
       const args: Record<string, unknown> = { pattern: params.query };
       if (params.file_pattern) args.file_pattern = params.file_pattern;
       if (params.limit) args.limit = params.limit;
-      const result = await mcpCallForProject("search_code", ctx.cwd, args, signal);
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("search_code", ctx.cwd, args, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1503,73 +2093,49 @@ export default async function (pi: ExtensionAPI) {
     ],
     parameters: diffParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      // BUG : le serveur MCP CBM ne fournit AUCUN tool `detect_changes` (vérifié via
-      // tools/list : 8 tools seulement, aucun équivalent diff). Fallback LOCAL : lire
-      // le diff git, puis retrouver les symboles affectés via query_graph (nœuds dont
-      // file_path correspond au fichier modifié).
-      const repoDir = params.path || ctx.cwd;
-      let files: string[] = [];
-      try {
-        // Fichiers modifiés/supprimés vs HEAD (staged + unstaged)
-        const diffOut = execSync("git diff --name-only HEAD", {
-          cwd: repoDir,
-          encoding: "utf-8",
-          timeout: 30_000,
-        });
-        // Fichiers untracked (ligne porcelain "?? chemin")
-        const statusOut = execSync("git status --porcelain", {
-          cwd: repoDir,
-          encoding: "utf-8",
-          timeout: 30_000,
-        });
-        const set = new Set<string>();
-        diffOut.split("\n").forEach((l) => { const t = l.trim(); if (t) set.add(t); });
-        statusOut.split("\n").forEach((l) => {
-          // Format porcelain : 2 lettres d'état + espace + chemin ("??" = untracked)
-          const p = l.length > 3 ? l.slice(3).trim() : "";
-          if (p) set.add(p);
-        });
-        files = [...set];
-      } catch (e: any) {
-        return {
-          content: [{
-            type: "text",
-            text: `cbm_diff : impossible de lire le diff git dans "${repoDir}" — ${e.message}. ` +
-              "Vérifiez que ce chemin est un dépôt git valide.",
-          }],
-          details: undefined,
-        };
+      const subs = listLinkedSubprojects(ctx.cwd);
+      // Projet NON lié : comportement inchangé (un seul dépôt = ctx.cwd ou path).
+      if (subs.length === 0) {
+        const text = await runDiffForRepo(params.path || ctx.cwd, signal);
+        return { content: [{ type: "text", text }], details: undefined };
       }
-      if (files.length === 0) {
-        return {
-          content: [{ type: "text", text: "cbm_diff : aucune modification détectée (working tree propre)." }],
-          details: undefined,
-        };
-      }
-      const lines: string[] = [`Modifications détectées (${files.length} fichier(s)) :`];
-      for (const file of files) {
-        lines.push(`\n## ${file}`);
-        // Échapper les guillemets du chemin pour la requête Cypher
-        const safePath = file.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-        const cypher =
-          `MATCH (n) WHERE n.file_path = "${safePath}" ` +
-          "RETURN n.name, n.label, n.start_line ORDER BY n.start_line";
-        try {
-          const res = await mcpCallForProject("query_graph", repoDir, { query: cypher }, signal);
-          const parsed = JSON.parse(res);
-          const rows: unknown[][] = parsed.rows || [];
-          if (rows.length === 0) {
-            lines.push("  (aucun symbole indexé pour ce fichier)");
-          } else {
-            for (const r of rows) {
-              lines.push(`  - ${r[1]} ${r[0]} (ligne ${r[2]})`);
-            }
-          }
-        } catch (e: any) {
-          lines.push(`  (recherche de symboles impossible : ${e.message})`);
+      // Workspace LIÉ : diff par sous-projet, fusionné sous `## [sous-projet]`.
+      //  - `target` explicite → on cible ce(s) sous-projet(s) ;
+      //  - sinon `path` → sous-projet déduit du chemin ;
+      //  - sinon tous les sous-projets (path par défaut de chacun).
+      let targets: FederationTarget[];
+      if (params.target && String(params.target).trim().toLowerCase() !== ALL_TARGETS) {
+        targets = await resolveTargets(ctx.cwd, params.target, signal);
+      } else if (params.path) {
+        const name = inferTargetFromPath(params.path, ctx.cwd, subs);
+        if (!name) {
+          // Chemin hors des sous-projets : lecture directe, sans fédérer.
+          const text = await runDiffForRepo(params.path, signal);
+          return { content: [{ type: "text", text }], details: undefined };
         }
+        targets = await resolveTargets(ctx.cwd, name, signal);
+      } else {
+        targets = await resolveTargets(ctx.cwd, undefined, signal);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }], details: undefined };
+      if (targets.length <= 1) {
+        const t = targets[0];
+        const sub = subs.find((s) => s.name === t.name);
+        const text = await runDiffForRepo(sub ? sub.rootPath : ctx.cwd, signal, t.project);
+        return { content: [{ type: "text", text }], details: undefined };
+      }
+      const settled = await Promise.allSettled(
+        targets.map((t) => {
+          const sub = subs.find((s) => s.name === t.name);
+          return runDiffForRepo(sub ? sub.rootPath : ctx.cwd, signal, t.project);
+        })
+      );
+      const parts: FederatedPart[] = targets.map((t, i) => {
+        const r = settled[i];
+        if (r.status === "fulfilled") return { name: t.name, text: r.value };
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        return { name: t.name, text: "", error: msg };
+      });
+      return { content: [{ type: "text", text: mergeFederatedParts(parts) }], details: undefined };
     },
   });
 
@@ -1587,7 +2153,8 @@ export default async function (pi: ExtensionAPI) {
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
       const args: Record<string, unknown> = {};
       if (params.path) args.path = params.path;
-      const result = await mcpCallForProject("get_architecture", ctx.cwd, args, signal);
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("get_architecture", ctx.cwd, args, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1602,7 +2169,8 @@ export default async function (pi: ExtensionAPI) {
     promptSnippet: "Run a Cypher query against the codebase graph",
     parameters: cypherParams,
     async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
-      const result = await mcpCallForProject("query_graph", ctx.cwd, { query: params.query }, signal);
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("query_graph", ctx.cwd, { query: params.query }, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });
@@ -1615,8 +2183,9 @@ export default async function (pi: ExtensionAPI) {
       "and statistics (node count, edge count). Useful for understanding what data is available.",
     promptSnippet: "Get knowledge graph schema and stats",
     parameters: schemaParams,
-    async execute(_toolCallId, _params: any, signal, _onUpdate, ctx) {
-      const result = await mcpCallForProject("get_graph_schema", ctx.cwd, {}, signal);
+    async execute(_toolCallId, params: any, signal, _onUpdate, ctx) {
+      const targets = await resolveTargets(ctx.cwd, params.target, signal);
+      const result = await mcpCallForTargets("get_graph_schema", ctx.cwd, {}, targets, signal);
       return { content: [{ type: "text", text: result }], details: undefined };
     },
   });

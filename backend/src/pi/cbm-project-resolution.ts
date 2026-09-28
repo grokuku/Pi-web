@@ -143,3 +143,94 @@ export function resolveCbmProjectName(
 
   return null;
 }
+
+/**
+ * Sous-projet d'un workspace LIÉ (« composite ») : nom lisible (nom de dossier
+ * du symlink dans le composite) + racine RÉELLE du dépôt.
+ *
+ * La racine RÉELLE (realpath du symlink) est le SEUL chemin qui identifie le
+ * projet CBM : CBM n'indexe PAS les symlinks (prouvé en direct, un dossier de
+ * symlinks donne un graphe vide), donc interroger/indexer le chemin du symlink
+ * est inopérant. `name` sert uniquement d'étiquette de provenance (en-têtes
+ * « ## [nom] »).
+ */
+export interface LinkedSubprojectRef {
+  /** Nom du sous-projet (nom de dossier du symlink dans le composite). */
+  name: string;
+  /** Racine RÉELLE du dépôt (chemin absolu, symlink résolu via realpath). */
+  rootPath: string;
+}
+
+/**
+ * Nom CBM du projet indexé correspondant à la racine d'un SOUS-PROJET : racine
+ * EXACTE, sinon ancêtre indexé le plus proche (tolérance : un sous-projet
+ * imbriqué dans un dépôt lui-même indexé). null si rien ne correspond.
+ */
+export function resolveCbmProjectNameForRoot(
+  rootPath: string,
+  indexed: IndexedProject[],
+): string | null {
+  const target = normalizeRootPath(rootPath);
+  const exact = indexed.find((p) => normalizeRootPath(p.rootPath) === target);
+  if (exact) return exact.name;
+  const ancestor = closestAncestor(target, indexed);
+  return ancestor ? ancestor.name : null;
+}
+
+/**
+ * Cible fédérée : un sous-projet résolu, avec son étiquette de provenance
+ * (`name`) et son nom CBM (`project`).
+ */
+export interface LinkedTarget {
+  /** Nom du sous-projet (nom de dossier du symlink), pour les en-têtes. */
+  name: string;
+  /** Nom CBM du projet indexé à interroger. */
+  project: string;
+}
+
+/**
+ * Résout les sous-projets d'un composite en CIBLES interrogeables : pour chaque
+ * sous-projet, le nom CBM du projet indexé correspondant ; les sous-projets non
+ * résolus sont EXCLUS, et les doublons (deux symlinks vers le même graphe)
+ * dédupliqués. L'ORDRE D'ENTRÉE est conservé (déterminisme de la fusion).
+ */
+export function resolveLinkedTargets(
+  indexed: IndexedProject[],
+  linkedSubprojects: LinkedSubprojectRef[],
+): LinkedTarget[] {
+  const out: LinkedTarget[] = [];
+  const seen = new Set<string>();
+  for (const sub of linkedSubprojects) {
+    const project = resolveCbmProjectNameForRoot(sub.rootPath, indexed);
+    if (!project || seen.has(project)) continue;
+    seen.add(project);
+    out.push({ name: sub.name, project });
+  }
+  return out;
+}
+
+/**
+ * Liste ORDONNÉE et DÉDUPLIQUÉE des noms de projets CBM à interroger pour un
+ * cwd — base de la FÉDÉRATION des workspaces liés.
+ *
+ * RÈGLE :
+ *  - `linkedSubprojects` NON VIDE → le cwd est un workspace COMPOSITE ; on
+ *    résout CHAQUE sous-projet (les non-résolus sont exclus) et on renvoie
+ *    leurs noms dans l'ORDRE D'ENTRÉE, sans doublon. La détection de composite
+ *    PRIME sur la règle « ancêtre le plus proche » : sinon un composite IMBRIQUÉ
+ *    dans un dossier lui-même indexé (ex. « Yuki and Libs » dans /projects/Yuki)
+ *    résoudrait vers le parent au lieu des sous-projets.
+ *  - `linkedSubprojects` VIDE → comportement à cible UNIQUE STRICTEMENT
+ *    inchangé : `[resolveCbmProjectName(...)]`, ou `[]` si non résolu.
+ */
+export function resolveCbmProjectNames(
+  cwd: string,
+  indexed: IndexedProject[],
+  linkedSubprojects: LinkedSubprojectRef[] = [],
+): string[] {
+  if (linkedSubprojects.length > 0) {
+    return resolveLinkedTargets(indexed, linkedSubprojects).map((t) => t.project);
+  }
+  const single = resolveCbmProjectName(cwd, indexed);
+  return single ? [single] : [];
+}

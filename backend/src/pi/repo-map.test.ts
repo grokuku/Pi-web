@@ -11,8 +11,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildRepoMap,
   extractTaskHints,
+  renderLinkedRepoMapSections,
   renderRepoMapTier,
   REPO_MAP_BUDGET_CHARS,
+  REPO_MAP_LINKED_BUDGET_CHARS,
   REPO_MAP_MARKER_END,
   REPO_MAP_MARKER_START,
   type RepoMapData,
@@ -269,5 +271,59 @@ describe("buildRepoMap — troncature par section (jamais en milieu de ligne)", 
       buildRepoMap(data, { rank: "stable", budget: 500 }),
     );
     for (const r of runs) expect(r).toBe(runs[0]);
+  });
+});
+
+describe("renderLinkedRepoMapSections (carte fédérée)", () => {
+  const A = "Carte du repo (CBM · signatures) — 3 fichiers · 2 hubs · 1 routes.\nCHEMINS:\nbackend/src";
+  const B = "Carte du repo (CBM · signatures) — 9 fichiers · 4 hubs · 0 routes.\nCHEMINS:\nfrontend/src";
+
+  it("expose un budget fédéré par défaut > budget simple", () => {
+    expect(REPO_MAP_LINKED_BUDGET_CHARS).toBeGreaterThan(REPO_MAP_BUDGET_CHARS);
+  });
+
+  it("0 section (ou toutes vides) → ''", () => {
+    expect(renderLinkedRepoMapSections([])).toBe("");
+    expect(renderLinkedRepoMapSections([{ name: "x", text: "  " }])).toBe("");
+  });
+
+  it("1 section → texte BRUT (non-régression projet non lié)", () => {
+    expect(renderLinkedRepoMapSections([{ name: "Pi-Web", text: A }])).toBe(A);
+  });
+
+  it("N sections → blocs `## [nom]` dans l'ordre fourni", () => {
+    const out = renderLinkedRepoMapSections([
+      { name: "Pi-Web", text: A },
+      { name: "holaf-lib", text: B },
+    ]);
+    expect(out.startsWith("## [Pi-Web]\n")).toBe(true);
+    expect(out).toContain("\n\n## [holaf-lib]\n");
+    expect(out.indexOf("## [Pi-Web]")).toBeLessThan(out.indexOf("## [holaf-lib]"));
+  });
+
+  it("filtre les sections vides et respecte le budget", () => {
+    const big = "x".repeat(5000);
+    const out = renderLinkedRepoMapSections(
+      [
+        { name: "vide", text: "" },
+        { name: "Pi-Web", text: big },
+        { name: "holaf-lib", text: big },
+      ],
+      { budget: 800 },
+    );
+    expect(out).not.toContain("## [vide]");
+    expect(out.length).toBeLessThanOrEqual(800);
+    expect(out).toContain("## [Pi-Web]");
+    expect(out).toContain("## [holaf-lib]");
+  });
+
+  it("est DÉTERMINISTE (même sortie sur plusieurs rendus)", () => {
+    const sections = [
+      { name: "Pi-Web", text: A },
+      { name: "holaf-lib", text: B },
+    ];
+    const runs = Array.from({ length: 5 }, () => renderLinkedRepoMapSections(sections, { budget: 300 }));
+    for (const r of runs) expect(r).toBe(runs[0]);
+    expect(runs[0].length).toBeLessThanOrEqual(300);
   });
 });
