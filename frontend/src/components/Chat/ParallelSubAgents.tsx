@@ -26,11 +26,11 @@
 //
 // COHÉRENCE : chaque colonne est un CollapsibleBlock → elle suit le réglage
 // displayDetailExpanded et l'override utilisateur (blockId `parallel:<id>`),
-// l'auto-dépli d'erreur, et l'auto-dépli « run en cours » (isRunning) pour le
-// SEUL run le plus récent du groupe. Le mur ne contient que des runs actifs par
-// construction (selectConcurrentRuns) : un `isRunning` vrai pour toutes les
-// colonnes annulerait le réglage — les colonnes plus anciennes restent donc
-// pilotées par displayDetailExpanded. Son corps (la sortie du sous-agent)
+// et l'auto-dépli d'erreur. PAS d'auto-dépli « run en cours » : le mur ne
+// contient que des runs actifs par construction (selectConcurrentRuns), et un
+// isRunning vrai par défaut annulerait le réglage (décision produit : journal
+// REPLIÉ même pendant un run, l'en-tête porte le suivi live — statut, chrono,
+// nombre d'actions, dernière action). Son corps (la sortie du sous-agent)
 // défile INDÉPENDAMMENT.
 
 import { memo } from "react";
@@ -45,9 +45,9 @@ export const MAX_PARALLEL_COLUMNS = 3;
 
 /** Une colonne = un run actif (en-tête rôle/modèle/statut/durée + sortie).
  *  `fixedWidth` : au-delà du plafond, largeur fixe (défilement horizontal).
- *  `autoExpand` : auto-dépli live — réservé au run le PLUS RÉCENT du groupe
- *  (les autres suivent le réglage global / l'override utilisateur). */
-const ParallelColumn = memo(function ParallelColumn({ run, fixedWidth, autoExpand }: { run: SubAgentRun; fixedWidth: boolean; autoExpand: boolean }) {
+ *  Repli/dépli : réglage global + override utilisateur (aucun auto-dépli
+ *  pendant le run — cf. commentaire de module). */
+const ParallelColumn = memo(function ParallelColumn({ run, fixedWidth }: { run: SubAgentRun; fixedWidth: boolean }) {
   const running = run.status === "running";
   const blockId = `parallel:${run.id}`;
   // ≤ plafond : largeurs ÉGALES (flex-1, base 0) ; au-delà : largeur FIXE pour
@@ -58,7 +58,6 @@ const ParallelColumn = memo(function ParallelColumn({ run, fixedWidth, autoExpan
   return (
     <CollapsibleBlock
       blockId={blockId}
-      isRunning={autoExpand}
       isError={run.isError}
       className={`flex flex-col min-w-0 w-full ${sizing} border border-hacker-border/60 rounded bg-hacker-surface/20 overflow-hidden`}
       headerClassName="inline-flex items-center gap-1.5 px-2 py-1 text-[0.6875rem] font-mono leading-tight text-left min-w-0 flex-wrap bg-hacker-bg/40 border-b border-hacker-border/30 cursor-pointer"
@@ -113,20 +112,13 @@ export const ParallelSubAgents = memo(function ParallelSubAgents({ projectId }: 
           {/* Largeurs égales ; défilement horizontal au-delà du plafond ;
               empilement vertical sur petit écran. */}
           <div className="flex flex-col sm:flex-row items-stretch gap-2 p-2 sm:overflow-x-auto">
-            {group.map((run) => {
-              // Le mur ne contient QUE des runs actifs (sélection) : n'accorder
-              // l'auto-dépli live qu'au run le PLUS RÉCENT du groupe (tri
-              // chronologique) — les autres suivent le réglage displayDetail.
-              const autoExpand = run.id === group[group.length - 1]?.id;
-              return (
-                <ParallelColumn
-                  key={run.id}
-                  run={run}
-                  fixedWidth={group.length > MAX_PARALLEL_COLUMNS}
-                  autoExpand={autoExpand}
-                />
-              );
-            })}
+            {group.map((run) => (
+              <ParallelColumn
+                key={run.id}
+                run={run}
+                fixedWidth={group.length > MAX_PARALLEL_COLUMNS}
+              />
+            ))}
           </div>
         </section>
       ))}

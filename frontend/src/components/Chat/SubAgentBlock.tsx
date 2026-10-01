@@ -9,6 +9,10 @@
 // du toolCall delegate) ; déplié = mini-fil du sous-agent (sa réflexion, ses
 // messages tronqués « extrait », ses outils résumés par le LOT 1). Erreurs
 // auto-dépliées ; résumé final + cause si échec.
+// Repli PAR DÉFAUT (décision produit) : le journal (actions numérotées) et les
+// réflexions/textes du sous-agent suivent le réglage « Déplier le détail
+// d'affichage par défaut » — y compris pendant le run (l'en-tête reste le
+// suivi live : statut, chrono, nombre d'actions, dernière action).
 //
 // `DatedSubAgentBlock` rend un run détaché À SA DATE dans le fil (il est inséré
 // par `insertDatedRuns` côté ChatView) : runs ARCHIVÉS (relus depuis l'historique)
@@ -165,6 +169,21 @@ export function SubAgentHeader({ run, toolCall, running, failed, stuck, duration
   );
 }
 
+/**
+ * Résumé d'action SANS la tête « verbe + cible » déjà rendue à gauche.
+ * Runs LIVE : le résumé vient de buildToolSummary et vaut « bash <cmd> · exit 0
+ * · 59 lignes » — la tête serait affichée DEUX FOIS (toolName + argSummary).
+ * Runs ARCHIVÉS : le résumé persisté (backend summarizeToolAction) contient
+ * déjà les SEULS segments (« 59 lignes ») → renvoyé tel quel.
+ */
+function actionSummaryTail(summary: string, argSummary: string): string {
+  if (!summary) return "";
+  if (argSummary && summary.startsWith(argSummary)) {
+    return summary.slice(argSummary.length).replace(/^\s*·\s*/, "");
+  }
+  return summary;
+}
+
 // ── Contenu commun (mini-fil du sous-agent) ──────────────────────────────────
 
 /** Contenu commun du mini-fil d'un run (messages, actions, résumé final).
@@ -201,20 +220,23 @@ export function SubAgentRunBody({ run, blockId, fallback }: { run?: SubAgentRun;
       {/* Actions d'outils (résumés du LOT 1). */}
       {run && run.actions.length > 0 && (
         <div className="ml-3 flex flex-col gap-0.5 border-l border-hacker-border/40 pl-2">
-          {run.actions.map((a) => (
-            <div key={a.seq} className={`text-[11px] font-mono flex flex-wrap items-center gap-1 ${a.isError ? "text-red-400" : "text-hacker-text-dim"}`}>
-              <span className="text-hacker-text-dim/50">{a.seq}.</span>
-              <span className="text-hacker-text-bright/80">{a.toolName}</span>
-              {a.argSummary && a.argSummary !== a.toolName && (
-                <span className="truncate max-w-[220px] text-hacker-text-dim/70">{a.argSummary.replace(a.toolName, "").trim()}</span>
-              )}
-              {a.summary && <span>· {a.summary}</span>}
-              {a.durationMs !== undefined && (
-                <span className="text-hacker-text-dim/50 tabular-nums">· {formatToolDuration(a.durationMs)}</span>
-              )}
-              {a.truncated && <span className="text-hacker-text-dim/50">· tronqué</span>}
-            </div>
-          ))}
+          {run.actions.map((a) => {
+            const tail = actionSummaryTail(a.summary, a.argSummary || a.toolName);
+            return (
+              <div key={a.seq} className={`text-[11px] font-mono flex flex-wrap items-center gap-1 ${a.isError ? "text-red-400" : "text-hacker-text-dim"}`}>
+                <span className="text-hacker-text-dim/50">{a.seq}.</span>
+                <span className="text-hacker-text-bright/80">{a.toolName}</span>
+                {a.argSummary && a.argSummary !== a.toolName && (
+                  <span className="truncate max-w-[220px] text-hacker-text-dim/70">{a.argSummary.replace(a.toolName, "").trim()}</span>
+                )}
+                {tail && <span>· {tail}</span>}
+                {a.durationMs !== undefined && (
+                  <span className="text-hacker-text-dim/50 tabular-nums">· {formatToolDuration(a.durationMs)}</span>
+                )}
+                {a.truncated && <span className="text-hacker-text-dim/50">· tronqué</span>}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -274,18 +296,18 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
   const stuck = run ? isRunStuck(run) : false;
   // Statut d'affichage : le run (store) prime une fois connu ; sinon dérivé du
   // toolCall. Un run TERMINÉ ne `running` plus, et un run resté `running` mais
-  // BLOQUÉ (`stuck`) non plus : aucun des deux ne doit s'auto-déplier à tort.
+  // BLOQUÉ (`stuck`) non plus.
   const running = run ? run.status === "running" && !stuck : toolCall.isStreaming;
   const failed = run ? run.isError : isSubAgentFailed(toolCall);
-  // AUTO-DÉPLI : un sous-agent EN COURS (et NON bloqué) est DÉPLIÉ par défaut
-  // pour montrer son activité (exigence « plus de silence »). Contrairement aux
-  // outils simples, on n'exige NI « dernier actif » NI output présent : une
-  // délégation long-running est l'activité principale du tour. TRANSITOIRE :
-  // une fois terminé (ou bloqué), `running` est faux → la règle normale
-  // (réglage global / erreur) reprend, sauf override utilisateur.
-  // NB : l'en-tête porte aussi un indicateur d'activité visible même replié
-  // (cf. SubAgentHeader.preview).
-  const autoRunning = running;
+  // PAS D'AUTO-DÉPLI pour un run EN COURS (décision produit) : le réglage
+  // « Déplier le détail d'affichage par défaut » INACTIF doit replier le
+  // journal du sous-agent MÊME pendant le run — sinon des dizaines de lignes
+  // d'actions défilent et le réglage paraît inopérant (plainte sur le volume).
+  // Le suivi live reste assuré SANS déplier : l'en-tête (toujours visible)
+  // porte statut, chrono, nombre d'actions et dernière action résumée
+  // (cf. SubAgentHeader.preview) ; un clic déplie le mini-fil.
+  // Précédence conservée : override utilisateur > erreur (auto-dépli) >
+  // réglage global (ACTIF → déplié, INACTIF → replié).
 
   // Durée : live pendant le run (chrono) ; figée (end.durationMs ou
   // startedAt→endedAt du toolCall) une fois terminé ; absente en historique.
@@ -297,7 +319,6 @@ export const SubAgentBlock = memo(function SubAgentBlock({ toolCall, blockId }: 
     <CollapsibleBlock
       blockId={blockId}
       isError={failed}
-      isRunning={autoRunning}
       className={`ml-4 pl-2 border-l border-hacker-border/60 min-w-0 ${running ? "animate-pulse" : ""}`}
       headerClassName={`inline-flex items-center gap-1.5 text-[0.6875rem] font-mono leading-tight text-left min-w-0 flex-wrap ${
         failed ? "text-red-400" : "text-hacker-text-dim"
@@ -339,7 +360,6 @@ export const DatedSubAgentBlock = memo(function DatedSubAgentBlock({ run }: { ru
     <CollapsibleBlock
       blockId={blockId}
       isError={live.isError}
-      isRunning={running}
       className="ml-4 my-1 pl-2 border-l border-hacker-border/60 min-w-0"
       headerClassName={`inline-flex items-center gap-1.5 text-[0.6875rem] font-mono leading-tight text-left min-w-0 flex-wrap ${
         live.isError ? "text-red-400" : "text-hacker-text-dim"
