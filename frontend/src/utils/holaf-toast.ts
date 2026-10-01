@@ -11,9 +11,9 @@
 // Thème « pi-web » : le registre --ht-* est mappé sur les tokens
 // hacker-theme.css via `var(...)`. Les variables étant posées À LA FOIS en
 // valeur dynamique (`var(--surface-raised)`, `var(--accent)`…), le toast suit
-// automatiquement le mode sombre/clair ET le preset d'accent (data-accent sur
-// <html>) sans rejouer setTheme : les custom properties sont résolues à
-// l'affichage contre l'héritage du document.
+// automatiquement le mode sombre/clair ET le thème choisi (packs pi-web-*)
+// sans rejouer setTheme : les custom properties sont résolues à l'affichage
+// contre l'héritage du document.
 
 import {
   HolafToast as VendoredHolafToast,

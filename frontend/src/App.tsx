@@ -16,7 +16,7 @@ import { CbmStatsModal } from "./components/Modals/CbmStatsModal";
 import { PiLogo } from "./components/common/PiLogo";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { MobileHeaderMenu } from "./components/Header/MobileHeaderMenu";
-import { AccentPicker } from "./components/Header/AccentPicker";
+import { ThemePicker } from "./components/Header/ThemePicker";
 import { Window } from "./components/common/Window";
 import { PreviewWindow } from "./components/Preview/PreviewWindow";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
@@ -25,7 +25,7 @@ import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
-import { applyPiWebTheme } from "./theme/pi-web-theme";
+import { applyPiWebTheme, persistThemeName, readSavedThemeName, THEME_STORAGE_KEY, type PiWebThemeId } from "./theme/pi-web-theme";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
 import { mergeServerSessionState } from "./utils/session-sync";
 import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
@@ -69,10 +69,13 @@ function App() {
 
   // ── State ──
   const [theme, setTheme] = useState<"dark" | "light">(() => {
-    const saved = localStorage.getItem("pi-web-theme");
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
     return (saved === "light" || saved === "dark") ? saved : "dark";
   });
-  const [accent, setAccent] = useState(() => localStorage.getItem("pi-web-accent") || "");
+  // Thème choisi (nouvelle notion, ex-« accent ») : `readSavedThemeName` joue
+  // aussi la MIGRATION de l'ancienne clé `pi-web-accent` (idempotente : au boot,
+  // `initPiWebTheme()` l'a déjà faite). Repli garanti : Matrix.
+  const [themeName, setThemeName] = useState<PiWebThemeId>(readSavedThemeName);
   const [scanlines, setScanlines] = useState(() => {
     // Auto-disable scanlines + matrix-bg on Gecko (Firefox/Floorp) — the Cycle Collector
     // runs at ~50% CPU with full-screen fixed overlays, making the UI unresponsive.
@@ -353,11 +356,12 @@ function App() {
   }, [theme]);
 
   // ── Thème unifié : la brique `tokens` (holaf-lib) est la source unique ──
-  // Chaque changement de mode ou d'accent rejoue le pack `pi-web-<accent>-<mode>`
-  // (l'anti-flash du boot est fait dans main.tsx, avant le premier rendu).
+  // Chaque changement de mode ou de thème rejoue le pack correspondant
+  // (`pi-web-<accent>-<mode>` ou `pi-web-lib-<famille>-<mode>`). L'anti-flash du
+  // boot est fait dans main.tsx, avant le premier rendu.
   useEffect(() => {
-    applyPiWebTheme(theme, accent);
-  }, [theme, accent]);
+    applyPiWebTheme(theme, themeName);
+  }, [theme, themeName]);
 
   // ── Toast HolafToast : thème « pi-web » posé une fois au boot ──
   // (idempotent ; le wrapper rejoue l'init paresseusement au premier toast()) ──
@@ -376,22 +380,22 @@ function App() {
     }
   }, [activeProject?.id, updateProjectSession]);
 
-  // ── Accent ──
+  // ── Thème choisi (ex-« accent ») : persistance dans la NOUVELLE clé ──
+  // (l'ancienne clé `pi-web-accent` est migrée puis supprimée — voir
+  // `readPersistedThemeName` dans theme/pi-web-theme.ts).
   useEffect(() => {
-    if (accent) {
-      document.documentElement.setAttribute("data-accent", accent);
-    } else {
-      document.documentElement.removeAttribute("data-accent");
-    }
-    localStorage.setItem("pi-web-accent", accent);
-  }, [accent]);
+    persistThemeName(themeName);
+  }, [themeName]);
+
+  // Mode clair/sombre : source d'état UNIQUE pour le bouton ☀/☾ du header ET
+  // le segmenté du panneau de thèmes — impossible de les désynchroniser.
+  const setThemeMode = (mode: "dark" | "light") => {
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
+    setTheme(mode);
+  };
 
   const toggleTheme = () => {
-    setTheme((t) => {
-      const next = t === "dark" ? "light" : "dark";
-      localStorage.setItem("pi-web-theme", next);
-      return next;
-    });
+    setThemeMode(theme === "dark" ? "light" : "dark");
   };
 
   const toggleScanlines = () => {
@@ -1115,7 +1119,14 @@ function App() {
           {theme === "dark" ? "☀" : "☾"}
         </button>
         <div className="hidden md:block">
-          <AccentPicker theme={theme} accent={accent} onAccentChange={setAccent} scanlines={scanlines} onScanlinesToggle={toggleScanlines} />
+          <ThemePicker
+            theme={theme}
+            themeName={themeName}
+            scanlines={scanlines}
+            onThemeChange={setThemeName}
+            onModeChange={setThemeMode}
+            onScanlinesToggle={toggleScanlines}
+          />
         </div>
         <button onClick={() => setShowSettings(true)} className="btn-hacker text-xs px-2 py-1" title={`${t('header.settings')} (Ctrl+L)`} aria-label={`${t('header.settings')} (Ctrl+L)`}>
           ⚙

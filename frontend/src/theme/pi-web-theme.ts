@@ -14,8 +14,13 @@
 //     (ils `extends` le pack de base du mode et n'ajoutent que accent/accent-dim).
 //
 // Convention de nommage : `pi-web-<accent>-<mode>`, accent ∈
-// {green,purple,orange,cyan,rose}, mode ∈ {dark,light}. Le vert est l'accent
-// par défaut de Pi-Web (data-accent absent).
+// {green,purple,orange,cyan,rose}, mode ∈ {dark,light}.
+//
+// Depuis le sélecteur de THÈME, l'« accent » n'est plus une notion d'UI : les
+// accents sont la couche basse (packs) et les THÈMES la couche affichée :
+//   matrix (vert, DÉFAUT), violet, orange, cyan, rose — puis les thèmes de la
+//   bibliothèque holaf (indigo, emerald, midnight, slate, amber) recopiés dans
+//   des packs hôte `pi-web-lib-<famille>-<mode>`. Voir PI_WEB_THEMES.
 //
 // ⚠️ CONTRAINTE N°1 — ZÉRO CHANGEMENT VISUEL : les valeurs des packs sont
 // copiées VERBATIM de `hacker-theme.css`. Le second argument de `var()` dans le
@@ -45,9 +50,11 @@ export type ThemeMode = "dark" | "light";
 export const PI_WEB_ACCENTS = ["green", "purple", "orange", "cyan", "rose"] as const;
 export type PiWebAccent = (typeof PI_WEB_ACCENTS)[number];
 
-/** Clés de persistance (identiques à App.tsx — préservées à l'identique). */
+/** Clés de persistance du MODE (inchangée) et de l'ancien ACCENT (migrée). */
 export const THEME_STORAGE_KEY = "pi-web-theme";
 export const ACCENT_STORAGE_KEY = "pi-web-accent";
+/** Nouvelle clé de persistance du THÈME choisi (remplace ACCENT_STORAGE_KEY). */
+export const THEME_NAME_STORAGE_KEY = "pi-web-theme-name";
 
 /** Noms des packs de base (un par mode). */
 export const BASE_PACK_DARK = "pi-web-base-dark";
@@ -141,6 +148,154 @@ export const ACCENT_PALETTES: Record<PiWebAccent, { dark: AccentPair; light: Acc
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// THÈMES (modèle UI) — remplace la notion d'« accent » dans l'interface
+// ─────────────────────────────────────────────────────────────────────────────
+// La brique `tokens` reste la source unique de couleurs ; le « thème » est la
+// couche de NOMMAGE présentée à l'utilisateur :
+//   • thèmes d'identité Pi-Web (packs `pi-web-<accent>-<mode>`) :
+//       matrix (DÉFAUT, ex-accent « green »), violet (ex-« purple »), orange,
+//       cyan, rose ;
+//   • thèmes de la bibliothèque holaf (presets intégrés `<famille>-<mode>`,
+//     recopiés dans des packs hôte `pi-web-lib-<famille>-<mode>` pour ne
+//     garder que le vocabulaire de tokens Pi-Web) :
+//       indigo, emerald, midnight, slate, amber.
+// L'ordre d'affichage est celui de `PI_WEB_THEMES` (Matrix en premier).
+
+export const PI_WEB_PRIMARY_THEME_IDS = ["matrix", "violet", "orange", "cyan", "rose"] as const;
+export const PI_WEB_LIBRARY_THEME_IDS = ["indigo", "emerald", "midnight", "slate", "amber"] as const;
+export const PI_WEB_THEME_IDS = [
+  ...PI_WEB_PRIMARY_THEME_IDS,
+  ...PI_WEB_LIBRARY_THEME_IDS,
+] as const;
+export type PiWebThemeId = (typeof PI_WEB_THEME_IDS)[number];
+
+/** Thème par défaut : Matrix (vert néon historique). */
+export const DEFAULT_THEME_ID: PiWebThemeId = "matrix";
+
+export interface PiWebThemeDefinition {
+  id: PiWebThemeId;
+  /** Ancien accent Pi-Web : pack appliqué `pi-web-<accent>-<mode>` (null si bibliothèque). */
+  accent: PiWebAccent | null;
+  /** Famille holaf : preset intégré `<famille>-<mode>` (null si thème Pi-Web). */
+  library: string | null;
+  /** Clé i18n du libellé affiché (`themes.names.<id>`). */
+  labelKey: string;
+  /** Thème par défaut (badge DÉFAUT + repli de toute valeur inconnue). */
+  isDefault: boolean;
+}
+
+/** Catalogue affiché, dans l'ordre : Matrix d'abord, puis les 4 autres couleurs. */
+export const PI_WEB_THEMES: readonly PiWebThemeDefinition[] = [
+  { id: "matrix", accent: "green", library: null, labelKey: "themes.names.matrix", isDefault: true },
+  { id: "violet", accent: "purple", library: null, labelKey: "themes.names.violet", isDefault: false },
+  { id: "orange", accent: "orange", library: null, labelKey: "themes.names.orange", isDefault: false },
+  { id: "cyan", accent: "cyan", library: null, labelKey: "themes.names.cyan", isDefault: false },
+  { id: "rose", accent: "rose", library: null, labelKey: "themes.names.rose", isDefault: false },
+  { id: "indigo", accent: null, library: "indigo", labelKey: "themes.names.indigo", isDefault: false },
+  { id: "emerald", accent: null, library: "emerald", labelKey: "themes.names.emerald", isDefault: false },
+  { id: "midnight", accent: null, library: "midnight", labelKey: "themes.names.midnight", isDefault: false },
+  { id: "slate", accent: null, library: "slate", labelKey: "themes.names.slate", isDefault: false },
+  { id: "amber", accent: null, library: "amber", labelKey: "themes.names.amber", isDefault: false },
+];
+
+/** Définition d'un thème par identifiant (undefined si inconnu). */
+export function getThemeDefinition(themeId: string): PiWebThemeDefinition | undefined {
+  return PI_WEB_THEMES.find((theme) => theme.id === themeId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION ancien accent → nouveau thème (testable, sans état incohérent)
+// ─────────────────────────────────────────────────────────────────────────────
+// Règle bijective : green→matrix, purple→violet, orange→orange, cyan→cyan,
+// rose→rose. Toute valeur absente/vide/inconnue → matrix (DÉFAUT).
+// La préférence est écrite dans la NOUVELLE clé `pi-web-theme-name`, puis
+// l'ancienne clé `pi-web-accent` est SUPPRIMÉE : plus aucune lecture de
+// l'ancienne valeur n'est possible (donc aucune divergence possible).
+
+export const LEGACY_ACCENT_TO_THEME: Readonly<Record<PiWebAccent, PiWebThemeId>> = {
+  green: "matrix",
+  purple: "violet",
+  orange: "orange",
+  cyan: "cyan",
+  rose: "rose",
+};
+
+/** Convertit un ancien accent en thème ; toute valeur non reconnue → Matrix. */
+export function themeFromLegacyAccent(accent: unknown): PiWebThemeId {
+  const key = typeof accent === "string" ? accent.trim().toLowerCase() : "";
+  return LEGACY_ACCENT_TO_THEME[key as PiWebAccent] ?? DEFAULT_THEME_ID;
+}
+
+/** Normalise un identifiant de thème (nouveau) OU un ancien accent. */
+export function normalizeThemeId(value: unknown): PiWebThemeId {
+  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return (PI_WEB_THEME_IDS as readonly string[]).includes(id)
+    ? (id as PiWebThemeId)
+    : themeFromLegacyAccent(id);
+}
+
+/** Interface minimale d'un stockage local (localStorage en production). */
+export interface ThemePreferenceStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+/**
+ * Lit la préférence de thème persistée en MIGRANT l'ancienne clé d'accent :
+ *   1. nouvelle clé valide → elle gagne, l'ancienne clé n'est pas touchée ;
+ *   2. sinon → conversion de `pi-web-accent` (`themeFromLegacyAccent`),
+ *      écriture dans la nouvelle clé puis suppression de l'ancienne ;
+ *   3. aucune information exploitable → Matrix (DÉFAUT), nouvelle clé écrite.
+ * Les erreurs de stockage (mode privé…) sont avalées : on rend un thème usable.
+ */
+export function readPersistedThemeName(storage: ThemePreferenceStorage): PiWebThemeId {
+  let current: string | null = null;
+  try {
+    current = storage.getItem(THEME_NAME_STORAGE_KEY);
+  } catch {
+    current = null;
+  }
+  if (current && (PI_WEB_THEME_IDS as readonly string[]).includes(current)) {
+    return current as PiWebThemeId;
+  }
+  let legacy: string | null = null;
+  try {
+    legacy = storage.getItem(ACCENT_STORAGE_KEY);
+  } catch {
+    legacy = null;
+  }
+  const migrated = themeFromLegacyAccent(legacy);
+  try {
+    storage.setItem(THEME_NAME_STORAGE_KEY, migrated);
+    if (legacy !== null) storage.removeItem(ACCENT_STORAGE_KEY);
+  } catch {
+    /* stockage indisponible : on rend quand même un thème */
+  }
+  return migrated;
+}
+
+/** Lit la préférence depuis le localStorage du navigateur (repli Matrix). */
+export function readSavedThemeName(): PiWebThemeId {
+  try {
+    if (typeof localStorage === "undefined") return DEFAULT_THEME_ID;
+    return readPersistedThemeName(localStorage);
+  } catch {
+    return DEFAULT_THEME_ID;
+  }
+}
+
+/** Persiste le thème choisi (erreurs de stockage avalées). */
+export function persistThemeName(themeId: PiWebThemeId): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(THEME_NAME_STORAGE_KEY, themeId);
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Utilitaires
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -156,6 +311,28 @@ export function hexToRgbTriple(hex: string): string {
     throw new Error(`[pi-web-theme] hex invalide : "${hex}" (attendu #rgb ou #rrggbb).`);
   }
   return `${parseInt(h.slice(0, 2), 16)} ${parseInt(h.slice(2, 4), 16)} ${parseInt(h.slice(4, 6), 16)}`;
+}
+
+/** Parse un hex en `[r,g,b]` décimaux ; `null` si l'entrée n'est pas un hex. */
+function parseHexRgb(hex: string): [number, number, number] | null {
+  let h = String(hex).trim().replace(/^#/, "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+/**
+ * Mélange deux hex (`ratio` 0..1 = part de `b`) ; renvoie `a` si l'entrée est
+ * invalide. Sert à dériver border-bright / text-bright des thèmes bibliothèque.
+ */
+export function mixHex(a: string, b: string, ratio: number): string {
+  const ca = parseHexRgb(a);
+  const cb = parseHexRgb(b);
+  if (!ca || !cb) return a;
+  const r = Math.max(0, Math.min(1, ratio));
+  const to2 = (n: number) =>
+    Math.max(0, Math.min(255, Math.round(n))).toString(16).toUpperCase().padStart(2, "0");
+  return `#${to2(ca[0] + (cb[0] - ca[0]) * r)}${to2(ca[1] + (cb[1] - ca[1]) * r)}${to2(ca[2] + (cb[2] - ca[2]) * r)}`;
 }
 
 /** Résout l'API de la brique (window en navigateur, globalThis ailleurs). */
@@ -236,6 +413,110 @@ export function themePackName(accent: string, mode: ThemeMode): string {
   return `pi-web-${id}-${mode}`;
 }
 
+/** Nom du pack hôte d'un thème bibliothèque (`pi-web-lib-<famille>-<mode>`). */
+export function libraryPackName(family: string, mode: ThemeMode): string {
+  return `pi-web-lib-${family}-${mode}`;
+}
+
+/**
+ * Pack appliqué pour un THÈME (ou un ancien accent) × mode.
+ * Les valeurs inconnues retombent sur Matrix : jamais d'état incohérent.
+ */
+export function themePackNameFor(themeId: string, mode: ThemeMode): string {
+  const def = getThemeDefinition(themeId) ?? getThemeDefinition(normalizeThemeId(themeId))!;
+  if (def.accent) return themePackName(def.accent, mode);
+  return libraryPackName(def.library!, mode);
+}
+
+/** Couleur d'accent d'aperçu (pastille) d'un thème dans un mode donné. */
+export function themeSwatchColor(themeId: string, mode: ThemeMode): string {
+  const def = getThemeDefinition(themeId) ?? getThemeDefinition(normalizeThemeId(themeId))!;
+  if (def.accent) return ACCENT_PALETTES[def.accent][mode].accent;
+  try {
+    const holaf = getHolafTokens();
+    // Pack hôte prioritaire (casse normalisée) puis preset intégré.
+    const preset =
+      holaf.getPreset(libraryPackName(def.library!, mode)) ?? holaf.getPreset(`${def.library}-${mode}`);
+    if (preset && typeof preset.accent === "string" && preset.accent) {
+      return preset.accent.toLowerCase();
+    }
+  } catch {
+    /* brique indisponible → repli vert */
+  }
+  return ACCENT_PALETTES.green[mode].accent;
+}
+
+/**
+ * Tokens Pi-Web d'un thème bibliothèque : couleurs du preset intégré holaf
+ * `<famille>-<mode>`, compléments dérivés (border-bright/text-bright) et
+ * triples RGB calculés (absents des presets intégrés). Aucun radius / shadow /
+ * font-size n'est recopié : le pack ne porte QUE le vocabulaire Pi-Web.
+ * `null` si la famille est absente de la brique (thème simplement ignoré).
+ */
+function buildLibraryTokens(family: string, mode: ThemeMode): HolafTokenMap | null {
+  const preset = getHolafTokens().getPreset(`${family}-${mode}`);
+  if (!preset || typeof preset.surface !== "string" || typeof preset.accent !== "string") {
+    return null;
+  }
+  const base = mode === "dark" ? DARK_PALETTE : LIGHT_PALETTE;
+  const str = (value: unknown, fallback: string) =>
+    typeof value === "string" && value.trim() ? value : fallback;
+  const surface = str(preset.surface, base.bg);
+  const surfaceElev = str(preset["surface-elev"], base.surface);
+  const surfaceRaised = str(preset["surface-raised"], base.surfaceRaised);
+  const border = str(preset.border, base.border);
+  const text = str(preset.text, base.text);
+  const textMuted = str(preset["text-muted"], base.textDim);
+  const accent = str(preset.accent, ACCENT_PALETTES.green[mode].accent);
+  const accentHover = str(preset["accent-hover"], ACCENT_PALETTES.green[mode].accentDim);
+  const danger = str(preset.danger, base.error);
+  const borderBright = mixHex(border, text, 0.24);
+  const textBright = mixHex(text, mode === "dark" ? "#ffffff" : "#000000", 0.35);
+  const tokens: HolafTokenMap = {
+    surface,
+    "surface-elev": surfaceElev,
+    "surface-raised": surfaceRaised,
+    border,
+    "border-bright": borderBright,
+    text,
+    "text-bright": textBright,
+    "text-muted": textMuted,
+    info: base.info,
+    warn: base.warn,
+    danger,
+    "code-inline-bg": base.codeInlineBg,
+    "code-block-bg": base.codeBlockBg,
+    "tool-output-bg": base.toolOutputBg,
+    accent,
+    "accent-hover": accentHover,
+  };
+  const rgb: Array<[string, string]> = [
+    ["bg-rgb", surface],
+    ["surface-rgb", surfaceElev],
+    ["surface-raised-rgb", surfaceRaised],
+    ["border-rgb", border],
+    ["border-bright-rgb", borderBright],
+    ["text-rgb", text],
+    ["text-bright-rgb", textBright],
+    ["text-dim-rgb", textMuted],
+    ["info-rgb", base.info],
+    ["warn-rgb", base.warn],
+    ["error-rgb", danger],
+    ["accent-rgb", accent],
+    ["accent-dim-rgb", accentHover],
+  ];
+  // Normalisation en minuscules : les presets intégrés mélangent les casses
+  // (historiques en minuscules, familles générées en MAJUSCULES).
+  for (const key of Object.keys(tokens)) {
+    const value = tokens[key];
+    if (typeof value === "string" && value.startsWith("#")) tokens[key] = value.toLowerCase();
+  }
+  for (const [key, hex] of rgb) {
+    if (parseHexRgb(hex)) tokens[key] = hexToRgbTriple(hex);
+  }
+  return tokens;
+}
+
 let packsRegistered = false;
 
 /**
@@ -262,6 +543,14 @@ export function registerPiWebPacks(): void {
       derive: false,
     });
   }
+  // Thèmes de la bibliothèque holaf (recopiés en packs hôte Pi-Web).
+  for (const def of PI_WEB_THEMES) {
+    if (!def.library) continue;
+    for (const mode of ["dark", "light"] as const) {
+      const tokens = buildLibraryTokens(def.library, mode);
+      if (tokens) HT.registerPreset(libraryPackName(def.library, mode), tokens, { derive: false });
+    }
+  }
   packsRegistered = true;
 }
 
@@ -278,10 +567,12 @@ export function __resetPacksRegistrationForTests(): void {
  * Applique le thème Pi-Web : la brique pose les `--holaf-*` sur `:root`, les
  * variables Pi-Web (aliases) suivent automatiquement. Aucune valeur littérale
  * n'est posée ici : la brique est la source unique.
+ * `themeOrAccent` accepte un identifiant de thème (matrix, violet, indigo…) ou
+ * un ancien accent (green, purple…) ; tout inconnu retombe sur Matrix.
  */
-export function applyPiWebTheme(mode: ThemeMode, accent: string): void {
+export function applyPiWebTheme(mode: ThemeMode, themeOrAccent: string): void {
   registerPiWebPacks();
-  getHolafTokens().setTheme(themePackName(accent, mode));
+  getHolafTokens().setTheme(themePackNameFor(themeOrAccent, mode));
 }
 
 function readSavedMode(): ThemeMode {
@@ -293,18 +584,11 @@ function readSavedMode(): ThemeMode {
   }
 }
 
-function readSavedAccent(): string {
-  try {
-    return localStorage.getItem(ACCENT_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
 /**
  * Boot anti-flash : enregistre les packs puis applique le thème mémorisé
  * AVANT le premier rendu (appelé en tête de `main.tsx`, de façon synchrone).
+ * C'est ici que la MIGRATION de l'ancienne clé d'accent est jouée (une fois).
  */
 export function initPiWebTheme(): void {
-  applyPiWebTheme(readSavedMode(), readSavedAccent());
+  applyPiWebTheme(readSavedMode(), readSavedThemeName());
 }

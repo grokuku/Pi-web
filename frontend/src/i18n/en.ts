@@ -8,7 +8,6 @@ export const en = {
     graph3d: "Open 3D codebase graph",
     cbmStats: "CBM usage statistics",
     toggleTheme: "Toggle light/dark theme",
-    accentColor: "Accent color",
     returnToHome: "Return to home",
     openSidebar: "Open sidebar",
     closeSidebar: "Close sidebar",
@@ -313,13 +312,30 @@ export const en = {
     dialog: "Dialog",
   },
 
-  // ── Accent colors (AccentPicker) ──
-  accentColors: {
-    green: "Green",
-    purple: "Purple",
-    orange: "Orange",
-    cyan: "Cyan",
-    rose: "Rose",
+  // ── Theme picker (ThemePicker) ──
+  // Matrix = Pi-Web identity theme (historical neon green), DEFAULT.
+  themes: {
+    title: "THEME",
+    trigger: "Choose theme",
+    mode: "Dark or light mode",
+    dark: "Dark",
+    light: "Light",
+    defaultBadge: "DEFAULT",
+    library: "HOLAF LIBRARY",
+    scanlines: "Scanlines",
+    migrationNote: "Migration: a previously chosen accent is carried over as the equivalent theme (green → Matrix).",
+    names: {
+      matrix: "Matrix",
+      violet: "Violet",
+      orange: "Orange",
+      cyan: "Cyan",
+      rose: "Rose",
+      indigo: "Indigo",
+      emerald: "Emerald",
+      midnight: "Midnight",
+      slate: "Slate",
+      amber: "Amber",
+    },
   },
   // ── Current activity (composer status line + StatusBar) ──
   activity: {

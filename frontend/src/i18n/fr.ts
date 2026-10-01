@@ -8,7 +8,6 @@ export const fr = {
     graph3d: "Ouvrir le graphe 3D du code",
     cbmStats: "Statistiques d'utilisation CBM",
     toggleTheme: "Basculer le thème clair/sombre",
-    accentColor: "Couleur d'accentuation",
     returnToHome: "Revenir à l'accueil",
     openSidebar: "Ouvrir la barre latérale",
     closeSidebar: "Fermer la barre latérale",
@@ -313,13 +312,30 @@ export const fr = {
     dialog: "Dialogue",
   },
 
-  // ── Couleurs d'accentuation (AccentPicker) ──
-  accentColors: {
-    green: "Vert",
-    purple: "Violet",
-    orange: "Orange",
-    cyan: "Cyan",
-    rose: "Rose",
+  // ── Sélecteur de thème (ThemePicker) ──
+  // Matrix = thème d'identité Pi-Web (vert néon historique), DÉFAUT.
+  themes: {
+    title: "THÈME",
+    trigger: "Choisir le thème",
+    mode: "Mode sombre ou clair",
+    dark: "Sombre",
+    light: "Clair",
+    defaultBadge: "DÉFAUT",
+    library: "BIBLIOTHÈQUE HOLAF",
+    scanlines: "Scanlines",
+    migrationNote: "Migration : un ancien accent est repris en thème équivalent (vert → Matrix).",
+    names: {
+      matrix: "Matrix",
+      violet: "Violet",
+      orange: "Orange",
+      cyan: "Cyan",
+      rose: "Rose",
+      indigo: "Indigo",
+      emerald: "Emerald",
+      midnight: "Midnight",
+      slate: "Slate",
+      amber: "Amber",
+    },
   },
   // ── Activité en cours (ligne d'état du composer + StatusBar) ──
   activity: {

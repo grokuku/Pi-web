@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi-Web — mockup : sélecteur de thème (avant → après)</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pi-Web — MOCKUP du nouveau sélecteur de THÈME (remplace le sélecteur
+   d'accent). Fichier autonome : CSS inline, zéro dépendance, zéro réseau.
+   ─────────────────────────────────────────────────────────────────────────────
+   • Rendu « AVANT / APRÈS » : le même header, le même menu ancré.
+   • Les couleurs des 5 thèmes Pi-Web sont les valeurs réelles des packs
+     `pi-web-<accent>-<mode>` (frontend/src/theme/pi-web-theme.ts) ;
+     les couleurs bibliothèque viennent de holaf-tokens.js (getPreset(), exécuté
+     en node) — voir le rapport de délégation.
+   • Mini-écrans : reproduction stylisée (tailles réduites), pas une capture.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Chrome de la page (neutre, volontairement distinct des thèmes) ─────── */
+:root{
+  color-scheme:dark;
+  --mono:ui-monospace,"JetBrains Mono","Fira Code","Cascadia Mono",Menlo,Consolas,monospace;
+  --page-bg:#101114; --page-panel:#17181c; --page-panel2:#1b1d21;
+  --page-border:#2a2c31; --page-text:#c9cdd3; --page-dim:#8a8f98; --page-acc:#7aa2ff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--page-bg)}
+body{background:var(--page-bg);color:var(--page-text);font-family:var(--mono);
+  font-size:14px;line-height:1.5;padding:clamp(12px,2.4vw,32px);padding-bottom:64px}
+.wrap{max-width:1560px;margin:0 auto}
+code{font-family:var(--mono);background:var(--page-panel2);border:1px solid var(--page-border);
+  padding:0 4px;font-size:.92em;color:#d7dbe0;white-space:nowrap}
+b{color:#e8eaee}
+
+/* ── En-tête de page ────────────────────────────────────────────────────── */
+.page-head h1{font-size:clamp(17px,2.2vw,26px);color:#f0f2f5;letter-spacing:-.01em;line-height:1.25;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.page-head h1 .hl{color:var(--page-acc)}
+.page-head h1 .mockchip{font-size:10px;letter-spacing:.16em;color:#bfe6cc;border:1px solid #2f7a45;
+  background:#0f2016;padding:2px 8px;font-weight:600}
+.page-head .sub{color:var(--page-dim);margin-top:8px;max-width:1020px;font-size:12.5px}
+.page-head .srcbox{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px}
+.page-head .srcbox code{font-size:11px;color:#d7dbe0}
+.mig-banner{margin:18px 0 4px;border:1px solid #2f7a45;border-left:3px solid #00ff41;
+  background:#0f2016;color:#bfe6cc;padding:9px 12px;font-size:12.5px}
+.mig-banner strong{color:#eafff2}
+.mig-banner em{color:#7fe0a0;font-style:normal}
+
+/* ── Titres de section ──────────────────────────────────────────────────── */
+h2.section-title{margin:34px 0 14px;font-size:14px;letter-spacing:.14em;text-transform:uppercase;
+  color:#e8eaee;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h2.section-title .hint{font-size:12px;letter-spacing:0;text-transform:none;color:var(--page-dim);font-weight:400}
+
+/* ── Marqueurs numérotés & ancres ───────────────────────────────────────── */
+.anchor{position:relative}
+.m{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;
+  background:var(--page-acc);color:#0b0c0f;font:700 8.5px/1 var(--mono);flex:0 0 auto}
+.pin{position:absolute;z-index:9;box-shadow:0 0 0 2px rgba(16,17,20,.65)}
+.mk-b{top:auto;bottom:-10px;right:-8px}
+.mk-tr{top:-9px;right:-7px}
+.mk-tl{top:-9px;left:-7px}
+.mk-bl{top:auto;bottom:-9px;left:-7px}
+.mk-br{top:auto;bottom:-9px;right:-7px}
+
+/* ── Section 1 : AVANT / APRÈS ──────────────────────────────────────────── */
+.compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:22px;align-items:start}
+.col{background:var(--page-panel);border:1px solid var(--page-border);padding:12px;min-width:0}
+.col-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.col-head h2{font-size:15px;color:#f0f2f5}
+.tag{font-size:10.5px;letter-spacing:.12em;padding:1px 8px;font-weight:600}
+.tag.avant{background:#3a2318;border:1px solid #7c4a26;color:#f0b27a}
+.tag.apres{background:#12301c;border:1px solid #2f7a45;color:#7fe0a0}
+.col-note{color:var(--page-dim);font-size:11.5px;margin:6px 0 10px}
+.legend{list-style:none;margin-top:10px;display:flex;flex-direction:column;gap:5px}
+.legend li{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;color:var(--page-dim)}
+.legend li b{color:#e8eaee}
+.legend li .m{margin-top:2px}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PALETTES DES MINI-ÉCRANS — variables locales `--t-*`
+   (dark/light = valeurs réelles de hacker-theme.css / pi-web-theme.ts)
+   ══════════════════════════════════════════════════════════════════════════ */
+.t-dark{
+  --t-bg:#0a0a0a; --t-surface:#161616; --t-raised:#1e1e1e;
+  --t-border:#2a2a2a; --t-border-bright:#3a3a3a;
+  --t-text:#c0c0c0; --t-text-bright:#e0e0e0; --t-dim:#888888;
+  --t-info:#00aaff; --t-warn:#ffaa00; --t-error:#ff4444;
+  --t-inset:rgba(0,0,0,.3);
+}
+.t-light{
+  --t-bg:#eeece6; --t-surface:#f8f7f4; --t-raised:#ffffff;
+  --t-border:#d0d0c8; --t-border-bright:#b8b8b0;
+  --t-text:#3d3d3a; --t-text-bright:#1a1a18; --t-dim:#777770;
+  --t-info:#0070cc; --t-warn:#cc8800; --t-error:#cc2222;
+  --t-inset:rgba(0,0,0,.06);
+}
+/* Accents — sombre puis clair (accents Pi-Web, pi-web-theme.ts) */
+.t-green {--t-accent:#00ff41;--t-accent-dim:#00cc34;--t-accent-rgb:0,255,65}
+.t-green.t-light {--t-accent:#166534;--t-accent-dim:#15803d;--t-accent-rgb:22,101,52}
+.t-purple{--t-accent:#c084fc;--t-accent-dim:#a855f7;--t-accent-rgb:192,132,252}
+.t-purple.t-light{--t-accent:#8b5cf6;--t-accent-dim:#7c3aed;--t-accent-rgb:139,92,246}
+.t-orange{--t-accent:#fb923c;--t-accent-dim:#f97316;--t-accent-rgb:251,146,60}
+.t-orange.t-light{--t-accent:#ea580c;--t-accent-dim:#c2410c;--t-accent-rgb:234,88,12}
+.t-cyan  {--t-accent:#22d3ee;--t-accent-dim:#06b6d4;--t-accent-rgb:34,211,238}
+.t-cyan.t-light  {--t-accent:#0891b2;--t-accent-dim:#0e7490;--t-accent-rgb:8,145,178}
+.t-rose  {--t-accent:#f472b6;--t-accent-dim:#ec4899;--t-accent-rgb:244,114,182}
+.t-rose.t-light  {--t-accent:#db2777;--t-accent-dim:#be185d;--t-accent-rgb:219,39,119}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MINI-ÉCRAN Pi-Web (header + sidebar + conversation + composer)
+   ══════════════════════════════════════════════════════════════════════════ */
+.screen{border:1px solid var(--page-border);overflow:hidden;background:#000}
+.app{position:relative;height:568px;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--t-bg);color:var(--t-text);font-size:9.5px;line-height:1.45}
+.app .spacer{flex:1 1 auto;min-width:0}
+.app b{color:var(--t-text-bright);font-weight:700}
+
+/* header (fidèle à App.tsx : logo, connexion, chips, mode, picker, réglages) */
+.app-header{display:flex;align-items:center;gap:6px;padding:0 8px;height:34px;flex:0 0 auto;
+  background:linear-gradient(180deg,var(--t-raised),var(--t-surface));
+  border-bottom:1px solid var(--t-border-bright);position:relative;z-index:3}
+.h-logo{color:var(--t-accent);font-size:14px;font-weight:700;line-height:1}
+.h-conn{color:var(--t-accent);font-size:9px;animation:tspulse 2s ease-in-out infinite}
+.h-dim{color:var(--t-dim);font-size:8px;white-space:nowrap}
+.h-sep{width:1px;height:14px;background:var(--t-border-bright);flex:0 0 auto}
+.btn{border:1px solid var(--t-accent-dim);color:var(--t-accent);background:transparent;
+  font-family:inherit;font-size:8.5px;padding:1px 6px;text-transform:uppercase;letter-spacing:.06em;
+  white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.btn.dim{border-color:var(--t-border);color:var(--t-dim)}
+.btn.on{border-color:var(--t-accent);background:rgba(var(--t-accent-rgb),.1);color:var(--t-accent)}
+.h-swatch{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto;
+  border:1px solid rgba(255,255,255,.3)}
+
+/* corps : sidebar + conversation */
+.app-body{display:flex;flex:1 1 auto;min-height:0}
+.sb{width:150px;flex:0 0 150px;background:var(--t-surface);border-right:1px solid var(--t-border-bright);
+  padding:7px;display:flex;flex-direction:column;gap:4px;overflow:hidden}
+.sb-title{color:var(--t-accent);font-size:7.5px;letter-spacing:.16em;margin-top:3px}
+.proj{display:flex;align-items:center;gap:4px;padding:2px 5px;border:1px solid transparent;
+  font-size:9px;white-space:nowrap;overflow:hidden}
+.proj.on{border-color:rgba(var(--t-accent-rgb),.4);background:rgba(var(--t-accent-rgb),.08);
+  color:var(--t-text-bright)}
+.proj.sub{padding-left:13px;color:var(--t-dim)}
+.gitbox{border:1px solid var(--t-border);background:var(--t-inset);padding:3px 5px;
+  display:flex;flex-direction:column;gap:1px;font-size:8px}
+.gitbox>div{display:flex;gap:5px;min-width:0}
+.st.warn{color:var(--t-warn)} .st.info{color:var(--t-info)} .st.err{color:var(--t-error)}
+.fp{color:var(--t-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gitmsg{border:1px solid rgba(var(--t-accent-rgb),.25);background:var(--t-inset);color:var(--t-accent);
+  padding:2px 5px;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-foot{color:var(--t-dim);font-size:7.5px;margin-top:auto}
+
+.chat{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px;padding:8px;
+  background:var(--t-bg);overflow:hidden}
+.msg{border:1px solid var(--t-border);background:var(--t-surface);padding:4px 7px;font-size:9px;
+  max-width:92%;align-self:flex-start}
+.msg.user{align-self:flex-end;border-color:rgba(var(--t-accent-rgb),.5);
+  background:rgba(var(--t-accent-rgb),.08);color:var(--t-text-bright)}
+.msg.tool{border-style:dashed;color:var(--t-dim)}
+.msg code{color:var(--t-accent);background:var(--t-inset);border:1px solid var(--t-border);
+  padding:0 3px;font-family:inherit}
+.acc{color:var(--t-accent)}
+.compose{margin-top:auto;display:flex;align-items:center;gap:6px;border:1px solid var(--t-border);
+  background:var(--t-surface);padding:4px 7px;color:var(--t-dim)}
+.compose-chip{border:1px solid var(--t-border);font-size:7.5px;padding:0 4px;letter-spacing:.06em}
+.cursor{display:inline-block;width:6px;height:10px;background:var(--t-accent);animation:tblink 1s step-end infinite}
+
+/* scanlines (fidèle : overlays au-dessus de tout, y compris du menu) */
+.scan::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:8;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,
+    rgba(255,255,255,.055) 2px,rgba(255,255,255,.055) 4px)}
+.t-light.scan::after{background:repeating-linear-gradient(0deg,transparent,transparent 2px,
+    rgba(0,0,0,.045) 2px,rgba(0,0,0,.045) 4px)}
+
+/* ── Menus ancrés sous le bouton du header (portail) ────────────────────── */
+.pop{position:absolute;top:38px;right:9px;z-index:6;border:1px solid var(--t-border-bright);
+  background:var(--t-raised);box-shadow:0 10px 30px rgba(0,0,0,.45);padding:8px}
+.pop::before{content:"";position:absolute;top:-5px;right:12px;width:8px;height:8px;
+  background:var(--t-raised);border-left:1px solid var(--t-border-bright);
+  border-top:1px solid var(--t-border-bright);transform:rotate(45deg)}
+
+/* AVANT — menu historique (AccentPicker.tsx, valeurs du composant) */
+.pop-avant{width:150px}
+.scan-row{display:flex;align-items:center;gap:6px;width:100%;background:transparent;border:0;
+  color:var(--t-dim);font-family:inherit;font-size:9px;padding:1px 2px;text-align:left}
+.scan-row.on{color:var(--t-accent)}
+.cbx{width:11px;height:11px;border:1px solid var(--t-border);display:inline-flex;align-items:center;
+  justify-content:center;font-size:7px;flex:0 0 auto}
+.scan-row.on .cbx{border-color:var(--t-accent);background:rgba(var(--t-accent-rgb),.2);color:var(--t-accent)}
+.dots{display:flex;gap:6px;justify-content:center;margin-top:8px}
+.dot{width:17px;height:17px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+  color:#fff;font-size:7px;font-weight:700;text-shadow:0 1px 1px rgba(0,0,0,.7)}
+
+/* APRÈS — panneau « thème » proposé */
+.pop-theme{width:min(298px,calc(100% - 14px))}
+.pop-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.pop-title{color:var(--t-accent);font-size:8px;letter-spacing:.18em}
+.pop-cur{color:var(--t-dim);font-size:7.5px}
+.seg{display:flex;border:1px solid var(--t-border);margin-top:6px}
+.seg-btn{flex:1 1 0;font-size:8.5px;color:var(--t-dim);padding:3px 4px;letter-spacing:.05em;
+  display:inline-flex;align-items:center;justify-content:center;gap:4px}
+.seg-btn.on{background:rgba(var(--t-accent-rgb),.12);color:var(--t-accent);box-shadow:inset 0 -2px 0 var(--t-accent)}
+.themes{margin-top:7px;display:flex;flex-direction:column;gap:3px}
+.trow{display:flex;align-items:center;gap:7px;padding:3px 5px;border:1px solid transparent}
+.trow.sel{border-color:var(--t-accent);background:rgba(var(--t-accent-rgb),.09)}
+.swatch{width:15px;height:15px;border-radius:50%;flex:0 0 auto;border:1px solid rgba(255,255,255,.25)}
+.trow-main{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+.trow-name{color:var(--t-text-bright);font-size:9.5px;display:flex;align-items:center;gap:5px}
+.trow-sub{color:var(--t-dim);font-size:7.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.def{font-size:6.8px;color:var(--t-accent);border:1px solid var(--t-accent);padding:0 3px;
+  letter-spacing:.08em;font-style:normal;flex:0 0 auto}
+.tthumb{width:40px;height:26px;flex:0 0 auto;border:1px solid rgba(127,127,127,.4)}
+.ck{width:12px;color:var(--t-accent);font-size:10px;flex:0 0 auto;text-align:center}
+.pop-sep{display:flex;align-items:center;gap:6px;color:var(--t-dim);font-size:7px;
+  letter-spacing:.14em;margin:7px 0 4px;white-space:nowrap}
+.pop-sep::before,.pop-sep::after{content:"";height:1px;background:var(--t-border);flex:1 1 auto}
+.lib-chips{display:flex;flex-wrap:wrap;gap:3px}
+.lib-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--t-border);
+  padding:1px 5px;font-size:8px;color:var(--t-text)}
+.lib-chip i{width:9px;height:9px;border-radius:50%;flex:0 0 auto;display:inline-block}
+.scan-row.top{margin-top:7px;border-top:1px solid var(--t-border);padding-top:5px}
+.mig{margin-top:6px;border:1px dashed var(--t-border);border-left:2px solid var(--t-accent);
+  background:var(--t-inset);color:var(--t-dim);font-size:7.4px;line-height:1.4;padding:3px 5px}
+.mig b{color:var(--t-accent)}
+
+/* ── Section 2 : cartes de thème (rendu sombre + clair) ─────────────────── */
+.themegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:18px}
+.tcard{background:var(--page-panel);border:1px solid var(--page-border);padding:10px;min-width:0}
+.tcard-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.tcard-head h3{font-size:13.5px;color:#f0f2f5}
+.tswatch{width:13px;height:13px;border-radius:50%;flex:0 0 auto;border:1px solid rgba(255,255,255,.25)}
+.def2{font-size:8px;letter-spacing:.08em;color:#7fe0a0;border:1px solid #2f7a45;background:#0f2016;
+  padding:0 4px;font-style:normal}
+.pid{font-size:10px;color:var(--page-dim);margin-left:auto;text-align:right}
+.previews{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.previews figure{min-width:0}
+.previews figcaption{font-size:9.5px;color:var(--page-dim);margin-bottom:3px;display:flex;
+  justify-content:space-between;gap:6px}
+.hexa{font-size:9px}
+.mini{border:1px solid var(--page-border);background:var(--t-bg);color:var(--t-text);overflow:hidden;
+  font-size:8px;line-height:1.4;height:172px;display:flex;flex-direction:column}
+.mini-head{display:flex;align-items:center;gap:4px;height:20px;padding:0 5px;flex:0 0 auto;
+  background:linear-gradient(180deg,var(--t-raised),var(--t-surface));border-bottom:1px solid var(--t-border-bright)}
+.mini-head .mlogo{color:var(--t-accent);font-weight:700;font-size:10px}
+.mini-head .mdot{color:var(--t-accent);font-size:7px}
+.mini-head .mtitle{color:var(--t-text-bright);font-size:7px;letter-spacing:.1em}
+.mini-head .msp{flex:1 1 auto}
+.mini-head .mchip{border:1px solid var(--t-border);color:var(--t-dim);font-size:6.5px;padding:0 3px;
+  letter-spacing:.06em}
+.mini-head .mswatch{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.mini-body{display:flex;flex:1 1 auto;min-height:0}
+.mini-sb{width:34%;flex:0 0 34%;background:var(--t-surface);border-right:1px solid var(--t-border);
+  padding:4px;display:flex;flex-direction:column;gap:3px;overflow:hidden}
+.ms-title{color:var(--t-accent);font-size:6.2px;letter-spacing:.14em}
+.ms-item{border:1px solid transparent;color:var(--t-text);padding:1px 3px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.ms-item.on{border-color:rgba(var(--t-accent-rgb),.4);background:rgba(var(--t-accent-rgb),.08);
+  color:var(--t-text-bright)}
+.ms-item.dim{color:var(--t-dim);padding-left:8px}
+.mini-chat{flex:1 1 auto;min-width:0;padding:5px;display:flex;flex-direction:column;gap:4px;overflow:hidden}
+.mini-msg{border:1px solid var(--t-border);background:var(--t-surface);padding:2px 4px;max-width:94%;
+  align-self:flex-start}
+.mini-msg.user{align-self:flex-end;border-color:rgba(var(--t-accent-rgb),.5);
+  background:rgba(var(--t-accent-rgb),.08);color:var(--t-text-bright)}
+.mini-msg.tool{border-style:dashed;color:var(--t-dim)}
+.mini-msg code{color:var(--t-accent);border:1px solid var(--t-border);background:var(--t-inset);
+  padding:0 2px;font-family:inherit}
+.mini-compose{margin-top:auto;border:1px solid var(--t-border);background:var(--t-surface);
+  color:var(--t-dim);padding:2px 4px;display:flex;align-items:center;gap:4px}
+.mini-cursor{width:4px;height:7px;background:var(--t-accent);display:inline-block;
+  animation:tblink 1s step-end infinite}
+
+/* palette (valeurs réelles) */
+.pal{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.pal-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.plabel{width:42px;color:#9aa0a8;font-size:9px;flex:0 0 auto}
+.psw{display:inline-flex;align-items:center;gap:3px;font-size:8px;color:#9aa0a8;
+  border:1px solid var(--page-border);padding:1px 4px}
+.psw i{width:9px;height:9px;display:inline-block;border:1px solid rgba(255,255,255,.2)}
+
+/* ── Section 3 : thèmes de la bibliothèque holaf ────────────────────────── */
+.libgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px}
+.libcard{background:var(--page-panel);border:1px solid var(--page-border);padding:9px;
+  display:flex;flex-direction:column;gap:6px;min-width:0}
+.libcard-head{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.libname{font-size:12.5px;color:#f0f2f5;font-weight:600}
+.libid{font-size:9px;color:var(--page-dim)}
+.libstrip{display:flex;gap:3px}
+.libstrip i{height:14px;flex:1 1 0;border:1px solid rgba(255,255,255,.15)}
+.libmeta{font-size:9px;color:var(--page-dim)}
+.libmeta b{font-weight:600}
+
+/* ── Section 4 : notes ──────────────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:18px}
+.note{background:var(--page-panel);border:1px solid var(--page-border);padding:12px}
+.note h3{font-size:12.5px;color:#e8eaee;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+.note ul{padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.note li{font-size:12px;color:var(--page-dim)}
+.note li b{color:#e8eaee}
+.foot{margin-top:26px;color:var(--page-dim);font-size:11px;border-top:1px solid var(--page-border);
+  padding-top:10px}
+
+/* ── Animations discrètes ───────────────────────────────────────────────── */
+@keyframes tspulse{0%,100%{opacity:1}50%{opacity:.55}}
+@keyframes tblink{0%,100%{opacity:1}50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){
+  .h-conn,.cursor,.mini-cursor{animation:none}
+}
+
+/* ── Responsive : lisible à 400 px de large ─────────────────────────────── */
+@media (max-width:640px){
+  body{padding:12px}
+  .h-opt{display:none}
+  .sb{width:104px;flex-basis:104px}
+  .sb-opt{display:none}
+  .app{height:540px}
+  .pop{top:36px;right:6px}
+  .pop-avant{width:142px}
+  .pop-theme{width:min(280px,calc(100% - 12px))}
+  .compare{gap:16px}
+}
+@media (max-width:520px){
+  .previews{grid-template-columns:1fr}
+  .mini{height:160px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ═══════════════════════ EN-TÊTE ═══════════════════════ -->
+  <header class="page-head">
+    <h1>Pi-Web — <span class="hl">sélecteur de thème</span> <span class="mockchip">MOCKUP</span></h1>
+    <p class="sub">
+      Proposition <b>AVANT implémentation</b> : la notion d'« accent » disparaît au profit d'un
+      <b>sélecteur de thème</b>. « Hacker » porte l'identité Pi-Web (packs verts actuels, défaut) ;
+      Violet, Orange, Cyan et Rose restent sélectionnables comme thèmes à part entière.
+      Les couleurs affichées sont celles des packs réels <code>pi-web-&lt;accent&gt;-&lt;mode&gt;</code>.
+    </p>
+    <div class="srcbox">
+      <code>frontend/src/components/Header/AccentPicker.tsx</code>
+      <code>frontend/src/theme/pi-web-theme.ts</code>
+      <code>frontend/src/styles/hacker-theme.css</code>
+      <code>holaf-lib/js/holaf-tokens.js</code>
+      <code>docs/mockups/selecteur-theme.html</code>
+    </div>
+  </header>
+
+  <!-- note de migration exigée, en clair -->
+  <div class="mig-banner" role="note">
+    <strong>Migration :</strong> les utilisateurs ayant choisi un accent le retrouveront comme
+    <em>thème équivalent</em> — vert → <em>Hacker</em>, violet → <em>Violet</em>, orange → <em>Orange</em>,
+    cyan → <em>Cyan</em>, rose → <em>Rose</em>. La clé <code>pi-web-accent</code> reste relue telle quelle :
+    aucun choix n'est perdu.
+  </div>
+
+  <!-- ═══════════════════════ 1 · AVANT / APRÈS ═══════════════════════ -->
+  <h2 class="section-title">1 · Avant / Après
+    <span class="hint">le même header, le même menu ancré — seule la notion change (accent → thème)</span>
+  </h2>
+  <div class="compare">
+
+    <!-- ─────────── AVANT ─────────── -->
+    <article class="col">
+      <div class="col-head">
+        <span class="tag avant">AVANT · AUJOURD'HUI</span>
+        <h2>Sélecteur d'accent</h2>
+      </div>
+      <p class="col-note">
+        Un déclencheur = une pastille sans nom. Dans le menu : Scanlines + 5 pastilles de couleur.
+        Le mode sombre/clair vit <b>ailleurs</b> dans le header (bouton ☀/☾).
+      </p>
+
+      <div class="screen">
+        <div class="app t-dark t-green scan">
+
+          <header class="app-header">
+            <span class="h-logo">π</span>
+            <span class="h-conn">●</span>
+            <span class="h-dim h-opt">connecté</span>
+            <span class="h-sep h-opt"></span>
+            <span class="spacer"></span>
+            <span class="btn dim h-opt">PI</span>
+            <span class="btn dim h-opt">TERM</span>
+            <span class="btn dim h-opt">FILES</span>
+            <span class="h-sep h-opt"></span>
+            <!-- 1 · bouton mode, séparé -->
+            <span class="btn">☀</span><span class="m">1</span>
+            <!-- 2 · déclencheur = pastille seule -->
+            <span class="btn on"><i class="h-swatch" style="background:#00ff41"></i></span><span class="m">2</span>
+            <span class="btn dim">⚙</span>
+          </header>
+
+          <div class="app-body">
+            <aside class="sb">
+              <div class="sb-title">PROJETS</div>
+              <div class="proj on">▸ Pi-Web</div>
+              <div class="proj sub sb-opt">holaf-lib</div>
+              <div class="proj sub sb-opt">comfyui-bridge</div>
+              <div class="sb-title" style="margin-top:6px">GIT · MAIN</div>
+              <div class="gitbox">
+                <div><span class="st warn">M</span><span class="fp">pi-web-theme.ts</span></div>
+                <div><span class="st info">M</span><span class="fp">App.tsx</span></div>
+                <div><span class="st err">??</span><span class="fp">mockups/selecteu…</span></div>
+              </div>
+              <div class="gitmsg">feat(theme): packs pi-web-*</div>
+              <span class="spacer"></span>
+              <div class="sb-foot sb-opt">v0.5.x · CBM ✓</div>
+            </aside>
+
+            <main class="chat">
+              <div class="msg tool">❯ cbm_search <span class="acc">AccentPicker</span> — 4 résultats</div>
+              <div class="msg">Le sélecteur d'accent devient un <b>sélecteur de thème</b> : chaque thème = un pack&nbsp;<code>pi-web-green-dark</code>.</div>
+              <div class="msg user">garde le vert néon comme thème par défaut</div>
+              <div class="compose">▌ <span class="cursor"></span>tapez un message…
+                <span class="spacer"></span><span class="compose-chip">ROUTAGE</span></div>
+            </main>
+          </div>
+
+          <!-- menu historique, ancré sous le bouton (portail <body> dans l'app réelle) -->
+          <div class="pop pop-avant">
+            <div class="scan-row on anchor"><span class="cbx">✓</span> Scanlines<span class="m pin mk-tr">3</span></div>
+            <div class="dots anchor">
+              <span class="dot" style="background:#00ff41">✓</span>
+              <span class="dot" style="background:#c084fc"></span>
+              <span class="dot" style="background:#fb923c"></span>
+              <span class="dot" style="background:#22d3ee"></span>
+              <span class="dot" style="background:#f472b6"></span>
+              <span class="m pin mk-br">4</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <ol class="legend">
+        <li><span class="m">1</span><span><b>Bouton mode ☀/☾</b> — séparé du sélecteur, vit dans le header (<code>App.tsx</code>).</span></li>
+        <li><span class="m">2</span><span><b>Déclencheur</b> — une pastille de couleur seule : impossible de lire le choix sans ouvrir.</span></li>
+        <li><span class="m">3</span><span><b>Scanlines</b> — toggle en haut du menu.</span></li>
+        <li><span class="m">4</span><span><b>5 pastilles sans libellé</b> — la coche ✓ marque l'accent actif (vert par défaut).</span></li>
+        <li><span class="m" style="background:#4a4e57">5</span><span><b>Portail</b> — dans l'app, le menu est monté dans <code>&lt;body&gt;</code> (<code>createPortal</code>) puis positionné sous le bouton via <code>useAnchorPosition</code>.</span></li>
+      </ol>
+    </article>
+
+    <!-- ─────────── APRÈS ─────────── -->
+    <article class="col">
+      <div class="col-head">
+        <span class="tag apres">APRÈS · PROPOSÉ</span>
+        <h2>Sélecteur de thème</h2>
+      </div>
+      <p class="col-note">
+        Même ancrage, même esprit : une <b>liste de thèmes</b> avec pastille + nom + aperçu miniature,
+        un choix <b>sombre/clair</b> dans le panneau, et le toggle <b>Scanlines conservé</b>.
+        La ligne sélectionnée est surlignée et cochée ; le déclencheur affiche le nom du thème.
+      </p>
+
+      <div class="screen">
+        <div class="app t-dark t-green scan">
+
+          <header class="app-header">
+            <span class="h-logo">π</span>
+            <span class="h-conn">●</span>
+            <span class="h-dim h-opt">connecté</span>
+            <span class="h-sep h-opt"></span>
+            <span class="spacer"></span>
+            <span class="btn dim h-opt">PI</span>
+            <span class="btn dim h-opt">TERM</span>
+            <span class="btn dim h-opt">FILES</span>
+            <span class="h-sep h-opt"></span>
+            <!-- 1 · déclencheur = pastille + NOM du thème -->
+            <span class="btn on"><i class="h-swatch" style="background:#00ff41"></i>Hacker</span><span class="m">1</span>
+            <span class="btn dim">⚙</span>
+          </header>
+
+          <div class="app-body">
+            <aside class="sb">
+              <div class="sb-title">PROJETS</div>
+              <div class="proj on">▸ Pi-Web</div>
+              <div class="proj sub sb-opt">holaf-lib</div>
+              <div class="proj sub sb-opt">comfyui-bridge</div>
+              <div class="sb-title" style="margin-top:6px">GIT · MAIN</div>
+              <div class="gitbox">
+                <div><span class="st warn">M</span><span class="fp">pi-web-theme.ts</span></div>
+                <div><span class="st info">M</span><span class="fp">App.tsx</span></div>
+                <div><span class="st err">??</span><span class="fp">mockups/selecteu…</span></div>
+              </div>
+              <div class="gitmsg">feat(theme): packs pi-web-*</div>
+              <span class="spacer"></span>
+              <div class="sb-foot sb-opt">v0.5.x · CBM ✓</div>
+            </aside>
+
+            <main class="chat">
+              <div class="msg tool">❯ cbm_search <span class="acc">AccentPicker</span> — 4 résultats</div>
+              <div class="msg">Le sélecteur d'accent devient un <b>sélecteur de thème</b> : chaque thème = un pack&nbsp;<code>pi-web-green-dark</code>.</div>
+              <div class="msg user">garde le vert néon comme thème par défaut</div>
+              <div class="compose">▌ <span class="cursor"></span>tapez un message…
+                <span class="spacer"></span><span class="compose-chip">ROUTAGE</span></div>
+            </main>
+          </div>
+
+          <!-- panneau « thème » proposé -->
+          <div class="pop pop-theme">
+            <div class="pop-head">
+              <span class="pop-title">THÈME</span>
+              <span class="pop-cur">pi-web-green-dark</span>
+            </div>
+
+            <div class="seg anchor">
+              <span class="seg-btn on">☾ Sombre</span>
+              <span class="seg-btn">☀ Clair</span>
+              <span class="m pin mk-tl">2</span>
+            </div>
+
+            <div class="themes anchor">
+              <!-- 4 · défaut Hacker -->
+              <div class="trow sel anchor">
+                <span class="swatch" style="background:#00ff41;box-shadow:0 0 6px rgba(0,255,65,.7)"></span>
+                <span class="trow-main">
+                  <span class="trow-name">Hacker <em class="def">DÉFAUT</em></span>
+                  <span class="trow-sub">pi-web-green-* · vert néon, identité Pi-Web</span>
+                </span>
+                <svg class="tthumb" viewBox="0 0 40 26" aria-hidden="true">
+                  <rect width="40" height="26" fill="#0a0a0a"/>
+                  <rect width="40" height="7" fill="#161616"/>
+                  <circle cx="4" cy="3.5" r="1.6" fill="#00ff41"/>
+                  <rect x="8" y="2.5" width="11" height="2" fill="#c0c0c0" opacity=".65"/>
+                  <rect x="3" y="11" width="20" height="2" fill="#00ff41"/>
+                  <rect x="3" y="15" width="29" height="2" fill="#c0c0c0" opacity=".5"/>
+                  <rect x="3" y="19" width="16" height="2" fill="#888888"/>
+                </svg>
+                <span class="ck">✓</span>
+                <span class="m pin mk-br">4</span>
+              </div>
+
+              <div class="trow">
+                <span class="swatch" style="background:#c084fc"></span>
+                <span class="trow-main">
+                  <span class="trow-name">Violet</span>
+                  <span class="trow-sub">pi-web-purple-* · accent #c084fc / #8b5cf6</span>
+                </span>
+                <svg class="tthumb" viewBox="0 0 40 26" aria-hidden="true">
+                  <rect width="40" height="26" fill="#0a0a0a"/>
+                  <rect width="40" height="7" fill="#161616"/>
+                  <circle cx="4" cy="3.5" r="1.6" fill="#c084fc"/>
+                  <rect x="8" y="2.5" width="11" height="2" fill="#c0c0c0" opacity=".65"/>
+                  <rect x="3" y="11" width="20" height="2" fill="#c084fc"/>
+                  <rect x="3" y="15" width="29" height="2" fill="#c0c0c0" opacity=".5"/>
+                  <rect x="3" y="19" width="16" height="2" fill="#888888"/>
+                </svg>
+                <span class="ck"></span>
+              </div>
+
+              <div class="trow">
+                <span class="swatch" style="background:#fb923c"></span>
+                <span class="trow-main">
+                  <span class="trow-name">Orange</span>
+                  <span class="trow-sub">pi-web-orange-* · accent #fb923c / #ea580c</span>
+                </span>
+                <svg class="tthumb" viewBox="0 0 40 26" aria-hidden="true">
+                  <rect width="40" height="26" fill="#0a0a0a"/>
+                  <rect width="40" height="7" fill="#161616"/>
+                  <circle cx="4" cy="3.5" r="1.6" fill="#fb923c"/>
+                  <rect x="8" y="2.5" width="11" height="2" fill="#c0c0c0" opacity=".65"/>
+                  <rect x="3" y="11" width="20" height="2" fill="#fb923c"/>
+                  <rect x="3" y="15" width="29" height="2" fill="#c0c0c0" opacity=".5"/>
+                  <rect x="3" y="19" width="16" height="2" fill="#888888"/>
+                </svg>
+                <span class="ck"></span>
+              </div>
+
+              <div class="trow">
+                <span class="swatch" style="background:#22d3ee"></span>
+                <span class="trow-main">
+                  <span class="trow-name">Cyan</span>
+                  <span class="trow-sub">pi-web-cyan-* · accent #22d3ee / #0891b2</span>
+                </span>
+                <svg class="tthumb" viewBox="0 0 40 26" aria-hidden="true">
+                  <rect width="40" height="26" fill="#0a0a0a"/>
+                  <rect width="40" height="7" fill="#161616"/>
+                  <circle cx="4" cy="3.5" r="1.6" fill="#22d3ee"/>
+                  <rect x="8" y="2.5" width="11" height="2" fill="#c0c0c0" opacity=".65"/>
+                  <rect x="3" y="11" width="20" height="2" fill="#22d3ee"/>
+                  <rect x="3" y="15" width="29" height="2" fill="#c0c0c0" opacity=".5"/>
+                  <rect x="3" y="19" width="16" height="2" fill="#888888"/>
+                </svg>
+                <span class="ck"></span>
+              </div>
+
+              <div class="trow">
+                <span class="swatch" style="background:#f472b6"></span>
+                <span class="trow-main">
+                  <span class="trow-name">Rose</span>
+                  <span class="trow-sub">pi-web-rose-* · accent #f472b6 / #db2777</span>
+                </span>
+                <svg class="tthumb" viewBox="0 0 40 26" aria-hidden="true">
+                  <rect width="40" height="26" fill="#0a0a0a"/>
+                  <rect width="40" height="7" fill="#161616"/>
+                  <circle cx="4" cy="3.5" r="1.6" fill="#f472b6"/>
+                  <rect x="8" y="2.5" width="11" height="2" fill="#c0c0c0" opacity=".65"/>
+                  <rect x="3" y="11" width="20" height="2" fill="#f472b6"/>
+                  <rect x="3" y="15" width="29" height="2" fill="#c0c0c0" opacity=".5"/>
+                  <rect x="3" y="19" width="16" height="2" fill="#888888"/>
+                </svg>
+                <span class="ck"></span>
+              </div>
+              <span class="m pin mk-bl">3</span>
+            </div>
+
+            <div class="pop-sep anchor">BIBLIOTHÈQUE HOLAF<span class="m pin mk-tr">6</span></div>
+            <div class="lib-chips">
+              <span class="lib-chip" title="indigo-dark · indigo-light"><i style="background:#6366f1"></i>Indigo</span>
+              <span class="lib-chip" title="emerald-dark · emerald-light"><i style="background:#34d399"></i>Emerald</span>
+              <span class="lib-chip" title="midnight-dark · midnight-light"><i style="background:#818cf8"></i>Midnight</span>
+              <span class="lib-chip" title="slate-dark · slate-light"><i style="background:#94a3b8"></i>Slate</span>
+              <span class="lib-chip" title="amber-dark · amber-light"><i style="background:#fbbf24"></i>Amber</span>
+            </div>
+
+            <div class="scan-row on top anchor"><span class="cbx">✓</span> Scanlines<span class="m pin mk-tr">5</span></div>
+
+            <div class="mig anchor">
+              <b>ⓘ Migration :</b> les utilisateurs ayant choisi un accent le retrouveront comme
+              thème équivalent (vert → Hacker).
+              <span class="m pin mk-br">7</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <ol class="legend">
+        <li><span class="m">1</span><span><b>Déclencheur</b> — pastille <b>+ nom du thème</b> (« Hacker ») : l'état est lisible sans ouvrir le menu.</span></li>
+        <li><span class="m">2</span><span><b>Sombre / Clair</b> — segmenté dans le panneau (le bouton ☀/☾ séparé du header peut disparaître ou rester en raccourci : point ouvert).</span></li>
+        <li><span class="m">3</span><span><b>Liste de thèmes</b> — pastille + nom + aperçu miniature de l'interface ; la coche ✓ est sur la ligne sélectionnée.</span></li>
+        <li><span class="m">4</span><span><b>Hacker</b> — packs verts actuels (<code>pi-web-green-dark/light</code>), marqué <b>DÉFAUT</b>.</span></li>
+        <li><span class="m">5</span><span><b>Scanlines conservé</b> à l'identique du sélecteur actuel.</span></li>
+        <li><span class="m">6</span><span><b>Bibliothèque holaf</b> — indigo, emerald, midnight, slate, amber déjà livrés par la brique : les proposer ne coûte qu'une entrée de liste (option, séparateur dédié).</span></li>
+        <li><span class="m">7</span><span><b>Note de migration</b> visible en pied de panneau (doublée par le bandeau en haut de page).</span></li>
+      </ol>
+    </article>
+  </div>
+
+  <!-- ═══════════════════════ 2 · RENDU DES 5 THÈMES ═══════════════════════ -->
+  <h2 class="section-title">2 · Rendu des 5 thèmes Pi-Web
+    <span class="hint">interface miniature en sombre et en clair + valeurs de palette réelles</span>
+  </h2>
+  <div class="themegrid">
+
+    <!-- ── Hacker ── -->
+    <article class="tcard">
+      <div class="tcard-head">
+        <span class="tswatch" style="background:#00ff41;box-shadow:0 0 7px rgba(0,255,65,.65)"></span>
+        <h3>Hacker</h3>
+        <em class="def2">DÉFAUT</em>
+        <span class="pid">pi-web-green-dark · pi-web-green-light</span>
+      </div>
+      <div class="previews">
+        <figure>
+          <figcaption><span>sombre</span><span class="hexa" style="color:#00ff41">#00ff41</span></figcaption>
+          <div class="mini t-dark t-green">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#00ff41"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le vert néon devient le thème <code>Hacker</code>.</div>
+                <div class="mini-msg user">garde-le par défaut</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span>clair</span><span class="hexa" style="color:#166534">#166534</span></figcaption>
+          <div class="mini t-light t-green">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#166534"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le vert néon devient le thème <code>Hacker</code>.</div>
+                <div class="mini-msg user">garde-le par défaut</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <div class="pal">
+        <div class="pal-row"><span class="plabel">sombre</span>
+          <span class="psw"><i style="background:#0a0a0a"></i>fond #0a0a0a</span>
+          <span class="psw"><i style="background:#161616"></i>surface #161616</span>
+          <span class="psw"><i style="background:#2a2a2a"></i>bordure #2a2a2a</span>
+          <span class="psw"><i style="background:#00ff41"></i>accent #00ff41</span>
+          <span class="psw"><i style="background:#c0c0c0"></i>texte #c0c0c0</span>
+        </div>
+        <div class="pal-row"><span class="plabel">clair</span>
+          <span class="psw"><i style="background:#eeece6"></i>fond #eeece6</span>
+          <span class="psw"><i style="background:#f8f7f4"></i>surface #f8f7f4</span>
+          <span class="psw"><i style="background:#d0d0c8"></i>bordure #d0d0c8</span>
+          <span class="psw"><i style="background:#166534"></i>accent #166534</span>
+          <span class="psw"><i style="background:#3d3d3a"></i>texte #3d3d3a</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- ── Violet ── -->
+    <article class="tcard">
+      <div class="tcard-head">
+        <span class="tswatch" style="background:#c084fc"></span>
+        <h3>Violet</h3>
+        <span class="pid">pi-web-purple-dark · pi-web-purple-light</span>
+      </div>
+      <div class="previews">
+        <figure>
+          <figcaption><span>sombre</span><span class="hexa" style="color:#c084fc">#c084fc</span></figcaption>
+          <div class="mini t-dark t-purple">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#c084fc"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Violet</code> est prêt.</div>
+                <div class="mini-msg user">je le garde pour ce projet</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span>clair</span><span class="hexa" style="color:#8b5cf6">#8b5cf6</span></figcaption>
+          <div class="mini t-light t-purple">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#8b5cf6"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Violet</code> est prêt.</div>
+                <div class="mini-msg user">je le garde pour ce projet</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <div class="pal">
+        <div class="pal-row"><span class="plabel">sombre</span>
+          <span class="psw"><i style="background:#0a0a0a"></i>fond #0a0a0a</span>
+          <span class="psw"><i style="background:#161616"></i>surface #161616</span>
+          <span class="psw"><i style="background:#2a2a2a"></i>bordure #2a2a2a</span>
+          <span class="psw"><i style="background:#c084fc"></i>accent #c084fc</span>
+          <span class="psw"><i style="background:#c0c0c0"></i>texte #c0c0c0</span>
+        </div>
+        <div class="pal-row"><span class="plabel">clair</span>
+          <span class="psw"><i style="background:#eeece6"></i>fond #eeece6</span>
+          <span class="psw"><i style="background:#f8f7f4"></i>surface #f8f7f4</span>
+          <span class="psw"><i style="background:#d0d0c8"></i>bordure #d0d0c8</span>
+          <span class="psw"><i style="background:#8b5cf6"></i>accent #8b5cf6</span>
+          <span class="psw"><i style="background:#3d3d3a"></i>texte #3d3d3a</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- ── Orange ── -->
+    <article class="tcard">
+      <div class="tcard-head">
+        <span class="tswatch" style="background:#fb923c"></span>
+        <h3>Orange</h3>
+        <span class="pid">pi-web-orange-dark · pi-web-orange-light</span>
+      </div>
+      <div class="previews">
+        <figure>
+          <figcaption><span>sombre</span><span class="hexa" style="color:#fb923c">#fb923c</span></figcaption>
+          <div class="mini t-dark t-orange">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#fb923c"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Orange</code> est prêt.</div>
+                <div class="mini-msg user">parfait pour la revue</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span>clair</span><span class="hexa" style="color:#ea580c">#ea580c</span></figcaption>
+          <div class="mini t-light t-orange">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#ea580c"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Orange</code> est prêt.</div>
+                <div class="mini-msg user">parfait pour la revue</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <div class="pal">
+        <div class="pal-row"><span class="plabel">sombre</span>
+          <span class="psw"><i style="background:#0a0a0a"></i>fond #0a0a0a</span>
+          <span class="psw"><i style="background:#161616"></i>surface #161616</span>
+          <span class="psw"><i style="background:#2a2a2a"></i>bordure #2a2a2a</span>
+          <span class="psw"><i style="background:#fb923c"></i>accent #fb923c</span>
+          <span class="psw"><i style="background:#c0c0c0"></i>texte #c0c0c0</span>
+        </div>
+        <div class="pal-row"><span class="plabel">clair</span>
+          <span class="psw"><i style="background:#eeece6"></i>fond #eeece6</span>
+          <span class="psw"><i style="background:#f8f7f4"></i>surface #f8f7f4</span>
+          <span class="psw"><i style="background:#d0d0c8"></i>bordure #d0d0c8</span>
+          <span class="psw"><i style="background:#ea580c"></i>accent #ea580c</span>
+          <span class="psw"><i style="background:#3d3d3a"></i>texte #3d3d3a</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- ── Cyan ── -->
+    <article class="tcard">
+      <div class="tcard-head">
+        <span class="tswatch" style="background:#22d3ee"></span>
+        <h3>Cyan</h3>
+        <span class="pid">pi-web-cyan-dark · pi-web-cyan-light</span>
+      </div>
+      <div class="previews">
+        <figure>
+          <figcaption><span>sombre</span><span class="hexa" style="color:#22d3ee">#22d3ee</span></figcaption>
+          <div class="mini t-dark t-cyan">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#22d3ee"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Cyan</code> est prêt.</div>
+                <div class="mini-msg user">plus froid, j'aime bien</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span>clair</span><span class="hexa" style="color:#0891b2">#0891b2</span></figcaption>
+          <div class="mini t-light t-cyan">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#0891b2"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Cyan</code> est prêt.</div>
+                <div class="mini-msg user">plus froid, j'aime bien</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <div class="pal">
+        <div class="pal-row"><span class="plabel">sombre</span>
+          <span class="psw"><i style="background:#0a0a0a"></i>fond #0a0a0a</span>
+          <span class="psw"><i style="background:#161616"></i>surface #161616</span>
+          <span class="psw"><i style="background:#2a2a2a"></i>bordure #2a2a2a</span>
+          <span class="psw"><i style="background:#22d3ee"></i>accent #22d3ee</span>
+          <span class="psw"><i style="background:#c0c0c0"></i>texte #c0c0c0</span>
+        </div>
+        <div class="pal-row"><span class="plabel">clair</span>
+          <span class="psw"><i style="background:#eeece6"></i>fond #eeece6</span>
+          <span class="psw"><i style="background:#f8f7f4"></i>surface #f8f7f4</span>
+          <span class="psw"><i style="background:#d0d0c8"></i>bordure #d0d0c8</span>
+          <span class="psw"><i style="background:#0891b2"></i>accent #0891b2</span>
+          <span class="psw"><i style="background:#3d3d3a"></i>texte #3d3d3a</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- ── Rose ── -->
+    <article class="tcard">
+      <div class="tcard-head">
+        <span class="tswatch" style="background:#f472b6"></span>
+        <h3>Rose</h3>
+        <span class="pid">pi-web-rose-dark · pi-web-rose-light</span>
+      </div>
+      <div class="previews">
+        <figure>
+          <figcaption><span>sombre</span><span class="hexa" style="color:#f472b6">#f472b6</span></figcaption>
+          <div class="mini t-dark t-rose">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#f472b6"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Rose</code> est prêt.</div>
+                <div class="mini-msg user">pour les captures d'écran</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span>clair</span><span class="hexa" style="color:#db2777">#db2777</span></figcaption>
+          <div class="mini t-light t-rose">
+            <div class="mini-head"><span class="mlogo">π</span><span class="mdot">●</span><span class="mtitle">PI-WEB</span><span class="msp"></span><span class="mchip">PI</span><span class="mchip">TERM</span><span class="mswatch" style="background:#db2777"></span></div>
+            <div class="mini-body">
+              <div class="mini-sb">
+                <div class="ms-title">PROJETS</div>
+                <div class="ms-item on">▸ Pi-Web</div>
+                <div class="ms-item dim">holaf-lib</div>
+                <div class="ms-title" style="margin-top:3px">GIT · MAIN</div>
+                <div class="ms-item dim">M pi-web-theme.ts</div>
+                <div class="ms-item dim">M App.tsx</div>
+              </div>
+              <div class="mini-chat">
+                <div class="mini-msg tool">❯ cbm_search AccentPicker</div>
+                <div class="mini-msg">Le thème <code>Rose</code> est prêt.</div>
+                <div class="mini-msg user">pour les captures d'écran</div>
+                <div class="mini-compose">▌<span class="mini-cursor"></span><span class="msp"></span>ENVOYER</div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <div class="pal">
+        <div class="pal-row"><span class="plabel">sombre</span>
+          <span class="psw"><i style="background:#0a0a0a"></i>fond #0a0a0a</span>
+          <span class="psw"><i style="background:#161616"></i>surface #161616</span>
+          <span class="psw"><i style="background:#2a2a2a"></i>bordure #2a2a2a</span>
+          <span class="psw"><i style="background:#f472b6"></i>accent #f472b6</span>
+          <span class="psw"><i style="background:#c0c0c0"></i>texte #c0c0c0</span>
+        </div>
+        <div class="pal-row"><span class="plabel">clair</span>
+          <span class="psw"><i style="background:#eeece6"></i>fond #eeece6</span>
+          <span class="psw"><i style="background:#f8f7f4"></i>surface #f8f7f4</span>
+          <span class="psw"><i style="background:#d0d0c8"></i>bordure #d0d0c8</span>
+          <span class="psw"><i style="background:#db2777"></i>accent #db2777</span>
+          <span class="psw"><i style="background:#3d3d3a"></i>texte #3d3d3a</span>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <!-- ═══════════════════════ 3 · BIBLIOTHÈQUE ═══════════════════════ -->
+  <h2 class="section-title">3 · Thèmes de la bibliothèque holaf
+    <span class="hint">option — déjà livrés par la brique <code>tokens</code> : les proposer ne coûte qu'une entrée de liste</span>
+  </h2>
+  <div class="libgrid">
+    <article class="libcard">
+      <div class="libcard-head"><span class="libname">Indigo</span><span class="libid">indigo-dark · indigo-light</span></div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (sombre)">
+        <i style="background:#1e1e1e"></i><i style="background:#27272a"></i><i style="background:#3f3f46"></i><i style="background:#6366f1"></i><i style="background:#e4e4e7"></i>
+      </div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (clair)">
+        <i style="background:#ffffff"></i><i style="background:#f4f4f5"></i><i style="background:#d4d4d8"></i><i style="background:#4f46e5"></i><i style="background:#18181b"></i>
+      </div>
+      <div class="libmeta">accent sombre <b style="color:#6366f1">#6366f1</b> · clair <b style="color:#4f46e5">#4f46e5</b></div>
+    </article>
+    <article class="libcard">
+      <div class="libcard-head"><span class="libname">Emerald</span><span class="libid">emerald-dark · emerald-light</span></div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (sombre)">
+        <i style="background:#0b1512"></i><i style="background:#12201a"></i><i style="background:#143f30"></i><i style="background:#34d399"></i><i style="background:#f4f4f5"></i>
+      </div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (clair)">
+        <i style="background:#ffffff"></i><i style="background:#f0fdf4"></i><i style="background:#c8e1da"></i><i style="background:#047857"></i><i style="background:#18181b"></i>
+      </div>
+      <div class="libmeta">accent sombre <b style="color:#34d399">#34d399</b> · clair <b style="color:#047857">#047857</b></div>
+    </article>
+    <article class="libcard">
+      <div class="libcard-head"><span class="libname">Midnight</span><span class="libid">midnight-dark · midnight-light</span></div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (sombre)">
+        <i style="background:#10111d"></i><i style="background:#181a2c"></i><i style="background:#272a44"></i><i style="background:#818cf8"></i><i style="background:#e2e4f0"></i>
+      </div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (clair)">
+        <i style="background:#f6f7fc"></i><i style="background:#ffffff"></i><i style="background:#d4d6f3"></i><i style="background:#5b63d3"></i><i style="background:#18181b"></i>
+      </div>
+      <div class="libmeta">accent sombre <b style="color:#818cf8">#818cf8</b> · clair <b style="color:#5b63d3">#5b63d3</b></div>
+    </article>
+    <article class="libcard">
+      <div class="libcard-head"><span class="libname">Slate</span><span class="libid">slate-dark · slate-light</span></div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (sombre)">
+        <i style="background:#1f232b"></i><i style="background:#292e38"></i><i style="background:#3a4150"></i><i style="background:#94a3b8"></i><i style="background:#e6e9ee"></i>
+      </div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (clair)">
+        <i style="background:#f4f6f8"></i><i style="background:#ffffff"></i><i style="background:#ced3d9"></i><i style="background:#475569"></i><i style="background:#18181b"></i>
+      </div>
+      <div class="libmeta">accent sombre <b style="color:#94a3b8">#94a3b8</b> · clair <b style="color:#475569">#475569</b></div>
+    </article>
+    <article class="libcard">
+      <div class="libcard-head"><span class="libname">Amber</span><span class="libid">amber-dark · amber-light</span></div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (sombre)">
+        <i style="background:#1a1408"></i><i style="background:#241c0d"></i><i style="background:#4c3a0e"></i><i style="background:#fbbf24"></i><i style="background:#f4f4f5"></i>
+      </div>
+      <div class="libstrip" title="fond · surface · bordure · accent · texte (clair)">
+        <i style="background:#ffffff"></i><i style="background:#fffbeb"></i><i style="background:#efd9c9"></i><i style="background:#b45309"></i><i style="background:#18181b"></i>
+      </div>
+      <div class="libmeta">accent sombre <b style="color:#fbbf24">#fbbf24</b> · clair <b style="color:#b45309">#b45309</b></div>
+    </article>
+  </div>
+
+  <!-- ═══════════════════════ 4 · NOTES ═══════════════════════ -->
+  <h2 class="section-title">4 · Notes &amp; points ouverts <span class="hint">pour la validation avant implémentation</span></h2>
+  <div class="notes">
+    <div class="note">
+      <h3>Ce que le mockup acte</h3>
+      <ul>
+        <li><b>« Hacker »</b> = packs verts actuels <code>pi-web-green-dark</code> / <code>pi-web-green-light</code>, marqué <b>DÉFAUT</b>.</li>
+        <li>Les 4 autres accents deviennent des <b>thèmes nommés</b> (Violet, Orange, Cyan, Rose) — option 2 retenue.</li>
+        <li>Déclencheur : pastille <b>+ nom du thème</b> ; liste avec <b>aperçu + coche</b> sur la ligne active.</li>
+        <li>Le choix <b>sombre/clair</b> entre dans le panneau ; le toggle <b>Scanlines est conservé</b>.</li>
+        <li><b>Migration</b> : un accent enregistré est relu comme thème équivalent (vert → Hacker), clé <code>pi-web-accent</code> inchangée.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Points ouverts / limites</h3>
+      <ul>
+        <li>Libellé du défaut : <b>« Hacker »</b> retenu ici, alternatives « Vert néon » ou « Défaut ».</li>
+        <li><b>Bouton ☀/☾ du header</b> : supprimé (mode dans le panneau) ou conservé comme raccourci ?</li>
+        <li><b>Bibliothèque</b> : section repliée, séparée, ou second onglet « plus de thèmes » ?</li>
+        <li>Rendu <b>statique</b> : aucun JS, aucun état, aucun localStorage — les clics ne changent rien (voulu pour la validation visuelle).</li>
+        <li>Les couleurs bibliothèque sont extraites de <code>holaf-tokens.js</code> (<code>getPreset()</code>) ; pas de mini-écran complet pour ces 5 familles.</li>
+        <li>Les mini-écrans sont des <b>reproductions stylisées</b> à taille réduite, pas une capture de l'app réelle.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot">
+    Mockup autonome (CSS inline, zéro dépendance, zéro requête réseau) — aucun fichier applicatif n'a été modifié.
+    Couleurs Pi-Web : <code>frontend/src/theme/pi-web-theme.ts</code> · couleurs holaf : <code>holaf-lib/js/holaf-tokens.js</code>.
+  </div>
+</div>
+</body>
+</html>
