@@ -32,7 +32,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, Link2, Pencil, Unlink, X } from "lucide-react";
+import { Unlink } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
 import { buildLinkCandidates } from "../../utils/linked-projects";
@@ -301,7 +302,7 @@ export function LinkedProjectMenu({
         <div className="flex-1 min-h-0 overflow-y-auto">
           {/* En-tête : nom du placeholder */}
           <div className="px-3 pt-2 pb-1 text-[10px] text-hacker-text-dim font-bold tracking-wider flex items-center gap-1">
-            <Link2 size={10} className="text-hacker-accent shrink-0" />
+            <HolafIcon name="link" size={10} className="text-hacker-accent shrink-0" />
             <span className="truncate">{project.name}</span>
           </div>
 
@@ -315,7 +316,7 @@ export function LinkedProjectMenu({
             }}
             className="w-full text-left px-3 py-2 text-xs text-hacker-text-dim hover:bg-hacker-accent/5 hover:text-hacker-text flex items-center gap-1.5"
           >
-            <Link2 size={12} className="shrink-0" />
+            <HolafIcon name="link" size={12} className="shrink-0" />
             {t('sidebar.linkedMenu.linkProject')}
           </button>
 
@@ -324,7 +325,7 @@ export function LinkedProjectMenu({
             onClick={openRename}
             className="w-full text-left px-3 py-2 text-xs text-hacker-text-dim hover:bg-hacker-accent/5 hover:text-hacker-text flex items-center gap-1.5"
           >
-            <Pencil size={12} className="shrink-0" />
+            <HolafIcon name="pencil" size={12} className="shrink-0" />
             {t('sidebar.linkedMenu.rename')}
           </button>
 
@@ -347,7 +348,7 @@ export function LinkedProjectMenu({
                   >
                     <span className="text-hacker-text-dim/60 shrink-0">↳</span>
                     <span className="truncate flex-1">{sub.name}</span>
-                    <X size={10} className="shrink-0 opacity-40 group-hover:opacity-100" />
+                    <HolafIcon name="x" size={10} className="shrink-0 opacity-40 group-hover:opacity-100" />
                   </button>
                 ))}
               </div>
@@ -376,7 +377,7 @@ export function LinkedProjectMenu({
               title={t('sidebar.linkedMenu.pickBack')}
               aria-label={t('sidebar.linkedMenu.pickBack')}
             >
-              <ChevronLeft size={12} />
+              <HolafIcon name="chevron-left" size={12} />
             </button>
             <span className="text-[10px] text-hacker-text-dim font-bold tracking-wider truncate">
               {t('sidebar.linkedMenu.pickTitle', project.name)}
@@ -462,7 +463,7 @@ export function LinkedProjectMenu({
               title={t('sidebar.linkedMenu.pickBack')}
               aria-label={t('sidebar.linkedMenu.pickBack')}
             >
-              <ChevronLeft size={12} />
+              <HolafIcon name="chevron-left" size={12} />
             </button>
             <span className="text-[10px] text-hacker-text-dim font-bold tracking-wider truncate">
               {t('sidebar.linkedMenu.renameTitle', project.name)}

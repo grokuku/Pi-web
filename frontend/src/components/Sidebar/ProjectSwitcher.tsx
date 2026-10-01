@@ -8,9 +8,12 @@
 //     d'un groupe lié — les projets liés eux-mêmes et le projet actif restent
 //     toujours listés (cf. buildSwitcherCandidates) ;
 //   - l'actuel marqué ✓ ;
-//   - une dot d'état par projet (diffusion en cours / bloquée, session
-//     active) issue de `projectSessions` : l'état des sessions par projet est
-//     déjà remonté par App.tsx pour la sidebar — aucun impact backend/WS ;
+//   - une dot d'état par projet (délégation en cours / diffusion en cours /
+//     bloquée, session active) issue de `projectSessions` ET du store isolé
+//     subagentRuns (useHasActiveSubAgentRun) : sans cette seconde source, une
+//     délégation non bloquante (session principale déjà settled) n'apparaissait
+//     nulle part dans la liste alors que « Délégation en cours… » s'affiche en
+//     bas à droite — aucun impact backend/WS ;
 //   - suppression à la volée (poubelle au survol, confirmation portée par la
 //     DeleteProjectModal de la Sidebar).
 // Le clic sur un projet bascule via onSelectProject (mécanisme existant :
@@ -25,9 +28,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Folder, Link2, Trash2 } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
+import { useHasActiveSubAgentRun } from "../../stores/subagentRuns";
 import { buildSwitcherCandidates } from "../../utils/linked-projects";
 import { sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
@@ -44,26 +48,54 @@ export interface ProjectSessionInfo {
 }
 
 // Dots d'état d'un projet (même convention qu'avant la refonte) :
+//   - DÉLÉGATION en cours : dot pulsée accent (même source que la ligne d'état
+//     du composer — store isolé subagentRuns, lue PAR PROJET). C'est ce dot qui
+//     manquait : `projectSessions` ne connaît que le run principal, or une
+//     délégation non bloquante continue après `agent_settled` (isStreaming
+//     false) et ses events ne touchent jamais projectSessions ;
 //   - diffusion en cours : dot pulsée accent (verte dans le thème hacker) ;
 //   - diffusion bloquée : dot ambre (BUG-72 : seuil 60s, cf. App.tsx) ;
 //   - session active sans diffusion : dot info atténuée.
-export function SessionDots({ state }: { state?: ProjectSessionInfo }) {
+// PRÉCÉDENCE (alignée sur resolveActivityDisplay / ChatStatusLine) : la
+// délégation active l'emporte sur les dots du run principal (un seul dot
+// « ça travaille », jamais deux pastilles empilées) et en supprime le « stalled »
+// (le silence du run principal est normal pendant une délégation).
+//
+// `projectId` : projet de la ligne. L'appartenance d'un run est STRICTE (son
+// projet de session, étanchéité du store) — en workspace LIÉ, un run du
+// composite est marqué du PLACEHOLDER (cwd de la session résolu par le pont
+// backend `__piWebResolveProjectIdByCwd__`), donc il allume la ligne du
+// placeholder et jamais les lignes des sous-projets : on n'allume PAS un
+// sous-projet précis, impossible de savoir lequel le sous-agent vise ; et on
+// n'allume PAS le placeholder pour un run d'un sous-projet (session distincte,
+// aucune activité de la conversation composite). Sans `projectId`, aucun
+// indicateur de délégation n'est lu (repli global du hook interdit ici).
+export function SessionDots({ state, projectId }: { state?: ProjectSessionInfo; projectId?: string }) {
   const { t } = useTranslation();
-  if (!state) return null;
-  const isStreaming = state.isStreaming;
-  const hasSession = !!state.session;
-  const streamingStalled = isStreaming && state.lastEventAt
+  const activeRunForProject = useHasActiveSubAgentRun(projectId);
+  const subAgentActive = !!projectId && activeRunForProject;
+  if (!state && !subAgentActive) return null;
+  const isStreaming = state?.isStreaming ?? false;
+  const hasSession = !!state?.session;
+  const streamingStalled = isStreaming && state?.lastEventAt
     ? Date.now() - state.lastEventAt > 60_000
     : false;
+  // États du run principal, neutralisés quand une délégation travaille.
+  const showStalled = !subAgentActive && isStreaming && streamingStalled;
+  const showStreaming = !subAgentActive && isStreaming && !streamingStalled;
+  const showIdleSession = hasSession && !isStreaming && !subAgentActive;
   return (
     <>
-      {isStreaming && !streamingStalled && (
+      {subAgentActive && (
+        <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title={t('activity.delegating')} />
+      )}
+      {showStreaming && (
         <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-hacker-accent shrink-0" title={t('sidebar.streaming')} />
       )}
-      {isStreaming && streamingStalled && (
+      {showStalled && (
         <span className="w-1.5 h-1.5 rounded-full bg-hacker-warn shrink-0" title={t('sidebar.streamingStalled')} />
       )}
-      {hasSession && !isStreaming && (
+      {showIdleSession && (
         <span className="w-1.5 h-1.5 rounded-full bg-hacker-info/50 shrink-0" title={t('sidebar.sessionActive')} />
       )}
     </>
@@ -182,7 +214,7 @@ export function ProjectSwitcher({
           aria-expanded={open}
           aria-haspopup="listbox"
         >
-          <Folder size={12} className="text-hacker-accent shrink-0" />
+          <HolafIcon name="folder" size={12} className="text-hacker-accent shrink-0" />
           <span className="truncate text-xs font-bold text-hacker-text">
             {activeProject?.name ?? t('sidebar.noProjects')}
           </span>
@@ -198,11 +230,11 @@ export function ProjectSwitcher({
             title={t('sidebar.linkedMenu.menuHint')}
             aria-label={t('sidebar.linkedMenu.menuHint')}
           >
-            <Link2 size={11} />
+            <HolafIcon name="link" size={11} />
           </button>
         )}
 
-        <ChevronDown
+        <HolafIcon name="chevron-down"
           size={12}
           className={`text-hacker-text-dim shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
         />
@@ -275,11 +307,11 @@ export function ProjectSwitcher({
                     aria-selected={isCurrent}
                   >
                     {p.storage === "linked" && (
-                      <Link2 size={10} className="shrink-0 opacity-60" />
+                      <HolafIcon name="link" size={10} className="shrink-0 opacity-60" />
                     )}
                     <span className="truncate flex-1">{p.name}</span>
-                    <SessionDots state={projectSessions?.get(p.id)} />
-                    {isCurrent && <Check size={12} className="shrink-0" />}
+                    <SessionDots state={projectSessions?.get(p.id)} projectId={p.id} />
+                    {isCurrent && <HolafIcon name="check" size={12} className="shrink-0" />}
                   </button>
                   {/* Suppression (au survol) — la confirmation reste dans la
                       Sidebar via DeleteProjectModal ; on ferme le dropdown, la
@@ -290,7 +322,7 @@ export function ProjectSwitcher({
                     title={t('sidebar.deleteProject')}
                     aria-label={t('sidebar.deleteProject')}
                   >
-                    <Trash2 size={10} />
+                    <HolafIcon name="trash" size={10} />
                   </button>
                 </div>
               );

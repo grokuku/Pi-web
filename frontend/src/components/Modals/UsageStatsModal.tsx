@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { BarChart3, X, Calendar, Brain, Hash, BarChart2, PieChart as PieIcon, TrendingUp } from "lucide-react";
+import { Calendar, Hash, PieChart as PieIcon, TrendingUp } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { Bar, Pie, Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -56,8 +57,20 @@ const COLORS = {
   output: "#60a5fa", // blue
 };
 
-const CHART_TYPES: { type: ChartType; icon: typeof BarChart2 }[] = [
-  { type: "bar", icon: BarChart2 },
+// Adaptateur : la table CHART_TYPES mélange des composants holaf (HolafIcon via
+// un alias local) et lucide-react. Le type commun accepte { size, className },
+// ce qui couvre les deux sources.
+const BarChartIcon = (props: { size?: number; className?: string }) => (
+  <HolafIcon name="bar-chart" {...props} />
+);
+
+const CHART_TYPES: {
+  type: ChartType;
+  // Type commun aux deux sources d'icônes (holaf et lucide) : `any` localisé,
+  // le temps de la migration — les composants sont rendus avec { size, className }.
+  icon: React.ComponentType<any>;
+}[] = [
+  { type: "bar", icon: BarChartIcon },
   { type: "line", icon: TrendingUp },
   { type: "pie", icon: PieIcon },
 ];
@@ -218,14 +231,14 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-hacker-border">
           <div className="flex items-center gap-2 text-hacker-accent font-bold text-sm">
-            <BarChart3 size={16} />
+            <HolafIcon name="bar-chart" size={16} />
             {t('usage.title')}
           </div>
           <button
             onClick={onClose}
             className="text-hacker-text-dim hover:text-hacker-accent"
           >
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 
@@ -300,7 +313,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
         <div className="flex-1 overflow-auto px-4 py-3">
           {loading ? (
             <div className="flex items-center justify-center py-12 text-hacker-text-dim text-sm">
-              <BarChart3 className="animate-pulse mr-2" size={14} />
+              <HolafIcon name="bar-chart" className="animate-pulse mr-2" size={14} />
               {t('common.loading')}
             </div>
           ) : !data ? (
@@ -309,7 +322,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
             </div>
           ) : !hasData ? (
             <div className="flex items-center justify-center py-12 text-hacker-text-dim text-sm">
-              <Brain size={14} className="mr-2" />
+              <HolafIcon name="brain" size={14} className="mr-2" />
               {t('usage.noDataForPeriod')}
             </div>
           ) : (

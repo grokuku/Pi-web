@@ -1,0 +1,1894 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi-Web — comparateur de thèmes : actuel vs presets holaf tokens</title>
+<style>
+
+:root {
+  --mono: ui-monospace, "JetBrains Mono", "Fira Code", "Cascadia Mono", Menlo, Consolas, monospace;
+  --page-bg: #101114;
+  --page-panel: #17181c;
+  --page-panel2: #1b1d21;
+  --page-border: #2a2c31;
+  --page-text: #c9cdd3;
+  --page-dim: #8a8f98;
+  --page-acc: #7aa2ff;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--page-bg); }
+body {
+  background: var(--page-bg); color: var(--page-text);
+  font-family: var(--mono); font-size: 14px; line-height: 1.5;
+  padding: clamp(14px, 2.6vw, 36px); padding-bottom: 70px;
+}
+.wrap { max-width: 1520px; margin: 0 auto; }
+.page-head h1 { font-size: clamp(17px, 2.2vw, 26px); color: #f0f2f5; letter-spacing: -0.01em; line-height: 1.25; }
+.page-head h1 .pi { color: var(--page-acc); }
+.page-head .sub { color: var(--page-dim); margin-top: 8px; max-width: 980px; font-size: 13px; }
+.page-head .srcbox { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.page-head .srcbox code { background: var(--page-panel); border: 1px solid var(--page-border); padding: 3px 9px; font-size: 11.5px; color: #d7dbe0; }
+h2.section-title {
+  margin: 34px 0 14px; font-size: 14px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #e8eaee; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+}
+h2.section-title .hint { font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--page-dim); font-weight: 400; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 22px; }
+
+/* ── Carte ── */
+.card { background: var(--page-panel); border: 1px solid var(--page-border); padding: 12px; }
+.card-head { margin-bottom: 10px; }
+.card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.num { color: var(--page-acc); border: 1px solid var(--page-border); background: var(--page-panel2); padding: 0 6px; font-size: 11px; }
+.card-top h3 { font-size: 14px; color: #f0f2f5; letter-spacing: 0.01em; }
+.src { font-size: 10.5px; color: var(--page-dim); margin-left: auto; text-align: right; }
+.modepill { font-size: 10px; border: 1px solid var(--page-border); padding: 0 7px; letter-spacing: 0.08em; }
+.modepill.dark { color: #cdd3db; background: #22242a; }
+.modepill.light { color: #3a3d44; background: #e8e9ec; border-color: #c9cbd1; }
+.swatches { display: flex; align-items: center; gap: 5px; margin: 9px 0 7px; flex-wrap: wrap; }
+.swatches i { width: 26px; height: 15px; border: 1px solid rgba(255, 255, 255, 0.22); display: inline-block; }
+.swlabel { font-size: 10px; color: #5f646c; margin-left: 4px; }
+.keyvals { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: var(--page-dim); }
+.keyvals b { color: #e8eaee; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ══ Mini-écran Pi-Web ═════════════════════════════════════════════════════ */
+.screen { border: 1px solid var(--page-border); overflow: hidden; }
+.app {
+  position: relative; height: 566px; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  font-size: 10px; line-height: 1.45; overflow: hidden;
+}
+.app .grow { flex: 1 1 auto; min-width: 0; }
+.app .dim { color: var(--text-dim); }
+.app .acc { color: var(--accent); }
+.app .info { color: var(--info); }
+.app b { font-weight: 700; }
+
+/* Header */
+.app-header {
+  display: flex; align-items: center; gap: 7px; padding: 5px 8px;
+  background: linear-gradient(180deg, var(--surface-raised), var(--surface));
+  border-bottom: 1px solid var(--border-bright); box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2);
+  position: relative; z-index: 3; flex: 0 0 auto;
+}
+.logo { color: var(--accent); font-size: 14px; font-weight: 700; line-height: 1; }
+.conn { color: var(--accent); font-size: 9px; animation: pulse 2s ease-in-out infinite; }
+.hdr-dim { color: var(--text-dim); font-size: 9px; }
+.hdr-model { color: var(--text-dim); font-size: 8.5px; border: 1px solid var(--border); padding: 1px 6px; }
+.modechip { border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 8px; padding: 1px 6px; letter-spacing: 0.08em; }
+.modechip.on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.08); color: var(--accent); }
+
+/* Corps */
+.app-body { display: flex; flex: 1 1 auto; min-height: 0; }
+
+/* Sidebar */
+.sb {
+  width: 158px; flex: 0 0 158px; background: var(--surface); border-right: 1px solid var(--border-bright);
+  padding: 7px; display: flex; flex-direction: column; gap: 5px; overflow: hidden;
+}
+.sb-title { color: var(--accent); font-size: 7.5px; letter-spacing: 0.16em; margin-top: 2px; }
+.proj { display: flex; align-items: center; gap: 4px; padding: 2px 5px; border: 1px solid transparent; color: var(--text); font-size: 9.5px; }
+.proj.active { border-color: rgba(var(--accent-rgb), 0.35); background: rgba(var(--accent-rgb), 0.08); color: var(--text-bright); }
+.proj.sub { padding-left: 14px; color: var(--text-dim); }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag {
+  display: inline-flex; align-items: center; gap: 2px; color: var(--info); border: 1px solid var(--border);
+  background: var(--inset); padding: 0 4px; font-size: 8px; white-space: nowrap; max-width: 84px; overflow: hidden;
+}
+.git-head { display: flex; align-items: center; gap: 4px; }
+.git-name { color: var(--accent); font-weight: 700; font-size: 9.5px; letter-spacing: 0.04em; }
+.git-badges { display: flex; gap: 3px; flex-wrap: wrap; }
+.git-files { border: 1px solid var(--border); background: var(--inset); padding: 3px 5px; display: flex; flex-direction: column; gap: 1.5px; }
+.git-files > div { display: flex; gap: 5px; min-width: 0; }
+.st { flex: 0 0 9px; width: 9px; font-weight: 700; font-size: 9px; }
+.st.warn { color: var(--warn); } .st.info { color: var(--info); } .st.err { color: var(--error); }
+.fp { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-msg {
+  border: 1px solid rgba(var(--accent-rgb), 0.25); background: var(--inset); color: var(--accent);
+  padding: 3px 5px; font-size: 8.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.git-actions { display: flex; gap: 4px; margin-top: auto; }
+.git-actions .btn { flex: 1 1 0; justify-content: center; padding: 2px 4px; font-size: 8px; }
+
+/* Badges d'état */
+.badge {
+  display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--border); color: var(--text-dim);
+  background: var(--inset); padding: 1px 5px; font-size: 8.5px; border-radius: 2px; white-space: nowrap;
+}
+.badge.ok { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.4); background: rgba(var(--accent-rgb), 0.05); }
+.badge.run { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.65); background: rgba(var(--accent-rgb), 0.08); }
+.badge.err { color: var(--error); border-color: rgba(var(--error-rgb), 0.5); background: rgba(var(--error-rgb), 0.06); }
+.badge.warn { color: var(--warn); border-color: rgba(var(--warn-rgb), 0.4); background: rgba(var(--warn-rgb), 0.05); }
+.badge.mini { font-size: 7.5px; padding: 0 3px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; background: var(--border); flex: 0 0 auto; }
+.dot.run { background: var(--accent); box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.5); animation: pulse 1.2s ease-in-out infinite; }
+.dot.done { background: var(--accent); }
+.dot.err { background: var(--error); }
+
+/* Chat */
+.chat { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.chat-head {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border-bottom: 1px solid var(--border); font-size: 8.5px; color: var(--text-dim);
+}
+.chat-title { color: var(--accent); letter-spacing: 0.14em; font-size: 7.5px; }
+.msgs { flex: 1 1 auto; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 7px; overflow: hidden; }
+.msg-user {
+  align-self: flex-end; max-width: 86%; background: rgba(var(--accent-rgb), 0.10);
+  border: 1px solid rgba(var(--accent-rgb), 0.30); border-radius: 8px 8px 2px 8px;
+  padding: 4px 7px; color: var(--text-bright); font-size: 9.5px;
+}
+.meta { font-size: 7.5px; color: var(--text-dim); text-align: right; margin-bottom: 1px; }
+.msg-bot { max-width: 97%; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+
+.think { border-left: 2px solid var(--accent); padding: 3px 0 3px 7px; opacity: 0.75; }
+.think-head { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 7.5px; letter-spacing: 0.08em; }
+.think-dur { font-size: 8px; }
+.think-body { color: var(--text-dim); font-size: 8.5px; margin-top: 2px; }
+.mini-btn { display: inline-flex; color: var(--text-dim); }
+
+.prose { color: var(--text-bright); font-size: 9.5px; }
+.prose code, .msg-user code { background: var(--code-bg); border: 1px solid var(--border); color: var(--accent); padding: 0 3px; font-size: 8.5px; font-family: inherit; }
+.codeblock { background: var(--code-bg); border: 1px solid var(--border); padding: 4px 6px; font-size: 8.5px; color: var(--text); }
+.ck { color: var(--warn); }
+.cf { color: var(--accent); }
+
+.tool { position: relative; border-left: 1px solid var(--border); margin-left: 4px; padding-left: 9px; }
+.tool > .dot { position: absolute; left: -4px; top: 5px; }
+.tool-line {
+  display: flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+  background: var(--surface); padding: 2px 6px; font-size: 9px; color: var(--text-dim);
+}
+.tool-line b { color: var(--text-bright); }
+.okmark { color: var(--accent); }
+.tool-out {
+  border: 1px solid var(--border); border-top: none; background: var(--tool-out);
+  padding: 3px 6px; font-size: 8px; color: var(--text-dim); white-space: pre-wrap; line-height: 1.5;
+}
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* Boutons + composer + icônes */
+.actions { display: flex; align-items: center; gap: 5px; padding: 0 8px 5px; flex-wrap: wrap; }
+.cap { font-size: 7.5px; color: var(--text-dim); }
+.btn {
+  display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border-bright); color: var(--text-dim);
+  background: transparent; font-family: inherit; font-size: 8.5px; padding: 2px 8px; letter-spacing: 0.05em; text-transform: uppercase;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 700; }
+.btn.accent { border-color: var(--accent-dim); color: var(--accent); background: rgba(var(--accent-rgb), 0.06); }
+.btn.danger { border-color: var(--error); color: var(--error); }
+.composer {
+  display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; border: 1px solid var(--border);
+  background: var(--surface); padding: 4px 7px; color: var(--text-dim); font-size: 9.5px;
+}
+.cursor::after { content: "▌"; color: var(--accent); animation: blink 1s step-end infinite; margin-left: 1px; }
+.iconbar {
+  display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-top: 1px solid var(--border);
+  background: var(--surface); color: var(--text-dim);
+}
+.ib-label { font-size: 7px; letter-spacing: 0.16em; }
+.ic { display: inline-flex; color: var(--text-dim); }
+.ic.acc { color: var(--accent); }
+
+/* Barre de statut */
+.statusbar {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  background: linear-gradient(0deg, var(--surface-raised), var(--surface));
+  border-top: 1px solid var(--border-bright); font-size: 8.5px; color: var(--text-dim); flex: 0 0 auto;
+}
+.sepb { color: var(--border-bright); }
+.meter { width: 44px; height: 5px; background: var(--border); overflow: hidden; display: inline-block; }
+.meter i { display: block; height: 100%; width: 24%; background: var(--accent); }
+
+/* Modale + toast (par-dessus le mini-écran) */
+.app-overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.12); z-index: 4; }
+.app-modal {
+  position: absolute; right: 10px; bottom: 104px; width: 63%; z-index: 5;
+  background: var(--surface-raised); border: 1px solid var(--accent-dim); border-radius: var(--radius);
+  box-shadow: var(--shadow), 0 0 22px rgba(var(--accent-rgb), 0.10); overflow: hidden;
+}
+.modal-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--text-bright); font-size: 9.5px; letter-spacing: 0.06em; }
+.modal-body { padding: 7px 8px; display: flex; flex-direction: column; gap: 6px; }
+.modal-text { color: var(--text); font-size: 9px; }
+.dangerbox { border: 1px solid rgba(var(--error-rgb), 0.45); background: rgba(var(--error-rgb), 0.08); color: var(--error); padding: 3px 6px; font-size: 8.5px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 5px; padding: 5px 8px; border-top: 1px solid var(--border); }
+.app-toast {
+  position: absolute; top: 36px; right: 9px; width: 72%; z-index: 6; display: flex; gap: 7px;
+  background: var(--surface-raised); color: var(--text-bright);
+  border: 1px solid var(--border-bright); border-left: 4px solid var(--accent); border-radius: var(--radius);
+  padding: 5px 8px; box-shadow: var(--shadow);
+}
+.ticon { color: var(--accent); font-weight: 700; }
+.ttitle { font-size: 9.5px; font-weight: 700; }
+.tmsg { font-size: 8.5px; color: var(--text-dim); }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ══ Légende comparative ═══════════════════════════════════════════════════ */
+.legend { margin-top: 44px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--page-border); background: var(--page-panel); }
+table { border-collapse: collapse; width: 100%; min-width: 1080px; font-size: 12px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--page-border); white-space: nowrap; }
+th { color: #e8eaee; font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; background: var(--page-panel2); }
+tr:last-child td { border-bottom: none; }
+tr.ref td { background: rgba(122, 162, 255, 0.05); }
+.rowname { color: #f0f2f5; }
+.cell { display: flex; align-items: center; gap: 6px; }
+.chip { width: 16px; height: 12px; border: 1px solid rgba(255, 255, 255, 0.22); display: inline-block; flex: 0 0 auto; }
+.hex { font-size: 11px; color: #dfe3e8; font-variant-numeric: tabular-nums; }
+.srcpill { font-size: 10px; border: 1px solid var(--page-border); padding: 0 6px; color: var(--page-dim); }
+.mode-pill { font-size: 10px; border: 1px solid var(--page-border); padding: 0 7px; }
+.mode-pill.dark { color: #cdd3db; background: #22242a; }
+.mode-pill.light { color: #3a3d44; background: #e8e9ec; border-color: #c9cbd1; }
+
+.notes { margin-top: 26px; color: var(--page-dim); font-size: 12.5px; }
+.notes h3 { color: #e8eaee; font-size: 12.5px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; }
+.notes ul { padding-left: 20px; display: flex; flex-direction: column; gap: 7px; max-width: 1200px; }
+.notes code { color: #dfe3e8; background: var(--page-panel2); border: 1px solid var(--page-border); padding: 0 4px; font-size: 11.5px; }
+.foot { margin-top: 30px; color: #5f646c; font-size: 11px; }
+
+
+/* ─── Variables de chaque variante (valeurs extraites des sources) ─────────── */
+/* 01 — Hacker actuel · source : hacker-theme.css (:root + accent green) */
+.t-hacker-dark {
+  --bg: #0a0a0a;
+  --surface: #161616;
+  --surface-raised: #1e1e1e;
+  --border: #2a2a2a;
+  --border-bright: #3a3a3a;
+  --text: #c0c0c0;
+  --text-bright: #e0e0e0;
+  --text-dim: #888888;
+  --accent: #00ff41;
+  --accent-dim: #00cc34;
+  --accent-rgb: 0, 255, 65;
+  --accent-dim-rgb: 0, 204, 52;
+  --accent-hover: #00cc34;
+  --accent-text: #0a0a0a;
+  --info: #00aaff;
+  --info-rgb: 0, 170, 255;
+  --warn: #ffaa00;
+  --warn-rgb: 255, 170, 0;
+  --error: #ff4444;
+  --error-rgb: 255, 68, 68;
+  --radius: 0px;
+  --shadow: 0 12px 34px rgba(0,0,0,.55);
+  --inset: rgba(0,0,0,.30);
+  --code-bg: rgba(0,0,0,.35);
+  --tool-out: rgba(0,0,0,.30);
+  --hover: rgba(255,255,255,.05);
+}
+/* 02 — indigo-dark · source : holaf-tokens.js 0.3.0 preset « indigo-dark » */
+.t-indigo-dark {
+  --bg: #1e1e1e;
+  --surface: #27272a;
+  --surface-raised: #1a1a1a;
+  --border: #3f3f46;
+  --border-bright: #717176;
+  --text: #e4e4e7;
+  --text-bright: #e4e4e7;
+  --text-dim: #a1a1aa;
+  --accent: #6366f1;
+  --accent-dim: #818cf8;
+  --accent-hover: #818cf8;
+  --accent-rgb: 99, 102, 241;
+  --accent-dim-rgb: 129, 140, 248;
+  --accent-text: #ffffff;
+  --info: #818cf8;
+  --info-rgb: 129, 140, 248;
+  --warn: #818cf8;
+  --warn-rgb: 129, 140, 248;
+  --error: #ef4444;
+  --error-rgb: 239, 68, 68;
+  --radius: 12px;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --inset: rgba(0,0,0,.35);
+  --code-bg: rgba(0,0,0,.40);
+  --tool-out: rgba(0,0,0,.35);
+  --hover: rgba(255,255,255,.05);
+}
+/* 03 — emerald-dark · source : holaf-tokens.js 0.3.0 preset « emerald-dark » */
+.t-emerald-dark {
+  --bg: #0B1512;
+  --surface: #12201A;
+  --surface-raised: #173B2D;
+  --border: #143F30;
+  --border-bright: #57756B;
+  --text: #F4F4F5;
+  --text-bright: #F4F4F5;
+  --text-dim: #929696;
+  --accent: #34D399;
+  --accent-dim: #2FB886;
+  --accent-hover: #2FB886;
+  --accent-rgb: 52, 211, 153;
+  --accent-dim-rgb: 47, 184, 134;
+  --accent-text: #000000;
+  --info: #2FB886;
+  --info-rgb: 47, 184, 134;
+  --warn: #2FB886;
+  --warn-rgb: 47, 184, 134;
+  --error: #EF4444;
+  --error-rgb: 239, 68, 68;
+  --radius: 12px;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --inset: rgba(0,0,0,.35);
+  --code-bg: rgba(0,0,0,.40);
+  --tool-out: rgba(0,0,0,.35);
+  --hover: rgba(255,255,255,.05);
+}
+/* 04 — midnight-dark · source : holaf-tokens.js 0.3.0 preset « midnight-dark » */
+.t-midnight-dark {
+  --bg: #10111d;
+  --surface: #181a2c;
+  --surface-raised: #0c0d17;
+  --border: #272a44;
+  --border-bright: #5F6278;
+  --text: #e2e4f0;
+  --text-bright: #e2e4f0;
+  --text-dim: #9aa0c3;
+  --accent: #818cf8;
+  --accent-dim: #a5b4fc;
+  --accent-hover: #a5b4fc;
+  --accent-rgb: 129, 140, 248;
+  --accent-dim-rgb: 165, 180, 252;
+  --accent-text: #10111d;
+  --info: #a5b4fc;
+  --info-rgb: 165, 180, 252;
+  --warn: #a5b4fc;
+  --warn-rgb: 165, 180, 252;
+  --error: #ef4444;
+  --error-rgb: 239, 68, 68;
+  --radius: 12px;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  --inset: rgba(0,0,0,.35);
+  --code-bg: rgba(0,0,0,.40);
+  --tool-out: rgba(0,0,0,.35);
+  --hover: rgba(255,255,255,.05);
+}
+/* 05 — Hacker clair · source : hacker-theme.css (.light + accent green) */
+.t-hacker-light {
+  --bg: #eeece6;
+  --surface: #f8f7f4;
+  --surface-raised: #ffffff;
+  --border: #d0d0c8;
+  --border-bright: #b8b8b0;
+  --text: #3d3d3a;
+  --text-bright: #1a1a18;
+  --text-dim: #777770;
+  --accent: #166534;
+  --accent-dim: #15803d;
+  --accent-rgb: 22, 101, 52;
+  --accent-dim-rgb: 21, 128, 61;
+  --accent-hover: #15803d;
+  --accent-text: #eeece6;
+  --info: #0070cc;
+  --info-rgb: 0, 112, 204;
+  --warn: #cc8800;
+  --warn-rgb: 204, 136, 0;
+  --error: #cc2222;
+  --error-rgb: 204, 34, 34;
+  --radius: 0px;
+  --shadow: 0 12px 34px rgba(24,24,27,.22);
+  --inset: rgba(0,0,0,.05);
+  --code-bg: rgba(0,0,0,.07);
+  --tool-out: rgba(0,0,0,.05);
+  --hover: rgba(0,0,0,.04);
+}
+/* 06 — indigo-light · source : holaf-tokens.js 0.3.0 preset « indigo-light » */
+.t-indigo-light {
+  --bg: #ffffff;
+  --surface: #f4f4f5;
+  --surface-raised: #fafafa;
+  --border: #d4d4d8;
+  --border-bright: #9C9C9F;
+  --text: #18181b;
+  --text-bright: #18181b;
+  --text-dim: #52525b;
+  --accent: #4f46e5;
+  --accent-dim: #6366f1;
+  --accent-hover: #6366f1;
+  --accent-rgb: 79, 70, 229;
+  --accent-dim-rgb: 99, 102, 241;
+  --accent-text: #ffffff;
+  --info: #6366f1;
+  --info-rgb: 99, 102, 241;
+  --warn: #6366f1;
+  --warn-rgb: 99, 102, 241;
+  --error: #dc2626;
+  --error-rgb: 220, 38, 38;
+  --radius: 12px;
+  --shadow: 0 18px 50px rgba(24, 24, 27, 0.18);
+  --inset: rgba(0,0,0,.05);
+  --code-bg: rgba(0,0,0,.07);
+  --tool-out: rgba(0,0,0,.05);
+  --hover: rgba(0,0,0,.04);
+}
+/* 07 — emerald-light · source : holaf-tokens.js 0.3.0 preset « emerald-light » */
+.t-emerald-light {
+  --bg: #FFFFFF;
+  --surface: #F0FDF4;
+  --surface-raised: #CDE9DC;
+  --border: #C8E1DA;
+  --border-bright: #93A5A1;
+  --text: #18181B;
+  --text-bright: #18181B;
+  --text-dim: #79797B;
+  --accent: #047857;
+  --accent-dim: #278C6F;
+  --accent-hover: #278C6F;
+  --accent-rgb: 4, 120, 87;
+  --accent-dim-rgb: 39, 140, 111;
+  --accent-text: #ffffff;
+  --info: #278C6F;
+  --info-rgb: 39, 140, 111;
+  --warn: #278C6F;
+  --warn-rgb: 39, 140, 111;
+  --error: #DC2626;
+  --error-rgb: 220, 38, 38;
+  --radius: 12px;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --inset: rgba(0,0,0,.05);
+  --code-bg: rgba(0,0,0,.07);
+  --tool-out: rgba(0,0,0,.05);
+  --hover: rgba(0,0,0,.04);
+}
+/* 08 — amber-light · source : holaf-tokens.js 0.3.0 preset « amber-light » */
+.t-amber-light {
+  --bg: #FFFFFF;
+  --surface: #FFFBEB;
+  --surface-raised: #F4E2C9;
+  --border: #EFD9C9;
+  --border-bright: #AF9F95;
+  --text: #18181B;
+  --text-bright: #18181B;
+  --text-dim: #79797B;
+  --accent: #B45309;
+  --accent-dim: #BF6C2B;
+  --accent-hover: #BF6C2B;
+  --accent-rgb: 180, 83, 9;
+  --accent-dim-rgb: 191, 108, 43;
+  --accent-text: #ffffff;
+  --info: #BF6C2B;
+  --info-rgb: 191, 108, 43;
+  --warn: #BF6C2B;
+  --warn-rgb: 191, 108, 43;
+  --error: #DC2626;
+  --error-rgb: 220, 38, 38;
+  --radius: 12px;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --inset: rgba(0,0,0,.05);
+  --code-bg: rgba(0,0,0,.07);
+  --tool-out: rgba(0,0,0,.05);
+  --hover: rgba(0,0,0,.04);
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <h1><span class="pi">π</span> Pi-Web — comparateur de thèmes : thème actuel vs presets holaf <b>tokens</b></h1>
+    <p class="sub">
+      8 variantes du même mini-écran Pi-Web (4 sombres, 4 claires). Toutes les couleurs proviennent des sources réelles —
+      aucune n'est inventée. La première variante de chaque rangée est la référence actuelle ; les suivantes sont les presets
+      de la brique <b>holaf-tokens</b> v0.3.0.
+    </p>
+    <div class="srcbox">
+      <code>source thème actuel : Pi-Web / frontend/src/styles/hacker-theme.css</code>
+      <code>source presets : holaf-lib / js/holaf-tokens.js v0.3.0 (brique exécutée)</code>
+      <code>mini-écran : sidebar + git, conversation + blocs repliables, boutons, badges, modale, toast, icônes</code>
+    </div>
+  </header>
+
+  <h2 class="section-title" id="sombre">01–04 · Mode sombre <span class="hint">référence Hacker (vert terminal) puis presets indigo / emerald / midnight</span></h2>
+  <div class="grid" id="grid-sombre">
+
+  <article class="card t-hacker-dark">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">01</span>
+        <h3>Hacker actuel</h3>
+        <span class="modepill dark">Sombre</span>
+        <span class="src">thème actuel · hacker-theme.css · :root · accent green</span>
+      </div>
+      <div class="swatches"><i style="background:#0a0a0a" title="bg #0a0a0a"></i><i style="background:#161616" title="surface #161616"></i><i style="background:#1e1e1e" title="surface-raised #1e1e1e"></i><i style="background:#2a2a2a" title="border #2a2a2a"></i><i style="background:#00ff41" title="accent #00ff41"></i><i style="background:#c0c0c0" title="text #c0c0c0"></i><i style="background:#ff4444" title="error #ff4444"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#0a0a0a</b></span><span>surface <b>#161616</b></span><span>accent <b>#00ff41</b></span><span>texte <b>#c0c0c0</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-indigo-dark">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">02</span>
+        <h3>indigo-dark</h3>
+        <span class="modepill dark">Sombre</span>
+        <span class="src">holaf-tokens 0.3.0 · preset indigo-dark (= alias « dark »)</span>
+      </div>
+      <div class="swatches"><i style="background:#1e1e1e" title="bg #1e1e1e"></i><i style="background:#27272a" title="surface #27272a"></i><i style="background:#1a1a1a" title="surface-raised #1a1a1a"></i><i style="background:#3f3f46" title="border #3f3f46"></i><i style="background:#6366f1" title="accent #6366f1"></i><i style="background:#e4e4e7" title="text #e4e4e7"></i><i style="background:#ef4444" title="error #ef4444"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#1e1e1e</b></span><span>surface <b>#27272a</b></span><span>accent <b>#6366f1</b></span><span>texte <b>#e4e4e7</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-emerald-dark">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">03</span>
+        <h3>emerald-dark</h3>
+        <span class="modepill dark">Sombre</span>
+        <span class="src">holaf-tokens 0.3.0 · preset emerald-dark (généré)</span>
+      </div>
+      <div class="swatches"><i style="background:#0B1512" title="bg #0B1512"></i><i style="background:#12201A" title="surface #12201A"></i><i style="background:#173B2D" title="surface-raised #173B2D"></i><i style="background:#143F30" title="border #143F30"></i><i style="background:#34D399" title="accent #34D399"></i><i style="background:#F4F4F5" title="text #F4F4F5"></i><i style="background:#EF4444" title="error #EF4444"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#0B1512</b></span><span>surface <b>#12201A</b></span><span>accent <b>#34D399</b></span><span>texte <b>#F4F4F5</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-midnight-dark">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">04</span>
+        <h3>midnight-dark</h3>
+        <span class="modepill dark">Sombre</span>
+        <span class="src">holaf-tokens 0.3.0 · preset midnight-dark (= alias « midnight »)</span>
+      </div>
+      <div class="swatches"><i style="background:#10111d" title="bg #10111d"></i><i style="background:#181a2c" title="surface #181a2c"></i><i style="background:#0c0d17" title="surface-raised #0c0d17"></i><i style="background:#272a44" title="border #272a44"></i><i style="background:#818cf8" title="accent #818cf8"></i><i style="background:#e2e4f0" title="text #e2e4f0"></i><i style="background:#ef4444" title="error #ef4444"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#10111d</b></span><span>surface <b>#181a2c</b></span><span>accent <b>#818cf8</b></span><span>texte <b>#e2e4f0</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+  </div>
+
+  <h2 class="section-title" id="clair">05–08 · Mode clair <span class="hint">référence Hacker clair puis presets indigo / emerald / amber</span></h2>
+  <div class="grid" id="grid-clair">
+
+  <article class="card t-hacker-light">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">05</span>
+        <h3>Hacker clair</h3>
+        <span class="modepill light">Clair</span>
+        <span class="src">thème actuel · hacker-theme.css · .light · accent green</span>
+      </div>
+      <div class="swatches"><i style="background:#eeece6" title="bg #eeece6"></i><i style="background:#f8f7f4" title="surface #f8f7f4"></i><i style="background:#ffffff" title="surface-raised #ffffff"></i><i style="background:#d0d0c8" title="border #d0d0c8"></i><i style="background:#166534" title="accent #166534"></i><i style="background:#3d3d3a" title="text #3d3d3a"></i><i style="background:#cc2222" title="error #cc2222"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#eeece6</b></span><span>surface <b>#f8f7f4</b></span><span>accent <b>#166534</b></span><span>texte <b>#3d3d3a</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-indigo-light">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">06</span>
+        <h3>indigo-light</h3>
+        <span class="modepill light">Clair</span>
+        <span class="src">holaf-tokens 0.3.0 · preset indigo-light (= alias « light »)</span>
+      </div>
+      <div class="swatches"><i style="background:#ffffff" title="bg #ffffff"></i><i style="background:#f4f4f5" title="surface #f4f4f5"></i><i style="background:#fafafa" title="surface-raised #fafafa"></i><i style="background:#d4d4d8" title="border #d4d4d8"></i><i style="background:#4f46e5" title="accent #4f46e5"></i><i style="background:#18181b" title="text #18181b"></i><i style="background:#dc2626" title="error #dc2626"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#ffffff</b></span><span>surface <b>#f4f4f5</b></span><span>accent <b>#4f46e5</b></span><span>texte <b>#18181b</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-emerald-light">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">07</span>
+        <h3>emerald-light</h3>
+        <span class="modepill light">Clair</span>
+        <span class="src">holaf-tokens 0.3.0 · preset emerald-light (généré)</span>
+      </div>
+      <div class="swatches"><i style="background:#FFFFFF" title="bg #FFFFFF"></i><i style="background:#F0FDF4" title="surface #F0FDF4"></i><i style="background:#CDE9DC" title="surface-raised #CDE9DC"></i><i style="background:#C8E1DA" title="border #C8E1DA"></i><i style="background:#047857" title="accent #047857"></i><i style="background:#18181B" title="text #18181B"></i><i style="background:#DC2626" title="error #DC2626"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#FFFFFF</b></span><span>surface <b>#F0FDF4</b></span><span>accent <b>#047857</b></span><span>texte <b>#18181B</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card t-amber-light">
+    <div class="card-head">
+      <div class="card-top">
+        <span class="num">08</span>
+        <h3>amber-light</h3>
+        <span class="modepill light">Clair</span>
+        <span class="src">holaf-tokens 0.3.0 · preset amber-light (généré)</span>
+      </div>
+      <div class="swatches"><i style="background:#FFFFFF" title="bg #FFFFFF"></i><i style="background:#FFFBEB" title="surface #FFFBEB"></i><i style="background:#F4E2C9" title="surface-raised #F4E2C9"></i><i style="background:#EFD9C9" title="border #EFD9C9"></i><i style="background:#B45309" title="accent #B45309"></i><i style="background:#18181B" title="text #18181B"></i><i style="background:#DC2626" title="error #DC2626"></i><span class="swlabel">fond · surface · élevée · bordure · accent · texte · danger</span></div>
+      <div class="keyvals"><span>fond <b>#FFFFFF</b></span><span>surface <b>#FFFBEB</b></span><span>accent <b>#B45309</b></span><span>texte <b>#18181B</b></span></div>
+    </div>
+    
+    <div class="screen">
+      <div class="app">
+        <div class="app-header">
+          <span class="logo" title="Pi-Web">π</span>
+          <span class="conn">●</span>
+          <span class="hdr-dim">connecté</span>
+          <span class="grow"></span>
+          <span class="hdr-model">claude-sonnet-4.5</span>
+          <span class="modechip on">PI</span>
+          <span class="modechip">TERM</span>
+          <span class="modechip">FILES</span>
+        </div>
+
+        <div class="app-body">
+          <aside class="sb">
+            <div class="sb-title">PROJETS</div>
+            <div class="proj active"><span class="ell">Pi-Web</span><span class="tag">⎇ main</span></div>
+            <div class="proj"><span class="ell">Homy</span></div>
+            <div class="proj sub"><span class="ell">↳ core</span></div>
+            <div class="proj"><span class="ell">Docky</span><span class="badge ok mini">●</span></div>
+
+            <div class="sb-title">GIT</div>
+            <div class="git-head">
+              <span class="git-name">▾ PI-WEB</span>
+              <span class="tag"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> main</span>
+            </div>
+            <div class="git-badges">
+              <span class="badge warn">3M +1 ✓1</span>
+              <span class="badge ok">↑2</span>
+              <span class="badge err">!1</span>
+            </div>
+            <div class="git-files">
+              <div><span class="st warn">M</span><span class="fp">src/App.tsx</span></div>
+              <div><span class="st warn">M</span><span class="fp">backend/src/pi/session.ts</span></div>
+              <div><span class="st info">A</span><span class="fp">frontend/src/styles/hacker-theme.css</span></div>
+              <div><span class="st err">D</span><span class="fp">legacy/old-theme.css</span></div>
+            </div>
+            <div class="git-msg">🚀 fix(chat): pin auto-scroll</div>
+            <div class="git-actions">
+              <span class="btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg> RAFRAÎCHIR</span>
+              <span class="btn accent"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> COMMIT</span>
+            </div>
+          </aside>
+
+          <main class="chat">
+            <div class="chat-head">
+              <span class="chat-title">CONVERSATION</span>
+              <span class="grow"></span>
+              <span class="dim">42k / 200k</span>
+              <span class="badge run mini"><span class="dot run"></span>STREAM</span>
+            </div>
+
+            <div class="msgs">
+              <div class="msg-user">
+                <div class="meta">vous · 14:02</div>
+                Refactore <code>GitPanel.tsx</code> : il est trop long.
+              </div>
+
+              <div class="msg-bot">
+                <div class="think">
+                  <div class="think-head">
+                    <span>▾ RÉFLEXION</span>
+                    <span class="grow"></span>
+                    <span class="think-dur">a réfléchi 12s</span>
+                    <span class="mini-btn"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  </div>
+                  <div class="think-body">880 lignes… j'extrais <em>GitProjectSection</em> + <em>CompactStateBadges</em>, puis je relance les tests.</div>
+                </div>
+
+                <div class="prose">Je découpe en deux composants et je garde les badges d'état :</div>
+
+                <div class="codeblock"><span class="ck">export function</span> <span class="cf">GitProjectSection</span>({ project, isMain, refreshKey }) { … }</div>
+
+                <div class="tool">
+                  <span class="dot done"></span>
+                  <div class="tool-line"><b>Read</b> GitPanel.tsx <span class="grow"></span> <span class="dim">0,4 s</span> <span class="okmark">✓</span></div>
+                  <div class="tool-out">L1–120   ├─ CompactStateBadges (L60)
+L121–…   └─ GitProjectSection (L129)   +37 −12</div>
+                </div>
+
+                <div class="tool">
+                  <span class="dot run"></span>
+                  <div class="tool-line"><b>Bash</b> npm test <span class="grow"></span> <span class="dim">en cours…</span></div>
+                </div>
+
+                <div class="badges">
+                  <span class="badge ok">✓ succès</span>
+                  <span class="badge run"><span class="dot run"></span>en cours</span>
+                  <span class="badge err">✕ erreur</span>
+                  <span class="badge warn">⚠ 3 modifiés</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <span class="btn primary">ENVOYER</span>
+              <span class="btn">STOP</span>
+              <span class="btn danger">ANNULER</span>
+              <span class="cap">primaire · secondaire · danger</span>
+            </div>
+
+            <div class="composer"><span class="cursor">Écris ton message…</span></div>
+
+            <div class="iconbar">
+              <span class="ib-label">ICÔNES</span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span class="ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+              <span class="ic acc"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+              <span class="ic">⟳ ↳ ☰ ● ○ π</span>
+            </div>
+          </main>
+        </div>
+
+        <div class="statusbar">
+          <span class="acc">● Pi-Web</span><span class="sepb">│</span>
+          <span class="dim">~/projects/Pi-Web</span><span class="sepb">│</span>
+          <span class="info">⎇ main</span><span class="sepb">│</span>
+          <span class="dim">42k / 200k</span>
+          <span class="meter"><i></i></span><span class="sepb">│</span>
+          <span class="acc">π DEFAULT</span>
+        </div>
+
+        <div class="app-overlay"></div>
+
+        <div class="app-modal">
+          <div class="modal-head"><b>SUPPRIMER LE PROJET ?</b><span class="grow"></span><span class="mini-btn">✕</span></div>
+          <div class="modal-body">
+            <div class="modal-text">Le projet <b>Docky</b> sera retiré de la liste. Le dossier disque n'est pas supprimé.</div>
+            <div class="dangerbox">⚠ Cette action ne peut pas être annulée.</div>
+          </div>
+          <div class="modal-actions">
+            <span class="btn">ANNULER</span>
+            <span class="btn danger">SUPPRIMER</span>
+          </div>
+        </div>
+
+        <div class="app-toast">
+          <span class="ticon">✓</span>
+          <div class="tbody">
+            <div class="ttitle">Commit créé</div>
+            <div class="tmsg">a1b2c3d · 3 fichiers · main</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+  </div>
+
+  <section class="legend" id="legende">
+    <h2 class="section-title">Légende comparative <span class="hint">valeurs réelles des tokens — le mapping appliqué est expliqué sous le tableau</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Variante</th><th>Mode</th><th>Source</th><th>Fond</th><th>Surface</th><th>Surface élevée</th><th>Bordure</th><th>Accent</th><th>Accent hover</th><th>Texte</th><th>Texte atténué</th><th>Danger</th></tr>
+        </thead>
+        <tbody>
+<tr class="ref"><td class="rowname"><span class="num">01</span> Hacker actuel</td><td><span class="mode-pill dark">Sombre</span></td><td><span class="srcpill">actuel</span></td><td><span class="cell"><i class="chip" style="background:#0a0a0a"></i><code class="hex">#0a0a0a</code></span></td><td><span class="cell"><i class="chip" style="background:#161616"></i><code class="hex">#161616</code></span></td><td><span class="cell"><i class="chip" style="background:#1e1e1e"></i><code class="hex">#1e1e1e</code></span></td><td><span class="cell"><i class="chip" style="background:#2a2a2a"></i><code class="hex">#2a2a2a</code></span></td><td><span class="cell"><i class="chip" style="background:#00ff41"></i><code class="hex">#00ff41</code></span></td><td><span class="cell"><i class="chip" style="background:#00cc34"></i><code class="hex">#00cc34</code></span></td><td><span class="cell"><i class="chip" style="background:#c0c0c0"></i><code class="hex">#c0c0c0</code></span></td><td><span class="cell"><i class="chip" style="background:#888888"></i><code class="hex">#888888</code></span></td><td><span class="cell"><i class="chip" style="background:#ff4444"></i><code class="hex">#ff4444</code></span></td></tr>
+<tr><td class="rowname"><span class="num">02</span> indigo-dark</td><td><span class="mode-pill dark">Sombre</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#1e1e1e"></i><code class="hex">#1e1e1e</code></span></td><td><span class="cell"><i class="chip" style="background:#27272a"></i><code class="hex">#27272a</code></span></td><td><span class="cell"><i class="chip" style="background:#1a1a1a"></i><code class="hex">#1a1a1a</code></span></td><td><span class="cell"><i class="chip" style="background:#3f3f46"></i><code class="hex">#3f3f46</code></span></td><td><span class="cell"><i class="chip" style="background:#6366f1"></i><code class="hex">#6366f1</code></span></td><td><span class="cell"><i class="chip" style="background:#818cf8"></i><code class="hex">#818cf8</code></span></td><td><span class="cell"><i class="chip" style="background:#e4e4e7"></i><code class="hex">#e4e4e7</code></span></td><td><span class="cell"><i class="chip" style="background:#a1a1aa"></i><code class="hex">#a1a1aa</code></span></td><td><span class="cell"><i class="chip" style="background:#ef4444"></i><code class="hex">#ef4444</code></span></td></tr>
+<tr><td class="rowname"><span class="num">03</span> emerald-dark</td><td><span class="mode-pill dark">Sombre</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#0B1512"></i><code class="hex">#0B1512</code></span></td><td><span class="cell"><i class="chip" style="background:#12201A"></i><code class="hex">#12201A</code></span></td><td><span class="cell"><i class="chip" style="background:#173B2D"></i><code class="hex">#173B2D</code></span></td><td><span class="cell"><i class="chip" style="background:#143F30"></i><code class="hex">#143F30</code></span></td><td><span class="cell"><i class="chip" style="background:#34D399"></i><code class="hex">#34D399</code></span></td><td><span class="cell"><i class="chip" style="background:#2FB886"></i><code class="hex">#2FB886</code></span></td><td><span class="cell"><i class="chip" style="background:#F4F4F5"></i><code class="hex">#F4F4F5</code></span></td><td><span class="cell"><i class="chip" style="background:#929696"></i><code class="hex">#929696</code></span></td><td><span class="cell"><i class="chip" style="background:#EF4444"></i><code class="hex">#EF4444</code></span></td></tr>
+<tr><td class="rowname"><span class="num">04</span> midnight-dark</td><td><span class="mode-pill dark">Sombre</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#10111d"></i><code class="hex">#10111d</code></span></td><td><span class="cell"><i class="chip" style="background:#181a2c"></i><code class="hex">#181a2c</code></span></td><td><span class="cell"><i class="chip" style="background:#0c0d17"></i><code class="hex">#0c0d17</code></span></td><td><span class="cell"><i class="chip" style="background:#272a44"></i><code class="hex">#272a44</code></span></td><td><span class="cell"><i class="chip" style="background:#818cf8"></i><code class="hex">#818cf8</code></span></td><td><span class="cell"><i class="chip" style="background:#a5b4fc"></i><code class="hex">#a5b4fc</code></span></td><td><span class="cell"><i class="chip" style="background:#e2e4f0"></i><code class="hex">#e2e4f0</code></span></td><td><span class="cell"><i class="chip" style="background:#9aa0c3"></i><code class="hex">#9aa0c3</code></span></td><td><span class="cell"><i class="chip" style="background:#ef4444"></i><code class="hex">#ef4444</code></span></td></tr>
+<tr class="ref"><td class="rowname"><span class="num">05</span> Hacker clair</td><td><span class="mode-pill light">Clair</span></td><td><span class="srcpill">actuel</span></td><td><span class="cell"><i class="chip" style="background:#eeece6"></i><code class="hex">#eeece6</code></span></td><td><span class="cell"><i class="chip" style="background:#f8f7f4"></i><code class="hex">#f8f7f4</code></span></td><td><span class="cell"><i class="chip" style="background:#ffffff"></i><code class="hex">#ffffff</code></span></td><td><span class="cell"><i class="chip" style="background:#d0d0c8"></i><code class="hex">#d0d0c8</code></span></td><td><span class="cell"><i class="chip" style="background:#166534"></i><code class="hex">#166534</code></span></td><td><span class="cell"><i class="chip" style="background:#15803d"></i><code class="hex">#15803d</code></span></td><td><span class="cell"><i class="chip" style="background:#3d3d3a"></i><code class="hex">#3d3d3a</code></span></td><td><span class="cell"><i class="chip" style="background:#777770"></i><code class="hex">#777770</code></span></td><td><span class="cell"><i class="chip" style="background:#cc2222"></i><code class="hex">#cc2222</code></span></td></tr>
+<tr><td class="rowname"><span class="num">06</span> indigo-light</td><td><span class="mode-pill light">Clair</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#ffffff"></i><code class="hex">#ffffff</code></span></td><td><span class="cell"><i class="chip" style="background:#f4f4f5"></i><code class="hex">#f4f4f5</code></span></td><td><span class="cell"><i class="chip" style="background:#fafafa"></i><code class="hex">#fafafa</code></span></td><td><span class="cell"><i class="chip" style="background:#d4d4d8"></i><code class="hex">#d4d4d8</code></span></td><td><span class="cell"><i class="chip" style="background:#4f46e5"></i><code class="hex">#4f46e5</code></span></td><td><span class="cell"><i class="chip" style="background:#6366f1"></i><code class="hex">#6366f1</code></span></td><td><span class="cell"><i class="chip" style="background:#18181b"></i><code class="hex">#18181b</code></span></td><td><span class="cell"><i class="chip" style="background:#52525b"></i><code class="hex">#52525b</code></span></td><td><span class="cell"><i class="chip" style="background:#dc2626"></i><code class="hex">#dc2626</code></span></td></tr>
+<tr><td class="rowname"><span class="num">07</span> emerald-light</td><td><span class="mode-pill light">Clair</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#FFFFFF"></i><code class="hex">#FFFFFF</code></span></td><td><span class="cell"><i class="chip" style="background:#F0FDF4"></i><code class="hex">#F0FDF4</code></span></td><td><span class="cell"><i class="chip" style="background:#CDE9DC"></i><code class="hex">#CDE9DC</code></span></td><td><span class="cell"><i class="chip" style="background:#C8E1DA"></i><code class="hex">#C8E1DA</code></span></td><td><span class="cell"><i class="chip" style="background:#047857"></i><code class="hex">#047857</code></span></td><td><span class="cell"><i class="chip" style="background:#278C6F"></i><code class="hex">#278C6F</code></span></td><td><span class="cell"><i class="chip" style="background:#18181B"></i><code class="hex">#18181B</code></span></td><td><span class="cell"><i class="chip" style="background:#79797B"></i><code class="hex">#79797B</code></span></td><td><span class="cell"><i class="chip" style="background:#DC2626"></i><code class="hex">#DC2626</code></span></td></tr>
+<tr><td class="rowname"><span class="num">08</span> amber-light</td><td><span class="mode-pill light">Clair</span></td><td><span class="srcpill">holaf 0.3.0</span></td><td><span class="cell"><i class="chip" style="background:#FFFFFF"></i><code class="hex">#FFFFFF</code></span></td><td><span class="cell"><i class="chip" style="background:#FFFBEB"></i><code class="hex">#FFFBEB</code></span></td><td><span class="cell"><i class="chip" style="background:#F4E2C9"></i><code class="hex">#F4E2C9</code></span></td><td><span class="cell"><i class="chip" style="background:#EFD9C9"></i><code class="hex">#EFD9C9</code></span></td><td><span class="cell"><i class="chip" style="background:#B45309"></i><code class="hex">#B45309</code></span></td><td><span class="cell"><i class="chip" style="background:#BF6C2B"></i><code class="hex">#BF6C2B</code></span></td><td><span class="cell"><i class="chip" style="background:#18181B"></i><code class="hex">#18181B</code></span></td><td><span class="cell"><i class="chip" style="background:#79797B"></i><code class="hex">#79797B</code></span></td><td><span class="cell"><i class="chip" style="background:#DC2626"></i><code class="hex">#DC2626</code></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="notes" id="notes">
+      <h3>Limites &amp; approximations</h3>
+      <ul>
+        <li><b>Mapping des tokens holaf vers les variables du mini-écran</b> : <code>--bg</code> ← <code>surface</code>,
+          <code>--surface</code> ← <code>surface-elev</code>, <code>--surface-raised</code> ← <code>surface-raised</code>
+          (projection documentée de la brique : <code>surface-raised ← surfaceHover</code>), <code>--text-bright</code> ← <code>text</code>,
+          <code>--text-dim</code> ← <code>text-muted</code>, <code>--accent-dim</code> ← <code>accent-hover</code>.</li>
+        <li><b>La brique holaf ne définit ni <code>info</code> ni <code>warn</code> ni <code>ok</code></b> (clés optionnelles 0.3.0 réservées
+          aux packs hôtes) : dans les variantes holaf, les états sémantiques réutilisent <code>accent</code> / <code>accent-hover</code> / <code>danger</code>.
+          Les variantes Pi-Web gardent leurs <code>--info</code> / <code>--warn</code> / <code>--error</code> d'origine. C'est en soi un
+          point de décision : adopter la brique telle quelle = fournir ces couleurs via un pack, ou perdre la distinction des états.</li>
+        <li><b><code>border-bright</code></b> n'existe pas côté holaf : valeur dérivée avec la formule interne de la brique
+          (<code>mix(border, text, 30 %)</code>). <b><code>accent-text</code></b> n'existe pas côté Pi-Web : la variante Hacker utilise
+          <code>--bg</code> comme texte sur aplat accent (contraste maximal). Côté holaf, <code>accent-text</code> est un vrai token.</li>
+        <li><b>Géométrie identique partout</b> (tailles, espacements, monospace) sauf le rayon <code>--radius</code> de la modale et du toast
+          (token réel : <code>0</code> côté Hacker, <code>12px</code> côté holaf) — pour que la comparaison ne porte que sur les couleurs.</li>
+        <li><b>Modale</b> posée en bas à droite et voile assombrissant réduit à 12 % (dans Pi-Web : centrée, voile 30 % + flou)
+          pour ne pas fausser la lecture des couleurs. <b>Toast</b> : structure de la brique HolafToast v0.5.0 vendored par Pi-Web
+          (bordure gauche colorée par type, fond <code>surface-raised</code>).</li>
+        <li><b>Police</b> : monospace du système (JetBrains Mono si installée, sinon repli) — Pi-Web utilise JetBrains Mono / Fira Code.
+          Les icônes sont des SVG inline (style Lucide, comme Pi-Web) : aucune requête réseau, tout tient dans ce fichier.</li>
+        <li><b>Pi-Web possède 5 presets d'accent</b> (green par défaut, purple, orange, cyan, rose) × sombre/clair :
+          seule la variante <b>green</b> est montrée ici, c'est la référence par défaut ; les autres resteraient disponibles.</li>
+        <li><b>Contraste</b> : la brique garantit ≥ 4,5:1 pour les textes sur ses surfaces ; à l'inverse, l'accent vert néon
+          <code>#00ff41</code> de Pi-Web est très lumineux sur fond noir (spectaculaire, mais fatigant sur de grandes surfaces).</li>
+      </ul>
+    </div>
+  </section>
+
+  <p class="foot">Artefact de démonstration autonome — généré pour comparer les palettes ; il ne modifie aucun fichier de l'application.
+  Les valeurs affichées sont celles des sources au moment de la génération.</p>
+</div>
+</body>
+</html>

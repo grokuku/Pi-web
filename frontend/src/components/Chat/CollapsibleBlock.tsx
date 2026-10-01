@@ -20,7 +20,7 @@
 //   (l'utilisateur décide, on ne l'écrase plus).
 
 import { createContext, memo, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { resolveExpanded, type UserOverride } from "../../utils/collapse";
 
 // ── Contexte ─────────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ export const CollapsibleBlock = memo(function CollapsibleBlock({
 
   const resolvedHeader = typeof header === "function" ? header({ expanded }) : header;
   const chevron = hasContent
-    ? (expanded ? <ChevronDown size={10} className="shrink-0" /> : <ChevronRight size={10} className="shrink-0" />)
+    ? (expanded ? <HolafIcon name="chevron-down" size={10} className="shrink-0" /> : <HolafIcon name="chevron-right" size={10} className="shrink-0" />)
     : null;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {

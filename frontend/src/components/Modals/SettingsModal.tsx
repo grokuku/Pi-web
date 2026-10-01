@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
-import {
-  X, Plus, Trash2, Eye, EyeOff, Shield, Keyboard, Brain,
-} from "lucide-react";
+import { Keyboard } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
 import { MemorySettingsTab } from "./MemorySettingsTab";
@@ -440,8 +439,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     { id: "analysis", icon: "🔬", label: t('settings.tabs.analysis') },
     { id: "extensions", icon: "📦", label: t('settings.tabs.extensions') },
     { id: "general", icon: "⚙", label: t('settings.tabs.general') },
-    { id: "memory", icon: <Brain size={14} />, label: t('settings.tabs.memory') },
-    { id: "security", icon: <Shield size={14} />, label: t('settings.tabs.security') },
+    { id: "memory", icon: <HolafIcon name="brain" size={14} />, label: t('settings.tabs.memory') },
+    { id: "security", icon: <HolafIcon name="shield" size={14} />, label: t('settings.tabs.security') },
     { id: "shortcuts", icon: <Keyboard size={14} />, label: "Raccourcis" },
     { id: "layout", icon: "⊞", label: t('settings.tabs.layout') },
     { id: "api-keys", icon: "🔑", label: "API Keys" },
@@ -461,7 +460,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-error">
-              <X size={16} />
+              <HolafIcon name="x" size={16} />
             </button>
           </div>
         </div>
@@ -910,7 +909,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                           </div>
                           <button onClick={() => removePackage(pkg.source)}
                             className="text-hacker-text-dim hover:text-hacker-error shrink-0" title="Remove">
-                            <Trash2 size={14} />
+                            <HolafIcon name="trash" size={14} />
                           </button>
                         </div>
                       ))}
@@ -940,7 +939,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                         const path = (document.getElementById("resource-path-input") as HTMLInputElement).value.trim();
                         if (path) toggleResource(type, path, true);
                       }} disabled={loading} className="btn-hacker text-xs px-3 py-1 flex items-center gap-1">
-                        <Plus size={12} /> ADD
+                        <HolafIcon name="plus" size={12} /> ADD
                       </button>
                     </div>
                   </div>
@@ -959,7 +958,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
               {/* Auth Section */}
               <div className="border border-hacker-border bg-hacker-surface/50">
                 <div className="px-3 py-2 border-b border-hacker-border bg-hacker-bg/50 flex items-center gap-2">
-                  <Shield size={14} className="text-hacker-accent" />
+                  <HolafIcon name="shield" size={14} className="text-hacker-accent" />
                   <span className="text-xs font-bold text-hacker-accent tracking-wider">WEB INTERFACE AUTHENTICATION</span>
                 </div>
                 <div className="p-3 space-y-3">
@@ -990,7 +989,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                         />
                         <button onClick={() => setShowPass(!showPass)}
                           className="btn-hacker text-xs px-2">
-                          {showPass ? <EyeOff size={12} /> : <Eye size={12} />}
+                          {showPass ? <HolafIcon name="eye-off" size={12} /> : <HolafIcon name="eye" size={12} />}
                         </button>
                       </div>
                     </div>

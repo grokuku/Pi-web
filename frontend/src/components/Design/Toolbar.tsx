@@ -1,4 +1,5 @@
-import { Undo2, Redo2, Save, Eye, FileDown } from "lucide-react";
+import { Undo2, Redo2, Save, FileDown } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 
 interface ToolbarProps {
   onSave?: () => void;
@@ -75,7 +76,7 @@ export function Toolbar({
           className="btn-hacker text-xs px-2 py-1 flex items-center gap-1 text-hacker-text-dim hover:text-hacker-accent"
           title="Preview"
         >
-          <Eye size={14} />
+          <HolafIcon name="eye" size={14} />
         </button>
       )}
 

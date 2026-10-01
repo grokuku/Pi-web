@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { X, RefreshCw, FolderOpen, Code, FileText, Image, Settings, AlertTriangle } from "lucide-react";
+import { X, FolderOpen, Code } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useTranslation } from "../../i18n";
 import { sortProjectsByName } from "../../utils/project-sort";
@@ -256,14 +257,14 @@ export function CbmStatsModal({ onClose }: Props) {
           )}
         </div>
         <button onClick={() => loadStats(selectedPaths)} disabled={loading} className="text-hacker-text-dim hover:text-hacker-accent p-1" title={t('cbmStats.refresh')}>
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+          <HolafIcon name="refresh" size={14} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 max-w-6xl mx-auto w-full">
         {error ? (
           <div className="text-hacker-error text-sm text-center py-12">
-            <AlertTriangle size={32} className="mx-auto mb-3 opacity-60" />
+            <HolafIcon name="alert-triangle" size={32} className="mx-auto mb-3 opacity-60" />
             <p className="font-bold mb-1">{t('cbmStats.error')}</p>
             <p className="text-xs text-hacker-text-dim">{error}</p>
           </div>
@@ -333,15 +334,15 @@ export function CbmStatsModal({ onClose }: Props) {
               <div className="space-y-4">
                 {/* Stats cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalCodeFiles)} label={t('cbmStats.codeFiles')} color="#00d4aa" />
+                  <StatCard icon={<HolafIcon name="file-text" size={14} />} value={formatNum(stats.totalCodeFiles)} label={t('cbmStats.codeFiles')} color="#00d4aa" />
                   <StatCard icon={<Code size={14} />} value={formatNum(stats.totalCodeLines)} label={t('cbmStats.codeLines')} color="#f7df1e" />
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalLines)} label={t('cbmStats.totalLines')} color="#6a4afc" />
-                  <StatCard icon={<Image size={14} />} value={formatBytes(stats.totalSize)} label={t('cbmStats.size')} color="#fc5c7d" />
+                  <StatCard icon={<HolafIcon name="file-text" size={14} />} value={formatNum(stats.totalLines)} label={t('cbmStats.totalLines')} color="#6a4afc" />
+                  <StatCard icon={<HolafIcon name="image" size={14} />} value={formatBytes(stats.totalSize)} label={t('cbmStats.size')} color="#fc5c7d" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <StatCard icon={<FileText size={14} />} value={formatNum(stats.totalBlank)} label={t('cbmStats.blankLines')} color="#555" />
-                  <StatCard icon={<Settings size={14} />} value={`${catCount("config")}`} label={t('cbmStats.config')} color="#3178c6" />
+                  <StatCard icon={<HolafIcon name="file-text" size={14} />} value={formatNum(stats.totalBlank)} label={t('cbmStats.blankLines')} color="#555" />
+                  <StatCard icon={<HolafIcon name="gear" size={14} />} value={`${catCount("config")}`} label={t('cbmStats.config')} color="#3178c6" />
                 </div>
 
                 {/* Languages + Top files */}

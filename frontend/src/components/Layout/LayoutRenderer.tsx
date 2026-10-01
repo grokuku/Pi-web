@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { PiLogo } from "../common/PiLogo";
 import type { LayoutType, PanelId } from "../../types";
 import { PANEL_LABELS } from "../../types";
@@ -252,10 +252,10 @@ export function LayoutRenderer({
           </select>
           <div className="flex items-center gap-1">
             <button onClick={() => onNewWindow(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Open in new window">
-              <ExternalLink size={12} />
+              <HolafIcon name="external-link" size={12} />
             </button>
             <button onClick={() => onDetach(panelId)} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Detach">
-              <ExternalLink size={12} />
+              <HolafIcon name="external-link" size={12} />
             </button>
           </div>
         </div>

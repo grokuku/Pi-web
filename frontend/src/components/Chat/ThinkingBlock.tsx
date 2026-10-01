@@ -14,7 +14,7 @@
 //   s'applique aux blocs DÉJÀ MONTÉS (correctif du bug d'initialisation unique).
 
 import { memo, useState, useCallback, useRef, useEffect } from "react";
-import { Copy, Check } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
 import { CollapsibleBlock } from "./CollapsibleBlock";
@@ -90,7 +90,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isStreaming
       )}
       headerActions={
         <button onClick={handleCopy} className="thinking-copy-btn" title={t('thinkingBlock.copy')}>
-          {copied ? <Check size={10} /> : <Copy size={10} />}
+          {copied ? <HolafIcon name="check" size={10} /> : <HolafIcon name="copy" size={10} />}
           {copied ? t('thinkingBlock.copied') : t('thinkingBlock.copy')}
         </button>
       }

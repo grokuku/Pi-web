@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, RefreshCw, Check, ArrowUpCircle, X } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
@@ -82,20 +82,20 @@ export function UpdateAgentModal({
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <div className="p-2 bg-hacker-warn/10 border border-hacker-warn/30">
-          <AlertTriangle size={20} className="text-hacker-warn" />
+          <HolafIcon name="alert-triangle" size={20} className="text-hacker-warn" />
         </div>
         <span className="text-hacker-warn font-bold text-sm tracking-wider">
           {t("sidebar.updateConfirmTitle")}
         </span>
         <button onClick={onClose} className="ml-auto text-hacker-text-dim hover:text-hacker-text">
-          <X size={16} />
+          <HolafIcon name="x" size={16} />
         </button>
       </div>
 
       {/* Erreur */}
       {error && (
         <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
-          <AlertTriangle size={12} />
+          <HolafIcon name="alert-triangle" size={12} />
           {error}
         </div>
       )}
@@ -103,7 +103,7 @@ export function UpdateAgentModal({
       {/* Succès */}
       {done && (
         <div className="text-hacker-accent text-xs mb-3 border border-hacker-accent/30 p-3 flex items-center gap-2 bg-hacker-accent/5">
-          <Check size={14} />
+          <HolafIcon name="check" size={14} />
           {t("sidebar.updateSuccess", latestVersion)}
         </div>
       )}
@@ -119,7 +119,7 @@ export function UpdateAgentModal({
       {!done && breakingChanges.length > 0 && (
         <div className="mb-4 border border-hacker-warn/40 bg-hacker-warn/5 p-3">
           <div className="flex items-center gap-2 text-hacker-warn text-xs font-bold mb-2">
-            <AlertTriangle size={13} />
+            <HolafIcon name="alert-triangle" size={13} />
             {t("sidebar.updateBreakingTitle")}
           </div>
           <ul className="space-y-2">
@@ -157,7 +157,7 @@ export function UpdateAgentModal({
       {/* Chargement */}
       {loading && (
         <div className="text-hacker-text-dim text-xs flex items-center gap-2 py-2">
-          <RefreshCw size={12} className="animate-spin" />
+          <HolafIcon name="refresh" size={12} className="animate-spin" />
           {t("sidebar.updatingTo", latestVersion)}
         </div>
       )}
@@ -176,7 +176,7 @@ export function UpdateAgentModal({
             disabled={blocked}
             className="btn-hacker danger text-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <ArrowUpCircle size={12} />
+            <HolafIcon name="arrow-up-circle" size={12} />
             {t("sidebar.updateNow")}
           </button>
         </div>

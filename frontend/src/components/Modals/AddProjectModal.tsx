@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { X, ArrowLeft, ArrowRight, AlertTriangle, GitBranch, FolderOpen, Link2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
 import { useTranslation } from "../../i18n";
@@ -253,14 +254,14 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 
         {/* Error */}
         {error && (
           <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
-            <AlertTriangle size={12} />
+            <HolafIcon name="alert-triangle" size={12} />
             {error}
           </div>
         )}
@@ -268,7 +269,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
         {/* Warning (non-blocking) */}
         {warning && (
           <div className="text-hacker-warn text-xs mb-3 border border-hacker-warn/30 p-2 flex items-center gap-1.5">
-            <AlertTriangle size={12} />
+            <HolafIcon name="alert-triangle" size={12} />
             {warning}
           </div>
         )}
@@ -307,10 +308,10 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                         : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
                     }`}
                   >
-                    {s === "local" && <FolderOpen size={14} />}
+                    {s === "local" && <HolafIcon name="folder-open" size={14} />}
                     {s === "ssh" && "🔗"}
                     {s === "smb" && "💾"}
-                    {s === "linked" && <Link2 size={14} />}
+                    {s === "linked" && <HolafIcon name="link" size={14} />}
                     <span>{s === "local" ? t('addProject.local') : s === "ssh" ? t('addProject.ssh') : s === "smb" ? t('addProject.smbNas') : t('addProject.linked')}</span>
                   </button>
                 ))}
@@ -472,7 +473,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                           }`}
                         >
                           <span className="w-3 text-center">{linkedProjectIds.includes(p.id) ? "☑" : "☐"}</span>
-                          <FolderOpen size={12} className="shrink-0" />
+                          <HolafIcon name="folder-open" size={12} className="shrink-0" />
                           <span className="flex-1 truncate text-hacker-text-bright">{p.name}</span>
                           <span className="text-[9px] text-hacker-text-dim font-mono">{p.cwd}</span>
                         </button>
@@ -502,7 +503,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                         : "border-hacker-border text-hacker-text-dim hover:border-hacker-accent/50"
                     }`}
                   >
-                    {v === "git" && <GitBranch size={14} />}
+                    {v === "git" && <HolafIcon name="git-branch" size={14} />}
                     {v === "standalone" && "📂"}
                     <span>{v === "git" ? t('addProject.git') : t('addProject.standalone')}</span>
                   </button>
@@ -612,7 +613,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 className="btn-hacker text-xs flex items-center gap-1"
               >
                 {t('addProject.next')}
-                <ArrowRight size={12} />
+                <HolafIcon name="arrow-right" size={12} />
               </button>
             ) : (
               <button

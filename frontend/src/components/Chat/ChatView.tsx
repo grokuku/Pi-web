@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type RefObject } from "react";
-import { Paperclip, X, Image, FileText, File, AlertTriangle, Download, Maximize, Minimize, ZoomIn, ZoomOut } from "lucide-react";
+import { Paperclip, File, ZoomIn, ZoomOut } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { MarkdownContent } from "../Markdown/markdown";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock, Activity } from "../../types";
 import { PiLogo } from "../common/PiLogo";
@@ -109,7 +110,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 function getFileExtensionIcon(category: Attachment["category"], fileName: string) {
-  switch (category) { case "image": return <Image size={14} />; case "text": return <FileText size={14} />; case "audio": return <AlertTriangle size={14} />; case "binary": return <File size={14} />; }
+  switch (category) { case "image": return <HolafIcon name="image" size={14} />; case "text": return <HolafIcon name="file-text" size={14} />; case "audio": return <HolafIcon name="alert-triangle" size={14} />; case "binary": return <File size={14} />; }
 }
 
 interface Props {
@@ -1255,7 +1256,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           {/* break-words : évite le débordement horizontal sur les longs messages d'erreur */}
           <span className="break-words min-w-0 flex-1">{error}</span>
           <button onClick={() => setError("")} className="shrink-0 hover:text-hacker-text-bright transition-colors" title={t('viewer.close')} aria-label={t('viewer.close')}>
-            <X size={12} />
+            <HolafIcon name="x" size={12} />
           </button>
         </div>
       )}
@@ -1292,11 +1293,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
                   <button onClick={() => viewerVpRef.current?.zoomBy(1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomIn')} aria-label={t('viewer.zoomIn')}><ZoomIn size={16} /></button>
                   <button onClick={() => viewerVpRef.current?.zoomBy(1 / 1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomOut')} aria-label={t('viewer.zoomOut')}><ZoomOut size={16} /></button>
                   <button onClick={toggleFullscreen} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')} aria-label={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')}>
-                    {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                    {isFullscreen ? <HolafIcon name="minimize" size={16} /> : <HolafIcon name="maximize" size={16} />}
                   </button>
                 </>
               )}
-              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}><X size={16} /></button>
+              <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}><HolafIcon name="x" size={16} /></button>
             </div>
             <div className="flex-1 overflow-auto p-4">
               {viewerFile.type === "image" ? (
@@ -1571,7 +1572,7 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
 // ── Vignettes d'attachments (partagé bulle user / messages système injectés) ──
 const AttachmentRefsRow = memo(function AttachmentRefsRow({ refs, onFileClick }: { refs: { id: string; name: string; category: string; size: number }[]; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   const { t } = useTranslation();
-  return <div className="flex flex-wrap gap-1.5 mt-2">{refs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>;
+  return <div className="flex flex-wrap gap-1.5 mt-2">{refs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><HolafIcon name="download" size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><HolafIcon name="download" size={10} /></a></div>; })}</div>;
 });
 
 // ── Lot 2 (orchestrateur interactif) : message de RÉSULTAT de sous-agent ──────
@@ -1624,9 +1625,9 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
       <div className="max-w-[85%] bg-hacker-accent/10 border border-hacker-accent/30 rounded-l-lg rounded-br-lg px-3 py-2">
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim text-right mb-0.5">{formatTime(message.timestamp)}</div> : null}
         {message.content && <span className="text-hacker-text-bright whitespace-pre-wrap text-sm">{message.content}</span>}
-        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={12} /></a></div>; })}</div>}
+        {message.images && message.images.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.images.map((img,i) => { const src = getImageSrc(img); if (!src) return null; return <div key={i} className="relative group"><img src={src} alt={img.name} className="max-w-[200px] max-h-[200px] object-contain rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src,name:img.name})} /><a href={src} download={img.name} className="absolute top-1 right-1 p-1 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><HolafIcon name="download" size={12} /></a></div>; })}</div>}
         {refsToShow.length > 0 && <AttachmentRefsRow refs={refsToShow} onFileClick={onFileClick} />}
-        {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><FileText size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>)}</div>}
+        {message.attachments && message.attachments.length > 0 && <div className="flex flex-wrap gap-2 mt-2">{message.attachments.map((att,i) => <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => onFileClick({type:"text",content:att.content,name:att.name})}><HolafIcon name="file-text" size={12} />{att.name}</button><a href={`data:text/plain;charset=utf-8,${encodeURIComponent(att.content)}`} download={att.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><HolafIcon name="download" size={10} /></a></div>)}</div>}
         {message.usage && <span className="text-[9px] text-hacker-text-dim shrink-0">{message.usage.input + message.usage.output}t</span>}
       </div>
     </div>
@@ -2058,7 +2059,7 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
               {(msg.stopReason === "error" || msg.errorMessage) && (
                 <div className="px-3 py-2">
                   <div className="flex items-start gap-2 text-xs border border-red-500/40 bg-red-500/10 text-red-400 rounded px-2 py-1.5">
-                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                    <HolafIcon name="alert-triangle" size={12} className="mt-0.5 shrink-0" />
                     <span className="whitespace-pre-wrap">{msg.errorMessage || t('chat.llmError')}</span>
                   </div>
                 </div>
@@ -2184,7 +2185,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
   return (
     <div className="border-t border-hacker-border-bright bg-hacker-surface p-3" onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setIsDragOver(true)}} onDragLeave={()=>setIsDragOver(false)} onPaste={handlePaste}>
       {isDragOver && <div className="absolute inset-0 flex items-center justify-center bg-hacker-bg/80 z-20"><div className="text-hacker-accent text-2xl glitch">{t('chat.dropFiles')}</div></div>}
-      {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1" title={t('chat.removeAttachment')} aria-label={t('chat.removeAttachment')}><X size={12}/></button></div>)}</div>}
+      {attachments.length > 0 && <div className="flex gap-2 mb-2 flex-wrap">{attachments.map(att => <div key={att.id} className={`flex items-center gap-1.5 text-xs border px-2 py-1.5 rounded group ${att.uploadStatus==="error"?"bg-red-500/10 border-red-500/50":att.uploadStatus==="uploading"?"bg-hacker-accent/10 border-hacker-accent/30 animate-pulse":"bg-hacker-border/40 border-hacker-border"}`}>{att.uploadStatus==="uploading"?<span className="text-hacker-accent animate-spin">⏳</span>:att.uploadStatus==="error"?<span className="text-red-400">⚠️</span>:att.category==="image"&&att.preview?<img src={att.preview} alt={att.name} className="w-8 h-8 object-cover rounded" />:<span className="text-hacker-accent">{getFileExtensionIcon(att.category,att.name)}</span>}<span className="truncate max-w-[120px]">{att.name}</span><span className="text-hacker-text-dim">{formatFileSize(att.size)}</span>{att.uploadStatus==="done"&&<span className="text-green-400 text-[9px]">✓</span>}{att.uploadStatus==="error"&&att.uploadError&&<span className="text-red-400 text-[9px] truncate max-w-[100px]" title={att.uploadError}>❌</span>}<button onClick={()=>setAttachments(prev=>prev.filter(a=>a.id!==att.id))} className="text-hacker-text-dim hover:text-hacker-error ml-1" title={t('chat.removeAttachment')} aria-label={t('chat.removeAttachment')}><HolafIcon name="x" size={12}/></button></div>)}</div>}
       <ChatStatusLine
         gitBranch={gitBranch}
         isStreaming={isStreaming}

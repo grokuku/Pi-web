@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
-import {
-  X, Wifi, Plus, Trash2, Star, Check, RefreshCw,
-  Edit2, Key, Power, TestTube2, Eye, EyeOff, Gauge,
-} from "lucide-react";
+import { Wifi, Power, TestTube2, Gauge } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
 import { PROVIDER_PRESETS, resolveModelCapability } from "../../types";
@@ -98,7 +96,7 @@ export function ModelLibraryModal({ onClose, session, onModelApplied }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <span className="text-hacker-accent font-bold text-sm tracking-wider"><PiLogo className="w-4 h-4 inline" /> {t('modelLibrary.title')}</span>
-          <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><X size={16} /></button>
+          <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text"><HolafIcon name="x" size={16} /></button>
         </div>
 
         {/* Status/Error */}
@@ -214,9 +212,9 @@ export function ProvidersTab({ providers, setProviders, setError }: {
                 <TestTube2 size={10} /> {t('modelLibrary.test')}
               </button>
               <button onClick={() => openEdit(p)}
-                className="text-hacker-text-dim hover:text-hacker-accent"><Edit2 size={11} /></button>
+                className="text-hacker-text-dim hover:text-hacker-accent"><HolafIcon name="edit" size={11} /></button>
               <button onClick={() => handleDelete(p.id)}
-                className="text-hacker-text-dim hover:text-hacker-error"><Trash2 size={11} /></button>
+                className="text-hacker-text-dim hover:text-hacker-error"><HolafIcon name="trash" size={11} /></button>
             </div>
             {p.baseUrl && <div className="px-3 pb-1.5 text-[0.6875rem] text-hacker-text-dim truncate">{p.baseUrl}</div>}
           </div>
@@ -271,7 +269,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
       ) : (
         <button onClick={openAdd}
           className="mt-2 btn-hacker w-full text-xs py-2 flex items-center justify-center gap-1.5">
-          <Plus size={12} /> {t('modelLibrary.addProvider')}
+          <HolafIcon name="plus" size={12} /> {t('modelLibrary.addProvider')}
         </button>
       )}
     </div>
@@ -369,7 +367,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
       {PROVIDER_PRESETS[type].requiresApiKey && (
         <div className="mb-2">
           <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
-            <Key size={10} /> {t('modelLibrary.apiKey')}
+            <HolafIcon name="key" size={10} /> {t('modelLibrary.apiKey')}
           </label>
           <div className="flex gap-1">
             <input value={apiKey} onChange={e => setApiKey(e.target.value)}
@@ -377,7 +375,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
               className="input-hacker flex-1 text-xs" />
             <button onClick={() => setShowKey(!showKey)}
               className="btn-hacker text-xs px-2">
-              {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
+              {showKey ? <HolafIcon name="eye-off" size={12} /> : <HolafIcon name="eye" size={12} />}
             </button>
           </div>
         </div>
@@ -409,7 +407,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
       <div className="flex gap-2">
         <button onClick={handleSave} className="btn-hacker flex-1 text-xs flex items-center justify-center gap-1">
-          <Check size={12} /> {isEdit ? t('modelLibrary.save') : t('modelLibrary.add')}
+          <HolafIcon name="check" size={12} /> {isEdit ? t('modelLibrary.save') : t('modelLibrary.add')}
         </button>
         <button onClick={onCancel} className="btn-hacker text-xs px-4">{t('modelLibrary.cancel')}</button>
       </div>
@@ -685,7 +683,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
         />
         {modelFilter && (
           <button onClick={() => setModelFilter("")} className="text-hacker-text-dim hover:text-hacker-accent">
-            <X size={12} />
+            <HolafIcon name="x" size={12} />
           </button>
         )}
       </div>
@@ -699,7 +697,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
             <span className="text-hacker-text-dim text-[0.6875rem]">{filteredAvailable.length}</span>
             <button onClick={handleScanAll} disabled={scanning}
               className="btn-hacker text-[0.6875rem] px-1.5 py-0.5 flex items-center gap-0.5" title={t('modelLibrary.rescan')}>
-              <RefreshCw size={9} className={scanning ? "animate-spin" : ""} /> {t('modelLibrary.update')}
+              <HolafIcon name="refresh" size={9} className={scanning ? "animate-spin" : ""} /> {t('modelLibrary.update')}
             </button>
           </div>
           {/* Available provider filter (above list) */}
@@ -835,7 +833,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                         isSelected ? "bg-hacker-error/10 text-hacker-error" : isDef ? "bg-hacker-accent/5" : "hover:bg-hacker-border/30"
                       }`}>
                       <span className="text-[0.6875rem]">{isSelected ? "☑" : "☐"}</span>
-                      <Star size={10} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
+                      <HolafIcon name="star" size={10} className={isDef ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-hacker-text-dim/30 shrink-0"}
                         onClick={(e) => { e.stopPropagation(); onSetDefault(m.id); }} />
                       <span className={`truncate flex-1 ${isDef ? "text-hacker-accent font-bold" : ""}`}>{m.name}</span>
                       <span className="text-[0.6875rem] text-hacker-text-dim">({getProviderName(m.providerId)})</span>
@@ -845,7 +843,7 @@ export function ModelsTab({ library, providers, onAdd, onUpdate, onRemove, onSet
                         {resolvedAudio && <span className="text-[0.6875rem]" title={t('modelLibrary.audio')}>🔊</span>}
                         {resolvedReasoning && <span className="text-[0.6875rem]" title={t('modelLibrary.reasoning')}>🧠</span>}
                         <span className="text-[0.6875rem] text-hacker-text-dim/70" title={t('modelLibrary.contextWindow')}>{fmtCtx(m.contextWindow)}</span>
-                        <Edit2 size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
+                        <HolafIcon name="edit" size={10} className="text-hacker-text-dim/50 hover:text-hacker-accent shrink-0"
                           onClick={(e) => {
                             e.stopPropagation();
                             if (editingModelId === m.id) {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import {
   DEFAULT_ROUTING_CONFIG,
@@ -240,7 +240,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-error">
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { X, User, Mail, RefreshCw } from "lucide-react";
+import { Mail } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 
 interface Props {
@@ -45,13 +46,13 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <User size={16} className="text-hacker-warn" />
+            <HolafIcon name="user" size={16} className="text-hacker-warn" />
             <span className="text-hacker-warn font-bold text-sm tracking-wider">
               GIT IDENTITY REQUIRED
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 
@@ -69,7 +70,7 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
         <div className="space-y-3">
           <div>
             <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-              <User size={10} />
+              <HolafIcon name="user" size={10} />
               NAME
             </label>
             <input
@@ -109,9 +110,9 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
             disabled={loading || !name.trim() || !email.trim()}
           >
             {loading ? (
-              <RefreshCw size={12} className="animate-spin" />
+              <HolafIcon name="refresh" size={12} className="animate-spin" />
             ) : (
-              <User size={12} />
+              <HolafIcon name="user" size={12} />
             )}
             {loading ? "SAVING..." : "SAVE & RETRY"}
           </button>

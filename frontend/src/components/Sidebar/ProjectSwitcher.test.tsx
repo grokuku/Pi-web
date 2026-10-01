@@ -8,10 +8,16 @@
  * chaque ouverture et la navigation vers le projet choisi.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nProvider } from "../../i18n";
-import { ProjectSwitcher } from "./ProjectSwitcher";
+import { ProjectSwitcher, type ProjectSessionInfo } from "./ProjectSwitcher";
 import type { Project } from "../../types";
+import {
+  flushSubagentNotifications,
+  resetSubagentRuns,
+  routeSubagentEnvelope,
+  type SubagentEnvelope,
+} from "../../stores/subagentRuns";
 
 function makeProject(overrides: Partial<Project> & { id: string; name: string }): Project {
   return {
@@ -66,15 +72,48 @@ const projects = [
   talky,
 ];
 
+/** Enveloppe sous-agent minimale (mêmes champs que le backend). */
+function subagentEnv(event: any, over: Partial<SubagentEnvelope> = {}): SubagentEnvelope {
+  return {
+    type: "subagent",
+    source: "subagent",
+    delegateRunId: "d-switcher-1",
+    attempt: 1,
+    delegateFunction: "execute",
+    delegateLabel: "Exécution",
+    model: "prov/model-x",
+    taskExcerpt: "fais X",
+    event,
+    ...over,
+  };
+}
+
+/**
+ * Démarre un run de sous-agent ACTIF pour `projectId` (frame WS du même projet)
+ * puis flush la notification : le store est ainsi à jour AVANT le render, sans
+ * timer en attente (pas de mise à jour hors `act`).
+ */
+function seedActiveSubAgentRun(projectId: string, runId = "d-switcher-1") {
+  routeSubagentEnvelope(
+    subagentEnv({ type: "subagent_start" }, { delegateRunId: runId, projectId }),
+    [],
+    Date.now(),
+    projectId,
+  );
+  flushSubagentNotifications();
+}
+
 function renderSwitcher(opts?: {
   active?: Project | null;
   onSelectProject?: (p: Project) => void;
+  projectSessions?: Map<string, ProjectSessionInfo>;
 }) {
   return render(
     <I18nProvider>
       <ProjectSwitcher
         projects={projects}
         activeProject={opts?.active === undefined ? talky : opts.active}
+        projectSessions={opts?.projectSessions}
         onSelectProject={opts?.onSelectProject ?? (() => {})}
         onDeleteProject={() => {}}
       />
@@ -263,5 +302,114 @@ describe("ProjectSwitcher — case « masquer les projets déjà liés »", () =
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" })));
     expect(names).toContain("holaf-lib");
     expect(names).not.toContain("Talky");
+  });
+});
+
+// ── Indicateur d'activité des SOUS-AGENTS dans la liste ──────────────────────
+// Bug signalé : « Délégation en cours… » s'affichait en bas à droite (source :
+// store subagentRuns) mais AUCUNE ligne du dropdown ne l'indiquait — les dots
+// ne lisaient que `projectSessions` (run principal). Ces tests verrouillent la
+// seconde source (useHasActiveSubAgentRun lue PAR PROJET) :
+//  (a) projet simple → sa ligne s'allume ;
+//  (b) workspace LIÉ → le run (marqué du placeholder, cf. resolveProjectId
+//      backend/extension) allume SA ligne, pas celles des sous-projets ;
+//  (b') run d'un sous-projet (session directe) → sa propre ligne seulement ;
+//  (c) aucun run → aucun indicateur ; fin du run → extinction.
+const DELEGATION_TITLE = "Delegation in progress\u2026";
+
+describe("ProjectSwitcher — indicateur de délégation des sous-agents", () => {
+  beforeEach(() => {
+    localStorage.setItem("pi-web-language", "en");
+    resetSubagentRuns();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetSubagentRuns();
+    localStorage.clear();
+  });
+
+  it("(a) un run actif sur un projet simple allume SA ligne uniquement", () => {
+    seedActiveSubAgentRun(talky.id);
+    renderSwitcher(); // projet actif : Talky
+    openSwitcher();
+
+    const talkyOption = screen.getByRole("option", { name: /Talky/ });
+    expect(within(talkyOption).getByTitle(DELEGATION_TITLE)).toBeTruthy();
+    // Les autres lignes du dropdown restent muettes.
+    const other = screen.getByRole("option", { name: "LINKED AI Helper" });
+    expect(within(other).queryByTitle(DELEGATION_TITLE)).toBeNull();
+  });
+
+  it("(b) workspace LIÉ : le run du placeholder allume la ligne du placeholder, pas les membres", () => {
+    // Le run du composite est marqué du projectId du PLACEHOLDER (cwd de la
+    // session résolu par le pont backend) — même id que `activeProject.id` qui
+    // fait déjà fonctionner l'indicateur du bas.
+    seedActiveSubAgentRun(aiHelperGroup.id);
+    renderSwitcher();
+    openSwitcher();
+
+    // Case cochée par défaut : le placeholder est visible et porte le dot.
+    const groupOption = screen.getByRole("option", { name: /LINKED AI Helper/ });
+    expect(within(groupOption).getByTitle(DELEGATION_TITLE)).toBeTruthy();
+
+    // Décochée : les sous-projets apparaissent, mais sans dot — le run
+    // appartient à la session composite, pas à un sous-projet précis.
+    fireEvent.click(screen.getByTestId("switcher-hide-already-linked"));
+    for (const name of ["AI-Helper", "ComfyUI-AI-Helper"]) {
+      const subOption = screen.getByRole("option", { name });
+      expect(within(subOption).queryByTitle(DELEGATION_TITLE)).toBeNull();
+    }
+  });
+
+  it("(b') un run d'un SOUS-PROJET (session directe) allume sa propre ligne seulement", () => {
+    seedActiveSubAgentRun(holafLib.id);
+    renderSwitcher({ active: talky });
+    openSwitcher();
+    fireEvent.click(screen.getByTestId("switcher-hide-already-linked"));
+
+    const subOption = screen.getByRole("option", { name: "holaf-lib" });
+    expect(within(subOption).getByTitle(DELEGATION_TITLE)).toBeTruthy();
+    // Le placeholder qui CONTIENT holaf-lib ne s'allume pas (session distincte).
+    const groupOption = screen.getByRole("option", { name: "Linked Homy et libs" });
+    expect(within(groupOption).queryByTitle(DELEGATION_TITLE)).toBeNull();
+  });
+
+  it("(c) aucun run → aucun indicateur de délégation", () => {
+    renderSwitcher();
+    openSwitcher();
+    expect(screen.queryByTitle(DELEGATION_TITLE)).toBeNull();
+  });
+
+  it("précédence : délégation + diffusion simultanées → UN seul dot (délégation)", () => {
+    seedActiveSubAgentRun(talky.id);
+    const projectSessions = new Map<string, ProjectSessionInfo>([
+      [talky.id, { isStreaming: true, session: {}, stats: null, lastEventAt: Date.now() }],
+    ]);
+    renderSwitcher({ projectSessions });
+    openSwitcher();
+
+    const talkyOption = screen.getByRole("option", { name: /Talky/ });
+    expect(within(talkyOption).getByTitle(DELEGATION_TITLE)).toBeTruthy();
+    // Pas de double pastille : le dot « Streaming » est neutralisé par la délégation.
+    expect(within(talkyOption).queryByTitle("Streaming")).toBeNull();
+  });
+
+  it("le dot s'éteint dès la fin du run (subagent_end) sans re-render du fil", () => {
+    seedActiveSubAgentRun(talky.id);
+    renderSwitcher();
+    openSwitcher();
+    expect(screen.getByTitle(DELEGATION_TITLE)).toBeTruthy();
+
+    act(() => {
+      routeSubagentEnvelope(
+        subagentEnv({ type: "subagent_end", status: "success" }),
+        [],
+        Date.now(),
+        talky.id,
+      );
+      flushSubagentNotifications();
+    });
+    expect(screen.queryByTitle(DELEGATION_TITLE)).toBeNull();
   });
 });

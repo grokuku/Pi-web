@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  X, RefreshCw, Check, AlertTriangle, ArrowUp, FileText, GitCommit, Sparkles, Brain, Cpu, Link2,
-} from "lucide-react";
+import { GitCommit, Sparkles, Cpu } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
@@ -226,20 +225,20 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <ArrowUp size={16} className="text-hacker-accent" />
+            <HolafIcon name="arrow-up" size={16} className="text-hacker-accent" />
             <span className="text-hacker-accent font-bold text-sm tracking-wider">
               PUSH TO REMOTE
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 
         {/* Error */}
         {error && (
           <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
-            <AlertTriangle size={12} />
+            <HolafIcon name="alert-triangle" size={12} />
             {error}
           </div>
         )}
@@ -247,7 +246,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {/* Loading preview state */}
         {loading === "preview" && (
           <div className="text-hacker-text-dim text-xs flex items-center gap-2 py-4 border border-hacker-border p-3 mb-3">
-            <RefreshCw size={12} className="animate-spin" />
+            <HolafIcon name="refresh" size={12} className="animate-spin" />
             Analyzing changes...
           </div>
         )}
@@ -255,7 +254,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {/* Done state */}
         {done && (
           <div className="text-hacker-accent text-xs mb-3 border border-hacker-accent/30 p-3 flex items-center gap-2 bg-hacker-accent/5">
-            <Check size={14} />
+            <HolafIcon name="check" size={14} />
             Changes pushed successfully! Closing...
           </div>
         )}
@@ -264,7 +263,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {linkedData && !done && (
           <div className="space-y-3">
             <div className="text-[11px] text-hacker-accent border border-hacker-accent/30 bg-hacker-accent/5 p-2 flex items-center gap-1.5">
-              <Link2 size={12} />
+              <HolafIcon name="link" size={12} />
               {t('commitPush.linkedTitle')} ({linkedData.projectName})
             </div>
             <div className="text-[10px] text-hacker-text-dim border border-hacker-border p-2">
@@ -317,7 +316,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {linkedData && done && (
           <div className="space-y-2">
             <div className="text-hacker-accent text-xs border border-hacker-accent/30 p-2 flex items-center gap-1.5 bg-hacker-accent/5">
-              <Check size={13} />
+              <HolafIcon name="check" size={13} />
               {t('commitPush.linkedResult')}
             </div>
             {linkedData.repos.map((r) => (
@@ -394,7 +393,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                     title={!canGenerateAi ? t('commitPush.aiDisabled') : t('commitPush.generate')}
                   >
                     {aiLoading ? (
-                      <RefreshCw size={10} className="animate-spin" />
+                      <HolafIcon name="refresh" size={10} className="animate-spin" />
                     ) : (
                       <Sparkles size={10} />
                     )}
@@ -412,7 +411,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                       </span>
                       {modelInfo.thinkingLevel && modelInfo.thinkingLevel !== "off" && (
                         <span className="text-[9px] text-hacker-text-dim flex items-center gap-1">
-                          <Brain size={8} />
+                          <HolafIcon name="brain" size={8} />
                           <span className="text-hacker-warn">{modelInfo.thinkingLevel}</span>
                         </span>
                       )}
@@ -440,7 +439,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
               {/* AI loading indicator */}
               {aiLoading && (
                 <div className="text-[10px] text-hacker-text-dim flex items-center gap-2">
-                  <RefreshCw size={10} className="animate-spin text-hacker-accent" />
+                  <HolafIcon name="refresh" size={10} className="animate-spin text-hacker-accent" />
                   Generating commit message with {modelInfo?.provider}/{modelInfo?.modelId}...
                 </div>
               )}
@@ -450,7 +449,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
             <div className="space-y-3">
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-                  <FileText size={10} />
+                  <HolafIcon name="file-text" size={10} />
                   SUBJECT
                 </label>
                 <input
@@ -466,7 +465,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
 
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-                  <FileText size={10} />
+                  <HolafIcon name="file-text" size={10} />
                   BODY (optional)
                 </label>
                 <textarea
@@ -502,9 +501,9 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
               disabled={loading !== null}
             >
               {loading === "push" ? (
-                <RefreshCw size={12} className="animate-spin" />
+                <HolafIcon name="refresh" size={12} className="animate-spin" />
               ) : (
-                <ArrowUp size={12} />
+                <HolafIcon name="arrow-up" size={12} />
               )}
               {loading === "push" ? t('commitPush.pushing') : t('commitPush.push')}
             </button>

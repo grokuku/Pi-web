@@ -1,7 +1,7 @@
 import { ModalDialog } from "../common/ModalDialog";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Power, Star, Settings } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { useAnchorPosition } from "../../hooks/useAnchorPosition";
@@ -244,7 +244,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   }`}
                   title={isEnabled ? t('modelSwitch.disable', t('modelSwitch.' + mode)) : t('modelSwitch.enable', t('modelSwitch.' + mode))}
                 >
-                  <Power size={10} />
+                  <HolafIcon name="power" size={10} />
                 </div>
               )}
 
@@ -260,7 +260,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                 {isVisuallyActive && (
                   <span className="text-xs text-hacker-text-dim max-w-[9rem] truncate">{getShortModelName(model)}</span>
                 )}
-                <ChevronDown size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
+                <HolafIcon name="chevron-down" size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
               </div>
             </button>
 
@@ -308,7 +308,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                                 ? cfg.color
                                 : "text-hacker-text-dim hover:text-hacker-text"
                             }`}>
-                            <Star size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
+                            <HolafIcon name="star" size={8} className={isDefault ? "text-hacker-accent fill-hacker-accent shrink-0" : "text-transparent shrink-0"} />
                             <span className="truncate flex-1">{m.name}</span>
                             {m.providerId && getProviderName(m.providerId) && <span className="text-[10px] text-hacker-text-dim shrink-0 hidden sm:inline">({getProviderName(m.providerId)})</span>}
                             <span className="flex items-center gap-1 shrink-0">{resolveModelCapability(m, "vision") && <span className="text-[10px]" title="Vision">👁️</span>}{resolveModelCapability(m, "reasoning") && <span className="text-[10px]" title="Reasoning">🧠</span>}<span className="text-[8px] text-hacker-text-dim/60" title="Context window">{fmtCtx(m.contextWindow)}</span></span>
@@ -356,7 +356,7 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                     onClick={() => { setShowRoutingConfig(true); setOpenMode(null); }}
                     className="w-full text-left px-3 py-1.5 text-xs text-hacker-text-dim border-t border-hacker-border/30 hover:bg-hacker-accent/5 flex items-center gap-1.5"
                   >
-                    <Settings size={10} />
+                    <HolafIcon name="gear" size={10} />
                     ⚙ CONFIGURER LE ROUTAGE
                   </button>
                 )}

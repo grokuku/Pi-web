@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Folder, File, ChevronRight, Plus, FolderPlus, Check, RefreshCw, AlertTriangle } from "lucide-react";
+import { File, FolderPlus } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 
 interface FileEntry {
@@ -132,7 +133,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
       <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-hacker-border bg-hacker-surface/50 overflow-x-auto">
         {breadcrumbItems.map((item, i) => (
           <div key={item.path} className="flex items-center gap-0.5 shrink-0">
-            {i > 0 && <ChevronRight size={10} className="text-hacker-text-dim shrink-0" />}
+            {i > 0 && <HolafIcon name="chevron-right" size={10} className="text-hacker-text-dim shrink-0" />}
             <button
               onClick={() => handleBreadcrumbClick(item.path)}
               className={`hover:text-hacker-accent transition-colors whitespace-nowrap ${
@@ -150,21 +151,21 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
           className="ml-auto text-hacker-text-dim hover:text-hacker-accent shrink-0"
           title="Refresh"
         >
-          <RefreshCw size={12} />
+          <HolafIcon name="refresh" size={12} />
         </button>
       </div>
 
       {/* Loading / Error */}
       {loading && (
         <div className="px-3 py-4 text-center text-hacker-text-dim">
-          <RefreshCw size={14} className="animate-spin inline mr-2" />
+          <HolafIcon name="refresh" size={14} className="animate-spin inline mr-2" />
           Loading...
         </div>
       )}
 
       {error && (
         <div className="px-3 py-2 text-hacker-error flex items-center gap-1.5">
-          <AlertTriangle size={12} />
+          <HolafIcon name="alert-triangle" size={12} />
           {error}
         </div>
       )}
@@ -185,7 +186,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
               onClick={() => handleNavigate(entry)}
               className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-hacker-accent/10 text-hacker-text-bright transition-colors text-left"
             >
-              <Folder size={14} className="text-hacker-accent shrink-0" />
+              <HolafIcon name="folder" size={14} className="text-hacker-accent shrink-0" />
               <span className="truncate">{entry.name}</span>
             </button>
           ))}
@@ -224,7 +225,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
             disabled={!newFolderName.trim() || creatingFolder}
             className="text-hacker-accent hover:text-hacker-text-bright disabled:opacity-30"
           >
-            <Check size={12} />
+            <HolafIcon name="check" size={12} />
           </button>
         </div>
       )}
@@ -235,7 +236,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
           onClick={() => { setShowNewFolder(true); setNewFolderName(""); }}
           className="flex items-center gap-1 text-hacker-text-dim hover:text-hacker-accent transition-colors"
         >
-          <Plus size={12} />
+          <HolafIcon name="plus" size={12} />
           <span>New Folder</span>
         </button>
 
@@ -248,7 +249,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
               : "border-transparent text-hacker-text-dim"
           }`}
         >
-          <Check size={12} />
+          <HolafIcon name="check" size={12} />
           {isSelected ? "Selected" : "Navigate to pick"}
         </div>
       </div>

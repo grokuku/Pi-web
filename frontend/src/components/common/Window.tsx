@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { X, ExternalLink, Minimize2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 
 // ── Persisted window geometry ──
 interface WindowGeometry {
@@ -194,10 +195,10 @@ export function Window({ id, title, icon, children, onClose, onDock, defaultW = 
         </div>
         <div className="flex items-center gap-1">
           <button onClick={onDock} className="p-1 text-hacker-text-dim hover:text-hacker-accent" title="Réintégrer">
-            <Minimize2 size={12} />
+            <HolafIcon name="minimize" size={12} />
           </button>
           <button onClick={handleClose} className="p-1 text-hacker-text-dim hover:text-hacker-error" title="Fermer">
-            <X size={12} />
+            <HolafIcon name="x" size={12} />
           </button>
         </div>
       </div>

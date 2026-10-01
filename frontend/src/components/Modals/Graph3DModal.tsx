@@ -1,4 +1,4 @@
-import { X, ExternalLink, RefreshCw } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useState, useEffect } from "react";
 import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useTranslation } from "../../i18n";
@@ -62,7 +62,7 @@ export function Graph3DModal({ onClose }: Props) {
             className="text-hacker-text-dim hover:text-hacker-accent p-1"
             title={t('graph3d.openNewTab')}
           >
-            <ExternalLink size={14} />
+            <HolafIcon name="external-link" size={14} />
           </a>
           <button
             onClick={() => {
@@ -74,14 +74,14 @@ export function Graph3DModal({ onClose }: Props) {
             className="text-hacker-text-dim hover:text-hacker-accent p-1"
             title={t('graph3d.reload')}
           >
-            <RefreshCw size={14} />
+            <HolafIcon name="refresh" size={14} />
           </button>
           <button
             onClick={onClose}
             className="text-hacker-text-dim hover:text-hacker-error p-1"
             title={t('graph3d.close')}
           >
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
       </div>

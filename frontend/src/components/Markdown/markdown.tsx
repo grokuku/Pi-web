@@ -27,7 +27,8 @@ import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Copy, ImageOff } from "lucide-react";
+import { ImageOff } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
 
@@ -210,7 +211,7 @@ const MarkdownCodeBlock = memo(function MarkdownCodeBlock({
           aria-label={copied ? t('chat.copied') : t('chat.copyCode')}
           className="flex items-center justify-center rounded border border-hacker-border bg-hacker-bg/80 px-1.5 py-1 text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 transition-opacity duration-150 cursor-pointer"
         >
-          {copied ? <span className="text-[10px] leading-none font-mono">{t('chat.copied')}</span> : <Copy size={12} />}
+          {copied ? <span className="text-[10px] leading-none font-mono">{t('chat.copied')}</span> : <HolafIcon name="copy" size={12} />}
         </button>
       </div>
     </div>

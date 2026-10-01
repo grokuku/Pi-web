@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  GitBranch, ArrowDown, ArrowUp, RefreshCw, AlertTriangle, Check,
-  Clock, Download, PlusSquare, ChevronRight, ChevronDown, Link2,
-} from "lucide-react";
+import { PlusSquare } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
@@ -288,7 +286,7 @@ function GitProjectSection({
       className="text-hacker-text-dim text-[0.6875rem] flex items-center gap-1 shrink-0"
       title={t("gitPanel.lastFetch")}
     >
-      <Clock size={9} />
+      <HolafIcon name="clock" size={9} />
       {formatTimeAgo(lastFetchedAt, t)}
     </span>
   ) : null;
@@ -307,15 +305,15 @@ function GitProjectSection({
       className="flex items-center gap-1.5 group cursor-pointer hover:bg-hacker-border/40 mt-1 py-1 px-1 rounded transition-colors select-none"
     >
       {isOpen ? (
-        <ChevronDown size={12} className="shrink-0 text-hacker-accent" />
+        <HolafIcon name="chevron-down" size={12} className="shrink-0 text-hacker-accent" />
       ) : (
-        <ChevronRight size={12} className="shrink-0 text-hacker-text-dim group-hover:text-hacker-accent" />
+        <HolafIcon name="chevron-right" size={12} className="shrink-0 text-hacker-text-dim group-hover:text-hacker-accent" />
       )}
       <span className="truncate flex-1 font-bold tracking-wide text-hacker-accent text-[0.75rem]">
         {project.name}
       </span>
       <span className="text-hacker-info text-[0.6875rem] border border-hacker-border bg-hacker-bg/30 px-1 rounded font-mono max-w-[90px] truncate shrink-0">
-        <GitBranch size={9} className="inline mr-0.5 -mt-0.5" />
+        <HolafIcon name="git-branch" size={9} className="inline mr-0.5 -mt-0.5" />
         {branchBadge}
       </span>
       <CompactStateBadges status={status} t={t} />
@@ -329,7 +327,7 @@ function GitProjectSection({
           title={error}
           aria-label={t("gitPanel.fetchError")}
         >
-          <AlertTriangle size={10} />
+          <HolafIcon name="alert-triangle" size={10} />
         </span>
       )}
     </div>
@@ -346,21 +344,21 @@ function GitProjectSection({
 
       {loading && !status && (
         <div className="text-hacker-text-dim italic text-[0.75rem] flex items-center gap-1 px-1">
-          <RefreshCw size={10} className="animate-spin" />
+          <HolafIcon name="refresh" size={10} className="animate-spin" />
           {t("gitPanel.loading")}
         </div>
       )}
 
       {error && (
         <div className="text-hacker-error text-[0.75rem] mb-1.5 px-1 flex items-center gap-1">
-          <AlertTriangle size={10} />
+          <HolafIcon name="alert-triangle" size={10} />
           {error}
         </div>
       )}
 
       {message && (
         <div className="text-hacker-accent text-[0.75rem] mb-1.5 px-1 flex items-center gap-1">
-          <Check size={10} />
+          <HolafIcon name="check" size={10} />
           {message}
         </div>
       )}
@@ -378,7 +376,7 @@ function GitProjectSection({
           {dirIsEmpty ? (
             <>
               <div className="text-hacker-text-dim text-[0.75rem] flex items-center gap-1">
-                <Download size={10} />
+                <HolafIcon name="download" size={10} />
                 {t("gitPanel.dirEmpty")}
               </div>
               <button
@@ -387,9 +385,9 @@ function GitProjectSection({
                 className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-hacker-accent text-[0.75rem] hover:bg-hacker-accent/10 transition-colors disabled:opacity-40"
               >
                 {actionLoading === "clone" ? (
-                  <RefreshCw size={10} className="animate-spin" />
+                  <HolafIcon name="refresh" size={10} className="animate-spin" />
                 ) : (
-                  <Download size={12} />
+                  <HolafIcon name="download" size={12} />
                 )}
                 {t("gitPanel.cloneRepo")}
               </button>
@@ -397,7 +395,7 @@ function GitProjectSection({
           ) : (
             <>
               <div className="text-hacker-warn text-[0.75rem] flex items-start gap-1 bg-hacker-bg/30 border border-hacker-warn/20 p-1.5">
-                <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
                 <span>{t("gitPanel.dirNotEmpty")}</span>
               </div>
               <button
@@ -406,7 +404,7 @@ function GitProjectSection({
                 className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-border text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent text-[0.75rem] transition-colors disabled:opacity-40"
               >
                 {actionLoading === "init" ? (
-                  <RefreshCw size={10} className="animate-spin" />
+                  <HolafIcon name="refresh" size={10} className="animate-spin" />
                 ) : (
                   <PlusSquare size={12} />
                 )}
@@ -457,13 +455,13 @@ function GitProjectSection({
             <div className="flex items-center gap-2">
               {normalStatus.behind > 0 && (
                 <span className="flex items-center gap-0.5 text-hacker-warn text-[0.75rem]">
-                  <ArrowDown size={10} />
+                  <HolafIcon name="arrow-down" size={10} />
                   {t("gitPanel.behind", normalStatus.behind)}
                 </span>
               )}
               {normalStatus.ahead > 0 && (
                 <span className="flex items-center gap-0.5 text-hacker-accent text-[0.75rem]">
-                  <ArrowUp size={10} />
+                  <HolafIcon name="arrow-up" size={10} />
                   {t("gitPanel.ahead", normalStatus.ahead)}
                 </span>
               )}
@@ -491,7 +489,7 @@ function GitProjectSection({
 
           {normalStatus.isClean && normalStatus.ahead === 0 && normalStatus.behind === 0 && (
             <div className="text-hacker-text-dim text-[0.75rem] flex items-center gap-1">
-              <Check size={10} className="text-hacker-accent" />
+              <HolafIcon name="check" size={10} className="text-hacker-accent" />
               {t("gitPanel.upToDate")}
             </div>
           )}
@@ -514,9 +512,9 @@ function GitProjectSection({
               title="git pull"
             >
               {actionLoading === "pull" ? (
-                <RefreshCw size={10} className="animate-spin" />
+                <HolafIcon name="refresh" size={10} className="animate-spin" />
               ) : (
-                <ArrowDown size={10} />
+                <HolafIcon name="arrow-down" size={10} />
               )}
               {t("gitPanel.pull")}
             </button>
@@ -527,9 +525,9 @@ function GitProjectSection({
               title={t("gitPanel.pushTitle")}
             >
               {actionLoading === "commit-push" ? (
-                <RefreshCw size={10} className="animate-spin" />
+                <HolafIcon name="refresh" size={10} className="animate-spin" />
               ) : (
-                <ArrowUp size={10} />
+                <HolafIcon name="arrow-up" size={10} />
               )}
               {t("gitPanel.push")}
             </button>
@@ -792,7 +790,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
     <div className="p-2 border-b border-hacker-border">
       {/* En-tête global du panel : GIT + refresh (rafraîchit toutes les sections) */}
       <div className="text-hacker-accent text-[0.75rem] tracking-widest mb-1 flex items-center gap-1">
-        <GitBranch size={12} />
+        <HolafIcon name="git-branch" size={12} />
         GIT {providerIcon}
         <div className="flex-1" />
         <button
@@ -800,7 +798,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
           className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
           title={t('gitPanel.refresh')}
         >
-          <RefreshCw size={10} className={isAnySectionLoading ? "animate-spin" : ""} />
+          <HolafIcon name="refresh" size={10} className={isAnySectionLoading ? "animate-spin" : ""} />
         </button>
       </div>
 
@@ -823,7 +821,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
       {linkedProjects.length > 0 && (
         <>
           <div className="mt-1.5 text-hacker-text-dim text-[0.625rem] tracking-widest uppercase mb-0.5 flex items-center gap-1">
-            <Link2 size={9} />
+            <HolafIcon name="link" size={9} />
             {t('gitPanel.linkedProjects')}
           </div>
           {linkedProjects.map((lp) => (
@@ -849,7 +847,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
               className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 border border-hacker-accent/50 text-[0.75rem] text-hacker-accent hover:bg-hacker-accent/10 transition-colors"
               title={t('commitPush.linkedPushAll')}
             >
-              <ArrowUp size={12} />
+              <HolafIcon name="arrow-up" size={12} />
               {t('gitPanel.pushAll')}
             </button>
           </div>
@@ -859,7 +857,7 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
       {/* Cas limite : placeholder sans lien résolu → note discrète */}
       {!hasAnySection && (
         <div className="text-hacker-text-dim text-[0.6875rem] italic flex items-start gap-1">
-          <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+          <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
           <span>{t('gitPanel.emptyLinked')}</span>
         </div>
       )}

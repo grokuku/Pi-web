@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Key, User, RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
 
@@ -48,13 +48,13 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Key size={16} className="text-hacker-warn" />
+            <HolafIcon name="key" size={16} className="text-hacker-warn" />
             <span className="text-hacker-warn font-bold text-sm tracking-wider">
               GIT AUTHENTICATION REQUIRED
             </span>
           </div>
           <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
-            <X size={16} />
+            <HolafIcon name="x" size={16} />
           </button>
         </div>
 
@@ -65,7 +65,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
           </p>
           {isGitHub && (
             <p className="flex items-start gap-1.5">
-              <AlertTriangle size={12} className="text-hacker-warn shrink-0 mt-0.5" />
+              <HolafIcon name="alert-triangle" size={12} className="text-hacker-warn shrink-0 mt-0.5" />
               <span>
                 GitHub requires a <strong className="text-hacker-accent">Personal Access Token (PAT)</strong> instead of your password.
                 Create one at{" "}
@@ -75,7 +75,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
                   rel="noopener noreferrer"
                   className="text-hacker-info underline inline-flex items-center gap-0.5"
                 >
-                  github.com/settings/tokens <ExternalLink size={10} />
+                  github.com/settings/tokens <HolafIcon name="external-link" size={10} />
                 </a>
                 {" "}(select <em>repo</em> scope).
               </span>
@@ -83,7 +83,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
           )}
           {isGitLab && (
             <p className="flex items-start gap-1.5">
-              <AlertTriangle size={12} className="text-hacker-warn shrink-0 mt-0.5" />
+              <HolafIcon name="alert-triangle" size={12} className="text-hacker-warn shrink-0 mt-0.5" />
               <span>
                 GitLab requires an <strong className="text-hacker-accent">Access Token</strong> instead of your password.
                 Create one at{" "}
@@ -93,7 +93,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
                   rel="noopener noreferrer"
                   className="text-hacker-info underline inline-flex items-center gap-0.5"
                 >
-                  gitlab.com/user_settings/personal_access_tokens <ExternalLink size={10} />
+                  gitlab.com/user_settings/personal_access_tokens <HolafIcon name="external-link" size={10} />
                 </a>
                 {" "}(select <em>write_repository</em> scope).
               </span>
@@ -101,7 +101,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
           )}
           {!isGitHub && !isGitLab && (
             <p className="flex items-start gap-1.5">
-              <AlertTriangle size={12} className="text-hacker-warn shrink-0 mt-0.5" />
+              <HolafIcon name="alert-triangle" size={12} className="text-hacker-warn shrink-0 mt-0.5" />
               <span>
                 Most git hosts require a <strong className="text-hacker-accent">token</strong> instead of your account password for HTTPS authentication.
               </span>
@@ -114,7 +114,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
 
         {error && (
           <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
-            <AlertTriangle size={12} />
+            <HolafIcon name="alert-triangle" size={12} />
             {error}
           </div>
         )}
@@ -122,7 +122,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
         <div className="space-y-3">
           <div>
             <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-              <User size={10} />
+              <HolafIcon name="user" size={10} />
               USERNAME
             </label>
             <input
@@ -138,7 +138,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
 
           <div>
             <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-              <Key size={10} />
+              <HolafIcon name="key" size={10} />
               PASSWORD / TOKEN
             </label>
             <input
@@ -167,9 +167,9 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
             disabled={loading || !username.trim() || !token.trim()}
           >
             {loading ? (
-              <RefreshCw size={12} className="animate-spin" />
+              <HolafIcon name="refresh" size={12} className="animate-spin" />
             ) : (
-              <Key size={12} />
+              <HolafIcon name="key" size={12} />
             )}
             {loading ? "SAVING..." : "SAVE & RETRY"}
           </button>

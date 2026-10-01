@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Copy, Download, X } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 
 interface ExportModalProps {
   html: string;
@@ -69,7 +69,7 @@ ${html}
             className="p-1 text-hacker-text-dim hover:text-hacker-accent transition-colors"
             title="Close"
           >
-            <X size={18} />
+            <HolafIcon name="x" size={18} />
           </button>
         </div>
 
@@ -115,21 +115,21 @@ ${html}
             onClick={handleCopyHtml}
             className="btn-hacker text-xs px-3 py-1.5 flex items-center gap-1"
           >
-            <Copy size={14} />
+            <HolafIcon name="copy" size={14} />
             Copy HTML
           </button>
           <button
             onClick={handleCopyCss}
             className="btn-hacker text-xs px-3 py-1.5 flex items-center gap-1"
           >
-            <Copy size={14} />
+            <HolafIcon name="copy" size={14} />
             Copy CSS
           </button>
           <button
             onClick={handleDownload}
             className="btn-hacker text-xs px-3 py-1.5 flex items-center gap-1"
           >
-            <Download size={14} />
+            <HolafIcon name="download" size={14} />
             Download .html
           </button>
           <button

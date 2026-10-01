@@ -10,7 +10,7 @@
 //  - AUCUN bouton « Reprendre » ni reprise automatique ;
 //  - le chat courant reste monté et intact derrière la modale.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { GroupedMessages } from "./ChatView";
 import { convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
@@ -219,7 +219,7 @@ export function PastConversationViewer({ projectId, session, onClose }: Props) {
             <div className="flex items-center justify-between px-3 py-2 border-b border-hacker-border shrink-0">
               <span className="text-sm text-hacker-text-bright truncate flex-1">{viewerFile.name || t('viewer.attachment')}</span>
               <button onClick={() => setViewerFile(null)} className="text-hacker-text-dim hover:text-hacker-error ml-2 shrink-0" aria-label={t('viewer.close')}>
-                <X size={16} />
+                <HolafIcon name="x" size={16} />
               </button>
             </div>
             <div className="flex-1 overflow-auto p-3">

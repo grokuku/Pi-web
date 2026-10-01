@@ -1,9 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  ChevronRight, ChevronDown, Folder, FolderOpen, RefreshCw,
-  Image, Code, FileText, Edit3, Save, X, Download, Upload, CheckSquare, Square,
-  CheckCheck,
-} from "lucide-react";
+import { Code, Save, CheckSquare, Square, CheckCheck } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -89,9 +86,9 @@ const FILES_TREE_MAX_RATIO = 0.6;  // max 60% de la largeur du panneau
 
 function getFileIcon(name: string) {
   const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : "";
-  if (IMAGE_EXTS.has(ext)) return <Image size={16} className="text-hacker-info shrink-0" />;
+  if (IMAGE_EXTS.has(ext)) return <HolafIcon name="image" size={16} className="text-hacker-info shrink-0" />;
   if (CODE_EXTS.has(ext)) return <Code size={16} className="text-hacker-accent shrink-0" />;
-  return <FileText size={16} className="text-hacker-text-dim shrink-0" />;
+  return <HolafIcon name="file-text" size={16} className="text-hacker-text-dim shrink-0" />;
 }
 
 function formatSize(bytes: number): string {
@@ -146,8 +143,8 @@ function DirNode({
         </span>
         {isDir ? (
           <>
-            {isExpanded ? <ChevronDown size={14} className="text-hacker-text-dim shrink-0" /> : <ChevronRight size={14} className="text-hacker-text-dim shrink-0" />}
-            {isExpanded ? <FolderOpen size={16} className="text-hacker-warn shrink-0" /> : <Folder size={16} className="text-hacker-warn/70 shrink-0" />}
+            {isExpanded ? <HolafIcon name="chevron-down" size={14} className="text-hacker-text-dim shrink-0" /> : <HolafIcon name="chevron-right" size={14} className="text-hacker-text-dim shrink-0" />}
+            {isExpanded ? <HolafIcon name="folder-open" size={16} className="text-hacker-warn shrink-0" /> : <HolafIcon name="folder" size={16} className="text-hacker-warn/70 shrink-0" />}
           </>
         ) : (
           <>
@@ -541,7 +538,7 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
             {/* Upload button */}
             <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
               className="text-hacker-text-dim hover:text-hacker-accent disabled:opacity-30" title="Upload files">
-              <Upload size={12} />
+              <HolafIcon name="upload" size={12} />
             </button>
             <input ref={fileInputRef} type="file" multiple className="hidden"
               onChange={(e) => e.target.files && handleUpload(e.target.files)}
@@ -550,11 +547,11 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
             {(selectedPaths.size > 0 || selectedPath) && (
               <button onClick={handleDownload} disabled={downloading}
                 className="text-hacker-text-dim hover:text-hacker-accent disabled:opacity-30" title="Download selected">
-                <Download size={12} />
+                <HolafIcon name="download" size={12} />
               </button>
             )}
             <button onClick={handleRefresh} className="text-hacker-text-dim hover:text-hacker-accent" title="Refresh">
-              <RefreshCw size={12} />
+              <HolafIcon name="refresh" size={12} />
             </button>
           </div>
         </div>
@@ -613,7 +610,7 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
                 {canEdit && !editMode && (
                   <button onClick={() => { setEditMode(true); setEditContent(fileContent.content); }}
                     className="btn-hacker text-[10px] px-1.5 py-0.5 flex items-center gap-1" title="Edit file">
-                    <Edit3 size={10} /> EDIT
+                    <HolafIcon name="edit" size={10} /> EDIT
                   </button>
                 )}
                 {editMode && (
@@ -624,13 +621,13 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
                     </button>
                     <button onClick={() => { setEditMode(false); setEditContent(""); }}
                       className="btn-hacker text-[10px] px-1.5 py-0.5 flex items-center gap-1" title="Cancel editing">
-                      <X size={10} /> CANCEL
+                      <HolafIcon name="x" size={10} /> CANCEL
                     </button>
                   </>
                 )}
                 <button onClick={handleDownload}
                   className="text-hacker-text-dim hover:text-hacker-accent" title="Download file">
-                  <Download size={12} />
+                  <HolafIcon name="download" size={12} />
                 </button>
               </div>
             </div>

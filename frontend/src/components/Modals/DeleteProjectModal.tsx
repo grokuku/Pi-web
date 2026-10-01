@@ -1,4 +1,5 @@
-import { AlertTriangle, Trash2, FolderX } from "lucide-react";
+import { FolderX } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
 
@@ -19,7 +20,7 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-hacker-warn/10 border border-hacker-warn/30">
-            <AlertTriangle size={20} className="text-hacker-warn" />
+            <HolafIcon name="alert-triangle" size={20} className="text-hacker-warn" />
           </div>
           <div>
             <span className="text-hacker-warn font-bold text-sm tracking-wider">
@@ -82,7 +83,7 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
             onClick={() => onConfirm(false)}
             className="w-full py-2 text-xs flex items-center justify-center gap-2 border border-hacker-border-bright hover:bg-hacker-surface/50 transition-colors"
           >
-            <Trash2 size={14} />
+            <HolafIcon name="trash" size={14} />
             <span className="text-hacker-text">
               Delete project
             </span>

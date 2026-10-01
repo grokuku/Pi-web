@@ -8,78 +8,86 @@
    can be swapped without touching Tailwind classes.
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── Dark (default) ─────────────────────────────────────────── */
+/* ── Dark (default) ─────────────────────────────── */
+/* Chaque variable Pi-Web est un ALIAS d'un token --holaf-* posé par la brique
+   `tokens` (packs pi-web-<accent>-<mode>, src/theme/pi-web-theme.ts). Le 2e
+   argument de var() est le REPLI historique : si la brique n'a pas chargé, on
+   retrouve EXACTEMENT les couleurs d'avant (zéro changement visuel garanti). */
 :root {
-  /* Surfaces */
-  --bg: #0a0a0a;
-  --surface: #161616;
-  --surface-raised: #1e1e1e;
-  --border: #2a2a2a;
-  --border-bright: #3a3a3a;
+  /* Surfaces ← holaf surface / surface-elev / surface-raised */
+  --bg: var(--holaf-surface, #0a0a0a);
+  --surface: var(--holaf-surface-elev, #161616);
+  --surface-raised: var(--holaf-surface-raised, #1e1e1e);
+  --border: var(--holaf-border, #2a2a2a);
+  --border-bright: var(--holaf-border-bright, #3a3a3a);
 
-  /* Text */
-  --text: #c0c0c0;
-  --text-bright: #e0e0e0;
-  --text-dim: #888888;
+  /* Text ← holaf text / text-bright / text-muted */
+  --text: var(--holaf-text, #c0c0c0);
+  --text-bright: var(--holaf-text-bright, #e0e0e0);
+  --text-dim: var(--holaf-text-muted, #888888);
 
-  /* Semantic */
-  --info: #00aaff;
-  --warn: #ffaa00;
-  --error: #ff4444;
+  /* Semantic ← holaf info / warn / danger */
+  --info: var(--holaf-info, #00aaff);
+  --warn: var(--holaf-warn, #ffaa00);
+  --error: var(--holaf-danger, #ff4444);
 
-  /* Code backgrounds (theme-adaptive) */
-  --code-inline-bg: rgba(0, 0, 0, 0.3);
-  --code-block-bg: rgba(0, 0, 0, 0.4);
-  --tool-output-bg: rgba(0, 0, 0, 0.3);
+  /* Code backgrounds ← holaf (clés hôte) */
+  --code-inline-bg: var(--holaf-code-inline-bg, rgba(0, 0, 0, 0.3));
+  --code-block-bg: var(--holaf-code-block-bg, rgba(0, 0, 0, 0.4));
+  --tool-output-bg: var(--holaf-tool-output-bg, rgba(0, 0, 0, 0.3));
 
-  /* RGB components for Tailwind alpha support */
-  --bg-rgb: 10 10 10;
-  --surface-rgb: 22 22 22;
-  --surface-raised-rgb: 30 30 30;
-  --border-rgb: 42 42 42;
-  --border-bright-rgb: 58 58 58;
-  --text-rgb: 192 192 192;
-  --text-bright-rgb: 224 224 224;
-  --text-dim-rgb: 136 136 136;
-  --info-rgb: 0 170 255;
-  --warn-rgb: 255 170 0;
-  --error-rgb: 255 68 68;
+  /* RGB components for Tailwind alpha support.
+     Alias de tokens hôte : la brique porte du HEX, les triples sont CALCULÉS
+     côté JS (hexToRgbTriple) et posés en --holaf-<x>-rgb. Le repli est le
+     triple historique pour que `rgb(var(--bg-rgb) / <alpha-value>)` reste
+     fonctionnel même sans la brique. */
+  --bg-rgb: var(--holaf-bg-rgb, 10 10 10);
+  --surface-rgb: var(--holaf-surface-rgb, 22 22 22);
+  --surface-raised-rgb: var(--holaf-surface-raised-rgb, 30 30 30);
+  --border-rgb: var(--holaf-border-rgb, 42 42 42);
+  --border-bright-rgb: var(--holaf-border-bright-rgb, 58 58 58);
+  --text-rgb: var(--holaf-text-rgb, 192 192 192);
+  --text-bright-rgb: var(--holaf-text-bright-rgb, 224 224 224);
+  --text-dim-rgb: var(--holaf-text-dim-rgb, 136 136 136);
+  --info-rgb: var(--holaf-info-rgb, 0 170 255);
+  --warn-rgb: var(--holaf-warn-rgb, 255 170 0);
+  --error-rgb: var(--holaf-error-rgb, 255 68 68);
 
   /* Scrollbar uses accent */
   scrollbar-color: var(--accent-dim) var(--surface);
 }
 
-/* ── Light ───────────────────────────────────────────────────── */
+/* ── Light ───────────────────────────────── */
 .light {
-  --bg: #eeece6;
-  --surface: #f8f7f4;
-  --surface-raised: #ffffff;
-  --border: #d0d0c8;
-  --border-bright: #b8b8b0;
+  --bg: var(--holaf-surface, #eeece6);
+  --surface: var(--holaf-surface-elev, #f8f7f4);
+  --surface-raised: var(--holaf-surface-raised, #ffffff);
+  --border: var(--holaf-border, #d0d0c8);
+  --border-bright: var(--holaf-border-bright, #b8b8b0);
 
-  --text: #3d3d3a;
-  --text-bright: #1a1a18;
-  --text-dim: #777770;
+  --text: var(--holaf-text, #3d3d3a);
+  --text-bright: var(--holaf-text-bright, #1a1a18);
+  --text-dim: var(--holaf-text-muted, #777770);
 
-  --info: #0070cc;
-  --warn: #cc8800;
-  --error: #cc2222;
+  --info: var(--holaf-info, #0070cc);
+  --warn: var(--holaf-warn, #cc8800);
+  --error: var(--holaf-danger, #cc2222);
 
-  --code-inline-bg: rgba(0, 0, 0, 0.06);
-  --code-block-bg: rgba(0, 0, 0, 0.08);
-  --tool-output-bg: rgba(0, 0, 0, 0.05);
+  --code-inline-bg: var(--holaf-code-inline-bg, rgba(0, 0, 0, 0.06));
+  --code-block-bg: var(--holaf-code-block-bg, rgba(0, 0, 0, 0.08));
+  --tool-output-bg: var(--holaf-tool-output-bg, rgba(0, 0, 0, 0.05));
 
-  --bg-rgb: 238 236 230;
-  --surface-rgb: 248 247 244;
-  --surface-raised-rgb: 255 255 255;
-  --border-rgb: 208 208 200;
-  --border-bright-rgb: 184 184 176;
-  --text-rgb: 61 61 58;
-  --text-bright-rgb: 26 26 24;
-  --text-dim-rgb: 119 119 112;
-  --info-rgb: 0 112 204;
-  --warn-rgb: 204 136 0;
-  --error-rgb: 204 34 34;
+  --bg-rgb: var(--holaf-bg-rgb, 238 236 230);
+  --surface-rgb: var(--holaf-surface-rgb, 248 247 244);
+  --surface-raised-rgb: var(--holaf-surface-raised-rgb, 255 255 255);
+  --border-rgb: var(--holaf-border-rgb, 208 208 200);
+  --border-bright-rgb: var(--holaf-border-bright-rgb, 184 184 176);
+  --text-rgb: var(--holaf-text-rgb, 61 61 58);
+  --text-bright-rgb: var(--holaf-text-bright-rgb, 26 26 24);
+  --text-dim-rgb: var(--holaf-text-dim-rgb, 119 119 112);
+  --info-rgb: var(--holaf-info-rgb, 0 112 204);
+  --warn-rgb: var(--holaf-warn-rgb, 204 136 0);
+  --error-rgb: var(--holaf-error-rgb, 204 34 34);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -89,77 +97,77 @@
 
 /* ── Green (default, no data-accent needed) ─────────────────── */
 :root {
-  --accent: #00ff41;
-  --accent-rgb: 0 255 65;
-  --accent-dim: #00cc34;
-  --accent-dim-rgb: 0 204 52;
+  --accent: var(--holaf-accent, #00ff41);
+  --accent-rgb: var(--holaf-accent-rgb, 0 255 65);
+  --accent-dim: var(--holaf-accent-hover, #00cc34);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 0 204 52);
 }
 .light {
   /* #166534 ≈5,3:1 sur fond clair → conforme AA ≥4,5:1 pour le texte normal */
-  --accent: #166534;
-  --accent-rgb: 22 101 52;
-  --accent-dim: #15803d;
-  --accent-dim-rgb: 21 128 61;
+  --accent: var(--holaf-accent, #166534);
+  --accent-rgb: var(--holaf-accent-rgb, 22 101 52);
+  --accent-dim: var(--holaf-accent-hover, #15803d);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 21 128 61);
 }
 
 /* ── Purple ──────────────────────────────────────────────────── */
 [data-accent="purple"] {
-  --accent: #c084fc;
-  --accent-rgb: 192 132 252;
-  --accent-dim: #a855f7;
-  --accent-dim-rgb: 168 85 247;
+  --accent: var(--holaf-accent, #c084fc);
+  --accent-rgb: var(--holaf-accent-rgb, 192 132 252);
+  --accent-dim: var(--holaf-accent-hover, #a855f7);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 168 85 247);
 }
 .light[data-accent="purple"],
 [data-accent="purple"].light {
-  --accent: #8b5cf6;
-  --accent-rgb: 139 92 246;
-  --accent-dim: #7c3aed;
-  --accent-dim-rgb: 124 58 237;
+  --accent: var(--holaf-accent, #8b5cf6);
+  --accent-rgb: var(--holaf-accent-rgb, 139 92 246);
+  --accent-dim: var(--holaf-accent-hover, #7c3aed);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 124 58 237);
 }
 
 /* ── Orange ──────────────────────────────────────────────────── */
 [data-accent="orange"] {
-  --accent: #fb923c;
-  --accent-rgb: 251 146 60;
-  --accent-dim: #f97316;
-  --accent-dim-rgb: 249 115 22;
+  --accent: var(--holaf-accent, #fb923c);
+  --accent-rgb: var(--holaf-accent-rgb, 251 146 60);
+  --accent-dim: var(--holaf-accent-hover, #f97316);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 249 115 22);
 }
 .light[data-accent="orange"],
 [data-accent="orange"].light {
-  --accent: #ea580c;
-  --accent-rgb: 234 88 12;
-  --accent-dim: #c2410c;
-  --accent-dim-rgb: 194 65 12;
+  --accent: var(--holaf-accent, #ea580c);
+  --accent-rgb: var(--holaf-accent-rgb, 234 88 12);
+  --accent-dim: var(--holaf-accent-hover, #c2410c);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 194 65 12);
 }
 
 /* ── Cyan ────────────────────────────────────────────────────── */
 [data-accent="cyan"] {
-  --accent: #22d3ee;
-  --accent-rgb: 34 211 238;
-  --accent-dim: #06b6d4;
-  --accent-dim-rgb: 6 182 212;
+  --accent: var(--holaf-accent, #22d3ee);
+  --accent-rgb: var(--holaf-accent-rgb, 34 211 238);
+  --accent-dim: var(--holaf-accent-hover, #06b6d4);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 6 182 212);
 }
 .light[data-accent="cyan"],
 [data-accent="cyan"].light {
-  --accent: #0891b2;
-  --accent-rgb: 8 145 178;
-  --accent-dim: #0e7490;
-  --accent-dim-rgb: 14 116 144;
+  --accent: var(--holaf-accent, #0891b2);
+  --accent-rgb: var(--holaf-accent-rgb, 8 145 178);
+  --accent-dim: var(--holaf-accent-hover, #0e7490);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 14 116 144);
 }
 
 /* ── Rose ────────────────────────────────────────────────────── */
 [data-accent="rose"] {
-  --accent: #f472b6;
-  --accent-rgb: 244 114 182;
-  --accent-dim: #ec4899;
-  --accent-dim-rgb: 236 72 153;
+  --accent: var(--holaf-accent, #f472b6);
+  --accent-rgb: var(--holaf-accent-rgb, 244 114 182);
+  --accent-dim: var(--holaf-accent-hover, #ec4899);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 236 72 153);
 }
 .light[data-accent="rose"],
 [data-accent="rose"].light {
-  --accent: #db2777;
-  --accent-rgb: 219 39 119;
-  --accent-dim: #be185d;
-  --accent-dim-rgb: 190 24 93;
+  --accent: var(--holaf-accent, #db2777);
+  --accent-rgb: var(--holaf-accent-rgb, 219 39 119);
+  --accent-dim: var(--holaf-accent-hover, #be185d);
+  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 190 24 93);
 }
 
 /* ═══════════════════════════════════════════════════════════════

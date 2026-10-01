@@ -1,4 +1,5 @@
-import { AlertTriangle, MessageSquarePlus } from "lucide-react";
+import { MessageSquarePlus } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation } from "../../i18n";
 
@@ -20,7 +21,7 @@ export function NewChatConfirmModal({ open, onClose, onConfirm }: Props) {
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <div className="p-2 bg-hacker-warn/10 border border-hacker-warn/30">
-          <AlertTriangle size={20} className="text-hacker-warn" />
+          <HolafIcon name="alert-triangle" size={20} className="text-hacker-warn" />
         </div>
         <div>
           <span className="text-hacker-warn font-bold text-sm tracking-wider">

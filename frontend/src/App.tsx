@@ -25,6 +25,7 @@ import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
+import { applyPiWebTheme } from "./theme/pi-web-theme";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
 import { mergeServerSessionState } from "./utils/session-sync";
 import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
@@ -350,6 +351,13 @@ function App() {
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  // ── Thème unifié : la brique `tokens` (holaf-lib) est la source unique ──
+  // Chaque changement de mode ou d'accent rejoue le pack `pi-web-<accent>-<mode>`
+  // (l'anti-flash du boot est fait dans main.tsx, avant le premier rendu).
+  useEffect(() => {
+    applyPiWebTheme(theme, accent);
+  }, [theme, accent]);
 
   // ── Toast HolafToast : thème « pi-web » posé une fois au boot ──
   // (idempotent ; le wrapper rejoue l'init paresseusement au premier toast()) ──

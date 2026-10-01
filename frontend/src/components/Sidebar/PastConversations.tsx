@@ -9,7 +9,7 @@
 // active du projet n'est jamais modifiée et il n'existe ni bouton « Reprendre »
 // ni reprise automatique.
 import { useMemo, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import type { PastSession } from "../../types";
 import { filterPastSessions, formatBytes, formatSessionDate, truncatePreview } from "../../utils/pastSessions";
@@ -50,7 +50,7 @@ export function PastConversations({ sessions, loading, onOpen, onRefresh }: Prop
           title={t('sidebar.refreshConversations')}
           aria-label={t('sidebar.refreshConversations')}
         >
-          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+          <HolafIcon name="refresh" size={10} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
 
@@ -58,7 +58,7 @@ export function PastConversations({ sessions, loading, onOpen, onRefresh }: Prop
         <div className="mt-1.5">
           {/* Filtre/recherche simple */}
           <div className="relative mb-1">
-            <Search size={10} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-hacker-text-dim/60" aria-hidden />
+            <HolafIcon name="search" size={10} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-hacker-text-dim/60" aria-hidden />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}

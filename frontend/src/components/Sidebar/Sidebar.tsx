@@ -1,7 +1,4 @@
-import {
-  Plus,
-  ArrowUpCircle,
-} from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { GitPanel } from "./GitPanel";
 import { LinkedProjectMenu } from "./LinkedProjectMenu";
@@ -178,7 +175,7 @@ export function Sidebar({
             title={t('addProject.title')}
             aria-label={t('addProject.title')}
           >
-            <Plus size={10} />
+            <HolafIcon name="plus" size={10} />
           </button>
         </div>
 
@@ -209,7 +206,7 @@ export function Sidebar({
               >
                 <span className="shrink-0 text-hacker-text-dim/50" aria-hidden>↳</span>
                 <span className="truncate flex-1">{sub.name}</span>
-                <SessionDots state={projectSessions?.get(sub.id)} />
+                <SessionDots state={projectSessions?.get(sub.id)} projectId={sub.id} />
               </button>
             ))}
           </div>
@@ -270,7 +267,7 @@ export function Sidebar({
               onClick={() => setUpdateModalOpen(true)}
               className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold cursor-pointer"
             >
-              <ArrowUpCircle size={10} />
+              <HolafIcon name="arrow-up-circle" size={10} />
               {piAgentLatest ? `→${piAgentLatest}` : t('sidebar.updateBadge')}
             </button>
           ) : (
@@ -287,7 +284,7 @@ export function Sidebar({
                 className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
                 title={t('sidebar.updateCbm')}
               >
-                <ArrowUpCircle size={10} />
+                <HolafIcon name="arrow-up-circle" size={10} />
                 {cbmUpdating ? "..." : t('sidebar.update')}
               </button>
             ) : (

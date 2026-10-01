@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { PiLogo } from "../common/PiLogo";
-import { Package, AlertTriangle, CheckCircle, Clock, Cpu, FolderOpen, Plus, RefreshCw, ArrowUpCircle } from "lucide-react";
+import { Package, CheckCircle, Cpu } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { sortProjectsByName } from "../../utils/project-sort";
 import type { Project } from "../../types";
@@ -115,7 +116,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
                 <span className="text-hacker-text-bright font-mono">{status.nodeVersion}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Clock size={9} className="text-hacker-text-dim" />
+                <HolafIcon name="clock" size={9} className="text-hacker-text-dim" />
                 <span className="text-hacker-text-bright font-mono">{formatUptime(status.uptimeSeconds)}</span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -123,7 +124,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
                 <span className="text-hacker-text-bright font-mono">{t('welcome.sessions', status.activeSessions)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <FolderOpen size={9} className="text-hacker-text-dim" />
+                <HolafIcon name="folder-open" size={9} className="text-hacker-text-dim" />
                 <span className="text-hacker-text-bright font-mono">{t('welcome.projectsCount', status.projectsCount)}</span>
               </div>
             </div>
@@ -132,12 +133,12 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
             <div className="mt-1.5 pt-1.5 border-t border-hacker-border/50 flex items-center justify-center gap-2 text-[10px]">
               {checkingUpdate ? (
                 <span className="text-hacker-text-dim flex items-center gap-1">
-                  <RefreshCw size={9} className="animate-spin" /> {t('welcome.checkingUpdates')}
+                  <HolafIcon name="refresh" size={9} className="animate-spin" /> {t('welcome.checkingUpdates')}
                 </span>
               ) : updateInfo ? (
                 updateInfo.updateAvailable ? (
                   <span className="text-hacker-warn flex items-center gap-1">
-                    <ArrowUpCircle size={10} />
+                    <HolafIcon name="arrow-up-circle" size={10} />
                     {t('welcome.updateAvailable', updateInfo.latestVersion)}
                   </span>
                 ) : (
@@ -161,14 +162,14 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
         {/* Error loading projects */}
         {loadError && (
           <div className="border border-hacker-error/30 bg-hacker-error/5 rounded p-2 text-xs text-hacker-error flex items-center gap-2">
-            <AlertTriangle size={12} /> {t('welcome.failedToLoadProjects')}: {loadError}
+            <HolafIcon name="alert-triangle" size={12} /> {t('welcome.failedToLoadProjects')}: {loadError}
           </div>
         )}
 
         {/* Error loading status */}
         {error && (
           <div className="border border-hacker-error/30 bg-hacker-error/5 rounded p-2 text-xs text-hacker-error flex items-center gap-2">
-            <AlertTriangle size={12} /> {t('welcome.failedToLoad')}: {error}
+            <HolafIcon name="alert-triangle" size={12} /> {t('welcome.failedToLoad')}: {error}
           </div>
         )}
 
@@ -186,7 +187,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
                   {ext.installed ? (
                     <CheckCircle size={10} className="text-green-400 shrink-0" />
                   ) : (
-                    <AlertTriangle size={10} className="text-hacker-error shrink-0" />
+                    <HolafIcon name="alert-triangle" size={10} className="text-hacker-error shrink-0" />
                   )}
                   <span className={`text-[10px] font-mono ${ext.installed ? "text-hacker-text-dim" : "text-hacker-error"}`}>
                     {ext.source}
@@ -200,7 +201,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
         {/* Issues warning */}
         {issues.length > 0 && (
           <div className="border border-hacker-warn/30 bg-hacker-warn/5 rounded p-2 text-[11px] text-hacker-warn flex items-center gap-2">
-            <AlertTriangle size={13} className="shrink-0" />
+            <HolafIcon name="alert-triangle" size={13} className="shrink-0" />
             <span>
               {t('welcome.issuesWarning', issues.length)}
             </span>
@@ -215,7 +216,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
               onClick={onAddProject}
               className="flex items-center gap-1 text-[10px] px-2 py-0.5 border border-hacker-accent/50 text-hacker-accent hover:bg-hacker-accent/10 rounded transition-colors"
             >
-              <Plus size={9} /> {t('welcome.addBtn')}
+              <HolafIcon name="plus" size={9} /> {t('welcome.addBtn')}
             </button>
           </div>
           {projects.length === 0 ? (

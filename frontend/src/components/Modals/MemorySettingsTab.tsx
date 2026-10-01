@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 
 // ── Types ──────────────────────────────────────────────
@@ -279,7 +279,7 @@ function MemorySection({ scope, projectId }: { scope: MemoryScope; projectId?: s
           disabled={!!form}
           className="btn-hacker text-xs px-3 py-1.5 flex items-center gap-1 shrink-0 disabled:opacity-30"
         >
-          <Plus size={12} /> {t("memory.add")}
+          <HolafIcon name="plus" size={12} /> {t("memory.add")}
         </button>
       </div>
 
@@ -407,14 +407,14 @@ function MemorySection({ scope, projectId }: { scope: MemoryScope; projectId?: s
                         className="text-hacker-text-dim hover:text-hacker-accent"
                         title={t("memory.edit")}
                       >
-                        <Pencil size={13} />
+                        <HolafIcon name="pencil" size={13} />
                       </button>
                       <button
                         onClick={() => handleDelete(entry)}
                         className={`text-xs ${confirmingDelete === entry.id ? "text-hacker-error font-bold animate-pulse" : "text-hacker-text-dim hover:text-hacker-error"}`}
                         title={t("memory.delete")}
                       >
-                        {confirmingDelete === entry.id ? "?" : <Trash2 size={13} />}
+                        {confirmingDelete === entry.id ? "?" : <HolafIcon name="trash" size={13} />}
                       </button>
                     </div>
                   </div>
