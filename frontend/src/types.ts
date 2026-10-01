@@ -229,7 +229,11 @@ export type SubAgentEndStatus =
   | "error"
   | "timeout-inactivity"
   | "timeout-global"
-  | "aborted";
+  | "aborted"
+  // LOT 1 (orchestrateur interactif) : arrêt CIBLÉ par l'utilisateur (bouton
+  // Stop d'un sous-agent / commande à l'orchestrateur). Les AUTRES runs du
+  // projet continuent ; le travail partiel est récupéré.
+  | "cancelled";
 
 /** Action d'outil du sous-agent (live : alimentée par les events tool_*). */
 export interface SubAgentAction {
@@ -310,6 +314,13 @@ export interface SubAgentRun {
   messages: SubAgentRunMessage[];
   /** Aperçu d'activité courant (dernier output d'outil, live). */
   currentOutput?: string;
+  /**
+   * LOT 5.1 : le sous-agent attend un SLOT LLM (file du limiteur de concurrence)
+   * — événement `subagent_queue` émis par l'extension autour de l'acquisition.
+   * Permet à l'UI d'afficher « file LLM » au lieu de laisser croire à tort que
+   * le run travaille (ou qu'il est bloqué) pendant l'attente de slot.
+   */
+  queued?: boolean;
   /** Résumé final (subagent_end) — absent tant que le run tourne. */
   end?: SubAgentEndInfo;
   /** Run reconstruit depuis une entrée persistée subagent_activity (historique). */

@@ -11,6 +11,7 @@ import { memo } from "react";
 import { useTranslation } from "../../i18n";
 import type { Activity } from "../../types";
 import { resolveActivityDisplay } from "../../utils/activity-label";
+import { useSubAgentControls } from "../../stores/subagentRuns";
 
 interface Props {
   /** Branche git du projet actif (affichée en permanence, indépendamment de l'activité). */
@@ -33,6 +34,8 @@ export const ChatStatusLine = memo(function ChatStatusLine({
   activity,
 }: Props) {
   const { t } = useTranslation();
+  // LOT 1 : arrêt GLOBAL des sous-agents (bouton visible dès qu'un run est actif).
+  const controls = useSubAgentControls();
   const display = resolveActivityDisplay(
     { activity, isStreaming, streamingStalled, subAgentActive },
     t,
@@ -42,6 +45,17 @@ export const ChatStatusLine = memo(function ChatStatusLine({
     <div className="text-hacker-text-dim text-[0.6875rem] mb-1 flex justify-between">
       <span className="hidden md:block">{t("chat.keyboardHints")}</span>
       <span className="flex items-center gap-2 ml-auto">
+        {subAgentActive && (
+          <button
+            type="button"
+            onClick={() => controls.stop()}
+            title={t("chat.subAgentStopAllTitle")}
+            aria-label={t("chat.subAgentStopAllTitle")}
+            className="px-1.5 py-0.5 rounded border border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-400 transition-colors text-[0.6875rem]"
+          >
+            ■ {t("chat.subAgentStopAll")}
+          </button>
+        )}
         {gitBranch && <span>git:{gitBranch}</span>}
         {display.visible && display.kind === "busy" && (
           <span

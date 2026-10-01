@@ -385,6 +385,19 @@ Mode YOLO supprimé — remplacé par le mode **HARNESS** : orchestration multi-
 
 Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Reviewer, QA Tester, Test Writer, Docs Writer, DevOps, Security Reviewer, Refactoring Specialist.
 
+### Orchestrateur interactif (v3.1) — délégation non bloquante + contrôle des runs
+
+**Comportement livré (mode Routing/HARNESS uniquement — le mode CODE est inchangé) :**
+- `delegate` est **NON BLOQUANT par défaut** : le tool rend la main immédiatement (ticket court) et le résultat complet est réinjecté plus tard par le backend en `subagent_result` (message conversationnel `display:true`) qui ouvre un NOUVEAU tour de l'orchestrateur. `background:false` **par appel** rétablit la délégation BLOQUANTE (ex. enchaîner planning→execute dans le même tour) — aucun réglage projet n'a été ajouté (le paramètre par appel suffit et évite une config persistée supplémentaire).
+- **L'utilisateur ne parle JAMAIS aux sous-agents** : tous ses messages vont à l'orchestrateur, qui RELAIE les précisions via le tool `delegate_steer` (cible : identifiant de run, fonction, ou « all »). Aucun ciblage d'agent dans l'UI du composer.
+- **Arrêt** : bouton UI par run / « Tout arrêter » (WS `pi_subagent_stop` → registre → `cancel` ciblé ou `cancelAll` du projet, sans toucher à la session orchestrateur), OU commande à l'orchestrateur via `delegate_stop` (ciblé/global). Le travail partiel d'un run arrêté est récupéré et livré en `subagent_result` (statut « annulé »).
+- `delegate_list` donne à l'orchestrateur ce qui tourne (id, fonction, tâche résumée, projet, temps écoulé) pour cibler un stop/steer ; en cas d'ambiguïté (plusieurs runs de la même fonction) le message demande explicitement de préciser un identifiant de run.
+- **File d'attente LLM** : un run qui attend un slot (`maxLLMSlots`) affiche un badge discret « file LLM » ; l'attente est **interruptible** par un stop ciblé (le slot acquis plus tard est libéré dans le `finally`, pas de fuite jusqu'au watchdog).
+
+**Arbitrage du slot pour la réinjection** : le tour orchestrateur déclenché par `subagent_result` (comme un message utilisateur) n'est PAS borné par le limiteur `maxLLMSlots` — seuls les appels de sous-agents (extension) et le classifieur de routage consomment des slots. Le lotisseur (~3 s, `harness-result-delivery.ts`) regroupe les fins rapprochées en UN SEUL tour, et le SDK sérialise de toute façon les prompts d'une même session. Décision documentée : ne pas ajouter de contrainte de slot sur le tour orchestrateur (ce serait un changement de comportement global des prompts, sans nécessité démontrée).
+
+**Fichiers clés :** `extensions/harness-orchestrator/index.ts` (tools `delegate` / `delegate_list` / `delegate_steer` / `delegate_stop`), `backend/src/pi/harness-run-registry.ts` (registre des runs + pont globalThis), `backend/src/pi/harness-run-targeting.ts` (résolution de cible + messages, PUR/testé vitest), `backend/src/pi/harness-result-delivery.ts` (lotissement + options de livraison, PUR/testé), `backend/src/index.ts` (canal WS `pi_subagent_stop`), `backend/src/routes/harness.ts` (`POST /api/harness/result`).
+
 ### Fichiers
 
 | Fichier | Rôle | Statut |
@@ -395,7 +408,10 @@ Architect, Backend Dev, Frontend Dev, Database Engineer, API Designer, Code Revi
 | `backend/src/pi/session.ts` | Intégration /harness | ✅ |
 | ~~`frontend/src/components/Modals/HarnessConfigModal.tsx`~~ | UI config (ancienne version) | 🗑 supprimé (remplacé par RoutingConfigModal) |
 | `frontend/src/components/Header/ModelQuickSwitch.tsx` | Toggle harness | ✅ |
-| `extensions/harness-orchestrator/index.ts` | Extension v3 (orchestrator conversationnel) | ✅ (BUG-59 porté : timeout à activité + timeout global + retry) |
+| `extensions/harness-orchestrator/index.ts` | Extension v3 (orchestrator conversationnel + contrôle des runs : list/steer/stop) | ✅ (v3.1 : délégation non bloquante, arrêt ciblé/global, relais des consignes) |
+| `backend/src/pi/harness-run-registry.ts` | Registre des runs en cours (cancel ciblé, cancelAll, steer) | ✅ (LOT 1, pont globalThis, testé) |
+| `backend/src/pi/harness-run-targeting.ts` | Ciblage runId/fonction/« all » + messages des tools de contrôle | ✅ (LOT 3/4, PUR, testé) |
+| `backend/src/pi/harness-result-delivery.ts` | Lotissement des résultats + options de livraison (idle/followUp) | ✅ (LOT 2, PUR, testé) |
 | `extensions/codebase-memory/index.ts` | Extension CBM (cbm_* tools) | ✅ (BUG-59 cbm_code : envoi `qualified_name`) |
 
 ### Réduction des tokens / contexte des sous-agents (étude `docs/etude-tokens-contexte-sous-agents.md`)

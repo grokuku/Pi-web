@@ -29,6 +29,7 @@ import {
   isRunStuck,
   subscribeRun,
   useConcurrentRuns,
+  useSubAgentControls,
   useSubAgentRun,
 } from "../../stores/subagentRuns";
 
@@ -39,6 +40,8 @@ const END_STATUS_LABELS: Record<string, string> = {
   "timeout-inactivity": "timeout (inactivité)",
   "timeout-global": "timeout (global)",
   aborted: "interrompu",
+  // LOT 1 : arrêt ciblé par l'utilisateur (les autres runs continuent).
+  cancelled: "annulé par l'utilisateur",
 };
 
 // ── Libellés des fonctions de routage ────────────────────────────────────────
@@ -92,10 +95,20 @@ interface HeaderProps {
  *  être réutilisé tel quel par la vue en colonnes (LOT 4). */
 export function SubAgentHeader({ run, toolCall, running, failed, stuck, durationMs, liveStartedAt }: HeaderProps) {
   const { t } = useTranslation();
+  const controls = useSubAgentControls();
   const { meta, roleLabel, model, task } = computeHeaderInfo(run, toolCall);
   const status = stuck ? "⏱" : running ? "⟳" : failed ? "❌" : "✓";
   const actionCount = run?.actions.length ?? 0;
   const attempt = run?.attempt ?? 1;
+  // LOT 1 : runId pour l'arrêt CIBLÉ — priorité au run (store) puis aux details
+  // du toolCall `delegate` (retour du tool). Le bouton Stop n'apparaît que pour
+  // un run ENCORE actif (running ou bloqué).
+  const runId =
+    (typeof run?.id === "string" && run.id) ||
+    (typeof toolCall?.details?.delegateRunId === "string" && toolCall.details.delegateRunId) ||
+    (typeof toolCall?.args?.delegateRunId === "string" && toolCall.args.delegateRunId) ||
+    undefined;
+  const canStop = !!runId && (running || !!stuck);
   // Aperçu replié : dernier résumé d'action, sinon dernier output connu — du
   // run (events structurés) OU du toolCall delegate (aperçu buildProgressText,
   // filet de secours si les events sous-agent n'arrivent pas). Toujours visible
@@ -119,6 +132,22 @@ export function SubAgentHeader({ run, toolCall, running, failed, stuck, duration
         <span className="text-amber-400/70" title={t("chat.subAgentStuck")}>
           ⏱ {t("chat.subAgentStuck")}
         </span>
+      )}
+      {run?.queued && (
+        <span className="text-hacker-text-dim/70" title={t("chat.subAgentQueuedTitle")}>
+          ⏳ {t("chat.subAgentQueued")}
+        </span>
+      )}
+      {canStop && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); controls.stop(runId); }}
+          title={t("chat.subAgentStopTitle")}
+          aria-label={t("chat.subAgentStopTitle")}
+          className="shrink-0 px-1.5 py-0.5 rounded border border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-400 transition-colors text-[0.625rem]"
+        >
+          ■ {t("chat.subAgentStop")}
+        </button>
       )}
       {running ? (
         <ToolCallTimer startedAt={liveStartedAt} />

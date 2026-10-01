@@ -81,6 +81,15 @@ function renderCollapsed(children: ReactNode) {
   );
 }
 
+/**
+ * Boutons de DÉPLIAGE uniquement (les en-têtes de bloc) : depuis le LOT 1, un
+ * run actif porte AUSSI un bouton « Stop » → on filtre sur `aria-expanded`
+ * (absent du bouton Stop) pour cibler le toggle de repli.
+ */
+function collapseToggles(): HTMLElement[] {
+  return screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-expanded"));
+}
+
 beforeEach(() => {
   localStorage.setItem("pi-web-language", "en");
   resetSubagentRuns();
@@ -100,7 +109,7 @@ describe("ParallelSubAgents — le réglage « replié par défaut » s'applique
 
     renderCollapsed(<ParallelSubAgents projectId={PROJECT} />);
 
-    const headers = screen.getAllByRole("button");
+    const headers = collapseToggles();
     expect(headers).toHaveLength(2);
     // Ordre chronologique des colonnes (ancien puis récent) : avant le fix,
     // `isRunning` était vrai pour TOUTES → aria-expanded valait "true" partout.
@@ -125,7 +134,7 @@ describe("ParallelSubAgents — le réglage « replié par défaut » s'applique
       </I18nProvider>,
     );
 
-    for (const header of screen.getAllByRole("button")) {
+    for (const header of collapseToggles()) {
       expect(header.getAttribute("aria-expanded")).toBe("true");
     }
     expect(screen.getByText("sortie-old")).toBeTruthy();
@@ -151,7 +160,7 @@ describe("SubAgentBlock — seul un run réellement ACTIF s'auto-déplie", () =>
       <SubAgentBlock toolCall={delegateCall("run-done")} blockId="m1:delegate:tc-run-done" />,
     );
 
-    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { expanded: false }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("résumé-final")).toBeNull();
   });
 
@@ -168,7 +177,7 @@ describe("SubAgentBlock — seul un run réellement ACTIF s'auto-déplie", () =>
       <SubAgentBlock toolCall={delegateCall("run-stuck")} blockId="m1:delegate:tc-run-stuck" />,
     );
 
-    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { expanded: false }).getAttribute("aria-expanded")).toBe("false");
     // L'en-tête signale quand même le blocage (i18n EN).
     expect(screen.getByText(/no end \(stalled\)/)).toBeTruthy();
   });
@@ -181,7 +190,7 @@ describe("SubAgentBlock — seul un run réellement ACTIF s'auto-déplie", () =>
       <SubAgentBlock toolCall={delegateCall("run-live")} blockId="m1:delegate:tc-run-live" />,
     );
 
-    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { expanded: true }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("sortie-live")).toBeTruthy();
   });
 });

@@ -72,6 +72,16 @@ export const fr = {
     subAgentCause: "cause",
     // ── Run bloqué (running sans subagent_end au-delà du seuil) ──
     subAgentStuck: "sans fin (débloqué)",
+    // ── LOT 5.1 : attente d'un slot LLM (file du limiteur de concurrence) ──
+    subAgentQueued: "file LLM",
+    subAgentQueuedTitle: "En attente d'un slot LLM (appels simultanés limités) — le sous-agent démarrera dès qu'un slot se libère",
+    // ── LOT 1 : arrêt des sous-agents (bouton par run + « tout arrêter ») ──
+    subAgentStop: "Stop",
+    subAgentStopTitle: "Arrêter ce sous-agent",
+    subAgentStopAll: "Tout arrêter",
+    subAgentStopAllTitle: "Arrêter tous les sous-agents en cours",
+    // ── LOT 2 : message de résultat d'un sous-agent détaché ──
+    subAgentResultLabel: "Résultat de sous-agent",
     // ── LOT 4 : vue en colonnes des sous-agents simultanés ──
     parallelSubAgents: (n: number) => `${n} sous-agents en parallèle`,
     parallelSubAgentsOverflow: (n: number) => `défilement horizontal au-delà de ${n}`,

@@ -46,6 +46,10 @@ import type { Project } from "./projects/manager.js";
 // fond du bug « messages récents manquants » : payload WS borné).
 import { buildFullUiHistory, sliceUiHistoryWindow, type UiHistoryWindowMeta } from "./pi/ui-history.js";
 import { runMemoryMigration } from "./pi/memory-migration.js";
+// LOT 1 (orchestrateur interactif) : registre des runs de sous-agents publié par
+// l'extension harness-orchestrator (pont globalThis) — arrêt CIBLÉ/GLOBAL des
+// sous-agents sans toucher à la session de l'orchestrateur.
+import { resolveHarnessRunRegistry } from "./pi/harness-run-registry.js";
 
 // ── Logger fichier (P0 observabilité 2/2) ──
 // Chaque erreur/crash est dupliqué dans .data/logs/ (persistant, lisible via
@@ -1159,6 +1163,34 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         await abortPi(pid);
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+      break;
+    }
+
+    // ── LOT 1 (orchestrateur interactif) : arrêt CIBLÉ/GLOBAL des sous-agents ──
+    // `runId` fourni → stoppe CE run ; absent → stoppe TOUS les runs DU PROJET.
+    // N'affecte JAMAIS la session de l'orchestrateur (≠ pi_abort) : anti-
+    // régression BUG-67, un arrêt de sous-agent ne tue pas l'orchestrateur, et
+    // un pi_abort de SESSION ne doit pas tuer les runs détachés (LOT 2) — seuls
+    // ces stops explicites le font. Best-effort : registre absent = no-op.
+    case "pi_subagent_stop": {
+      const pid = msg.projectId || projectId;
+      const runId = typeof msg.runId === "string" && msg.runId ? msg.runId : undefined;
+      if (!getValidatedProject(pid)) return;
+      logger.warn("ws", "pi_subagent_stop reçu", { projectId: pid, runId: runId ?? null });
+      try {
+        const registry = resolveHarnessRunRegistry();
+        if (!registry) {
+          logger.warn("ws", "pi_subagent_stop : registre de sous-agents indisponible (no-op)", { projectId: pid });
+        } else if (runId) {
+          const cancelled = registry.cancel(runId, pid);
+          logger.info("ws", "pi_subagent_stop : run ciblé", { projectId: pid, runId, cancelled });
+        } else {
+          const count = registry.cancelAll(pid);
+          logger.info("ws", "pi_subagent_stop : tous les runs du projet", { projectId: pid, count });
+        }
+      } catch (e: any) {
+        logger.error("ws", "pi_subagent_stop échec", { projectId: pid, runId: runId ?? null, error: e?.message || String(e) });
       }
       break;
     }

@@ -24,7 +24,7 @@ import { getPreviewMode, openImagePopup } from "../../utils/preview-mode";
 import type { Project } from "../../types";
 import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/useChatHistory";
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, mergeHistoryWithPending, prependHistoryBatch } from "../../utils/pi-events";
-import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, useHasActiveSubAgentRun, type SubagentEnvelope } from "../../stores/subagentRuns";
+import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, useHasActiveSubAgentRun, SubAgentControlsProvider, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
@@ -1021,6 +1021,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     send({ type: "pi_abort", projectId });
   }, [send, projectId]);
 
+  // ── LOT 1 : arrêt CIBLÉ/GLOBAL des sous-agents ──
+  // `pi_subagent_stop` n'est JAMAIS mis en file (comme pi_abort, cf.
+  // QUEUEABLE_TYPES) : un arrêt hors connexion est ignoré, sans replay fantôme.
+  // runId fourni → arrête CE run ; absent → « Tout arrêter » (tous les runs du
+  // projet). Exposé aux blocs via contexte (sans prop-drilling du fil).
+  const onStopSubAgent = useCallback((runId?: string) => {
+    send({ type: "pi_subagent_stop", projectId, ...(runId ? { runId } : {}) });
+  }, [send, projectId]);
+  const subAgentControls = useMemo(() => ({ stop: onStopSubAgent }), [onStopSubAgent]);
+
   // ── Send ──
   const handleSend = useCallback(async (text: string, attachments: Attachment[]) => {
     const uploadErrors = attachments.filter(a => a.uploadStatus === "error");
@@ -1160,6 +1170,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const msgUpdateTimingRef = useRef(0);
 
   return (
+    <SubAgentControlsProvider value={subAgentControls}>
     <div className="h-full flex flex-col">
       {/* Debug overlay */}
       {showDebug && (
@@ -1305,6 +1316,7 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
         onConfirm={handleConfirmNewChat}
       />
     </div>
+    </SubAgentControlsProvider>
   );
 }
 
@@ -1562,6 +1574,24 @@ const AttachmentRefsRow = memo(function AttachmentRefsRow({ refs, onFileClick }:
   return <div className="flex flex-wrap gap-1.5 mt-2">{refs.map((ref,i) => { const icon = ref.category==="image"?"🖼️":ref.category==="pdf"?"📄":ref.category==="audio"?"🎵":ref.category==="video"?"🎬":ref.category==="text"?"📝":"📎"; const fu = `/api/attachments/${ref.id}/file`; if(ref.category==="image") return <div key={i} className="relative group"><img src={fu} alt={ref.name} title={ref.name} className="w-28 h-20 object-cover rounded border border-hacker-border cursor-pointer hover:border-hacker-accent transition-colors" onClick={() => onFileClick({type:"image",src:fu,name:ref.name})} /><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; return <div key={i} className="relative group"><button className="flex items-center gap-1.5 text-xs bg-hacker-bg/40 border border-hacker-border px-2 py-1 rounded hover:border-hacker-accent transition-colors text-hacker-text-bright" onClick={() => { if(ref.category==="pdf") window.open(fu,"_blank"); }}><span>{icon}</span><span>{ref.name}</span><span className="text-hacker-text-dim">{formatFileSize(ref.size)}</span></button><a href={fu} download={ref.name} className="absolute -top-1 -right-1 p-0.5 bg-hacker-bg/80 border border-hacker-border rounded text-hacker-text-dim hover:text-hacker-accent opacity-0 group-hover:opacity-100 transition-opacity" title={t('common.download')}><Download size={10} /></a></div>; })}</div>;
 });
 
+// ── Lot 2 (orchestrateur interactif) : message de RÉSULTAT de sous-agent ──────
+// Le backend réinjecte le résultat d'un run détaché via un custom message
+// conversationnel `subagent_result` (display:true) → l'orchestrateur en fait un
+// NOUVEAU tour. Ici, on le rend comme un message système lisible à GAUCHE,
+// distinct des bulles utilisateur (il n'est PAS de l'utilisateur).
+const SubAgentResultMessage = memo(function SubAgentResultMessage({ message }: { message: DisplayMessage }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex justify-start mb-3">
+      <div className="max-w-[90%] border-l-2 border-hacker-accent bg-hacker-surface/40 rounded-r-lg px-3 py-2">
+        {message.timestamp ? <div className="text-[9px] text-hacker-text-dim mb-0.5">{formatTime(message.timestamp)}</div> : null}
+        <div className="text-[10px] text-hacker-accent/80 mb-1 font-mono uppercase tracking-wide">🤖 {t("chat.subAgentResultLabel")}</div>
+        <div className="text-hacker-text-bright/90 text-xs whitespace-pre-wrap break-words">{message.content}</div>
+      </div>
+    </div>
+  );
+});
+
 // ── Message système injecté (ex. screenshot web_screenshot) — rendu à GAUCHE ──
 const InjectedMessage = memo(function InjectedMessage({ message, onFileClick }: { message: DisplayMessage; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void }) {
   return (
@@ -1586,6 +1616,7 @@ const UserBubble = memo(function UserBubble({ message, onFileClick }: { message:
   const inlineImageIds = new Set((message.images || []).map(img => img.attachmentId).filter(Boolean));
   const refsToShow = (message.attachmentRefs || []).filter(ref => !inlineImageIds.has(ref.id));
   if (message.injected) return <InjectedMessage message={message} onFileClick={onFileClick} />;
+  if (message.customType === "subagent_result") return <SubAgentResultMessage message={message} />;
   if (message.customType === "pi_command") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-left whitespace-pre-wrap font-mono">{message.content}</div></div>;
   if (message.customType === "git_notification") return <div className="flex justify-center mb-3"><div className="max-w-[90%] bg-hacker-surface/80 border border-hacker-border rounded-lg px-4 py-2 text-xs text-hacker-text-dim text-center whitespace-pre-wrap">{message.content}</div></div>;
   return (

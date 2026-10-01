@@ -10,10 +10,12 @@ import {
   ABORT_MESSAGE_MARKER,
   ABORT_SESSION_MESSAGE,
   ABORT_USER_MESSAGE,
+  CANCEL_USER_MESSAGE,
   abortMessageFor,
   createRaceGuard,
   isAbortInterruption,
   resolveAbortCause,
+  resolveDelegationAbortCause,
   swallowRejection,
 } from "./harness-abort.js";
 
@@ -39,6 +41,34 @@ describe("resolveAbortCause (P2)", () => {
     expect(abortMessageFor("abort-session")).toBe(ABORT_SESSION_MESSAGE);
     expect(ABORT_USER_MESSAGE).toContain(ABORT_MESSAGE_MARKER);
     expect(ABORT_SESSION_MESSAGE).toContain(ABORT_MESSAGE_MARKER);
+  });
+});
+
+describe("resolveDelegationAbortCause — LOT 1 (arrêt ciblé)", () => {
+  it("arrêt CIBLÉ utilisateur ⇒ cancel-utilisateur (prioritaire)", () => {
+    expect(resolveDelegationAbortCause({ cancelled: true })).toBe("cancel-utilisateur");
+    // Prioritaire même si un marqueur d'abort de session est présent.
+    expect(resolveDelegationAbortCause({ cancelled: true, userInitiated: true })).toBe(
+      "cancel-utilisateur",
+    );
+  });
+
+  it("sans cancel : comportement P2 inchangé (utilisateur vs interne)", () => {
+    expect(resolveDelegationAbortCause({ userInitiated: true })).toBe("abort-utilisateur");
+    expect(resolveDelegationAbortCause({ userInitiated: false })).toBe("abort-session");
+    expect(resolveDelegationAbortCause({})).toBe("abort-session");
+  });
+
+  it("le message d'arrêt ciblé est reconnu comme une interruption", () => {
+    expect(CANCEL_USER_MESSAGE).toContain(ABORT_MESSAGE_MARKER);
+    expect(isAbortInterruption(CANCEL_USER_MESSAGE)).toBe(true);
+    expect(isAbortInterruption(`${CANCEL_USER_MESSAGE} (récupéré : 42 chars)`)).toBe(true);
+  });
+
+  it("abortMessageFor renvoie le message d'arrêt ciblé", () => {
+    expect(abortMessageFor("cancel-utilisateur")).toBe(CANCEL_USER_MESSAGE);
+    expect(abortMessageFor("cancel-utilisateur")).not.toBe(ABORT_SESSION_MESSAGE);
+    expect(abortMessageFor("cancel-utilisateur")).not.toBe(ABORT_USER_MESSAGE);
   });
 });
 

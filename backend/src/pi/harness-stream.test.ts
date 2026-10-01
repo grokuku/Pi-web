@@ -42,6 +42,7 @@ import {
   truncateChars,
   withNonConversationalMark,
   type RawSubagentEmitter,
+  type SubagentEndStatus,
   type SubagentEventBase,
 } from "./harness-stream.js";
 
@@ -587,5 +588,24 @@ describe("decideExplorationNudge (garde-fou anti-spam CBM)", () => {
     for (const tool of ["cbm_search", "cbm_code", "cbm_trace", "cbm_search_code", "cbm_arch"]) {
       expect(r).toContain(tool);
     }
+  });
+});
+
+describe("LOT 1 — statut de fin 'cancelled' (arrêt ciblé)", () => {
+  it("SubagentEndStatus inclut 'cancelled' et l'enveloppe le transporte tel quel", () => {
+    // Assertion de TYPE (compile) : 'cancelled' est une valeur valide du statut.
+    const status: SubagentEndStatus = "cancelled";
+    expect(["success", "error", "timeout-inactivity", "timeout-global", "aborted", "cancelled"]).toContain(status);
+
+    const base: SubagentEventBase = {
+      delegateRunId: "d-1",
+      attempt: 1,
+      delegateFunction: "execute",
+      delegateLabel: "Exécution",
+      model: "prov/model",
+      taskExcerpt: "fais X",
+    };
+    const env = buildSubagentEnvelope(base, { type: "subagent_end", status: "cancelled" }, "proj-a");
+    expect((env.event as any).status).toBe("cancelled");
   });
 });

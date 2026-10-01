@@ -101,7 +101,12 @@ export type SubagentEndStatus =
   | "error"
   | "timeout-inactivity"
   | "timeout-global"
-  | "aborted";
+  | "aborted"
+  // LOT 1 (orchestrateur interactif) : arrêt CIBLÉ demandé par l'utilisateur
+  // (bouton Stop d'un sous-agent / commande « arrête » de l'orchestrateur).
+  // Distinct d'« aborted » (abort de SESSION) : seul le run visé s'arrête, les
+  // autres délégations continuent, et le travail partiel est récupéré.
+  | "cancelled";
 
 /** Action d'outils résumée, portée par l'entrée persistée subagent_activity. */
 export interface SubagentActionRecord {

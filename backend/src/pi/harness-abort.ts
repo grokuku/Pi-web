@@ -19,8 +19,17 @@
  * harness-orchestrator via jiti (chemin relatif résolu au chargement).
  */
 
-/** Causes d'abandon d'une délégation. */
-export type HarnessAbortCause = "abort-utilisateur" | "abort-session";
+/**
+ * Causes d'arrêt d'une délégation :
+ *  - "abort-utilisateur" : abandon explicite de la SESSION orchestrateur
+ *    (bouton ABORT) — abort de toute la conversation, dont la délégation ;
+ *  - "abort-session" : abort INTERNE (timeout de session, shutdown,
+ *    switchMode, reloadModelRegistry…) — jamais présenté comme un choix user ;
+ *  - "cancel-utilisateur" : arrêt CIBLÉ d'un run (bouton Stop d'un sous-agent
+ *    ou commande « arrête » de l'orchestrateur) — n'arrête QUE ce run, les
+ *    autres délégations continuent (cf. registre des runs).
+ */
+export type HarnessAbortCause = "abort-utilisateur" | "abort-session" | "cancel-utilisateur";
 
 /** Message d'une interruption par action utilisateur explicite. */
 export const ABORT_USER_MESSAGE =
@@ -37,6 +46,14 @@ export const ABORT_SESSION_MESSAGE = "Délégation interrompue (abort de session
  */
 export const ABORT_MESSAGE_MARKER = "Délégation interrompue";
 
+/**
+ * Message d'un arrêt CIBLÉ demandé par l'utilisateur (Stop d'un sous-agent).
+ * Contient volontairement le marqueur commun : la branche d'interruption de
+ * l'extension doit récupérer le travail partiel exactement comme pour un abort.
+ */
+export const CANCEL_USER_MESSAGE =
+  `${ABORT_MESSAGE_MARKER} — arrêt demandé par l'utilisateur (sous-agent)`;
+
 /** Le message décrit-il une interruption de délégation ? */
 export function isAbortInterruption(message: string): boolean {
   return String(message || "").includes(ABORT_MESSAGE_MARKER);
@@ -51,9 +68,30 @@ export function resolveAbortCause(userInitiated: boolean): HarnessAbortCause {
   return userInitiated ? "abort-utilisateur" : "abort-session";
 }
 
+/**
+ * Résout la cause d'un arrêt depuis les PREUVES disponibles, par ordre de
+ * priorité : arrêt CIBLÉ utilisateur (cancelled) > abort de session utilisateur
+ * > abort interne. Pure — testée.
+ *
+ * Un arrêt ciblé est un geste VOLONTAIRE de l'utilisateur (bouton Stop /
+ * commande) : il prime sur l'éventuel marqueur d'abort de session (qui peut être
+ * posé par un abort interne concomitant). Prudence : sans preuve de cancel ni
+ * d'abandon utilisateur, on retombe sur « abort-session » (jamais de faux
+ * « abort-utilisateur »).
+ */
+export function resolveDelegationAbortCause(evidence: {
+  cancelled?: boolean;
+  userInitiated?: boolean;
+}): HarnessAbortCause {
+  if (evidence?.cancelled) return "cancel-utilisateur";
+  return resolveAbortCause(evidence?.userInitiated === true);
+}
+
 /** Message associé à la cause d'abandon. */
 export function abortMessageFor(cause: HarnessAbortCause): string {
-  return cause === "abort-utilisateur" ? ABORT_USER_MESSAGE : ABORT_SESSION_MESSAGE;
+  if (cause === "abort-utilisateur") return ABORT_USER_MESSAGE;
+  if (cause === "cancel-utilisateur") return CANCEL_USER_MESSAGE;
+  return ABORT_SESSION_MESSAGE;
 }
 
 /**

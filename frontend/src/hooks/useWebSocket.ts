@@ -22,6 +22,8 @@ const QUEUE_MAX = 50;
 // Sont volontairement EXCLUS de la file (envoyés uniquement socket ouverte) :
 //  - pi_abort : inutile hors connexion et dangereux à rejouer — provoquerait un
 //    « abort fantôme » tuant une génération légitime après reconnexion ;
+//  - pi_subagent_stop : même règle (LOT 1) — arrêter un sous-agent hors
+//    connexion n'a aucun sens et un replay tuerait un run légitime plus tard ;
 //  - ping / keepalive : messages de santé de la connexion, sans sens différé ;
 //  - messages techniques (mode_switch, terminal_*) : déjà renvoyés ou
 //    resynchronisés par la logique existante à la reconnexion

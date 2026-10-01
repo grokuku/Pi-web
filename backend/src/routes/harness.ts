@@ -33,6 +33,25 @@ function isValidProjectId(id: unknown): id is string {
 const MAX_ACTIONS = 50;
 
 /**
+ * Résout le projet cible d'un body de route interne : projectId (UUID)
+ * prioritaire, sinon résolution par cwd (chemin exact du projet). Commun aux
+ * routes /activity (résumé) et /result (réinjection LOT 2).
+ */
+async function resolveBodyProjectId(body: { projectId?: string; cwd?: string }): Promise<string | undefined> {
+  if (isValidProjectId(body.projectId)) return body.projectId;
+  if (typeof body.cwd === "string" && body.cwd.trim()) {
+    try {
+      const { getAllProjects } = await import("../projects/manager.js");
+      const project = getAllProjects().find((p) => p.cwd === body.cwd);
+      if (project) return project.id;
+    } catch (e: any) {
+      console.warn(`[harness] project lookup by cwd failed:`, e?.message || e);
+    }
+  }
+  return undefined;
+}
+
+/**
  * POST /api/harness/activity
  *
  * Body: { projectId?, cwd?, activity }
@@ -54,18 +73,7 @@ router.post("/activity", async (req: Request, res: Response) => {
   };
 
   // ── Résolution du projet cible (projectId prioritaire, sinon cwd) ──
-  let projectId: string | undefined;
-  if (isValidProjectId(body.projectId)) {
-    projectId = body.projectId;
-  } else if (typeof body.cwd === "string" && body.cwd.trim()) {
-    try {
-      const { getAllProjects } = await import("../projects/manager.js");
-      const project = getAllProjects().find((p) => p.cwd === body.cwd);
-      if (project) projectId = project.id;
-    } catch (e: any) {
-      console.warn(`[harness] activity: project lookup by cwd failed:`, e?.message || e);
-    }
-  }
+  const projectId = await resolveBodyProjectId(body);
   if (!projectId) {
     return res.status(400).json({
       error: "Cannot resolve project: provide projectId (UUID) or a cwd matching a project",
@@ -100,6 +108,53 @@ router.post("/activity", async (req: Request, res: Response) => {
     // polluerait les logs de la délégation — on signale injected=false.
     console.error(`[harness] activity: injection failed for ${projectId}:`, e?.message || e);
     return res.json({ success: true, injected: false, projectId });
+  }
+});
+
+/**
+ * POST /api/harness/result — LOT 2 (orchestrateur interactif).
+ *
+ * Body: { projectId?, cwd?, result }
+ *   - result : { delegateRunId, function?, label?, status, cause?, errorMessage?,
+ *     response?, durationMs?, actionCount? }.
+ *
+ * L'extension harness-orchestrator POSTe le RÉSULTAT FINAL d'un run détaché
+ * (délégation non bloquante) ; le backend le réinjecte dans la conversation de
+ * l'orchestrateur (session COURANTE du projet) via `injectSubagentResult`. La
+ * réinjection déclenche un NOUVEAU tour LLM, et les résultats rapprochés sont
+ * LOTIS (un seul tour).
+ *
+ * Robuste au rechargement de session : l'extension peut avoir une référence
+ * `pi` stale, le backend lit toujours la session vivante (décision n°2).
+ * Best-effort : un échec d'injection ne fait jamais échouer le run.
+ */
+router.post("/result", async (req: Request, res: Response) => {
+  const body = (req.body || {}) as {
+    projectId?: string;
+    cwd?: string;
+    result?: Record<string, unknown>;
+  };
+
+  const projectId = await resolveBodyProjectId(body);
+  if (!projectId) {
+    return res.status(400).json({
+      error: "Cannot resolve project: provide projectId (UUID) or a cwd matching a project",
+    });
+  }
+
+  const result = body.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return res.status(400).json({ error: "Invalid result payload" });
+  }
+
+  try {
+    const { injectSubagentResult } = await import("../pi/session.js");
+    const accepted = await injectSubagentResult(projectId, result as any);
+    return res.json({ success: true, accepted, projectId });
+  } catch (e: any) {
+    // Best-effort : ne jamais retourner 500 (polluerait les logs du run).
+    console.error(`[harness] result: injection failed for ${projectId}:`, e?.message || e);
+    return res.json({ success: true, accepted: false, projectId });
   }
 });
 

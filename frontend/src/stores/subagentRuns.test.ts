@@ -957,3 +957,89 @@ describe("hasActiveRun — travail délégué EN COURS", () => {
     expect(hasActiveRun("A", 1_000)).toBe(false);
   });
 });
+
+// ── LOT 1 (orchestrateur interactif) : statut de fin « cancelled » ───────────
+// Un arrêt CIBLÉ par l'utilisateur (bouton Stop d'un sous-agent) arrive via
+// subagent_end avec status "cancelled". Le run est terminal (failed, non
+// `running`) → plus de bloc actif ni de colonne, et le travail partiel reste
+// dans `responsePreview`.
+describe("applySubagentEvent — statut 'cancelled' (LOT 1)", () => {
+  it("subagent_end 'cancelled' → run terminal + end.status conservé", () => {
+    const run = applySubagentEvent(undefined, env({
+      type: "subagent_end",
+      status: "cancelled",
+      attemptsMade: 1,
+      durationMs: 800,
+      actionCount: 2,
+      eventCount: 5,
+      thinkingChars: 10,
+      model: "prov/final",
+      cause: "cancel-utilisateur",
+      errorMessage: "Délégation interrompue — arrêt demandé par l'utilisateur (sous-agent) (récupéré : 42 chars)",
+      responsePreview: "travail partiel",
+      droppedEvents: 0,
+    }), 1234);
+
+    expect(run.end?.status).toBe("cancelled");
+    expect(run.status).toBe("failed");
+    expect(run.isError).toBe(true);
+    expect(run.endedAt).toBe(1234);
+    expect(run.end?.cause).toBe("cancel-utilisateur");
+    expect(run.end?.responsePreview).toBe("travail partiel");
+    expect(isRunActive(run)).toBe(false);
+  });
+
+  it("un event d'outil TARDIF après 'cancelled' ne ressuscite pas le run", () => {
+    let run = applySubagentEvent(undefined, env({ type: "subagent_start" }), 0);
+    run = applySubagentEvent(run, env({ type: "subagent_end", status: "cancelled", responsePreview: "p" }), 100);
+    run = applySubagentEvent(run, env({ type: "tool_execution_start", toolCallId: "late", toolName: "read", args: {} }), 200);
+    expect(run.status).toBe("failed");
+    expect(isRunActive(run)).toBe(false);
+  });
+
+  it("runFromActivity rejoue un run 'cancelled' archivé comme terminal", () => {
+    const run = runFromActivity({
+      delegateRunId: "d-cancel",
+      function: "execute",
+      label: "Exécution",
+      status: "cancelled",
+      durationMs: 500,
+      actions: [],
+    }, 10_000);
+    expect(run?.end?.status).toBe("cancelled");
+    expect(run?.status).toBe("failed");
+    expect(run?.isError).toBe(true);
+  });
+});
+
+// ── LOT 5.1 : attente d'un slot LLM (file du limiteur de concurrence) ─────────
+// L'extension émet {type:"subagent_queue", queued} autour de l'acquisition du
+// slot LLM. Le run porte alors un drapeau `queued` pour un badge discret —
+// l'UI ne doit pas laisser croire que le sous-agent travaille (ni qu'il est
+// bloqué) pendant l'attente de slot.
+describe("applySubagentEvent — signal d'attente de slot LLM (LOT 5.1)", () => {
+  it("subagent_queue queued:true → run en file, toujours actif", () => {
+    let run = applySubagentEvent(undefined, env({ type: "subagent_start" }), 0);
+    expect(run.queued).toBe(false);
+    run = applySubagentEvent(run, env({ type: "subagent_queue", queued: true, provider: "prov-x" }), 10);
+    expect(run.queued).toBe(true);
+    expect(run.status).toBe("running");
+    expect(isRunActive(run)).toBe(true);
+  });
+
+  it("subagent_queue queued:false → file levée (slot obtenu)", () => {
+    let run = applySubagentEvent(undefined, env({ type: "subagent_start" }), 0);
+    run = applySubagentEvent(run, env({ type: "subagent_queue", queued: true }), 10);
+    run = applySubagentEvent(run, env({ type: "subagent_queue", queued: false }), 20);
+    expect(run.queued).toBe(false);
+    expect(run.status).toBe("running");
+  });
+
+  it("subagent_end clôt aussi l'état de file (jamais de badge sur un run terminal)", () => {
+    let run = applySubagentEvent(undefined, env({ type: "subagent_start" }), 0);
+    run = applySubagentEvent(run, env({ type: "subagent_queue", queued: true }), 10);
+    run = applySubagentEvent(run, env({ type: "subagent_end", status: "success", responsePreview: "ok" }), 20);
+    expect(run.queued).toBe(false);
+    expect(isRunActive(run)).toBe(false);
+  });
+});

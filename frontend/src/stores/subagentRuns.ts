@@ -17,7 +17,7 @@
 // - `runFromActivity` reconstruit un run « archivé » depuis l'entrée custom
 //   `subagent_activity` persistée (relecture après rechargement).
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type {
   DisplayMessage,
   SubAgentAction,
@@ -127,6 +127,8 @@ function createRun(env: SubagentEnvelope, now: number): SubAgentRun {
     attempt: env.attempt ?? 1,
     actions: [],
     messages: [],
+    // LOT 5.1 : pas en file au démarrage (l'événement subagent_queue suivra).
+    queued: false,
     // Étanchéité : le run est marqué du projet de son enveloppe (l'enveloppe
     // est la source d'autorité — sinon assignation par l'appelant, cf.
     // routeSubagentEnvelope).
@@ -182,7 +184,13 @@ export function applySubagentEvent(
 
   switch (ev.type) {
     case "subagent_start":
-      return { ...base, ...meta, status: "running", startedAt: base.startedAt ?? now };
+      return { ...base, ...meta, status: "running", startedAt: base.startedAt ?? now, queued: false };
+
+    case "subagent_queue": {
+      // LOT 5.1 : attente d'un SLOT LLM (file du limiteur) — simple drapeau
+      // d'UI ; ni action ni statut ne changent (le run est toujours actif).
+      return { ...base, ...meta, queued: ev.queued === true };
+    }
 
     case "tool_execution_start": {
       const toolCallId = ev.toolCallId;
@@ -293,6 +301,8 @@ export function applySubagentEvent(
         endedAt: now,
         attempt: end.attemptsMade || base.attempt,
         modelId: end.model && end.model !== "?" ? end.model : base.modelId,
+        // Fin de vie : plus jamais « en file ».
+        queued: false,
       };
     }
 
@@ -1184,4 +1194,26 @@ export function useSubAgentRun(toolCall: {
   );
   const getSnapshot = useCallback(() => (runId ? getRun(runId) : undefined), [runId]);
   return useSyncExternalStore(subscribe, getSnapshot, getUndefinedRun);
+}
+
+// ── Contrôles d'arrêt des sous-agents (LOT 1 : orchestrateur interactif) ──────
+// Le composer et les blocs doivent pouvoir émettre un arrêt CIBLÉ (Stop d'un
+// run) ou GLOBAL (Tout arrêter) SANS prop-drilling à travers tout le fil de
+// messages. On expose un contexte léger : ChatView le fournit (avec
+// `send`/`projectId`), SubAgentHeader et ChatStatusLine le consomment. Le
+// contexte n'est PAS porté par le tableau `messages` → aucun re-rendu du fil.
+export interface SubAgentControls {
+  /** Arrête un run CIBLÉ (runId) ou TOUS les runs du projet (runId absent). */
+  stop: (runId?: string) => void;
+}
+
+const NOOP_SUBAGENT_CONTROLS: SubAgentControls = { stop: () => {} };
+const SubAgentControlsContext = createContext<SubAgentControls>(NOOP_SUBAGENT_CONTROLS);
+
+/** Fournisseur du contexte de contrôle (monté par ChatView). */
+export const SubAgentControlsProvider = SubAgentControlsContext.Provider;
+
+/** Consomme les contrôles d'arrêt d'un sous-agent (Stop ciblé / Tout arrêter). */
+export function useSubAgentControls(): SubAgentControls {
+  return useContext(SubAgentControlsContext);
 }

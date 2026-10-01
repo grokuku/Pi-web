@@ -33,9 +33,37 @@ import {
   abortMessageFor,
   createRaceGuard,
   isAbortInterruption,
-  resolveAbortCause,
+  resolveDelegationAbortCause,
   swallowRejection,
 } from "../../backend/src/pi/harness-abort.js";
+
+// ── LOT 1 (orchestrateur interactif) : REGISTRE des runs en cours ───────────
+// Chaque délégation enregistre un handle (cancel/steer) et le désenregistre
+// dans un finally. Le registre est PUBLIÉ sur globalThis (pont identique à
+// l'émetteur) pour que le backend (routeur WS pi_subagent_stop) puisse arrêter
+// un run CIBLÉ, tous les runs, ou diriger un run — sans toucher à la session de
+// l'orchestrateur (anti-régression BUG-67).
+import {
+  ensureHarnessRunRegistry,
+  type SubagentRunHandle,
+} from "../../backend/src/pi/harness-run-registry.js";
+
+// ── LOT 3/4 (orchestrateur interactif) : résolution de cible + messages ──────
+// Module backend PUR (backend/src/pi/harness-run-targeting.ts), résolu par jiti
+// comme harness-run-registry. Toute la logique testable des tools de contrôle
+// (`delegate_stop` / `delegate_steer` / `delegate_list`) y vit : cible souple
+// runId / fonction / « all », cas « aucun run », « cible inconnue », ambiguïté
+// (plusieurs runs de la même fonction → demander de préciser), et composition
+// des messages de retour. Les extensions n'étant PAS couvertes par vitest, rien
+// de cette logique ne doit rester ici.
+import {
+  buildRunListMessage,
+  buildSteerResultMessage,
+  buildStopResultMessage,
+  resolveRunTarget,
+  runTargetInfoFromHandle,
+  type RunTargetInfo,
+} from "../../backend/src/pi/harness-run-targeting.js";
 
 // ── Détecteur de SILENCE DE FLUX des sous-agents ─────────────────────────
 // Module backend PUR (backend/src/pi/stream-silence.ts) : la liveness d'un run
@@ -150,6 +178,11 @@ const HARNESS_ROLE_REMINDER = [
   "## ⚠️ HARNESS MODE — ROLE REMINDER (BINDING)",
   "",
   "You are in HARNESS mode (project lead): you DESIGN, you DELEGATE every execution task to sub-agents via the `delegate` tool (execute/planning/review/integrate), then you review results. Execution tools (bash, edit, read, write, grep) are NOT available to you — if a tool is 'not found', that is the signal to DELEGATE, never to wait or retry directly. Never code, edit files, or run commands yourself.",
+  "",
+  "DELEGATION IS NON-BLOCKING BY DEFAULT: `delegate` returns IMMEDIATELY with a short ticket ('Sous-agent lancé — <id>'). You stay AVAILABLE to the user while sub-agents work in the background. So: (1) acknowledge briefly what you launched, (2) do NOT wait for or invent the sub-agent's result, (3) keep answering the user possible — they may refine the task, ask questions, or ask you to stop a sub-agent. Each finished sub-agent's FULL result is delivered to you LATER as a new message (customType `subagent_result`) and starts a NEW turn where you comment on it. Use `background:false` ONLY when you truly need the result INSIDE the current turn (e.g. chaining planning→execute on its output in the same turn); otherwise tasks run in parallel and you sequence them across turns.",
+  "STOPPING: the user can stop a sub-agent (UI Stop / 'arrête'). If asked to stop, use the `delegate_stop` tool (target = run id from `delegate_list`, function name, or 'all') — do not claim the work finished; the run ends as 'annulé' and you receive the partial result.",
+  "USER CHANNEL (BINDING): the user NEVER talks to sub-agents — every user message reaches YOU. If the user's message refines, corrects or questions a RUNNING sub-agent, RELAY it with the `delegate_steer` tool. Never pretend you executed it yourself, and never say the sub-agent received it unless `delegate_steer` confirmed it.",
+  "RUN CONTROL TOOLS: `delegate_list` (what is running: run id, function, task, elapsed), `delegate_steer` (relay a user instruction to a running sub-agent), `delegate_stop` (stop a run by id, all runs of a function, or 'all'). If several runs share the same function (ambiguity), ask for the run id — or use 'all' only if the user really wants to stop everything.",
   "",
   "TOOL NAME (BINDING) : the delegation tool is named EXACTLY `delegate`, with the parameter `function` (planning | execute | review | integrate). There is NO tool named `delegate_to_expert` — it was RENAMED to `delegate`. If your own earlier/persisted messages (resumed session) mention `delegate_to_expert` or a `role` argument, IGNORE that legacy form and call `delegate` with `function`.",
   HARNESS_ROLE_MARKER_END,
@@ -475,6 +508,10 @@ function statusFromCause(cause: string | null, success: boolean): SubagentEndSta
     case "abort-utilisateur":
     case "abort-session":
       return "aborted";
+    // LOT 1 : arrêt CIBLÉ utilisateur (Stop) → statut d'annulation dédié (les
+    // AUTRES runs continuent ; le travail partiel est récupéré).
+    case "cancel-utilisateur":
+      return "cancelled";
     default:
       return "error";
   }
@@ -673,6 +710,15 @@ const delegateParams = {
       type: "string",
       description: "Contexte additionnel (fichiers à lire, décisions précédentes, etc.). Optionnel.",
     },
+    background: {
+      type: "boolean",
+      description:
+        "Exécuter la délégation EN TÂCHE DE FOND (défaut : true). Le tool rend la main " +
+        "immédiatement ; le RÉSULTAT du sous-agent sera réinjecté dans la conversation " +
+        "dès sa fin (tu produiras alors un nouveau tour pour le commenter). " +
+        "Mets `false` UNIQUEMENT si tu as besoin du résultat IMMÉDIATEMENT dans ce tour " +
+        "(ex. enchaîner planning→execute sans attendre) — le tool bloque alors jusqu'à la fin.",
+    },
   },
   required: ["function", "task"],
 };
@@ -721,6 +767,83 @@ const explorationNotesParams = {
   required: [],
 };
 
+// ── LOT 1 : REGISTRE des runs en cours (module-level, pont globalThis) ──
+// Un SEUL registre par PROCESSUS, publié sur globalThis pour que le backend
+// (routeur WS pi_subagent_stop) puisse arrêter un run CIBLÉ ou tous les runs
+// d'un projet — cf. harness-run-registry.ts (pont identique à l'émetteur
+// __piWebHarnessRawEmit__). ensureHarnessRunRegistry (et non createRunRegistry)
+// est INDISPENSABLE : le SDK charge cette extension DANS CHAQUE SESSION (main +
+// tempSessions de délégués, jiti moduleCache:false) ; sans le partage, la
+// dernière instance chargée écraserait le pont par un registre VIDE et le Stop
+// ciblé de l'UI (WS pi_subagent_stop) ne trouverait plus aucun run.
+const harnessRunRegistry = ensureHarnessRunRegistry();
+
+/**
+ * LOT 2 : ticket COURT retourné immédiatement par le tool en mode tâche de
+ * fond. Le RÉSULTAT COMPLET ne transite pas par le tool : il est réinjecté plus
+ * tard dans la conversation par le backend (customType `subagent_result`).
+ */
+function buildBackgroundTicket(delegateRunId: string, label: string): string {
+  return (
+    `🚀 Sous-agent « ${label} » lancé — ${delegateRunId} ; le résultat arrivera ` +
+    `dans la conversation dès la fin de sa tâche. Tu peux continuer à échanger ` +
+    `avec l'utilisateur ou lancer d'autres délégations en attendant.`
+  );
+}
+
+/**
+ * LOT 2 : POSTE le résultat final d'un run DÉTACHÉ au backend (route interne
+ * /api/harness/result), qui le réinjecte dans la conversation de
+ * l'orchestrateur (customType conversationnel `subagent_result` + tour LLM).
+ *
+ * POURQUOI le backend : la session de l'orchestrateur peut avoir été rechargée
+ * pendant le run (référence `pi` stale ici) — le backend lit toujours la session
+ * COURANTE du projet (décision utilisateur n°2). Fire-and-forget : un échec ne
+ * doit jamais casser le run.
+ */
+function postSubagentResult(args: {
+  delegateRunId: string;
+  projectId: string | null;
+  cwd: string;
+  delegateFunction: string;
+  label: string;
+  status: SubagentEndStatus;
+  cause: string | null;
+  errorMessage: string | null;
+  response: string;
+  durationMs: number;
+  actionCount: number;
+}): void {
+  try {
+    const body = JSON.stringify({
+      // projectId peut être null → la route re-résout par cwd.
+      projectId: args.projectId,
+      cwd: args.cwd,
+      result: {
+        delegateRunId: args.delegateRunId,
+        delegateFunction: args.delegateFunction,
+        label: args.label,
+        status: args.status,
+        cause: args.cause,
+        errorMessage: args.errorMessage,
+        response: args.response,
+        durationMs: args.durationMs,
+        actionCount: args.actionCount,
+      },
+    });
+    void fetch(`${PI_WEB_URL}/api/harness/result`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => {
+      // fire-and-forget : la réinjection est un plus, jamais une nécessité.
+    });
+  } catch {
+    // silencieux : ne JAMAIS casser le run.
+  }
+}
+
 // ── Extension ───────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -766,7 +889,11 @@ export default function (pi: ExtensionAPI) {
       "Le tool de délégation s'appelle EXACTEMENT `delegate` (paramètre `function`). `delegate_to_expert` n'existe plus (renommé) : ignore toute trace héritée de ce nom dans l'historique.",
       "Utilise delegate pour TOUTE tâche d'exécution (code, debug, review, tests, plan, doc).",
       "Pour une tâche simple → délègue directement à la fonction execute.",
-      "Pour une tâche complexe → délègue d'abord à planning pour un plan, puis à execute.",
+      "Pour une tâche complexe → délègue à planning. Par DÉFAUT la délégation est NON BLOQUANTE : le tool rend la main tout de suite et tu recevras le plan plus tard (`subagent_result`), sur lequel tu enchaîneras par un `delegate` execute. N'utilise `background:false` que si tu dois absolument enchaîner dans le MÊME tour.",
+      "Après un `delegate` non bloquant : accuse RÉCEPTION en une phrase, n'attends pas le résultat et n'invente rien. Le résultat complet arrivera dans la conversation et ouvrira un nouveau tour pour que tu le commentes.",
+      "Quand un `subagent_result` arrive : lis-le, fais un point concis à l'utilisateur et enchaîne (nouvelle délégation review/integrate, ou réponse finale).",
+      "Reste disponible pendant que les sous-agents travaillent : l'utilisateur peut préciser la tâche, poser une question, ou demander d'ARRÊTER un sous-agent (le run repasse alors en « annulé » et tu reçois le travail partiel).",
+      "L'utilisateur ne parle QU'À TOI : s'il donne une précision pour un sous-agent EN COURS, RELAIE-la avec `delegate_steer` (ne l'ignore pas, ne prétends pas l'avoir exécutée). Pour savoir ce qui tourne : `delegate_list`. Pour arrêter : `delegate_stop` (runId / fonction / « all »).",
       "Pour une relecture ou un audit → délègue à review.",
       "Pour la synthèse finale → délègue à integrate.",
       "Ne code JAMAIS toi-même. Tu es un chef de projet, pas un développeur.",
@@ -781,9 +908,43 @@ export default function (pi: ExtensionAPI) {
       onUpdate: any,
       ctx: any,
     ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      // ── LOT 2 (orchestrateur interactif) : délégation NON BLOQUANTE ──
+      // DÉFAUT = tâche de fond (mode harness uniquement : le tool `delegate`
+      // n'est actif QUE dans ce mode, cf. session.ts HARNESS_EXCLUDE). L'appel
+      // `background:false` repasse en mode bloquant (enchaînement planning→execute).
+      // delegateRunId est généré AU PLUS TÔT (ticket, registre, réinjection).
+      const delegateRunId = makeDelegateRunId();
+      // Normalisation tolérante : un modèle peut envoyer "false" (chaîne) plutôt
+      // que le booléen false — on ne doit PAS repasser en tâche de fond dans ce cas.
+      const background = params?.background !== false && params?.background !== "false";
+      // ── LOT 1 : état partagé du contrôle d'arrêt CIBLÉ ──
+      // runAbort : arrêt demandé par l'utilisateur (bouton Stop / commande) via
+      // le registre. cancelledByUser : preuve locale pour étiqueter la cause.
+      // activeTempSession : référence mutable (la tempSession n'existe pas encore
+      // au moment de l'enregistrement du run).
+      const runAbort = new AbortController();
+      let cancelledByUser = false;
+      let activeTempSession: any = null;
+      let runProjectId: string | null = null;
+      let runLabel = "";
+      // ── LOT 3 : tampon des consignes relayées AVANT le premier prompt ──
+      // Fenêtre registre → premier prompt (résolution de route HTTP, création de
+      // la tempSession, ré-enregistrement des providers…) : un steer() du SDK sur
+      // une session PAS ENCORE lancée serait ignoré en silence. Les consignes
+      // arrivées dans cette fenêtre sont donc tamponnées puis INTÉGRÉES au premier
+      // message (aucune perte) ; une fois le run lancé, steer() est utilisé.
+      let promptStarted = false;
+      const pendingSteers: string[] = [];
+      const MAX_PENDING_STEERS = 10;
+
+      // Le corps de la délégation est encapsulé pour pouvoir être exécuté soit
+      // BLOQUANT (await), soit DÉTACHÉ (tâche de fond) selon `background`.
+      const runDelegation = async (): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> => {
       // onUpdate permet de forwarder l'activité de la fonction vers le frontend
       // (tool_execution_update) — fini le silence pendant une délégation (BUG-67).
+      // En tâche de fond, le tool a DÉJÀ rendu la main : plus d'update attendu.
       const emitProgress = (text: string) => {
+        if (background) return;
         try {
           onUpdate?.({ content: [{ type: "text", text }] });
         } catch {}
@@ -792,12 +953,19 @@ export default function (pi: ExtensionAPI) {
       const context = typeof params.context === "string" ? params.context : undefined;
 
       // ── Identité + horodatage de la délégation (LOT 2a) ──
-      // Générés au PLUS TÔT pour que TOUS les retours du tool — y compris les
-      // erreurs de validation — portent un `details` structuré rattachable :
-      // le frontend relie le run de sous-agent EXACTEMENT via
-      // details.delegateRunId (le FIFO par args.function reste un secours).
-      const delegateRunId = makeDelegateRunId();
+      // delegateRunId est généré au PLUS TÔT (niveau execute, LOT 2) pour que le
+      // TICKET de tâche de fond, le REGISTRE et la réinjection partagent le MÊME
+      // identifiant. Chaque retour du tool porte un `details` structuré
+      // rattachable : le frontend relie le run EXACTEMENT via details.delegateRunId.
       const delegateStartedAt = Date.now();
+
+      // ── P0 observabilité (volet 1/2) : état d'issue, déclaré AVANT buildDetails
+      // pour que `cause` figure dans les détails de TOUS les retours. success =
+      // réponse valide retournée au tool ; tout autre chemin = ÉCHEC → archivage
+      // boîte noire (.data/logs/harness/).
+      let success = false;
+      let archiveCause: string | null = null;
+      let archiveErrorMessage: string | undefined = undefined;
 
       /** Détails structurés du RETOUR du tool `delegate` (portés par le toolCall). */
       const buildDetails = (
@@ -808,6 +976,9 @@ export default function (pi: ExtensionAPI) {
         delegateRunId,
         delegateFunction,
         status,
+        // Cause court (abort/cancel/timeout…) — nécessaire à la réinjection du
+        // résultat d'un run DÉTACHÉ (customType subagent_result).
+        cause: archiveCause,
         durationMs: Date.now() - delegateStartedAt,
         actionCount: actions,
       });
@@ -896,6 +1067,40 @@ export default function (pi: ExtensionAPI) {
       } catch {
         subagentProjectId = null;
       }
+      // LOT 2 : projectId partagé avec le callback de réinjection (détaché).
+      runProjectId = subagentProjectId;
+
+      // ── LOT 1 : ENREGISTREMENT du run dans le registre (arrêt ciblé/global) ──
+      // Enregistré AVANT la création de la tempSession (fenêtre de course
+      // minimale) : un arrêt pendant la création pose runAbort.aborted, ce que
+      // runPromptWithTimeouts détecte à l'entrée. Le handle est DÉSENREGISTRÉ
+      // dans un finally (fin de vie du run, cf. plus bas). activeTempSession
+      // reçoit la session dès sa création pour que cancel() puisse l'aborter.
+      const runHandle: SubagentRunHandle = {
+        runId: delegateRunId,
+        projectId: subagentProjectId ?? undefined,
+        delegateFunction: functionName,
+        // LOT 3/4 : métadonnées d'affichage du registre (delegate_list). Le
+        // libellé humain et la fonction EFFECTIVE sont renseignés après la
+        // classification (le registre stocke la référence — mutation visible).
+        taskExcerpt,
+        startedAt: delegateStartedAt,
+        cancel: () => {
+          // Preuve locale d'un arrêt VOLONTAIRE (étiquette de cause) + abort de
+          // la tempSession si elle existe déjà.
+          cancelledByUser = true;
+          try { runAbort.abort(); } catch {}
+          try { activeTempSession?.abort?.(); } catch {}
+        },
+        steer: (text: string) => {
+          // Direction d'un sous-agent (relais orchestrator) — best-effort.
+          try {
+            if (promptStarted && activeTempSession) activeTempSession.steer?.(text);
+            else if (pendingSteers.length < MAX_PENDING_STEERS) pendingSteers.push(text);
+          } catch {}
+        },
+      };
+      harnessRunRegistry.register(runHandle);
       // Fonction effective (peut être re-classée par le routeur backend).
       let subagentFuncName = functionName || "unknown";
       let subagentFuncLabel = requestedFunc.label;
@@ -950,6 +1155,25 @@ export default function (pi: ExtensionAPI) {
           emitSubagentEvent(subagentProjectId, subagentBase(), event);
         } catch {
           // silencieux : le streaming est un plus, jamais une dépendance
+        }
+      };
+
+      /**
+       * LOT 5.1 : signal discret d'ATTENTE DE SLOT LLM (file du limiteur de
+       * concurrence). Émis HORS quota du gate (2 événements max par tentative) :
+       * c'est un état d'UI, le perdre laisserait croire à tort que le run
+       * travaille (ou qu'il est bloqué). Best-effort permanent.
+       */
+      const emitQueueState = (queued: boolean, provider?: string): void => {
+        try {
+          if (!subagentProjectId) return;
+          emitSubagentEvent(subagentProjectId, subagentBase(), {
+            type: "subagent_queue",
+            queued,
+            provider,
+          });
+        } catch {
+          // silencieux : signal d'UI, jamais une dépendance du run.
         }
       };
 
@@ -1232,14 +1456,10 @@ export default function (pi: ExtensionAPI) {
         }
       };
 
-      // ── P0 observabilité (volet 1/2) : suivi de l'issue, déclaré AVANT le
-      // try externe pour rester visible de son catch (le statut exact est porté
-      // par les `details` du retour du tool). success = réponse valide retournée
-      // au tool (fichier de session supprimé) ; tout autre chemin = ÉCHEC →
-      // archivage boîte noire (.data/logs/harness/).
-      let success = false;
-      let archiveCause: string | null = null;
-      let archiveErrorMessage: string | undefined = undefined;
+      // ── P0 observabilité (volet 1/2) : suivi de l'issue ──
+      // success/archiveCause/archiveErrorMessage sont DÉCLARÉS PLUS HAUT (niveau
+      // execute, avant buildDetails, LOT 2) — visibles du catch externe ET des
+      // détails du tool. On les a déjà initialisés.
 
       try {
         // Créer une session temporaire pour la fonction
@@ -1274,6 +1494,12 @@ export default function (pi: ExtensionAPI) {
         // portée par chaque enveloppe {type:"subagent", …} et le résumé persisté.
         subagentFuncName = effectiveFunction;
         subagentFuncLabel = effectiveFunc.label;
+        // LOT 2 : libellé partagé avec le callback de réinjection (détaché).
+        runLabel = effectiveFunc.label;
+        // LOT 3/4 : le registre expose la fonction EFFECTIVE et le libellé
+        // humain (delegate_list / messages de delegate_stop/delegate_steer).
+        runHandle.delegateFunction = effectiveFunction;
+        runHandle.label = effectiveFunc.label;
 
         // Modèle conseillé par le routeur (sinon fallback ctx.model plus bas).
         const routingModel = await resolveRoutingModel(ctx, routing?.modelId);
@@ -1323,6 +1549,8 @@ export default function (pi: ExtensionAPI) {
           resourceLoader: tempResourceLoader,
         });
         const tempSession = result.session;
+        // LOT 1 : le registre peut désormais aborter/diriger la session réelle.
+        activeTempSession = tempSession;
 
         // ── LOT 2a : début du streaming (projectId déjà résolu avant le try
         // externe — cf. bloc d'état LOT 2a) ──
@@ -1426,6 +1654,8 @@ export default function (pi: ExtensionAPI) {
           }
           // P0 : mémoriser le modèle/provider effectifs pour la meta d'archivage
           usedModelLabel = getSessionModelLabel(tempSession);
+          // LOT 3/4 : modèle effectif visible dans delegate_list.
+          runHandle.model = usedModelLabel;
           console.log(`[harness-orchestrator] Modèle effectif ${effectiveFunc.label} : ${usedModelLabel}`);
 
           // Restreindre les outils de la fonction
@@ -1726,15 +1956,22 @@ export default function (pi: ExtensionAPI) {
            * Throw sur abort signal ou erreurs modèle (pas de retry).
            */
           const runPromptWithTimeouts = async (): Promise<boolean> => {
-            // P2 : cause d'abandon dérivée d'une PREUVE (marqueur backend), pas
-            // du message. Un abort interne ne doit jamais devenir
-            // « abort-utilisateur ».
+            // P2/LOT 1 : cause d'arrêt dérivée de PREUVES, par priorité :
+            //  - cancel-utilisateur : arrêt CIBLÉ demandé (bouton Stop/commande) ;
+            //  - abort-utilisateur : abandon explicite de la session (marqueur backend) ;
+            //  - abort-session : abort interne (timeout/shutdown/switchMode…).
+            if (runAbort.signal.aborted) cancelledByUser = true;
             const abortCause = () =>
-              resolveAbortCause(isUserInitiatedAbort(subagentProjectId));
+              resolveDelegationAbortCause({
+                cancelled: cancelledByUser,
+                userInitiated: isUserInitiatedAbort(subagentProjectId),
+              });
 
-            // Si le signal est déjà aborté avant le lancement, ne pas relancer un prompt
-            if (signal?.aborted) {
-              // P0 : abort sans travail → échec, boîte noire à archiver
+            // Si un arrêt est déjà demandé avant le lancement, ne pas lancer le
+            // prompt. LOT 2 : en tâche de fond, le signal de l'orchestrateur est
+            // IGNORÉ (BUG-67) — seul runAbort (arrêt ciblé) compte.
+            if ((signal?.aborted && !background) || runAbort.signal.aborted) {
+              // P0 : arrêt sans travail → échec/annulation, boîte noire à archiver
               const cause = abortCause();
               archiveCause = cause;
               throw new Error(abortMessageFor(cause));
@@ -1755,6 +1992,7 @@ export default function (pi: ExtensionAPI) {
             let detectorTimer: ReturnType<typeof setInterval> | null = null;
             let rejectTimeout: ((err: Error) => void) | null = null;
             let abortHandler: (() => void) | null = null;
+            let cancelHandler: (() => void) | null = null;
             let warnedOnce = false;
 
             // Chaque événement reçu de la tempSession prouve que le flux vit →
@@ -1794,53 +2032,105 @@ export default function (pi: ExtensionAPI) {
             // rejet non géré (sinon le handler unhandledRejection tue le process).
             swallowRejection(timeoutPromise);
 
-            // Abort signal de l'orchestrator → abort la fonction aussi (message clair)
-            const abortPromise = signal
-              ? new Promise<void>((_, reject) => {
-                  abortHandler = () => {
-                    raceGuard.guard(() => {
-                      (tempSession as any).abort?.().catch(() => {});
-                      reject(new Error(abortMessageFor(abortCause())));
-                    });
-                  };
-                  signal.addEventListener("abort", abortHandler);
-                })
-              : new Promise<void>(() => {}); // jamais résout si pas de signal
+            // Abort signal de l'orchestrator → abort la fonction aussi (message clair).
+            // ⚠️ BUG-67 / LOT 2 : en TÂCHE DE FOND, le signal de l'orchestrateur est
+            // IGNORÉ — un abort de SESSION ultérieur (reload, nouveau prompt) ne doit
+            // PAS tuer un run détaché. Seul l'arrêt CIBLÉ (runAbort, via
+            // pi_subagent_stop) l'arrête.
+            const useOrchestratorSignal = !!signal && !background;
+            const abortPromise = new Promise<void>((_, reject) => {
+              abortHandler = () => {
+                raceGuard.guard(() => {
+                  (tempSession as any).abort?.().catch(() => {});
+                  reject(new Error(abortMessageFor(abortCause())));
+                });
+              };
+              if (useOrchestratorSignal) signal!.addEventListener("abort", abortHandler);
+            }); // jamais résout sans signal orchestrateur
             // P3 : idem — la promesse d'abort perdante est neutralisée.
             swallowRejection(abortPromise);
 
+            // ── LOT 1 : ARRÊT CIBLÉ (registre → pi_subagent_stop → runAbort) ──
+            // Contrairement à l'abort de session, il vise CE run uniquement :
+            // les autres délégations continuent. Le partiel est récupéré plus bas
+            // (branche isAbortInterruption).
+            const cancelPromise = new Promise<void>((_, reject) => {
+              cancelHandler = () => {
+                cancelledByUser = true;
+                raceGuard.guard(() => {
+                  (tempSession as any).abort?.().catch(() => {});
+                  reject(new Error(abortMessageFor("cancel-utilisateur")));
+                });
+              };
+              runAbort.signal.addEventListener("abort", cancelHandler);
+              // Course : le signal a pu être aborté entre le contrôle d'entrée et
+              // l'enregistrement du listener (addEventListener ne rejoue pas).
+              if (runAbort.signal.aborted) cancelHandler();
+            });
+            swallowRejection(cancelPromise);
+
             // ── Phase 2 : slot LLM par provider pour l'appel du sous-agent ──
-            // Le provider est résolu APRÈS le setModel (tempSession.model), donc
-            // c'est bien le provider réellement appelé. ANTI-DEADLOCK : le
-            // sous-agent ne dispose PAS du tool `delegate` → il ne sous-délègue
-            // jamais, donc le slot n'est jamais conservé pendant l'attente d'une
-            // sous-délégation. Libération garantie dans le finally ci-dessous.
-            // ⚠️ Un sous-agent EN ATTENTE de slot n'émet AUCUN événement : sans
-            // pause, le détecteur de silence le tuerait à tort. On neutralise
-            // donc le compteur pendant toute attente légitime sans flux.
+            // (déclaration des variables AVANT le try : le finally doit pouvoir
+            // libérer un slot même si la course est interrompue pendant
+            // l'attente — cf. commentaire détaillé dans le try ci-dessous.)
             const bridge = getConcurrencyBridge();
             const subagentProvider = (tempSession as any)?.model?.provider ?? "__default__";
             let subagentSlotKey: string | null = null;
-            if (bridge) {
-              subagentSlotKey =
-                `${subagentProvider}::${subagentProjectId ?? "unknown"}::subagent::${++subagentSlotSeq}`;
-              detector.pause();
-              try {
-                await bridge.acquireLLMSlot(
-                  subagentSlotKey,
-                  `subagent:${effectiveFunction}`,
-                  subagentProvider,
-                );
-              } finally {
-                detector.resume();
-              }
-            }
+            // LOT 3 : état d'acquisition du slot (course avec cancelPromise).
+            let slotAcquired = false;
+            let slotAcquirePromise: Promise<void> | null = null;
 
             try {
+              // ── Phase 2 : slot LLM par provider pour l'appel du sous-agent ──
+              // Le provider est résolu APRÈS le setModel (tempSession.model), donc
+              // c'est bien le provider réellement appelé. ANTI-DEADLOCK : le
+              // sous-agent ne dispose PAS du tool `delegate` → il ne sous-délègue
+              // jamais, donc le slot n'est jamais conservé pendant l'attente d'une
+              // sous-délégation. Libération garantie dans le finally ci-dessous.
+              // ⚠️ Un sous-agent EN ATTENTE de slot n'émet AUCUN événement : sans
+              // pause, le détecteur de silence le tuerait à tort. On neutralise
+              // donc le compteur pendant toute attente légitime sans flux.
+              if (bridge) {
+                subagentSlotKey =
+                  `${subagentProvider}::${subagentProjectId ?? "unknown"}::subagent::${++subagentSlotSeq}`;
+                detector.pause();
+                try {
+                  slotAcquirePromise = bridge.acquireLLMSlot(
+                    subagentSlotKey,
+                    `subagent:${effectiveFunction}`,
+                    subagentProvider,
+                  );
+                  // Preuve locale d'acquisition (le finally libère le slot).
+                  slotAcquirePromise.then(
+                    () => { slotAcquired = true; },
+                    () => {},
+                  );
+                  // LOT 5.1 : l'UI affiche discrètement l'attente de slot.
+                  emitQueueState(true, subagentProvider);
+                  // LOT 3 : l'attente d'un slot est INTERRUPTIBLE — un run EN FILE
+                  // peut être arrêté (bouton Stop / commande delegate_stop) sans
+                  // attendre l'obtention du slot (jusqu'à queueTimeout, défaut 1 h).
+                  // En mode bloquant, l'abort de la session orchestrateur interrompt
+                  // aussi l'attente (abortPromise jamais résolu en tâche de fond).
+                  await Promise.race([slotAcquirePromise, cancelPromise, abortPromise]);
+                } finally {
+                  detector.resume();
+                  emitQueueState(false, subagentProvider);
+                }
+              }
+
+              // LOT 3 : consignes relayées pendant la fenêtre de démarrage
+              // (registre → premier prompt) → intégrées au premier message.
+              // Le tampon est vidé : jamais rejoué aux tentatives suivantes.
+              if (pendingSteers.length > 0) {
+                functionPrompt += `\n\n## Précisions de l'utilisateur (relayées pendant le démarrage)\n\n${pendingSteers.splice(0).join("\n\n")}`;
+              }
+              promptStarted = true;
               await Promise.race([
                 tempSession.prompt(functionPrompt, {}),
                 timeoutPromise,
                 abortPromise,
+                cancelPromise,
               ]);
               return true;
             } catch (err: any) {
@@ -1895,12 +2185,22 @@ export default function (pi: ExtensionAPI) {
               // Phase 2 : TOUJOURS libérer le slot (succès, exception, abort,
               // silence de flux/garde-fou). Un échec de libération ne doit pas
               // masquer l'issue réelle de la délégation.
-              if (bridge && subagentSlotKey) bridge.releaseLLMSlot(subagentSlotKey);
+              if (bridge && subagentSlotKey && slotAcquired) {
+                bridge.releaseLLMSlot(subagentSlotKey);
+              } else if (bridge && subagentSlotKey && slotAcquirePromise) {
+                // LOT 3 : l'acquisition peut aboutir APRÈS la fin de la course
+                // (cancel gagnant pendant l'attente) → libérer dès sa résolution,
+                // sinon le slot resterait détenu jusqu'au watchdog.
+                void slotAcquirePromise
+                  .then(() => bridge.releaseLLMSlot(subagentSlotKey!))
+                  .catch(() => {});
+              }
               // P3 : marquer la course terminée AVANT de couper les timers — un
               // callback de timer déjà en file ne peut plus rejeter.
               raceGuard.finish();
               if (detectorTimer) clearInterval(detectorTimer);
               if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
+              if (cancelHandler) runAbort.signal.removeEventListener("abort", cancelHandler);
               resetSilenceFn = null; // déconnecter le callback
             }
           };
@@ -2111,12 +2411,289 @@ export default function (pi: ExtensionAPI) {
             details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
           };
         }
+        // ── LOT 1 : interruption (abort de session OU arrêt CIBLÉ) — renvoyer le
+        // message tel quel (plus parlant que « ❌ ... a échoué »). Le partiel
+        // récupéré est déjà joint au message.
+        if (typeof err?.message === "string" && isAbortInterruption(err.message)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: err.message,
+            }],
+            details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
+          };
+        }
         return {
           content: [{
             type: "text" as const,
             text: `❌ ${requestedFunc.label} a échoué : ${err.message}`,
           }],
           details: buildDetails(statusFromCause(archiveCause, false), subagentFuncName, actionCount),
+        };
+      } finally {
+        // LOT 1 : DÉSENREGISTREMENT du run (fin de vie, quel que soit le chemin).
+        harnessRunRegistry.unregister(delegateRunId);
+      }
+      }; // ── fin runDelegation ──
+
+      // ── LOT 2 : exécution BLOQUANTE (background:false) vs TÂCHE DE FOND ──
+      if (!background) {
+        return await runDelegation();
+      }
+
+      // Tâche de fond (défaut) : lancer la délégation DÉTACHÉE puis rendre la
+      // main IMMÉDIATEMENT (ticket court). Le résultat complet sera réinjecté
+      // par le backend (route /api/harness/result → customType subagent_result),
+      // ce qui déclenchera un NOUVEAU tour de l'orchestrateur.
+      void runDelegation()
+        .then((res) => {
+          const d = (res?.details || {}) as any;
+          postSubagentResult({
+            delegateRunId,
+            projectId: runProjectId,
+            cwd: ctx?.cwd || process.cwd(),
+            delegateFunction: d.delegateFunction || String(params?.function || ""),
+            label: runLabel,
+            status: (d.status as SubagentEndStatus) || "error",
+            cause: d.cause ?? null,
+            errorMessage: null,
+            response: res?.content?.[0]?.text || "",
+            durationMs: typeof d.durationMs === "number" ? d.durationMs : 0,
+            actionCount: typeof d.actionCount === "number" ? d.actionCount : 0,
+          });
+        })
+        .catch(() => {});
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: buildBackgroundTicket(
+            delegateRunId,
+            FUNCTION_BY_NAME.get(String(params?.function))?.label || String(params?.function || "sous-agent"),
+          ),
+        }],
+        details: {
+          delegateRunId,
+          delegateFunction: String(params?.function || ""),
+          background: true,
+        },
+      };
+    },
+  });
+
+  // ── LOT 3/4 : tools de CONTRÔLE des sous-agents en cours ─────────────────
+  // L'utilisateur ne parle JAMAIS aux sous-agents (décision utilisateur passe
+  // 2) : c'est l'orchestrateur qui RELAIE ses consignes (delegate_steer),
+  // ARRÊTE un run (delegate_stop) et SAIT ce qui tourne (delegate_list). Ces
+  // tools s'appuient sur le registre (LOT 1) ; la résolution de cible et les
+  // messages de retour sont PURS et testés côté backend
+  // (harness-run-targeting.ts + .test.ts). En mode CODE, ils sont exclus via
+  // HARNESS_EXCLUDE (session.ts) comme `delegate`.
+
+  /**
+   * Runs en cours VISIBLES pour l'orchestrateur (étanchéité projet).
+   * Le registre est un singleton de PROCESSUS (pont globalThis) : on borne la
+   * liste au projet de l'orchestrateur quand il est résolvable ; un run dont
+   * le projet est inconnu (résolution dégradée) reste visible pour ne jamais
+   * « cacher » un run réel. Les tools ne contrôlent QUE les runs de cette liste.
+   */
+  async function listActiveRunsForCtx(ctx: any): Promise<RunTargetInfo[]> {
+    const cwd = ctx?.cwd || process.cwd();
+    let projectId: string | null = null;
+    try {
+      projectId =
+        typeof ctx?.projectId === "string" && ctx.projectId
+          ? ctx.projectId
+          : await resolveProjectId(cwd);
+    } catch {
+      projectId = null;
+    }
+    const handles = harnessRunRegistry
+      .list()
+      .filter((h) => !projectId || !h.projectId || h.projectId === projectId);
+    return handles.map(runTargetInfoFromHandle);
+  }
+
+  /** Description partagée du paramètre `target` (mêmes règles pour stop/steer). */
+  const runTargetDescription =
+    "Cible : identifiant de run (ex. « d-... », cf. `delegate_list`), nom de fonction " +
+    "(« planning » | « execute » | « review » | « integrate », alias de rôles legacy acceptés), " +
+    "ou « all » pour TOUS les runs. En cas d'ambiguïté (plusieurs runs de la même fonction), " +
+    "précise un identifiant de run.";
+
+  const delegateStopParams = {
+    type: "object" as const,
+    properties: {
+      target: { type: "string", description: runTargetDescription },
+    },
+    required: ["target"],
+  };
+
+  const delegateSteerParams = {
+    type: "object" as const,
+    properties: {
+      target: { type: "string", description: runTargetDescription },
+      message: {
+        type: "string",
+        description:
+          "La consigne/précision à TRANSMETTRE au sous-agent en cours (injectée dans sa session ; " +
+          "il en tient compte dans la suite de sa tâche). Reprends fidèlement la demande de " +
+          "l'utilisateur — ne la transforme pas en nouvelle tâche complète.",
+      },
+    },
+    required: ["target", "message"],
+  };
+
+  const delegateListParams = {
+    type: "object" as const,
+    properties: {},
+    required: [],
+  };
+
+  // delegate_list : QU'EST-CE QUI TOURNE ? (indispensable pour cibler un stop/steer).
+  pi.registerTool({
+    name: "delegate_list",
+    label: "Delegate List",
+    description:
+      "Liste les sous-agents EN COURS (identifiant de run, fonction, libellé, modèle, temps " +
+      "écoulé, tâche résumée). À utiliser AVANT tout `delegate_stop`/`delegate_steer` pour " +
+      "cibler le bon run, et pour répondre à l'utilisateur qui demande où en sont les tâches.",
+    promptSnippet: "Lister les sous-agents en cours",
+    promptGuidelines: [
+      "Call delegate_list before delegate_stop/delegate_steer whenever you are not certain of the exact run id.",
+      "When the user asks what is running (or asks for a status), answer from delegate_list — never invent sub-agent identities or results.",
+    ],
+    parameters: delegateListParams,
+    async execute(
+      _toolCallId: string,
+      _params: any,
+      _signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      try {
+        const runs = await listActiveRunsForCtx(ctx);
+        return {
+          content: [{ type: "text" as const, text: buildRunListMessage(runs) }],
+          details: { count: runs.length, runIds: runs.map((r) => r.runId) },
+        };
+      } catch (e: any) {
+        return {
+          content: [
+            { type: "text" as const, text: `❌ Liste des sous-agents indisponible : ${e?.message || e}` },
+          ],
+          details: {},
+        };
+      }
+    },
+  });
+
+  // delegate_steer : RELAIS d'une consigne utilisateur vers un run en cours.
+  pi.registerTool({
+    name: "delegate_steer",
+    label: "Delegate Steer",
+    description:
+      "Transmet une consigne/précision à un sous-agent EN COURS : c'est LE canal de relais " +
+      "(l'utilisateur ne parle jamais aux agents). La consigne est injectée dans la session du " +
+      "sous-agent, qui continue sa tâche en en tenant compte. Cible : identifiant de run " +
+      "(cf. `delegate_list`), fonction, ou « all ». Si le run est déjà terminé, le tool le " +
+      "signale et indique de relancer une délégation de suivi avec la précision.",
+    promptSnippet: "Relayer une consigne à un sous-agent en cours",
+    promptGuidelines: [
+      "The user ONLY talks to you. When their message refines/corrects a RUNNING sub-agent's task, relay it with delegate_steer — do not swallow it, do not answer on the sub-agent's behalf, and do not pretend you did the work.",
+      "If delegate_steer reports the run is already finished, relaunch a follow-up delegation via `delegate` including the user's precision.",
+    ],
+    parameters: delegateSteerParams,
+    async execute(
+      _toolCallId: string,
+      params: any,
+      _signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      const target = typeof params?.target === "string" ? params.target : "";
+      const text = typeof params?.message === "string" ? params.message : "";
+      if (!text.trim()) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "❌ Consigne vide : rien n'a été transmis. Fournis le texte de la consigne à relayer.",
+          }],
+          details: {},
+        };
+      }
+      try {
+        const runs = await listActiveRunsForCtx(ctx);
+        const resolution = resolveRunTarget(runs, target);
+        let steered = 0;
+        if (resolution.status === "all" || resolution.status === "resolved") {
+          for (const run of resolution.runs) {
+            if (harnessRunRegistry.steer(run.runId, text)) steered++;
+          }
+        }
+        return {
+          content: [{
+            type: "text" as const,
+            text: buildSteerResultMessage({ target, resolution, text, steered }),
+          }],
+          details: { target, status: resolution.status, steered },
+        };
+      } catch (e: any) {
+        return {
+          content: [
+            { type: "text" as const, text: `❌ Relais de la consigne impossible : ${e?.message || e}` },
+          ],
+          details: {},
+        };
+      }
+    },
+  });
+
+  // delegate_stop : ARRÊT ciblé (runId / fonction) ou global (« all »).
+  pi.registerTool({
+    name: "delegate_stop",
+    label: "Delegate Stop",
+    description:
+      "Arrête un ou plusieurs sous-agents EN COURS (identifiant de run, fonction, ou « all »). " +
+      "Périmètre STRICTEMENT limité aux sous-agents : la session de l'orchestrateur et les autres " +
+      "runs continuent. Le travail partiel est récupéré et livré via `subagent_result` avec le " +
+      "statut « annulé ». À utiliser quand l'utilisateur demande d'arrêter une tâche.",
+    promptSnippet: "Arrêter un sous-agent en cours (ciblé ou global)",
+    promptGuidelines: [
+      "Use delegate_stop when the user asks to stop a sub-agent (or all of them). Never claim the work finished: the run ends as 'annulé' and its partial result arrives later.",
+      "Targets: a run id from delegate_list, a function name (planning/execute/review/integrate), or 'all'. If several runs share the function, ask for the run id — or use 'all' only if the user really wants everything stopped.",
+    ],
+    parameters: delegateStopParams,
+    async execute(
+      _toolCallId: string,
+      params: any,
+      _signal: AbortSignal | undefined,
+      _onUpdate: any,
+      ctx: any,
+    ): Promise<{ content: { type: "text"; text: string }[]; details: unknown }> {
+      const target = typeof params?.target === "string" ? params.target : "";
+      try {
+        const runs = await listActiveRunsForCtx(ctx);
+        const resolution = resolveRunTarget(runs, target);
+        let cancelled = 0;
+        if (resolution.status === "all" || resolution.status === "resolved") {
+          for (const run of resolution.runs) {
+            if (harnessRunRegistry.cancel(run.runId)) cancelled++;
+          }
+        }
+        return {
+          content: [{
+            type: "text" as const,
+            text: buildStopResultMessage({ target, resolution, cancelled }),
+          }],
+          details: { target, status: resolution.status, cancelled },
+        };
+      } catch (e: any) {
+        return {
+          content: [
+            { type: "text" as const, text: `❌ Arrêt des sous-agents impossible : ${e?.message || e}` },
+          ],
+          details: {},
         };
       }
     },

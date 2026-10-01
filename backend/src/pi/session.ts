@@ -46,6 +46,16 @@ import {
 import { buildMemoryInjection } from "./memory-service.js";
 import { createPromptExtension, type PiWebPromptContext } from "./system-prompt.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
+// LOT 2 (orchestrateur interactif) : réinjection des résultats de sous-agents.
+// Logique pure (options de livraison + lotissement) testée dans
+// harness-result-delivery.test.ts.
+import {
+  buildResultMessageContent,
+  createResultBatcher,
+  resultDeliveryOptions,
+  type ResultBatcher,
+  type SubagentResultPayload,
+} from "./harness-result-delivery.js";
 import { getProject, getAllProjects } from "../projects/manager.js";
 import { logger } from "../utils/logger.js";
 
@@ -1955,6 +1965,111 @@ export async function injectSubagentActivity(
   }
 }
 
+// ── LOT 2 (orchestrateur interactif) : réinjection des RÉSULTATS de sous-agents ──
+// DÉCISION UTILISATEUR n°2 : c'est le BACKEND qui réinjecte les résultats (et
+// non l'extension) — la session de l'orchestrateur peut avoir été rechargée
+// pendant le run (référence `pi` stale côté extension) ; le backend retrouve
+// toujours la session COURANTE du projet au moment du flush.
+// DÉCISION n°3 : si l'orchestrateur est en streaming (l'utilisateur parle), la
+// livraison est différée en `followUp` (après le tour courant).
+// LOTISSEMENT : plusieurs fins de runs rapprochées déclenchent UN SEUL tour LLM
+// (fenêtre courte, cf. harness-result-delivery.ts).
+const subagentResultBatchers = new Map<string, ResultBatcher>();
+
+function getSubagentResultBatcher(projectId: string): ResultBatcher {
+  let batcher = subagentResultBatchers.get(projectId);
+  if (!batcher) {
+    batcher = createResultBatcher({
+      onFlush: (items) => { void deliverSubagentResults(projectId, items); },
+    });
+    subagentResultBatchers.set(projectId, batcher);
+  }
+  return batcher;
+}
+
+/**
+ * SEAM TESTABLE : réinjecte un LOT de résultats dans une session donnée.
+ * Construit le message conversationnel `subagent_result` et le transmet via
+ * `sendCustomMessage` avec les options de livraison (idle → tour normal ;
+ * streaming → followUp). PURE vis-à-vis du store (session injectée) — testée
+ * dans session-subagent-result.test.ts.
+ */
+export async function deliverSubagentResultsToSession(
+  session: { sendCustomMessage: (message: any, options: any) => Promise<void> },
+  items: SubagentResultPayload[],
+  isStreaming: boolean,
+): Promise<void> {
+  const options = resultDeliveryOptions(isStreaming);
+  const content = buildResultMessageContent(items);
+  if (!content) return;
+  await session.sendCustomMessage(
+    {
+      customType: "subagent_result",
+      content,
+      display: true,
+      // `details` : données structurées (non envoyées au LLM) pour un rendu
+      // UI enrichi. AUCUN marqueur NON conversationnel : ce message DOIT être
+      // vu par le modèle (cf. harness-stream.NON_CONVERSATIONAL_CUSTOM_TYPES).
+      details: { results: items },
+    },
+    {
+      triggerTurn: options.triggerTurn,
+      ...(options.deliverAs ? { deliverAs: options.deliverAs } : {}),
+    },
+  );
+}
+
+/**
+ * Réinjecte un LOT de résultats dans la conversation de l'orchestrateur via
+ * `sendCustomMessage` (customType conversationnel `subagent_result`, display:true
+ * → VU par le LLM) avec `triggerTurn:true` : l'orchestrateur produit
+ * SPONTANÉMENT un nouveau tour commentant les résultats.
+ *
+ * La session est résolue AU MOMENT DU FLUSH (robustesse au rechargement) ;
+ * l'échec est best-effort et ne remonte jamais à l'appelant.
+ */
+async function deliverSubagentResults(
+  projectId: string,
+  items: SubagentResultPayload[],
+): Promise<void> {
+  const state = sessionsByProject.get(projectId);
+  if (!state?.session) {
+    console.warn(`[subagentResult] No session for ${projectId} — ${items.length} résultat(s) non réinjecté(s)`);
+    return;
+  }
+  const streaming = isSessionStreaming(projectId);
+  try {
+    await deliverSubagentResultsToSession(state.session, items, streaming);
+    console.log(`[subagentResult] ${items.length} résultat(s) réinjecté(s) pour ${projectId} (streaming=${streaming})`);
+  } catch (e: any) {
+    console.error(`[subagentResult] Failed for ${projectId}:`, e?.message || e);
+  }
+}
+
+/**
+ * LOT 2 : réception d'un résultat de sous-agent (route /api/harness/result).
+ * Ne réinjecte PAS immédiatement : le résultat rejoint le lotisseur du projet
+ * (fenêtre courte) pour ne déclencher QU'UN tour même en cas de fins groupées.
+ *
+ * Best-effort : un payload invalide ou une erreur ne jette jamais.
+ */
+export async function injectSubagentResult(
+  projectId: string,
+  result: SubagentResultPayload,
+): Promise<boolean> {
+  if (!result || typeof result !== "object" || typeof result.delegateRunId !== "string") {
+    console.warn(`[injectSubagentResult] Invalid result payload for ${projectId}`);
+    return false;
+  }
+  try {
+    getSubagentResultBatcher(projectId).add(result);
+    return true;
+  } catch (e: any) {
+    console.error(`[injectSubagentResult] Failed for ${projectId}:`, e?.message || e);
+    return false;
+  }
+}
+
 export function getSessionInfo(projectId?: string) {
   const state = projectId
     ? sessionsByProject.get(projectId)
@@ -2076,8 +2191,10 @@ function filterPlatformTools(names: string[]): string[] {
 const HARNESS_TOOLS: string[] = [];
 // Tools d'orchestration à EXCLURE des modes non-harness (BUG-71).
 // En mode CODE/REVIEW, le LLM doit travailler directement,
-// pas déléguer via delegate.
-const HARNESS_EXCLUDE = ["delegate"];
+// pas déléguer via delegate ; idem pour les tools de CONTRÔLE des runs
+// (LOT 3/4 : delegate_list / delegate_steer / delegate_stop) qui n'ont de sens
+// qu'en mode harness — en mode CODE, seuls les tools de base doivent rester.
+const HARNESS_EXCLUDE = ["delegate", "delegate_list", "delegate_steer", "delegate_stop"];
 
 /** Get extension tool names registered in the session */
 function getExtensionToolNames(session: any, exclude: string[] = []): string[] {

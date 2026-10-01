@@ -72,6 +72,16 @@ export const en = {
     subAgentCause: "cause",
     // ── Stalled run (still `running` with no subagent_end past the threshold) ──
     subAgentStuck: "no end (stalled)",
+    // ── LOT 5.1: waiting for an LLM slot (concurrency limiter queue) ──
+    subAgentQueued: "LLM queue",
+    subAgentQueuedTitle: "Waiting for an LLM slot (simultaneous calls are limited) — the sub-agent will start as soon as a slot frees up",
+    // ── LOT 1: sub-agent stop (per-run button + “Stop all”) ──
+    subAgentStop: "Stop",
+    subAgentStopTitle: "Stop this sub-agent",
+    subAgentStopAll: "Stop all",
+    subAgentStopAllTitle: "Stop all running sub-agents",
+    // ── LOT 2: result message from a detached sub-agent ──
+    subAgentResultLabel: "Sub-agent result",
     // ── LOT 4: side-by-side columns for simultaneous sub-agents ──
     parallelSubAgents: (n: number) => `${n} sub-agents in parallel`,
     parallelSubAgentsOverflow: (n: number) => `horizontal scroll beyond ${n}`,

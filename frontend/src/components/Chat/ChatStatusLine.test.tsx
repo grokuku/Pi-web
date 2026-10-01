@@ -4,11 +4,12 @@
 // (aucun événement de texte de la session principale), que l'indicateur
 // s'éteint au repos, que la pastille « stalled » est explicite et supprimée
 // pendant une délégation active, et que `git:<branche>` reste affiché.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { I18nProvider } from "../../i18n";
 import { ChatStatusLine } from "./ChatStatusLine";
+import { SubAgentControlsProvider } from "../../stores/subagentRuns";
 
 function renderLine(props: Partial<ComponentProps<typeof ChatStatusLine>> = {}) {
   return render(
@@ -64,5 +65,25 @@ describe("ChatStatusLine — indicateur d'activité", () => {
   it("run principal silencieux sans délégation : « no activity for 60s » (explicite)", () => {
     renderLine({ isStreaming: true, streamingStalled: true });
     expect(screen.getByText("no activity for 60s")).toBeTruthy();
+  });
+
+  it("subAgentActive → bouton « Stop all » qui arrête TOUS les runs via le contexte (LOT 1)", () => {
+    const stop = vi.fn();
+    render(
+      <I18nProvider>
+        <SubAgentControlsProvider value={{ stop }}>
+          <ChatStatusLine isStreaming={false} subAgentActive />
+        </SubAgentControlsProvider>
+      </I18nProvider>,
+    );
+    screen.getByRole("button", { name: /Stop all/i }).click();
+    // Aucun runId → arrêt GLOBAL du projet.
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith();
+  });
+
+  it("aucune délégation active → AUCUN bouton « Stop all »", () => {
+    renderLine({ isStreaming: false, subAgentActive: false });
+    expect(screen.queryByRole("button", { name: /Stop all/i })).toBeNull();
   });
 });
