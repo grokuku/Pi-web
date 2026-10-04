@@ -23,10 +23,11 @@ Catégories en place : `ws` (messages WebSocket — erreurs, mais aussi le cycle
  de vie complet : connexions/déconnexions client, envois `pi_history`, replays
  `pi_start` après reconnexion, cf. section suivante), `pi-session`
 (création/resume de session Pi, y compris les replays `pi_start` sur session
-déjà active), `express` (erreurs middleware global), `console` (capture des
+active), `express` (erreurs middleware global), `console` (capture des
 `console.error` extérieurs), `crash` (résumé d'un crash), `harness`
 (délégués du harness inline — archivage des sessions en échec, cause et
-contexte de l'échec).
+contexte de l'échec), `llm-error` et `llm-retry` (échecs fournisseur LLM et
+reprises automatiques du SDK, cf. section dédiée).
 
 ## Événements INFO/WARN du cycle WS et des envois d'historique
 
@@ -50,6 +51,37 @@ grep 'pi_history volumineux' .data/logs/backend-$(date +%Y%m%d).log
 
 # Reconstituer une séquence coupure → reconnexion → replay → resync
 grep -E 'WS client|pi_history|rejoué' .data/logs/backend-$(date +%Y%m%d).log
+```
+
+## Échecs fournisseur LLM et reprises automatiques (`llm-error` / `llm-retry`)
+
+Pendant l'incident « 4 pavés 500 » (Ollama Cloud, 2026-10-04), les échecs
+provider et les 3 reprises automatiques du SDK Pi n'ont laissé **aucune trace**
+dans le journal : le diagnostic n'a pu aboutir qu'en fouillant les transcripts
+de session (`/root/.pi/agent/sessions/...`, champ `errorMessage`). Depuis, la
+session Pi trace (module pur `backend/src/pi/provider-retry-log.ts`) :
+
+| Ligne de log | Niveau | Signification |
+|---|---|---|
+| `échec provider [provider/modèle] type=… durée=…ms : …` | ERROR | Un tour assistant s'est terminé en échec (`stopReason:"error"`). Détails structurés : statut HTTP, `ref` fournisseur, type (`server`, `overloaded`, `rate_limit`, `timeout`, `auth`, `quota`, `bad_request`, `network`, `aborted`, `unknown`), durée de la tentative. |
+| `reprise N/M programmée dans Xms — cause=…` | WARN | Le SDK a programmé une reprise automatique (backoff exponentiel `settings.retry`, défauts : 3 reprises, 2 s → 4 s → 8 s). |
+| `reprise RÉUSSIE après N reprise(s)` | INFO | Une reprise ultérieure a produit une réponse : la panne était transitoire. |
+| `reprises ÉPUISÉES après N reprise(s) — …` | WARN | Budget de reprises épuisé : le tour reste en échec. |
+| `reprises ANNULÉES après N reprise(s) — …` | WARN | Abort utilisateur/interne pendant le backoff. |
+
+L'`errorMessage` est réduit à une ligne, tronqué (300 car.) et les motifs de
+secrets (`Bearer …`, `sk-…`, `api_key: …`) sont masqués — aucune clé API ni
+contenu de prompt n'est journalisé.
+
+```bash
+# Pannes provider du jour (statut, ref, durée, modèle)
+grep 'échec provider' .data/logs/backend-$(date +%Y%m%d).log
+
+# Séquences panne → reprises → issue
+grep -E 'échec provider|reprise' .data/logs/backend-$(date +%Y%m%d).log
+
+# Uniquement les pannes ayant fini par une reprise réussie (transitoires)
+grep 'reprise RÉUSSIE' .data/logs/backend-$(date +%Y%m%d).log
 ```
 
 ## Contenu d'un dump de crash

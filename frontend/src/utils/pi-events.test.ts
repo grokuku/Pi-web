@@ -165,6 +165,22 @@ describe("applyPiEvent — cycle complet du streaming", () => {
     expect(asstId).toBeNull();
   });
 
+  it("message_end capture provider/modèle du tour (C1/C2) — responseModel prioritaire", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      {
+        type: "message_end",
+        message: {
+          role: "assistant", id: "asst-1", stopReason: "error", errorMessage: "500: boom",
+          provider: "ollama-cloud", model: "deepseek-v4.1-flash", responseModel: "deepseek-v4.1-flash-2026",
+        },
+      },
+    ]);
+    expect(msgs[0].provider).toBe("ollama-cloud");
+    expect(msgs[0].model).toBe("deepseek-v4.1-flash-2026");
+    expect(msgs[0].errorMessage).toBe("500: boom");
+  });
+
   it("agent_end reason:timeout → stopReason error + errorMessage localisé", () => {
     const t = vi.fn((key: string) => (key === "chat.timeoutError" ? "Temps dépassé" : key));
     const { msgs, asstId } = run(

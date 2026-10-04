@@ -9,6 +9,8 @@ import { NewChatConfirmModal } from "../Modals/NewChatConfirmModal";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ChatStatusLine } from "./ChatStatusLine";
 import { CollapsibleBlock, CollapseProvider, useCollapsible } from "./CollapsibleBlock";
+import { ProviderErrorCard, RetriedSuccessNote } from "./ProviderErrorCard";
+import { RetryBanner } from "./RetryBanner";
 import { SubAgentBlock } from "./SubAgentBlock";
 import { ParallelSubAgents } from "./ParallelSubAgents";
 import { ToolCallTimer } from "./ToolCallTimer";
@@ -33,6 +35,9 @@ import { withDaySeparators } from "../../utils/day-separator";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
 import { promptMessageType } from "../../utils/session-sync";
+import { buildProviderErrorRun, groupProviderFailures } from "../../utils/llm-errors";
+import { retryStateFromEvent, type RetryBannerState } from "../../utils/retry-banner";
+import { buildRetrySendArgs } from "../../utils/retry-message";
 
 // ── (perf) Throttle de valeur (re-parse markdown) ────────────────────────
 // Retarde la propagation d'une valeur qui change très souvent (contenu
@@ -212,6 +217,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const [viewerFile, setViewerFile] = useState<{ type: "image"; src: string; name?: string } | { type: "text"; content: string; name?: string; language?: string } | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // (C4) Bandeau « Nouvelle tentative n/N » pendant les reprises automatiques
+  // du SDK : état dérivé des événements auto_retry_start/auto_retry_end (ref
+  // miroir pour évaluer dans le handler pi_event sans dépendance React).
+  const [retryState, setRetryState] = useState<RetryBannerState | null>(null);
+  const retryStateRef = useRef<RetryBannerState | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [confirmNewChat, setConfirmNewChat] = useState(false);
@@ -299,6 +309,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
   // ── Project switching ──
   useEffect(() => {
+    // (C4) Le bandeau de reprise est propre au run du projet affiché : on le
+    // retire au changement de projet (les événements d'un autre projet ne
+    // doivent jamais laisser un bandeau orphelin).
+    retryStateRef.current = null;
+    setRetryState(null);
     const prevId = prevProjectIdRef.current;
     if (prevId && prevId !== projectId) {
       chatHistory.saveMessagesFor(messagesRef.current, prevId);
@@ -916,6 +931,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 
       // ── Message content updates — route to the correct project's store ──
       if (pid === projectId) {
+        // (C4) Reprises automatiques (auto_retry_start/auto_retry_end, relayés
+        // par le backend) : bandeau discret pendant le backoff ; retiré à la
+        // fin de la reprise (succès, échec définitif, annulation).
+        const nextRetry = retryStateFromEvent(retryStateRef.current, evt);
+        if (nextRetry !== retryStateRef.current) {
+          retryStateRef.current = nextRetry;
+          setRetryState(nextRetry);
+        }
         // BUG-18 fix: gérer les custom messages ici au lieu d'un listener séparé
         if (evt.type === "message_start" && evt.message?.role === "custom" && evt.message?.display) {
           const cm = evt.message;
@@ -1135,6 +1158,20 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     });
   }, [send, projectId, activeMode, isStreaming, t]);
 
+  // ── (C2) Bouton « Réessayer » des erreurs fournisseur ──
+  // Renvoie le message utilisateur d'origine via le canal d'envoi EXISTANT
+  // (handleSend) : aucun nouveau canal, mêmes contrôles (pièces jointes,
+  // images, steer vs prompt). Les pièces jointes sont reconstruites depuis le
+  // message affiché (vignettes + ids d'attachement).
+  const handleRetryMessage = useCallback((anchorId: string) => {
+    const args = buildRetrySendArgs(messagesRef.current, anchorId);
+    if (!args) {
+      setError(t("chat.providerErrorRetryNoMessage"));
+      return;
+    }
+    void handleSend(args.text, args.attachments);
+  }, [handleSend, t]);
+
   // ── Commande /new confirmée : envoi réel de la commande ──
   const handleConfirmNewChat = useCallback(() => {
     setConfirmNewChat(false);
@@ -1221,6 +1258,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
               onLoadEarlierFromServer={fetchEarlierFromServer}
               serverBatchSeq={serverBatch.seq}
               serverBatchAll={serverBatch.all}
+              // (C2) Renvoi du message d'origine depuis la carte d'erreur.
+              onRetry={handleRetryMessage}
             />
           </div>
           <div ref={chatEndRef} />
@@ -1254,6 +1293,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       )}
 
 
+
+      {/* Bandeau de reprise automatique (C4) — discret, au-dessus de la
+          bannière d'erreur : l'écran n'est plus muet pendant le backoff. */}
+      {retryState && <RetryBanner state={retryState} />}
 
       {/* Bannière d'erreur — rendue hors du conditionnel hasContent pour rester
           visible même sans messages (échec d'upload, trop de fichiers, etc.) */}
@@ -1328,8 +1371,6 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
 }
 
 // ── Grouped Messages ──
-interface AssistantMsg { id:string; content:string; thinking:string; toolCalls:ToolCallInfo[]; blocks?:AssistantBlock[]; timestamp:number; usage?:{input:number;output:number;cost:{total:number}}; _streaming?:boolean; stopReason?:string; errorMessage?:string; thinkingDurationMs?:number; }
-
 // Fenêtre d'affichage paginée des messages : on ne rend que les N derniers
 // groupes au départ, puis « charger les messages antérieurs » étend la fenêtre
 // vers le haut. Avant, un slice(-200) définitif faisait disparaître pour
@@ -1342,7 +1383,7 @@ const VISIBLE_GROUPS_STEP = 200;
 // `hideLiveExtras` : la vue « conversation passée » (LOT E1) réutilise ce
 // rendu mais ne doit PAS afficher les murs LIVE de sous-agents (ils
 // s'abonnent au store courant, sans rapport avec une session passée).
-export const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll, hideLiveExtras, projectId }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean; hideLiveExtras?: boolean; projectId?: string }) {
+export const GroupedMessages = memo(function GroupedMessages({ messages, displayDetailExpanded, onFileClick, scrollContainerRef, serverHasMore, serverRemaining, loadingEarlier, onLoadEarlierFromServer, serverBatchSeq, serverBatchAll, hideLiveExtras, projectId, onRetry }: { messages: DisplayMessage[]; displayDetailExpanded: boolean; onFileClick: (f: { type:"image"; src:string; name?:string } | { type:"text"; content:string; name?:string; language?:string }) => void; scrollContainerRef: RefObject<HTMLDivElement | null>; serverHasMore?: boolean; serverRemaining?: number; loadingEarlier?: boolean; onLoadEarlierFromServer?: (all: boolean) => void; serverBatchSeq?: number; serverBatchAll?: boolean; hideLiveExtras?: boolean; projectId?: string; onRetry?: (anchorId: string) => void }) {
   const { t } = useTranslation();
   // (perf) Regroupement mémoïsé (useMemo, dépendance = tableau de messages
   // déferé reçu en prop). Avant : tableaux de groupes reconstruits à CHAQUE
@@ -1580,7 +1621,7 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
       if (first.kind === "bashExecution") return <BashExecutionRow key={first.id} message={first} />;
       if (first.kind === "compaction") return <CompactionRow key={first.id} message={first} />;
       if (first.role === "user") return <UserBubble key={first.id} message={first} onFileClick={onFileClick} />;
-      return <AssistantGroup key={first.id} messages={group as AssistantMsg[]} />;
+      return <AssistantGroup key={first.id} messages={group} onRetry={onRetry} />;
     })}
     {/* LOT 4 : sous-agents simultanés — vue EN COLONNES. Rendue À LA DATE du
         premier `delegate` du lot quand elle est connue (cf. wallAnchor) ; en
@@ -2057,7 +2098,7 @@ const AssistantContent = memo(function AssistantContent({ content, isStreaming }
 // le rendu regroupait par type et affichait un appel d'outil AVANT le texte qui
 // l'avait précédé). Repli sur l'ancien regroupement par type si `blocks` est
 // absent (messages en cache antérieurs au correctif).
-function assistantSegments(msg: AssistantMsg): AssistantBlock[] {
+function assistantSegments(msg: DisplayMessage): AssistantBlock[] {
   if (msg.blocks && msg.blocks.length > 0) {
     // Sécurité : tout toolCall non référencé par un bloc est ajouté en fin
     // (on ne perd jamais silencieusement une action).
@@ -2078,7 +2119,7 @@ function assistantSegments(msg: AssistantMsg): AssistantBlock[] {
   return segs;
 }
 
-const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: AssistantMsg[] }) {
+const AssistantGroup = memo(function AssistantGroup({ messages, onRetry }: { messages: DisplayMessage[]; onRetry?: (anchorId: string) => void }) {
   const { t } = useTranslation();
   let totalUsage: {input:number;output:number;cost:{total:number}} | undefined; let isStreaming = false;
   for (const msg of messages) {
@@ -2086,6 +2127,9 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
     if (msg._streaming) isStreaming = true;
   }
   const hasMultiple = messages.length > 1;
+  // (C1) Regroupement pur des tentatives ratées du tour (un seul bloc pour N
+  // tentatives ; note sous le message réussi si une reprise a fonctionné).
+  const items = useMemo(() => groupProviderFailures(messages), [messages]);
 
   return (
     <div className="flex justify-start mb-3">
@@ -2099,8 +2143,19 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
           {isStreaming && <span className="w-2 h-2 rounded-full bg-hacker-accent animate-pulse" />}
         </div>
 
-        {/* Messages in chronological order */}
-        {messages.map((msg, i) => {
+        {/* Messages in chronological order. Regroupement (C1) : les tentatives
+            ratées CONSÉCUTIVES d'un même tour sont fusionnées en UNE carte
+            d'erreur ; si une reprise a réussi, elles deviennent une note
+            repliable SOUS le message réussi (jamais un échec affiché). */}
+        {items.map((item, i) => {
+          if (item.kind === "failures") {
+            return (
+              <div key={`pf-${item.run.anchorId}`} className="px-3 py-2">
+                <ProviderErrorCard run={item.run} onRetry={onRetry ? () => onRetry(item.run.anchorId) : undefined} />
+              </div>
+            );
+          }
+          const msg = item.message;
           const isFirst = i === 0;
           const showThinking = !!msg.thinking;
           const showContent = !!msg.content;
@@ -2123,14 +2178,15 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
 
           return (
             <div key={msg.id} className={hasMultiple && !isFirst && hasSubstantialContent ? "border-t border-hacker-border/30" : ""}>
-              {/* BUG-68 : bannière d'erreur visible si le turn LLM a échoué
-                  (le SDK renvoie un message assistant vide avec stopReason:"error"). */}
-              {(msg.stopReason === "error" || msg.errorMessage) && (
+              {/* BUG-68 amélioré (C2) : erreur FOURNISSEUR traduite en clair +
+                  bouton Réessayer + détail brut repliable (au lieu du pavé
+                  rouge brut, dupliqué par tentative). */}
+              {turnFailed && (
                 <div className="px-3 py-2">
-                  <div className="flex items-start gap-2 text-xs border border-red-500/40 bg-red-500/10 text-red-400 rounded px-2 py-1.5">
-                    <HolafIcon name="alert-triangle" size={12} className="mt-0.5 shrink-0" />
-                    <span className="whitespace-pre-wrap">{msg.errorMessage || t('chat.llmError')}</span>
-                  </div>
+                  <ProviderErrorCard
+                    run={buildProviderErrorRun([msg])}
+                    onRetry={onRetry ? () => onRetry(msg.id) : undefined}
+                  />
                 </div>
               )}
               {/* ── Blocs rendus DANS L'ORDRE CHRONOLOGIQUE du message ──
@@ -2194,6 +2250,14 @@ const AssistantGroup = memo(function AssistantGroup({ messages }: { messages: As
               {showThinkingPlaceholder && (
                 <div className="px-3 py-2 prose-hacker">
                   <span className="text-hacker-text-dim italic text-sm">{t('chat.thinking')}</span>
+                </div>
+              )}
+
+              {/* Reprise RÉUSSIE (C1) : les tentatives ratées qui précèdent ce
+                  message réussi sont regroupées en note repliable SOUS lui. */}
+              {item.failedAttemptsBefore && (
+                <div className="px-3 pb-2">
+                  <RetriedSuccessNote run={item.failedAttemptsBefore} />
                 </div>
               )}
             </div>

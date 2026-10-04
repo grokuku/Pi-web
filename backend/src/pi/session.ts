@@ -24,6 +24,7 @@ import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
 import { warnIfThinkingOnlyTruncatedTurn } from "./response-guard.js";
+import { buildProviderFailureLog, buildRetryLog, type LlmLogEntry } from "./provider-retry-log.js";
 import { getVisionModelInfo, describeImageWithVisionModel, sanitizeErrorText } from "../routes/attachments.js";
 import { createDesignTools } from "./design-tools.js";
 import { createCommitDraftTool } from "./commit-draft-tool.js";
@@ -144,6 +145,21 @@ const activeToolCalls: Map<
     isError?: boolean;
   }
 > = new Map();
+
+// (C3) Horodate de début de la tentative assistant en cours, par projet :
+// permet d'annoncer la DURÉE d'une tentative ratée dans le log d'erreur
+// provider (message_start → message_end). Écrasée à chaque reprise.
+const assistantAttemptStartedAt = new Map<string, number>();
+
+// Écrit une entrée d'observabilité LLM (échec provider / reprise) via le
+// logger FICHIER : contrairement à console.log, elle survit et est greppable
+// dans .data/logs/backend-*.log (le diagnostic d'incident n'a plus besoin des
+// transcripts de session). Aucune donnée sensible : le module pur masque les
+// motifs de secrets et tronque le message.
+function logLlmEntry(entry: LlmLogEntry | null): void {
+  if (!entry) return;
+  logger[entry.level](entry.category, entry.message, entry.details);
+}
 
 // Stale entry cleanup: remove entries older than 5 minutes
 const TOOL_CALL_TTL_MS = 5 * 60 * 1000;
@@ -799,6 +815,30 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
             console.warn(`[PiSession] recordUsage failed for ${projectId}:`, e?.message || e);
           }
         }
+      } else if (event.type === "message_start") {
+        // (C3) Début d'une tentative assistant (essai initial ou reprise) :
+        // on horodate pour pouvoir logger la durée d'un échec provider.
+        if ((event as any).message?.role === "assistant") {
+          assistantAttemptStartedAt.set(projectId, Date.now());
+        }
+      } else if (event.type === "message_end") {
+        // (C3) Échec provider sur un tour assistant (BUG-68 rend le
+        // stopReason/errorMessage visible côté UI) : on trace désormais
+        // provider, modèle, statut HTTP, ref, type et durée dans le log fichier.
+        if ((event as any).message?.role === "assistant") {
+          const startedAt = assistantAttemptStartedAt.get(projectId);
+          assistantAttemptStartedAt.delete(projectId);
+          logLlmEntry(buildProviderFailureLog(
+            event,
+            projectId,
+            startedAt ? Date.now() - startedAt : undefined,
+          ));
+        }
+      } else if (event.type === "auto_retry_start" || event.type === "auto_retry_end") {
+        // (C3) Reprises automatiques du SDK : planification (délai, cause) et
+        // fin (réussie / épuisée / annulée) sont tracées pour rendre une panne
+        // provider transitoire diagnostiquable a posteriori.
+        logLlmEntry(buildRetryLog(event, projectId));
       } else if (event.type === "agent_start") {
         // BUG-72 : branche manquante — le flag backend n'était JAMAIS mis à true
         // en mode normal. Le guard `if (state.isStreaming)` de sendPrompt était

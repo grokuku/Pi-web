@@ -35,6 +35,47 @@ export const en = {
     llmError: "LLM error — empty response (the process stopped). Try again or check the model/provider.",
     timeoutError: "Interrupted: no model response for 5 min",
     thoughtFor: (dur: string) => `thought for ${dur}`,
+    // ── Provider errors + automatic retries (C1/C2/C4) ──
+    // A turn can fail N times in a row (SDK automatic retries): the thread
+    // groups them into ONE card, with the last error explained in plain words.
+    providerErrorTitle: "Provider error",
+    providerErrorTitleAborted: "Generation interrupted",
+    providerErrorTitleRequest: "Request rejected by the provider",
+    providerErrorTitleUnknown: "Model error",
+    providerErrorAttempts: (n: number, from: string, to: string) =>
+      n > 1 ? `${n} attempts${from && to ? ` (from ${from} to ${to})` : ""}` : "1 attempt",
+    providerErrorDetails: (n: number) => `Technical details — ${n} attempt${n > 1 ? "s" : ""}`,
+    providerErrorAttemptLabel: (n: number) => `Attempt ${n}`,
+    providerErrorNoDetail: "(no error message)",
+    providerErrorRetry: "Retry",
+    providerErrorRetryTitle: "Send the original message again",
+    providerErrorRetryNoMessage: "Could not find the original message to send again.",
+    providerRetriedOk: (n: number) =>
+      `${n} failed attempt${n > 1 ? "s" : ""} before this answer — see details`,
+    // INTERNAL provider error (5xx): nothing to fix on the user's side.
+    providerErrorMessageServer: (model: string, provider: string, ref: string) =>
+      `The model ${model || "selected"}${provider ? ` on ${provider}` : ""} returned an internal error${ref ? ` (ref: ${ref})` : ""}. This is on the provider side — try again in a few minutes.`,
+    providerErrorMessageOverloaded: (_model: string, provider: string) =>
+      `The service${provider ? ` ${provider}` : ""} is temporarily overloaded. Wait a few minutes and try again — nothing to fix on your side.`,
+    providerErrorMessageRateLimit: (_model: string, provider: string) =>
+      `The provider${provider ? ` ${provider}` : ""} is temporarily limiting requests. Try again in a minute.`,
+    providerErrorMessageTimeout: (model: string, provider: string) =>
+      `The model ${model || "selected"}${provider ? ` (${provider})` : ""} did not answer in time. Try again or select another model.`,
+    providerErrorMessageAuth: (_model: string, provider: string) =>
+      `Access denied by the provider${provider ? ` ${provider}` : ""}. Check this model's key or subscription in Settings.`,
+    providerErrorMessageQuota: (_model: string, provider: string) =>
+      `Quota exhausted at the provider${provider ? ` ${provider}` : ""}. Add credits or select another model.`,
+    providerErrorMessageNetwork: (_model: string, provider: string) =>
+      `Connection to the provider interrupted${provider ? ` (${provider})` : ""}. Check your network and try again.`,
+    providerErrorMessageAborted: () => "Generation was interrupted before the answer.",
+    providerErrorMessageBadRequest: (_model: string, _provider: string, _ref: string, detail: string) =>
+      `The provider rejected the request${detail ? `: ${detail}` : ""}.`,
+    providerErrorMessageUnknown: (_model: string, _provider: string, _ref: string, detail: string) =>
+      `Something went wrong during generation${detail ? `: ${detail}` : ""}. You can try again.`,
+    // ── Automatic retry banner (C4) ──
+    retryScheduled: (attempt: number, max: number, seconds: number) =>
+      `Retrying ${attempt}/${max} in ${seconds}s…`,
+    retryInProgress: (attempt: number, max: number) => `Attempt ${attempt}/${max} in progress…`,
     // ── Day separator (date marker in the thread) ──
     loadEarlier: (n: number) => `Load ${n} earlier message${n > 1 ? "s" : ""}`,
     loadingEarlier: "Loading history…",

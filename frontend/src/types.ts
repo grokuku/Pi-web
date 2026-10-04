@@ -182,6 +182,10 @@ export interface DisplayMessage {
   // Permettent d'afficher une bannière d'erreur au lieu d'un message vide.
   stopReason?: string;
   errorMessage?: string;
+  // (C1/C2) Provider et modèle RÉELS du tour (AssistantMessage du SDK) :
+  // alimentent le message pédagogique d'erreur (nom du modèle/fournisseur).
+  provider?: string;
+  model?: string;
   // Images attached to user message (server URLs or inline base64 for legacy messages)
   images?: { attachmentId?: string; data?: string; name: string; mimeType: string }[];
   // Text/code files attached to user message (legacy, kept for old messages)

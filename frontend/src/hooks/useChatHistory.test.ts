@@ -358,3 +358,36 @@ describe("convertHistoryToDisplayMessages — date_context (display:false)", () 
     expect(display.some((m: any) => m.customType === "date_context")).toBe(false);
   });
 });
+
+// ── Tests : erreurs fournisseur relues depuis l'historique (C1/C2) ──────────
+// Après rechargement, chaque tentative ratée revient comme un message assistant
+// distinct (stopReason "error" + errorMessage). Provider/modèle réels du tour
+// doivent survivre à la sérialisation backend (serializeMessagesForUi) pour que
+// le message d'erreur pédagogique reste exact.
+describe("convertHistoryToDisplayMessages — erreurs fournisseur (C1/C2)", () => {
+  beforeEach(() => {
+    resetSubagentRuns();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("préserve stopReason/errorMessage/provider/modèle de chaque tentative", () => {
+    const history = [
+      { id: "u1", role: "user", content: "salut", timestamp: 1 },
+      {
+        id: "a1", role: "assistant", content: [], timestamp: 2,
+        stopReason: "error", errorMessage: '500: {"message":"Internal Server Error (ref: aaaa)"}',
+        provider: "ollama-cloud", model: "deepseek-v4.1-flash",
+      },
+      {
+        id: "a2", role: "assistant", content: [], timestamp: 3,
+        stopReason: "error", errorMessage: '500: {"message":"Internal Server Error (ref: bbbb)"}',
+        provider: "ollama-cloud", model: "deepseek-v4.1-flash", responseModel: "deepseek-v4.1-flash-2026",
+      },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    // Les 2 tentatives restent deux messages (le regroupement est un rendu).
+    expect(display).toHaveLength(3);
+    expect(display[1]).toMatchObject({ id: "a1", stopReason: "error", provider: "ollama-cloud", model: "deepseek-v4.1-flash" });
+    expect(display[2]).toMatchObject({ id: "a2", stopReason: "error", provider: "ollama-cloud", model: "deepseek-v4.1-flash-2026" });
+  });
+});

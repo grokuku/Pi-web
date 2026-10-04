@@ -250,11 +250,24 @@ describe("serializeMessagesForUi", () => {
   it("normalise tool_use → toolCall et préserve stopReason/errorMessage (BUG-68)", () => {
     const out = serializeMessagesForUi([{
       id: "a1", role: "assistant", timestamp: 1, stopReason: "error", errorMessage: "boom",
+      provider: "ollama-cloud", model: "deepseek-v4.1-flash",
       content: [{ type: "tool_use", name: "read", arguments: { path: "x" } }, { type: "thinking", thinking: "hmm" }],
     }]);
     expect(out[0].content[0]).toMatchObject({ type: "toolCall", name: "read", arguments: { path: "x" } });
     expect(out[0].thinking).toBe("hmm");
     expect(out[0].stopReason).toBe("error");
     expect(out[0].errorMessage).toBe("boom");
+    // (C1/C2) provider/modèle conservés pour le message d'erreur pédagogique.
+    expect(out[0].provider).toBe("ollama-cloud");
+    expect(out[0].model).toBe("deepseek-v4.1-flash");
+  });
+
+  it("responseModel prime sur model quand le SDK le fournit (C1/C2)", () => {
+    const out = serializeMessagesForUi([{
+      id: "a2", role: "assistant", timestamp: 2, stopReason: "error",
+      provider: "ollama-cloud", model: "deepseek-v4.1-flash", responseModel: "deepseek-v4.1-flash-2026",
+      content: [],
+    }]);
+    expect(out[0].model).toBe("deepseek-v4.1-flash-2026");
   });
 });

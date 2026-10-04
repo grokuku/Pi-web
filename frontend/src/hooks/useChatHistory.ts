@@ -242,6 +242,12 @@ export function convertHistoryToDisplayMessages(
         // BUG-68 : préserver les métadonnées d'échec LLM pour le rendu de la bannière.
         stopReason: (msg as any).stopReason,
         errorMessage: (msg as any).errorMessage,
+        // (C1/C2) Provider/modèle du tour (AssistantMessage du SDK, conservés
+        // par serializeMessagesForUi) — nommés dans le message d'erreur.
+        provider: typeof (msg as any).provider === "string" ? (msg as any).provider : undefined,
+        model: typeof (msg as any).responseModel === "string"
+          ? (msg as any).responseModel
+          : (typeof (msg as any).model === "string" ? (msg as any).model : undefined),
       });
     }
 

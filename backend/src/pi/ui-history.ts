@@ -34,6 +34,12 @@ export function serializeMessagesForUi(messages: any[]): any[] {
       // Sinon l'erreur est avalée ici et le frontend ne reçoit qu'un message assistant vide.
       base.stopReason = m.stopReason;
       base.errorMessage = m.errorMessage;
+      // (C1/C2) Provider et modèle RÉELS du tour : le message d'erreur du SDK
+      // les porte (AssistantMessage.provider/model). Conservés dans l'historique
+      // UI pour que le message pédagogique reste exact après rechargement
+      // (sans eux, seule la session courante les connaîtrait).
+      base.provider = m.provider;
+      base.model = m.responseModel || m.model;
       base.thinking = Array.isArray(base.content)
         ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
         : undefined;

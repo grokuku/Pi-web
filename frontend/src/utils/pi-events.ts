@@ -668,6 +668,12 @@ export function applyPiEvent(
             // une bannière d'erreur au lieu d'un assistant vide.
             stopReason: evt.message?.stopReason,
             errorMessage: evt.message?.errorMessage,
+            // (C1/C2) Provider/modèle réels du tour (l'AssistantMessage du SDK
+            // les porte) : le message d'erreur pédagogique peut les nommer.
+            provider: typeof evt.message?.provider === "string" ? evt.message.provider : ex.provider,
+            model: typeof evt.message?.responseModel === "string"
+              ? evt.message.responseModel
+              : (typeof evt.message?.model === "string" ? evt.message.model : ex.model),
           };
         }
         asstId = null;

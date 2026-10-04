@@ -35,6 +35,47 @@ export const fr = {
     llmError: "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider.",
     timeoutError: "Interrompu : le modèle n'a pas répondu depuis 5 min",
     thoughtFor: (dur: string) => `a réfléchi ${dur}`,
+    // ── Erreurs fournisseur + reprises automatiques (C1/C2/C4) ──
+    // Un tour peut échouer N fois de suite (reprises automatiques du SDK) : le
+    // fil les regroupe en UNE carte, avec la dernière erreur expliquée en clair.
+    providerErrorTitle: "Erreur du fournisseur",
+    providerErrorTitleAborted: "Génération interrompue",
+    providerErrorTitleRequest: "Requête refusée par le fournisseur",
+    providerErrorTitleUnknown: "Erreur du modèle",
+    providerErrorAttempts: (n: number, from: string, to: string) =>
+      n > 1 ? `${n} tentatives${from && to ? ` (de ${from} à ${to})` : ""}` : "1 tentative",
+    providerErrorDetails: (n: number) => `Détail technique — ${n} tentative${n > 1 ? "s" : ""}`,
+    providerErrorAttemptLabel: (n: number) => `Tentative ${n}`,
+    providerErrorNoDetail: "(aucun message d'erreur)",
+    providerErrorRetry: "Réessayer",
+    providerErrorRetryTitle: "Renvoyer le message d'origine",
+    providerErrorRetryNoMessage: "Impossible de retrouver le message d'origine à renvoyer.",
+    providerRetriedOk: (n: number) =>
+      `${n} tentative${n > 1 ? "s" : ""} échouée${n > 1 ? "s" : ""} avant cette réponse — voir le détail`,
+    // Erreur INTERNE du fournisseur (5xx) : rien à corriger côté utilisateur.
+    providerErrorMessageServer: (model: string, provider: string, ref: string) =>
+      `Le modèle ${model || "sélectionné"}${provider ? ` chez ${provider}` : ""} a renvoyé une erreur interne${ref ? ` (réf. ${ref})` : ""}. C'est côté fournisseur — réessayez dans quelques minutes.`,
+    providerErrorMessageOverloaded: (_model: string, provider: string) =>
+      `Le service${provider ? ` ${provider}` : ""} est momentanément surchargé. Patientez quelques minutes puis réessayez — aucune action de votre côté n'est nécessaire.`,
+    providerErrorMessageRateLimit: (_model: string, provider: string) =>
+      `Le fournisseur${provider ? ` ${provider}` : ""} limite temporairement le nombre de requêtes. Réessayez dans une minute.`,
+    providerErrorMessageTimeout: (model: string, provider: string) =>
+      `Le modèle ${model || "sélectionné"}${provider ? ` (${provider})` : ""} n'a pas répondu à temps. Réessayez ou choisissez un autre modèle.`,
+    providerErrorMessageAuth: (_model: string, provider: string) =>
+      `Accès refusé par le fournisseur${provider ? ` ${provider}` : ""}. Vérifiez la clé ou l'abonnement de ce modèle dans les Paramètres.`,
+    providerErrorMessageQuota: (_model: string, provider: string) =>
+      `Quota épuisé chez le fournisseur${provider ? ` ${provider}` : ""}. Rechargez le crédit ou choisissez un autre modèle.`,
+    providerErrorMessageNetwork: (_model: string, provider: string) =>
+      `Connexion au fournisseur interrompue${provider ? ` (${provider})` : ""}. Vérifiez le réseau puis réessayez.`,
+    providerErrorMessageAborted: () => "La génération a été interrompue avant la réponse.",
+    providerErrorMessageBadRequest: (_model: string, _provider: string, _ref: string, detail: string) =>
+      `Le fournisseur a refusé la requête${detail ? ` : ${detail}` : ""}.`,
+    providerErrorMessageUnknown: (_model: string, _provider: string, _ref: string, detail: string) =>
+      `Une erreur est survenue pendant la génération${detail ? ` : ${detail}` : ""}. Vous pouvez réessayer.`,
+    // ── Bandeau de reprise automatique (C4) ──
+    retryScheduled: (attempt: number, max: number, seconds: number) =>
+      `Nouvelle tentative ${attempt}/${max} dans ${seconds} s…`,
+    retryInProgress: (attempt: number, max: number) => `Tentative ${attempt}/${max} en cours…`,
     // ── Séparateur de journée (repère de date dans le fil) ──
     loadEarlier: (n: number) => `Charger ${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""}`,
     loadingEarlier: "Chargement de l'historique…",
