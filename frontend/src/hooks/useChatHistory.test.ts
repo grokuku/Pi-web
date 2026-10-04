@@ -67,6 +67,51 @@ describe("convertHistoryToDisplayMessages — subagent_activity (LOT 2b)", () =>
   });
 });
 
+// ── Tests : message de RÉSULTAT de sous-agent (relecture) ───────────────────
+// Le message `subagent_result` (custom, display:true) reste CONVERSATIONNEL et
+// affiché ; la conversion doit conserver ses métadonnées structurées
+// (details.results) pour que l'en-tête repliable du message (SubAgentResultMessage)
+// reste informatif après un rechargement — même chemin que le fil live.
+describe("convertHistoryToDisplayMessages — subagent_result (relecture)", () => {
+  beforeEach(() => {
+    resetSubagentRuns();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("conserve le message affiché et attache details.results", () => {
+    const history = [
+      {
+        id: "c-res",
+        role: "custom",
+        customType: "subagent_result",
+        display: true,
+        content: "🧩 Résultat du sous-agent (délégation terminée)\n\n### Exécution (execute) — succès\n\nfini",
+        details: {
+          results: [
+            { delegateRunId: "d-res-1", delegateFunction: "execute", label: "Exécution", status: "success", durationMs: 4200, actionCount: 3 },
+          ],
+        },
+        timestamp: 7,
+      },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    expect(display).toHaveLength(1);
+    expect(display[0]).toMatchObject({ role: "user", customType: "subagent_result", display: true });
+    expect(display[0].subagentResults).toEqual([
+      { delegateRunId: "d-res-1", delegateFunction: "execute", label: "Exécution", status: "success", durationMs: 4200, actionCount: 3 },
+    ]);
+  });
+
+  it("sans details.results → pas de métadonnées (en-tête de repli côté rendu)", () => {
+    const history = [
+      { id: "c-res-2", role: "custom", customType: "subagent_result", display: true, content: "🧩 Résultat", timestamp: 8 },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    expect(display).toHaveLength(1);
+    expect(display[0].subagentResults).toBeUndefined();
+  });
+});
+
 // ── Tests : timeline chronologique (LOT 3) ──────────────────────────────────
 // Les résultats d'outils orphelins, exécutions bash et compactions doivent
 // être rendus À LEUR DATE comme blocs autonomes (kind), sans perdre de données
@@ -287,5 +332,29 @@ describe("convertHistoryToDisplayMessages — promotion réflexion seule", () =>
     ] as any);
     expect(display[0].content).toBe("");
     expect(display[0].thinking).toBe("abc");
+  });
+});
+
+// ── Tests : contexte temporel pour le MODÈLE (customType "date_context") ─────
+// Le repère de date/heure injecté par le backend (sendCustomMessage display:false)
+// doit rester INVISIBLE dans le fil relu : aucune fuite côté utilisateur.
+describe("convertHistoryToDisplayMessages — date_context (display:false)", () => {
+  beforeEach(() => {
+    resetSubagentRuns();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("le repère date_context n'apparaît PAS dans les messages affichés", () => {
+    const history = [
+      {
+        id: "dc1", role: "custom", customType: "date_context", display: false,
+        content: "[horodatage] 2026-10-04 14:32 (heure locale)", timestamp: 1,
+      },
+      { id: "u1", role: "user", content: "salut", timestamp: 2 },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    expect(display).toHaveLength(1);
+    expect(display[0]).toMatchObject({ role: "user", content: "salut" });
+    expect(display.some((m: any) => m.customType === "date_context")).toBe(false);
   });
 });

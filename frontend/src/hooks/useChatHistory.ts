@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect } from "react";
 import type { AssistantBlock, DisplayMessage, SubAgentRun, ToolCallInfo } from "../types";
 import { registerArchivedRuns, runFromActivity, toEpochMs } from "../stores/subagentRuns";
+import { extractSubagentResults } from "../utils/subagent-result";
 // Filet de sécurité partagé « réflexion seule ⇒ réponse » : la MÊME règle doit
 // s'appliquer au live et à la conversion d'historique (sinon un rechargement
 // re-déclasserait ce que le live a promu).
@@ -317,6 +318,9 @@ export function convertHistoryToDisplayMessages(
           attachmentRefs: Array.isArray((msg as any).details?.attachmentRefs)
             ? (msg as any).details.attachmentRefs
             : undefined,
+          // `subagent_result` : métadonnées structurées (details.results) pour
+          // l'en-tête repliable du message de résultat (cf. SubAgentResultMessage).
+          subagentResults: extractSubagentResults((msg as any).customType, (msg as any).details),
         });
       }
     }

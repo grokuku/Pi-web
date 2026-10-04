@@ -35,6 +35,7 @@ export const fr = {
     llmError: "Erreur LLM — réponse vide (le process s'est arrêté). Réessayez ou vérifiez le modèle/provider.",
     timeoutError: "Interrompu : le modèle n'a pas répondu depuis 5 min",
     thoughtFor: (dur: string) => `a réfléchi ${dur}`,
+    // ── Séparateur de journée (repère de date dans le fil) ──
     loadEarlier: (n: number) => `Charger ${n} message${n > 1 ? "s" : ""} antérieur${n > 1 ? "s" : ""}`,
     loadingEarlier: "Chargement de l'historique…",
     streaming: "⚡ STREAMING",
@@ -81,6 +82,15 @@ export const fr = {
     subAgentStopAllTitle: "Arrêter tous les sous-agents en cours",
     // ── LOT 2 : message de résultat d'un sous-agent détaché ──
     subAgentResultLabel: "Résultat de sous-agent",
+    // En-tête replié : nombre d'agents du lot, taille du corps, statuts.
+    subAgentResultCount: (n: number) => `${n} sous-agents`,
+    subAgentResultSize: (lines: number, chars: number) => `${lines} ligne${lines > 1 ? "s" : ""} · ${chars} caractère${chars > 1 ? "s" : ""}`,
+    subAgentStatusSuccess: "succès",
+    subAgentStatusError: "échec",
+    subAgentStatusTimeoutInactivity: "timeout (inactivité)",
+    subAgentStatusTimeoutGlobal: "timeout (global)",
+    subAgentStatusAborted: "interrompu",
+    subAgentStatusCancelled: "annulé par l'utilisateur",
     // ── LOT 4 : vue en colonnes des sous-agents simultanés ──
     parallelSubAgents: (n: number) => `${n} sous-agents en parallèle`,
     parallelSubAgentsOverflow: (n: number) => `défilement horizontal au-delà de ${n}`,

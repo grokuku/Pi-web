@@ -173,6 +173,11 @@ export interface DisplayMessage {
   // Custom message metadata (for git_notification, etc.)
   customType?: string;
   display?: boolean;
+  // LOT 2 (orchestrateur interactif) : métadonnées STRUCTURÉES du message
+  // `subagent_result` — extraites de `details.results` côté backend (jamais
+  // envoyées au LLM). Elles alimentent l'EN-TÊTE toujours visible du message
+  // (agent, statut, taille) quand le corps est replié, sans parser le texte.
+  subagentResults?: SubAgentResultInfo[];
   // BUG-68 : métadonnées d'échec du turn LLM (stopReason:"error" + errorMessage)
   // Permettent d'afficher une bannière d'erreur au lieu d'un message vide.
   stopReason?: string;
@@ -234,6 +239,32 @@ export type SubAgentEndStatus =
   // Stop d'un sous-agent / commande à l'orchestrateur). Les AUTRES runs du
   // projet continuent ; le travail partiel est récupéré.
   | "cancelled";
+
+/**
+ * Résumé STRUCTURÉ d'un résultat de sous-agent réinjecté dans la conversation
+ * (customType `subagent_result`). Miroir côté UI de `SubagentResultPayload`
+ * (backend/src/pi/harness-result-delivery.ts), extrait de `details.results`.
+ * `status` reste une chaîne : le champ traverse la persistance JSON et une
+ * valeur inconnue doit s'afficher telle quelle plutôt que disparaître.
+ */
+export interface SubAgentResultInfo {
+  /** Identifiant de la délégation (makeDelegateRunId). */
+  delegateRunId: string;
+  /** Fonction de routage effective (execute, planning, review…). */
+  delegateFunction?: string;
+  /** Libellé humain (« Exécution », …). */
+  label?: string;
+  /** Statut de fin de vie (SubAgentEndStatus, ou valeur brute si inconnu). */
+  status: string;
+  /** Cause d'arrêt éventuelle (courte). */
+  cause?: string;
+  /** Message d'erreur éventuel. */
+  errorMessage?: string;
+  /** Durée effective (ms). */
+  durationMs?: number;
+  /** Nombre d'actions d'outils. */
+  actionCount?: number;
+}
 
 /** Action d'outil du sous-agent (live : alimentée par les events tool_*). */
 export interface SubAgentAction {

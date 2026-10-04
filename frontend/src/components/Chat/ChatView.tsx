@@ -13,6 +13,7 @@ import { SubAgentBlock } from "./SubAgentBlock";
 import { ParallelSubAgents } from "./ParallelSubAgents";
 import { ToolCallTimer } from "./ToolCallTimer";
 import { buildToolSummaryFromCall, formatToolDuration, type UnavailableToolKind, type ToolSummaryLabels } from "../../utils/toolSummaries";
+import { countContentLines, extractSubagentResults, firstResultHeading, isSubagentResultFailed, subagentStatusLabelKey } from "../../utils/subagent-result";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import { useTranslation } from "../../i18n";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
@@ -27,6 +28,8 @@ import { useChatHistory, convertHistoryToDisplayMessages } from "../../hooks/use
 import { applyPiEvent, appendMessageDedup, findPendingUserMessages, mergeHistoryWithPending, prependHistoryBatch } from "../../utils/pi-events";
 import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnchorTimestamp, useDatedDetachedRuns, useConcurrentWallAnchor, useHasActiveSubAgentRun, SubAgentControlsProvider, type SubagentEnvelope } from "../../stores/subagentRuns";
 import { DatedSubAgentBlock } from "./SubAgentBlock";
+import { DaySeparator } from "./DaySeparator";
+import { withDaySeparators } from "../../utils/day-separator";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
 import { promptMessageType } from "../../utils/session-sync";
@@ -922,8 +925,11 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           // Les messages customType "screenshot" (injectés via inject-to-chat)
           // sont système : rendus à gauche, pas en bulle utilisateur.
           const injected = cm.customType === "screenshot" || undefined;
+          // `subagent_result` : métadonnées structurées (details.results) pour
+          // l'en-tête repliable du message de résultat (cf. SubAgentResultMessage).
+          const subagentResults = extractSubagentResults(cm.customType, cm.details);
           // (dédup) append avec déduplication par id (cf. appendMessageDedup)
-          setMessages(prev => appendMessageDedup(prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, injected, attachmentRefs: injectedRefs }));
+          setMessages(prev => appendMessageDedup(prev, { id:cm.id||`c-${Date.now()}`, role:"user", content:cm.content||"", thinking:"", toolCalls:[], timestamp:cm.timestamp||Date.now(), customType:cm.customType, display:cm.display, injected, attachmentRefs: injectedRefs, subagentResults }));
           return;
         }
         // BUG-18 fix: gérer session_reloaded ici au lieu d'un listener séparé
@@ -1475,6 +1481,17 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
     [visibleGroups, datedRuns, hideLiveExtras, hasAnchoredWall, wallAnchor],
   );
 
+  // ── Repères de date (séparateurs de journée) ──
+  // Insère un marqueur `day` AVANT la première entrée datée de chaque journée
+  // (y compris la toute première : repère en haut de fil et à l'ouverture de
+  // chaque lot d'historique). Logique de date PURE et testée (utils/day-separator),
+  // appliquée à la liste RENDUE : le calcul est refait quand un lot antérieur est
+  // préfixé, donc les séparateurs des messages plus anciens se réconcilient.
+  // Les entrées elles-mêmes sont réutilisées TELLES QUELLES → l'identité des
+  // groupes mémoïsés (perf streaming) n'est pas cassée, seul le tableau
+  // enveloppe est reconstruit (déjà le cas pour threadEntries).
+  const threadTimeline = useMemo(() => withDaySeparators(threadEntries), [threadEntries]);
+
   // ── CollapseProvider (LOT 1) ──
   // Porte le réglage global « détail d'affichage déplié » et la Map d'overrides
   // par bloc. Monté ICI (remonté par projet via key={projectId} → overrides
@@ -1526,7 +1543,13 @@ export const GroupedMessages = memo(function GroupedMessages({ messages, display
         )}
       </div>
     )}
-    {threadEntries.map((entry) => {
+    {threadTimeline.map((entry) => {
+      // Marqueur de jour : ligne fine avec la date centrée (jour courant/veille
+      // en libellé court i18n, sinon date complète localisée). Jamais deux
+      // marqueurs consécutifs ni entre deux messages du même jour.
+      if (entry.kind === "day") {
+        return <DaySeparator key={`day-${entry.ts}`} timestamp={entry.ts} />;
+      }
       // Mur des colonnes (runs simultanés) → rendu À SA DATE.
       if (entry.kind === "wall") {
         return <ParallelSubAgents key="parallel-wall" projectId={projectId} />;
@@ -1580,14 +1603,60 @@ const AttachmentRefsRow = memo(function AttachmentRefsRow({ refs, onFileClick }:
 // conversationnel `subagent_result` (display:true) → l'orchestrateur en fait un
 // NOUVEAU tour. Ici, on le rend comme un message système lisible à GAUCHE,
 // distinct des bulles utilisateur (il n'est PAS de l'utilisateur).
-const SubAgentResultMessage = memo(function SubAgentResultMessage({ message }: { message: DisplayMessage }) {
+//
+// REPLI : ce message passe par le mécanisme commun (CollapsibleBlock → le
+// réglage « Déplier le détail d'affichage par défaut » + override par bloc au
+// clic). L'en-tête TOUJOURS visible porte : libellé, agent(s) (rôle/fonction)
+// et statut(s) issus de `details.results`, taille du corps (lignes/chars) ; le
+// corps (contenu conversationnel complet) n'est rendu que déplié. Échec d'un
+// résultat (statut ≠ succès) → auto-dépli, comme partout ailleurs.
+// Le message reste CONVERSATIONNEL (ni ajouté à NON_CONVERSATIONAL_CUSTOM_TYPES
+// ni modifié côté backend) : on ne change QUE le rendu frontend.
+export const SubAgentResultMessage = memo(function SubAgentResultMessage({ message }: { message: DisplayMessage }) {
   const { t } = useTranslation();
+  const results = message.subagentResults;
+  const failed = isSubagentResultFailed(results);
+  const lines = countContentLines(message.content);
+  // Repli : sans métadonnées structurées, la 1re ligne d'en-tête du contenu
+  // backend (« ### Label (fn) — statut ») garde l'en-tête informatif.
+  const headingFallback = results && results.length > 0 ? null : firstResultHeading(message.content);
   return (
     <div className="flex justify-start mb-3">
-      <div className="max-w-[90%] border-l-2 border-hacker-accent bg-hacker-surface/40 rounded-r-lg px-3 py-2">
+      <div className="max-w-[90%] min-w-0 border-l-2 border-hacker-accent bg-hacker-surface/40 rounded-r-lg px-3 py-2">
         {message.timestamp ? <div className="text-[9px] text-hacker-text-dim mb-0.5">{formatTime(message.timestamp)}</div> : null}
-        <div className="text-[10px] text-hacker-accent/80 mb-1 font-mono uppercase tracking-wide">🤖 {t("chat.subAgentResultLabel")}</div>
-        <div className="text-hacker-text-bright/90 text-xs whitespace-pre-wrap break-words">{message.content}</div>
+        <CollapsibleBlock
+          blockId={`subagent-result:${message.id}`}
+          isError={failed}
+          className="min-w-0"
+          headerClassName={`inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wide text-left min-w-0 flex-wrap ${failed ? "text-red-400" : "text-hacker-accent/80"}`}
+          contentClassName="mt-1"
+          header={
+            <>
+              <span>🤖 {t("chat.subAgentResultLabel")}</span>
+              {results && results.length > 0 ? (
+                <>
+                  {results.length > 1 && (
+                    <span className="text-hacker-text-dim/70">{t("chat.subAgentResultCount", results.length)}</span>
+                  )}
+                  {results.map((r) => {
+                    const statusKey = subagentStatusLabelKey(r.status);
+                    return (
+                      <span key={r.delegateRunId} className="normal-case text-hacker-text-bright/80">
+                        {r.label || r.delegateFunction || t("chat.subAgent")}
+                        {r.delegateFunction && r.delegateFunction !== r.label ? ` (${r.delegateFunction})` : ""} — {statusKey ? t(statusKey) : r.status}
+                      </span>
+                    );
+                  })}
+                </>
+              ) : headingFallback ? (
+                <span className="normal-case text-hacker-text-bright/80">{headingFallback}</span>
+              ) : null}
+              <span className="text-hacker-text-dim/70">{t("chat.subAgentResultSize", lines, message.content.length)}</span>
+            </>
+          }
+        >
+          <div className="text-hacker-text-bright/90 text-xs whitespace-pre-wrap break-words">{message.content}</div>
+        </CollapsibleBlock>
       </div>
     </div>
   );

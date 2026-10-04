@@ -35,6 +35,7 @@ export const en = {
     llmError: "LLM error — empty response (the process stopped). Try again or check the model/provider.",
     timeoutError: "Interrupted: no model response for 5 min",
     thoughtFor: (dur: string) => `thought for ${dur}`,
+    // ── Day separator (date marker in the thread) ──
     loadEarlier: (n: number) => `Load ${n} earlier message${n > 1 ? "s" : ""}`,
     loadingEarlier: "Loading history…",
     streaming: "⚡ STREAMING",
@@ -81,6 +82,15 @@ export const en = {
     subAgentStopAllTitle: "Stop all running sub-agents",
     // ── LOT 2: result message from a detached sub-agent ──
     subAgentResultLabel: "Sub-agent result",
+    // Collapsed header: number of agents in the batch, body size, statuses.
+    subAgentResultCount: (n: number) => `${n} sub-agents`,
+    subAgentResultSize: (lines: number, chars: number) => `${lines} line${lines > 1 ? "s" : ""} · ${chars} char${chars > 1 ? "s" : ""}`,
+    subAgentStatusSuccess: "success",
+    subAgentStatusError: "failure",
+    subAgentStatusTimeoutInactivity: "timeout (inactivity)",
+    subAgentStatusTimeoutGlobal: "timeout (global)",
+    subAgentStatusAborted: "interrupted",
+    subAgentStatusCancelled: "cancelled by user",
     // ── LOT 4: side-by-side columns for simultaneous sub-agents ──
     parallelSubAgents: (n: number) => `${n} sub-agents in parallel`,
     parallelSubAgentsOverflow: (n: number) => `horizontal scroll beyond ${n}`,
