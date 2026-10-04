@@ -91,7 +91,7 @@ Pi-Web tourne dans un conteneur Docker. Il y a deux copies du code :
 - Les noms de variables/fonctions : **anglais** (convention universelle).
 - Les labels UI : **français** (avec i18n en parallèle).
 
-## 🔗 Conventions partagées (écosystème holaf)
+## Conventions partagées (écosystème holaf)
 
 Avant d'introduire ou de modifier un composant, une intégration ou un outil,
 consulter les conventions communes : `/projects/holaf-lib/docs/conventions/`
