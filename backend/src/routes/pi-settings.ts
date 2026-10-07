@@ -3,6 +3,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { execSync, execFileSync } from "child_process";
 import path from "path";
 import os from "os";
+// Logique pure du toggle des skills (nom nu → motif d'exclusion « !nom » compris
+// par le SDK, cf. docs SDK settings.md) — testée dans skills-announce.test.ts.
+import { updateSkillSettingsList } from "../pi/skills-announce.js";
 
 const router = Router();
 
@@ -430,6 +433,20 @@ router.post("/toggle", (req: Request, res: Response) => {
 
     const settings = loadSettings();
     const list: string[] = settings[type] || [];
+
+    // ── Skills : les noms NUS désignent des skills AUTO-DÉCOUVERTES ──
+    // Le SDK les charge par défaut ; les retirer de settings.skills ne les
+    // désactive PAS (vérifié : un nom nu résout vers un chemin inexistant).
+    // La désactivation réelle exige un motif d'exclusion « !<nom> » ; on l'écrit
+    // donc à la place du nom nu (et on le retire à la ré-activation). Les
+    // entrées qui ressemblent à un chemin gardent le comportement historique
+    // (elles ne sont chargées QUE via cette entrée → add/remove suffit).
+    if (type === "skills") {
+      const next = updateSkillSettingsList(list, source, enabled === true);
+      settings.skills = next;
+      saveSettings(settings);
+      return res.json({ success: true, skills: next });
+    }
 
     if (enabled && !list.includes(source)) {
       list.push(source);

@@ -58,6 +58,13 @@ Ce fichier contient les règles de base que les assistants IA (Claude Code, GitH
 │                                 compaction-checkpoint)
 ├── docs/                       # Documentation
 │   └── agent-api.md
+├── skills/                     # Skills maison PORTABLES livrées (pi-web-ui,
+│                                 pi-web-cbm) : semées au démarrage dans
+│                                 ~/.pi/agent/skills si absentes — seed jamais
+│                                 écrasé, cf. docs/skills.md. Les skills de
+│                                 l'écosystème holaf (holaf-conventions,
+│                                 holaf-briques) vivent dans /projects/holaf-lib/skills/
+│                                 et ne sont PAS livrées ici.
 ├── ROADMAP.md                  # Suivi du projet (lire en premier)
 ├── README.md
 └── AGENTS.md                   # Ce fichier
@@ -81,6 +88,8 @@ Pi-Web tourne dans un conteneur Docker. Il y a deux copies du code :
 - `ROADMAP.md` — état du projet, bugs, features planifiées
 - `frontend/src/components/Chat/ChatView.tsx` — composant principal du chat, contient toute la logique de streaming, scroll, messages
 - `backend/src/pi/session.ts` — orchestration des sessions Pi (modes, auto-review)
+- `backend/src/pi/skills-seed.ts` — installation au démarrage des skills livrées (`skills/` → `~/.pi/agent/skills`, seulement si absentes ; seed jamais écrasé)
+- `docs/skills.md` — skills maison : où elles vivent, comment les personnaliser / revenir à l'original
 - `docs/agent-api.md` — API REST externe pour agents tiers
 
 ## 🌐 Langue

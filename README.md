@@ -79,6 +79,10 @@ If you run Ollama locally, make sure it's accessible from the Pi-Web container. 
 
 Use `Shift+Tab` or the sidebar commands to cycle through thinking levels (off → minimal → low → medium → high).
 
+### Skills
+
+Pi-Web ships two built-in skills in `skills/` (Pi-Web UI conventions, CBM graph pitfalls). On startup they are installed into `~/.pi/agent/skills/` **only if not already present** — your local copies are never overwritten, edit them freely. Skills that depend on other ecosystem repositories (e.g. the `holaf-lib` library) are intentionally **not** shipped here. See `docs/skills.md` (French) for details, customization, and how to restore a bundled skill.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |

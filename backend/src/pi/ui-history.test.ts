@@ -271,3 +271,39 @@ describe("serializeMessagesForUi", () => {
     expect(out[0].model).toBe("deepseek-v4.1-flash-2026");
   });
 });
+
+// ── C5 : nom LISIBLE du fournisseur dans l'historique UI ──────────────────
+// La carte d'erreur ne doit JAMAIS afficher l'id technique du provider
+// (`provider_<horodatage>_<suffixe>`) : la sérialisation résout le nom depuis
+// la config providers fournie par les callers (loadProviders()), y compris
+// pour un message ancien relu après rechargement de l'historique.
+describe("libellé lisible du provider dans l'historique (C5)", () => {
+  const providers = [
+    { id: "provider_1779417542317_igjvu", name: "Ollama-Cloud" },
+    { id: "p2", name: "Deepseek" },
+    { id: "p3", name: "   " }, // nom vide → ignoré
+  ];
+
+  it("serializeMessagesForUi : provider → providerName résolu, absent si inconnu", () => {
+    const out = serializeMessagesForUi([
+      { id: "a1", role: "assistant", timestamp: 1, stopReason: "error", errorMessage: "boom", provider: "provider_1779417542317_igjvu", model: "deepseek-v4.1-flash", content: [] },
+      { id: "a2", role: "assistant", timestamp: 2, stopReason: "error", errorMessage: "boom", provider: "inconnu", model: "m", content: [] },
+      { id: "a3", role: "assistant", timestamp: 3, stopReason: "error", errorMessage: "boom", provider: "p3", model: "m", content: [] },
+    ], providers);
+    expect(out[0].provider).toBe("provider_1779417542317_igjvu");
+    expect(out[0].providerName).toBe("Ollama-Cloud");
+    // Provider inconnu ou sans nom → AUCUN providerName (le frontend affichera
+    // alors un message SANS nom, jamais l'id brut).
+    expect(out[1].providerName).toBeUndefined();
+    expect(out[2].providerName).toBeUndefined();
+  });
+
+  it("buildFullUiHistory : le nom lisible suit le rechargement d'historique", () => {
+    const session = makeSession([
+      { type: "message", id: "e1", timestamp: 1, message: { role: "assistant", content: [], stopReason: "error", errorMessage: "boom", provider: "provider_1779417542317_igjvu", model: "deepseek-v4.1-flash" } },
+    ]);
+    expect(buildFullUiHistory(session, providers)[0].providerName).toBe("Ollama-Cloud");
+    // Sans config providers, comportement inchangé (pas de providerName).
+    expect(buildFullUiHistory(session)[0].providerName).toBeUndefined();
+  });
+});

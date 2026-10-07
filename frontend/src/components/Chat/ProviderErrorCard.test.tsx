@@ -201,4 +201,33 @@ describe("Classification visible — messages non techniques", () => {
     expect(screen.getByText("Generation interrupted")).toBeTruthy();
     expect(screen.queryByText("Provider error")).toBeNull();
   });
+
+  it("nom lisible du fournisseur (C5) : « Ollama Cloud », jamais l'id technique", () => {
+    const attempt = {
+      ...failedAttempt(
+        "a1",
+        1_000,
+        '500: {"message":"Internal Server Error (ref: b8415c7e-58d6-483c-87ea-5c863445578e)"}',
+      ),
+      provider: "provider_1779417542317_igjvu",
+      providerName: "Ollama-Cloud",
+    };
+    renderThread([user("u1"), attempt], false);
+    expect(screen.getByText(/on Ollama Cloud returned an internal error/)).toBeTruthy();
+    // La ref affichée est EXACTEMENT celle de l'erreur brute (minuscules).
+    expect(screen.getByText(/ref: b8415c7e-58d6-483c-87ea-5c863445578e/)).toBeTruthy();
+    expect(screen.queryByText(/provider_1779417542317_igjvu/)).toBeNull();
+    expect(screen.queryByText(/Provider 1779417542317/)).toBeNull();
+  });
+
+  it("id technique sans nom résolu → message SANS nom (jamais l'id brut)", () => {
+    const attempt = {
+      ...failedAttempt("a1", 1_000),
+      provider: "provider_1779417542317_igjvu",
+      providerName: undefined,
+    };
+    renderThread([user("u1"), attempt], false);
+    expect(screen.getByText(/The model deepseek-v4\.1-flash returned an internal error/)).toBeTruthy();
+    expect(screen.queryByText(/provider_1779417542317/)).toBeNull();
+  });
 });

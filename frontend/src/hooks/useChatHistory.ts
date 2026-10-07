@@ -245,6 +245,8 @@ export function convertHistoryToDisplayMessages(
         // (C1/C2) Provider/modèle du tour (AssistantMessage du SDK, conservés
         // par serializeMessagesForUi) — nommés dans le message d'erreur.
         provider: typeof (msg as any).provider === "string" ? (msg as any).provider : undefined,
+        // (C5) Nom LISIBLE du fournisseur (résolu backend) — jamais l'id brut.
+        providerName: typeof (msg as any).providerName === "string" ? (msg as any).providerName : undefined,
         model: typeof (msg as any).responseModel === "string"
           ? (msg as any).responseModel
           : (typeof (msg as any).model === "string" ? (msg as any).model : undefined),

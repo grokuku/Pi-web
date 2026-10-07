@@ -288,6 +288,18 @@ export function getProvider(id: string): ProviderConfig | undefined {
   return loadProviders().find((p) => p.id === id);
 }
 
+/**
+ * Nom LISIBLE d'un provider à partir de son id technique, pour l'AFFICHAGE
+ * (carte d'erreur fournisseur) : `provider_1779417542317_igjvu` →
+ * `Ollama-Cloud`. `undefined` si l'id est vide, inconnu ou si la config n'a
+ * pas de nom — l'appelant n'affiche alors AUCUN nom plutôt que l'id brut.
+ */
+export function getProviderDisplayName(id?: string | null): string | undefined {
+  if (typeof id !== "string" || !id.trim()) return undefined;
+  const name = getProvider(id)?.name?.trim();
+  return name || undefined;
+}
+
 export function inferReasoning(modelId: string, family?: string): boolean {
   const name = (family || modelId).toLowerCase();
   // ⚠️ HEURISTIQUE DE NOM : simple DÉFAUT, à mettre à jour au fil des sorties de modèles.

@@ -35,7 +35,9 @@ function ProviderErrorAttemptsList({ attempts }: { attempts: ProviderErrorAttemp
     <div className="flex flex-col gap-1">
       {attempts.map((a, i) => {
         const time = formatTimeSeconds(a.timestamp);
-        const who = [a.provider, a.model].filter(Boolean).join("/");
+        // Nom lisible du fournisseur (résolu backend) quand il existe ; repli
+        // sur la valeur brute pour garder le détail technique diagnostiquable.
+        const who = [a.providerName || a.provider, a.model].filter(Boolean).join("/");
         return (
           <div key={a.id} className="bg-black/20 border border-red-500/20 rounded px-1.5 py-1">
             <div className="text-[9px] text-red-300/70">
@@ -109,6 +111,7 @@ export const ProviderErrorCard = memo(function ProviderErrorCard({ run, onRetry 
   const display = llmErrorDisplay({
     errorMessage: last?.errorMessage,
     provider: last?.provider,
+    providerName: last?.providerName,
     model: last?.model,
   });
   const count = run.attempts.length;

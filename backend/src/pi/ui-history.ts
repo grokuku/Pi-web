@@ -2,10 +2,34 @@
 // Module pur (aucune dépendance serveur) : extrait de index.ts pour être
 // testable (index.ts démarre Express + WS + crons à l'import, impossible à
 // charger depuis vitest sans effets de bord).
+// Les libellés d'affichage (nom LISIBLE du provider, cf. C5) sont résolus à
+// partir de la liste de providers PASSÉE en paramètre : le module reste pur
+// (aucune lecture de .data/providers.json ici), les callers fournissent
+// `loadProviders()`.
+
+/** Vue minimale d'un provider utile aux libellés d'affichage. */
+export interface ProviderLabel {
+  id?: string;
+  name?: string;
+}
+
+/** Index `id → nom` des providers (ignore les entrées sans id/nom). PURE. */
+function providerNameIndex(providers?: ProviderLabel[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const p of providers || []) {
+    const id = typeof p?.id === "string" ? p.id : "";
+    const name = typeof p?.name === "string" ? p.name.trim() : "";
+    if (id && name) map.set(id, name);
+  }
+  return map;
+}
 
 // ── Fonction partagée de sérialisation des messages (BUG-46 fix) ──
 // Utilisée par pi_start et pi_history_request pour reconstruire l'historique UI.
-export function serializeMessagesForUi(messages: any[]): any[] {
+// `providers` (optionnel) : config providers pour résoudre le nom LISIBLE du
+// fournisseur (`provider_<id>` → « Ollama-Cloud ») sur les messages assistant.
+export function serializeMessagesForUi(messages: any[], providers?: ProviderLabel[]): any[] {
+  const providerNames = providerNameIndex(providers);
   return messages.map((m: any) => {
     const base: any = {
       id: m.id,
@@ -39,6 +63,10 @@ export function serializeMessagesForUi(messages: any[]): any[] {
       // UI pour que le message pédagogique reste exact après rechargement
       // (sans eux, seule la session courante les connaîtrait).
       base.provider = m.provider;
+      // (C5) Nom LISIBLE du fournisseur résolu depuis la config : la carte
+      // d'erreur n'affiche jamais l'id technique. Absent si non résolvable.
+      const providerName = typeof m.provider === "string" ? providerNames.get(m.provider) : undefined;
+      if (providerName) base.providerName = providerName;
       base.model = m.responseModel || m.model;
       base.thinking = Array.isArray(base.content)
         ? base.content.filter((b: any) => b.type === "thinking").map((b: any) => b.thinking || "").join("")
@@ -86,11 +114,11 @@ export function serializeMessagesForUi(messages: any[]): any[] {
 //    le payload WS (ils ne servent qu'à l'affichage ; les récentes restent).
 // Le contexte LLM (compaction-aware) n'est PAS touché : c'est uniquement la
 // vue UI (pi_history) qui devient complète.
-export function buildFullUiHistory(session: any): any[] {
+export function buildFullUiHistory(session: any, providers?: ProviderLabel[]): any[] {
   const sm = session?.sessionManager;
   if (!sm || typeof sm.getEntries !== "function") {
     // Fallback : ancien comportement (contexte compaction-aware).
-    return serializeMessagesForUi(session?.messages || []);
+    return serializeMessagesForUi(session?.messages || [], providers);
   }
   const entries: any[] = sm.getEntries() || [];
   // Index de la dernière compaction : au-delà, on garde tout ; avant, on
@@ -152,7 +180,7 @@ export function buildFullUiHistory(session: any): any[] {
         b?.type === "image" ? { type: "text", text: "[image omise de l'historique ancien]" } : b
       );
     }
-    uiMessages.push(serializeMessagesForUi([message])[0]);
+    uiMessages.push(serializeMessagesForUi([message], providers)[0]);
   }
   return uiMessages;
 }

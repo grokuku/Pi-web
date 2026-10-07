@@ -45,6 +45,11 @@ import type { Project } from "./projects/manager.js";
 // pi/ui-history.test.ts. sliceUiHistoryWindow = chargement par lots (fix de
 // fond du bug « messages récents manquants » : payload WS borné).
 import { buildFullUiHistory, sliceUiHistoryWindow, type UiHistoryWindowMeta } from "./pi/ui-history.js";
+// Config providers : résout le nom LISIBLE du fournisseur (id technique
+// `provider_<horodatage>_<suffixe>` → « Ollama-Cloud ») dans l'historique UI
+// transmis au client (C5). Lecture directe du fichier à chaque sérialisation
+// d'historique (déjà chargé depuis le cache OS ; volume faible).
+import { loadProviders } from "./pi/providers.js";
 import { runMemoryMigration } from "./pi/memory-migration.js";
 // LOT 1 (orchestrateur interactif) : registre des runs de sous-agents publié par
 // l'extension harness-orchestrator (pont globalThis) — arrêt CIBLÉ/GLOBAL des
@@ -453,7 +458,7 @@ app.get("/api/sessions/:projectId/history", (req, res) => {
   const state = getSession(projectId);
   // Historique UI COMPLET (entrées brutes, pré-compaction incluse) et non le
   // seul contexte LLM compaction-aware : cf. buildFullUiHistory.
-  const messages = state?.session ? buildFullUiHistory(state.session) : [];
+  const messages = state?.session ? buildFullUiHistory(state.session, loadProviders()) : [];
   res.json({ messages });
 });
 
@@ -877,7 +882,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           // pi_history_page. La source reste buildFullUiHistory (entrées
           // brutes, ids, compactions inline) — seule la TRANCHÉE change.
           const t0 = Date.now();
-          const full = buildFullUiHistory(state.session);
+          const full = buildFullUiHistory(state.session, loadProviders());
           // AJUSTEMENT 1 : événement replay tracé à part (grep facile), le
           // détail volumétrique partant via sendPiHistory ci-dessous.
           if (isReplay) {
@@ -954,7 +959,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
         // à chaque reconnexion = la cause racine du flapping) mais les N
         // derniers messages + curseur (le client pagine via pi_history_page).
         const t0 = Date.now();
-        const full = buildFullUiHistory(state.session);
+        const full = buildFullUiHistory(state.session, loadProviders());
         const win = sliceUiHistoryWindow(full);
         sendPiHistory(ws, projectId, win.messages, "pi_history_request", Date.now() - t0, win);
       }
@@ -1011,7 +1016,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       const t0 = Date.now();
       // buildFullUiHistory reste la SOURCE (entrées brutes, ids, compactions
       // inline) : on ne change que la tranche envoyée.
-      const full = buildFullUiHistory(pageState.session);
+      const full = buildFullUiHistory(pageState.session, loadProviders());
       const win = sliceUiHistoryWindow(full, {
         before: msg.before,
         beforeId: msg.beforeId,
@@ -1105,7 +1110,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           );
           if (state.session) {
             const t0 = Date.now();
-            const full = buildFullUiHistory(state.session);
+            const full = buildFullUiHistory(state.session, loadProviders());
             const win = sliceUiHistoryWindow(full);
             // AJUSTEMENT 1 : fallback auto-guérison — le prompt a réveillé un
             // projet sans session ; l'historique restauré est aussi tracé.
@@ -1129,7 +1134,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
           const stateNow = getSession(pid);
           if (stateNow?.session) {
             const t0 = Date.now();
-            const full = buildFullUiHistory(stateNow.session);
+            const full = buildFullUiHistory(stateNow.session, loadProviders());
             const win = sliceUiHistoryWindow(full);
             sendPiHistory(ws, pid, win.messages, "pi_prompt_needs_history", Date.now() - t0, win);
           }
@@ -1436,6 +1441,26 @@ httpServer.listen(PORT, async () => {
     }
   } catch (e: any) {
     console.warn("[startup] reasoning levels backfill failed:", e.message);
+  }
+
+  // Semer les skills maison livrées avec Pi-Web (racine du dépôt → skills/)
+  // dans <agentDir>/skills, SI elles n'y sont pas déjà — même philosophie que
+  // la création de settings.json par entrypoint.sh (seed seulement si absent,
+  // idempotent) : une copie locale existante n'est JAMAIS réécrite, donc les
+  // personnalisations de l'utilisateur survivent aux redémarrages. Best-effort :
+  // un échec (lecture/copie) ne doit jamais bloquer le boot.
+  try {
+    const { seedBundledSkills } = await import("./pi/skills-seed.js");
+    const seed = seedBundledSkills();
+    if (seed.copied.length > 0) {
+      console.log(`[startup] skills maison installées dans ${seed.targetDir} : ${seed.copied.join(", ")}`);
+    } else if (seed.failed.length > 0) {
+      console.warn(`[startup] skills maison : échec pour ${seed.failed.join(", ")} (${seed.targetDir})`);
+    } else if (seed.skipped.length > 0) {
+      console.log(`[startup] skills maison : ${seed.skipped.length} déjà présente(s) — rien à écrire`);
+    }
+  } catch (e: any) {
+    console.warn("[startup] skills seed failed:", e.message);
   }
 
   // Auto-mount SMB projects

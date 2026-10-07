@@ -181,6 +181,23 @@ describe("applyPiEvent — cycle complet du streaming", () => {
     expect(msgs[0].errorMessage).toBe("500: boom");
   });
 
+  it("message_end capture le NOM LISIBLE du provider (C5) posé par le backend", () => {
+    const { msgs } = run([
+      messageStart("asst-1"),
+      {
+        type: "message_end",
+        message: {
+          role: "assistant", id: "asst-1", stopReason: "error", errorMessage: "500: boom",
+          provider: "provider_1779417542317_igjvu", providerName: "Ollama-Cloud",
+        },
+      },
+    ]);
+    // L'id brut reste disponible (diagnostic) MAIS le nom lisible l'accompagne :
+    // la carte d'erreur affiche « Ollama Cloud », jamais l'id.
+    expect(msgs[0].provider).toBe("provider_1779417542317_igjvu");
+    expect(msgs[0].providerName).toBe("Ollama-Cloud");
+  });
+
   it("agent_end reason:timeout → stopReason error + errorMessage localisé", () => {
     const t = vi.fn((key: string) => (key === "chat.timeoutError" ? "Temps dépassé" : key));
     const { msgs, asstId } = run(

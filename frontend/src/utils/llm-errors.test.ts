@@ -3,6 +3,7 @@
 // SDK pour un même tour = 4 messages assistant vides avec stopReason "error").
 import { describe, expect, it } from "vitest";
 import type { DisplayMessage } from "../types";
+import { getT } from "../i18n";
 import {
   LLM_ERROR_DETAIL_MAX,
   buildProviderErrorRun,
@@ -10,6 +11,7 @@ import {
   groupProviderFailures,
   isEmptyFailedAttempt,
   isFailedAssistantMessage,
+  isTechnicalProviderId,
   llmErrorDisplay,
   llmErrorMessageKey,
   llmErrorTitleKey,
@@ -83,6 +85,27 @@ describe("classifyLlmError", () => {
     expect(long.detail.length).toBeLessThanOrEqual(LLM_ERROR_DETAIL_MAX);
   });
 
+  it("ref incident : UUID minuscules copié À L'IDENTIQUE (aucune substitution de casse)", () => {
+    // Ref BRUTE du log backend 2026-10-06 (incident 500 Ollama Cloud, ligne
+    // `[llm-error]` de .data/logs) : la capture montrait « …557Be » — artefact
+    // visuel (8 vs B), le code ne touche pas à la casse. Ce test verrouille le
+    // format RÉEL jusqu'au rendu.
+    const raw =
+      '500: {"message":"Internal Server Error (ref: b8415c7e-58d6-483c-87ea-5c863445578e)","type":"api_error","param":null,"code":null}';
+    expect(classifyLlmError(raw).ref).toBe("b8415c7e-58d6-483c-87ea-5c863445578e");
+    // Le détail brut contient la ref telle quelle (aucune réécriture).
+    expect(classifyLlmError(raw).detail).toContain("b8415c7e-58d6-483c-87ea-5c863445578e");
+  });
+
+  it("ref : casse mixte, caractères particuliers et espaces préservés byte-à-byte", () => {
+    expect(classifyLlmError("500 (ref: AbC-9f8e_7b+Q==/Z)").ref).toBe("AbC-9f8e_7b+Q==/Z");
+    // Variante JSON `"ref": "…"` : casse conservée.
+    expect(classifyLlmError('500 {"ref":"MiXeD-UUID_42"}').ref).toBe("MiXeD-UUID_42");
+    // La capture s'arrête à la parenthèse fermante, pas au premier espace :
+    // aucune troncature d'une ref contenant des blancs.
+    expect(classifyLlmError("500 (ref: abc def-123)").ref).toBe("abc def-123");
+  });
+
   it("mappe les clés i18n par type", () => {
     expect(llmErrorMessageKey("server")).toBe("chat.providerErrorMessageServer");
     expect(llmErrorMessageKey("rate_limit")).toBe("chat.providerErrorMessageRateLimit");
@@ -105,11 +128,60 @@ describe("classifyLlmError", () => {
     expect(d.args[2]).toBe("97780de6-d6ab-4582-91e8-e7a8a9543966");
   });
 
+  it("llmErrorDisplay : le NOM du provider transporté par le backend prime sur l'id (C5)", () => {
+    const d = llmErrorDisplay({
+      errorMessage: '500: {"message":"Internal Server Error (ref: b8415c7e-58d6-483c-87ea-5c863445578e)"}',
+      provider: "provider_1779417542317_igjvu",
+      providerName: "Ollama-Cloud",
+      model: "deepseek-v4.1-flash",
+    });
+    expect(d.args[1]).toBe("Ollama Cloud");
+    expect(d.args[2]).toBe("b8415c7e-58d6-483c-87ea-5c863445578e");
+  });
+
+  it("llmErrorDisplay : sans nom résolu, un id technique n'est JAMAIS affiché (repli sans nom)", () => {
+    const d = llmErrorDisplay({
+      errorMessage: "500 boom",
+      provider: "provider_1779417542317_igjvu",
+      model: "deepseek-v4.1-flash",
+    });
+    expect(d.args[1]).toBe("");
+  });
+
+  it("phrase finale (fr) : nom lisible + réf exacte, aucun id technique (preuve de bout en bout)", () => {
+    const t = getT("fr");
+    const d = llmErrorDisplay({
+      errorMessage:
+        '500: {"message":"Internal Server Error (ref: b8415c7e-58d6-483c-87ea-5c863445578e)"}',
+      provider: "provider_1779417542317_igjvu",
+      providerName: "Ollama-Cloud",
+      model: "deepseek-v4.1-flash",
+    });
+    const sentence = t(d.messageKey, ...d.args);
+    expect(sentence).toBe(
+      "Le modèle deepseek-v4.1-flash chez Ollama Cloud a renvoyé une erreur interne (réf. b8415c7e-58d6-483c-87ea-5c863445578e). C'est côté fournisseur — réessayez dans quelques minutes.",
+    );
+    expect(sentence).not.toContain("provider_1779417542317_igjvu");
+    expect(sentence).not.toContain("Provider 1779417542317");
+  });
+
   it("prettyProviderName : ids → libellés lisibles, vide si inconnu", () => {
     expect(prettyProviderName("ollama-cloud")).toBe("Ollama Cloud");
     expect(prettyProviderName("openrouter")).toBe("Openrouter");
     expect(prettyProviderName("")).toBe("");
     expect(prettyProviderName(undefined)).toBe("");
+    // Id technique Pi-Web : jamais présenté comme un nom (repli sans nom).
+    expect(prettyProviderName("provider_1779417542317_igjvu")).toBe("");
+    expect(prettyProviderName("__default__")).toBe("");
+  });
+
+  it("isTechnicalProviderId : distingue un id interne d'un slug/nom de provider", () => {
+    expect(isTechnicalProviderId("provider_1779417542317_igjvu")).toBe(true);
+    expect(isTechnicalProviderId("provider-123-abc")).toBe(true);
+    expect(isTechnicalProviderId("__default__")).toBe(true);
+    expect(isTechnicalProviderId("ollama-cloud")).toBe(false);
+    expect(isTechnicalProviderId("Ollama-Cloud")).toBe(false);
+    expect(isTechnicalProviderId(undefined)).toBe(false);
   });
 });
 

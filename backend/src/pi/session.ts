@@ -19,7 +19,7 @@ import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
-import { ollamaReasoningModelOptions } from "./providers.js";
+import { getProviderDisplayName, ollamaReasoningModelOptions } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
@@ -833,6 +833,16 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
             projectId,
             startedAt ? Date.now() - startedAt : undefined,
           ));
+          // (C5) Nom LISIBLE du fournisseur sur l'événement transmis à l'UI :
+          // l'id interne (`provider_<horodatage>_<suffixe>`) ne doit JAMAIS
+          // apparaître dans la carte d'erreur. Résolu depuis la config des
+          // providers, uniquement pour un tour en échec (aucun coût sur les
+          // tours réussis) ; absent = repli sans nom côté frontend.
+          const msg = (event as any).message;
+          if ((msg.stopReason === "error" || msg.errorMessage) && typeof msg.provider === "string") {
+            const providerName = getProviderDisplayName(msg.provider);
+            if (providerName) msg.providerName = providerName;
+          }
         }
       } else if (event.type === "auto_retry_start" || event.type === "auto_retry_end") {
         // (C3) Reprises automatiques du SDK : planification (délai, cause) et

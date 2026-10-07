@@ -67,7 +67,11 @@ export function classifyLlmError(raw?: string | null): LlmErrorInfo {
 
   const statusMatch = /^(\d{3})\b/.exec(text);
   const httpStatus = statusMatch ? Number(statusMatch[1]) : undefined;
-  const refMatch = /\(ref:\s*([^)\s]+)\)/i.exec(text) ?? /"ref"\s*:\s*"([^"]+)"/i.exec(text);
+  // Ref fournisseur : « (ref: <uuid>) » ou « "ref": "<uuid>" » (JSON). La
+  // capture s'arrête à la parenthèse FERMANTE (jamais à l'espace) : toute la
+  // référence est conservée À L'IDENTIQUE (casse, tirets, caractères
+  // particuliers) — c'est le seul usage de cette valeur (support fournisseur).
+  const refMatch = /\(ref:\s*([^)]+)\)/i.exec(text) ?? /"ref"\s*:\s*"([^"]+)"/i.exec(text);
   const ref = refMatch ? refMatch[1].trim() : undefined;
 
   const lower = text.toLowerCase();
@@ -131,9 +135,24 @@ export function llmErrorMessageKey(kind: LlmErrorKind): string {
   }
 }
 
+/**
+ * Un identifiant technique de provider (id interne créé par Pi-Web
+ * `provider_<horodatage>_<suffixe>`, sentinelle `__default__`) n'est PAS un nom
+ * de fournisseur : il ne doit jamais être présenté à l'utilisateur (ex. le
+ * message « chez Provider 1779417542317 Igjvu » venu de l'id
+ * `provider_1779417542317_igjvu`). Mieux vaut n'afficher AUCUN nom que l'id brut.
+ */
+export function isTechnicalProviderId(provider?: string | null): boolean {
+  if (typeof provider !== "string") return false;
+  const v = provider.trim();
+  return /^provider[_-]\d+[_-][a-z0-9]+$/i.test(v) || /^__?default__?$/i.test(v);
+}
+
 /** « ollama-cloud » → « Ollama Cloud » (lisible par un non-développeur). */
 export function prettyProviderName(provider?: string | null): string {
   if (typeof provider !== "string" || !provider.trim()) return "";
+  // Jamais d'id technique affiché : repli sur un message SANS nom de provider.
+  if (isTechnicalProviderId(provider)) return "";
   return provider
     .trim()
     .replace(/[-_.]+/g, " ")
@@ -154,16 +173,24 @@ export interface LlmErrorDisplay {
 export function llmErrorDisplay(input: {
   errorMessage?: string;
   provider?: string;
+  /** Nom LISIBLE du provider (transporté par le backend) — prime sur `provider`. */
+  providerName?: string;
   model?: string;
 }): LlmErrorDisplay {
   const info = classifyLlmError(input.errorMessage);
+  // Nom configuré du fournisseur s'il est connu (résolu côté backend depuis
+  // providers.json) ; sinon repli sur la valeur du message — qui peut être un
+  // id technique, alors jamais affiché (prettyProviderName le neutralise).
+  const providerLabel = typeof input.providerName === "string" && input.providerName.trim()
+    ? prettyProviderName(input.providerName)
+    : prettyProviderName(input.provider);
   return {
     info,
     titleKey: llmErrorTitleKey(info.kind),
     messageKey: llmErrorMessageKey(info.kind),
     args: [
       input.model?.trim() || "",
-      prettyProviderName(input.provider),
+      providerLabel,
       info.ref || "",
       info.detail,
     ],
@@ -177,6 +204,8 @@ export interface ProviderErrorAttempt {
   timestamp?: number;
   errorMessage?: string;
   provider?: string;
+  /** Nom LISIBLE du fournisseur (résolu backend) — affiché dans le détail. */
+  providerName?: string;
   model?: string;
 }
 
@@ -211,6 +240,7 @@ export function attemptFromMessage(m: DisplayMessage): ProviderErrorAttempt {
     timestamp: typeof m.timestamp === "number" && Number.isFinite(m.timestamp) ? m.timestamp : undefined,
     errorMessage: m.errorMessage,
     provider: m.provider,
+    providerName: m.providerName,
     model: m.model,
   };
 }

@@ -185,6 +185,10 @@ export interface DisplayMessage {
   // (C1/C2) Provider et modèle RÉELS du tour (AssistantMessage du SDK) :
   // alimentent le message pédagogique d'erreur (nom du modèle/fournisseur).
   provider?: string;
+  // (C5) Nom LISIBLE du fournisseur résolu côté backend depuis la config des
+  // providers (`provider_<id>` → « Ollama-Cloud ») : la carte d'erreur ne doit
+  // JAMAIS afficher l'identifiant technique. Absent = repli sans nom.
+  providerName?: string;
   model?: string;
   // Images attached to user message (server URLs or inline base64 for legacy messages)
   images?: { attachmentId?: string; data?: string; name: string; mimeType: string }[];

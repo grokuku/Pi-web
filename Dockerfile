@@ -36,6 +36,10 @@ COPY VERSION ./VERSION
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY extensions/ ./extensions/
+# Skills maison livrées avec Pi-Web : semées au démarrage du backend dans
+# <agentDir>/skills SI ABSENTES (backend/src/pi/skills-seed.ts) — le dossier
+# doit donc exister dans l'image à /app/skills (résolu depuis backend/dist/pi).
+COPY skills/ ./skills/
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 

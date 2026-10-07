@@ -154,6 +154,15 @@ import {
 const TASK_RELEVANCE_MARKER_START = "<!-- PI_TASK_RELEVANCE -->";
 const TASK_RELEVANCE_MARKER_END = "<!-- /PI_TASK_RELEVANCE -->";
 
+// ── Skills (standard Agent Skills) : annonce des fiches aux sous-agents ─────
+// Le SDK n'ajoute sa section <available_skills> au prompt système QUE si
+// l'agent a l'outil read/bash (dist/core/system-prompt.js) ; le prompt maison
+// des sous-agents REMPLACE le prompt SDK → sans ce bloc, les skills installées
+// restent invisibles. Le helper PUR (backend/src/pi/skills-announce.ts) rend le
+// bloc depuis la liste ACTIVE du chargeur de la tempSession (source de vérité :
+// emplacements globaux/projet/.agents + activation/désactivation settings.json).
+import { renderSkillsBlock } from "../../backend/src/pi/skills-announce.js";
+
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
 // directs (bash, edit, read…) — retirés de sa session en mode harness — puis
@@ -1744,11 +1753,36 @@ export default function (pi: ExtensionAPI) {
             console.warn(`[harness-orchestrator] Carnet d'exploration indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
           }
 
-          // Préfixe SYSTÈME stable (P3) : rôle + carte stable + carnet stable (+ cwd
-          // réinjecté au run par l'extension inline). Ces blocs n'ont AUCUNE
+          // ── Skills (standard Agent Skills) : annonce des fiches ACTIVES ──────
+          // Le prompt maison REMPLACE le prompt SDK ; or le SDK n'ajoute sa section
+          // <available_skills> que si l'agent a read/bash — le sous-agent ne verrait
+          // donc JAMAIS les skills sans ce bloc. Source de vérité : le chargeur DÉJÀ
+          // instancié pour la tempSession (getSkills) → emplacements globaux/projet/
+          // .agents, packages, et activation/désactivation de settings.json (une
+          // skill désactivée via l'UI Pi-Web est un motif « !nom » → absente ici).
+          // Le loader est recréé à CHAQUE délégation : aucune liste périmée après
+          // ajout/désactivation, sans cache à gérer (le bouton « Reload session »
+          // ne concerne que la session principale, pas les sous-agents).
+          // try/catch PERMANENT : une annonce indisponible ne bloque jamais le run.
+          let skillsBlock = "";
+          try {
+            const loaderSkills = tempResourceLoader.getSkills().skills;
+            skillsBlock = renderSkillsBlock(loaderSkills);
+            if (skillsBlock) {
+              console.log(
+                `[harness-orchestrator] Skills annoncées (${effectiveFunc.label}) : ` +
+                `${loaderSkills.length} chargée(s) — ${loaderSkills.map((s) => s.name).join(", ")}`,
+              );
+            }
+          } catch (e: any) {
+            console.warn(`[harness-orchestrator] Annonce des skills indisponible (${effectiveFunc.label}) : ${e?.message || e}`);
+          }
+
+          // Préfixe SYSTÈME stable (P3) : rôle + carte stable + carnet stable + skills
+          // (+ cwd réinjecté au run par l'extension inline). Ces blocs n'ont AUCUNE
           // dépendance à la tâche → la totalité du prompt système est identique pour
           // un couple (projet, rôle) et reste cachable entre deux délégations.
-          subagentPromptState.systemPrompt = effectiveFunc.systemPrompt + repoMapBlock + explorationNotesBlock;
+          subagentPromptState.systemPrompt = effectiveFunc.systemPrompt + repoMapBlock + explorationNotesBlock + skillsBlock;
 
           // ── Annexe de pertinence (P3) → PREMIER MESSAGE USER ──────────────
           // Les éléments VARIABLES par tâche (carte CBM boostée P1 + carnet

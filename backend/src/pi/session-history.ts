@@ -16,6 +16,7 @@
 import { promises as fs } from "fs";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { buildFullUiHistory, sliceUiHistoryWindow, type UiHistoryWindow } from "./ui-history.js";
+import { loadProviders } from "./providers.js";
 
 /**
  * Sélectionne le fichier de session correspondant à `sessionId` dans la liste
@@ -49,6 +50,9 @@ export async function readSessionHistoryFile(
   const entries = parseSessionEntries(content);
   // buildFullUiHistory s'appuie sur `sessionManager.getEntries()` : on lui
   // fournit un adaptateur minimal, sans SessionManager (lecture passive).
-  const full = buildFullUiHistory({ sessionManager: { getEntries: () => entries } });
+  // La config providers (courante) résout le nom LISIBLE du fournisseur des
+  // messages assistant — y compris pour un message ancien relu depuis le
+  // fichier de session (C5).
+  const full = buildFullUiHistory({ sessionManager: { getEntries: () => entries } }, loadProviders());
   return sliceUiHistoryWindow(full, opts);
 }

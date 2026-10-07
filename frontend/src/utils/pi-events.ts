@@ -671,6 +671,10 @@ export function applyPiEvent(
             // (C1/C2) Provider/modèle réels du tour (l'AssistantMessage du SDK
             // les porte) : le message d'erreur pédagogique peut les nommer.
             provider: typeof evt.message?.provider === "string" ? evt.message.provider : ex.provider,
+            // (C5) Nom LISIBLE du fournisseur (posé par le backend à message_end
+            // depuis la config providers) : la carte d'erreur n'affiche jamais
+            // l'id technique (`provider_<horodatage>_<suffixe>`).
+            providerName: typeof evt.message?.providerName === "string" ? evt.message.providerName : ex.providerName,
             model: typeof evt.message?.responseModel === "string"
               ? evt.message.responseModel
               : (typeof evt.message?.model === "string" ? evt.message.model : ex.model),

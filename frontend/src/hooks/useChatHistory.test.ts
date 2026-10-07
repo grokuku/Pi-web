@@ -390,4 +390,23 @@ describe("convertHistoryToDisplayMessages — erreurs fournisseur (C1/C2)", () =
     expect(display[1]).toMatchObject({ id: "a1", stopReason: "error", provider: "ollama-cloud", model: "deepseek-v4.1-flash" });
     expect(display[2]).toMatchObject({ id: "a2", stopReason: "error", provider: "ollama-cloud", model: "deepseek-v4.1-flash-2026" });
   });
+
+  it("préserve le NOM LISIBLE du provider (C5) — rechargement d'historique compris", () => {
+    const history = [
+      { id: "u1", role: "user", content: "salut", timestamp: 1 },
+      {
+        id: "a1", role: "assistant", content: [], timestamp: 2,
+        stopReason: "error", errorMessage: '500: {"message":"Internal Server Error (ref: b8415c7e-58d6-483c-87ea-5c863445578e)"}',
+        provider: "provider_1779417542317_igjvu", providerName: "Ollama-Cloud", model: "deepseek-v4.1-flash",
+      },
+    ];
+    const display = convertHistoryToDisplayMessages(history as any);
+    // L'id technique reste dans `provider` (diagnostic) et le nom lisible dans
+    // `providerName` : la carte affiche le second, jamais le premier.
+    expect(display[1]).toMatchObject({
+      id: "a1",
+      provider: "provider_1779417542317_igjvu",
+      providerName: "Ollama-Cloud",
+    });
+  });
 });

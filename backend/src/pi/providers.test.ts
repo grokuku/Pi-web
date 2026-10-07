@@ -34,6 +34,7 @@ import {
   backfillRegisteredModelReasoningLevels,
   deleteProvider,
   getProvider,
+  getProviderDisplayName,
   inferContextWindow,
   inferReasoning,
   inferVision,
@@ -331,6 +332,20 @@ describe("persistance des providers (fs simulé)", () => {
     expect(created.discoveredModels).toEqual([]);
     // Persisté sur le "disque" simulé
     expect(loadProviders()).toHaveLength(1);
+  });
+
+  it("getProviderDisplayName : id technique → nom configuré, sinon undefined", () => {
+    saveProviders([
+      makeProvider({ id: "provider_1779417542317_igjvu", name: "Ollama-Cloud" }),
+      makeProvider({ id: "sans-nom", name: "   " }),
+    ]);
+    // Cas réel de la carte d'erreur : l'id interne est résolu en nom lisible.
+    expect(getProviderDisplayName("provider_1779417542317_igjvu")).toBe("Ollama-Cloud");
+    // Provider inconnu / nom vide / id vide → undefined (jamais un id brut).
+    expect(getProviderDisplayName("inconnu")).toBeUndefined();
+    expect(getProviderDisplayName("sans-nom")).toBeUndefined();
+    expect(getProviderDisplayName("")).toBeUndefined();
+    expect(getProviderDisplayName(undefined)).toBeUndefined();
   });
 
   it("updateProvider fusionne les champs et lève si l'id est inconnu", () => {
