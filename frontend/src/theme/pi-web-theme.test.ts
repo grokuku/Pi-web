@@ -1,5 +1,5 @@
 /**
- * Tests du thème Pi-Web branché sur la brique `tokens` (holaf-lib >= 0.5.0).
+ * Tests du thème Pi-Web branché sur la brique `tokens` (holaf-lib >= 0.6.0).
  *
  * Pi-Web n'enregistre AUCUN thème maison : le sélecteur n'expose QUE les FAMILLES
  * de la brique (identité `matrix` + 6 familles couleur) et applique le preset

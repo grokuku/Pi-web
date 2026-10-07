@@ -1,7 +1,7 @@
-// Déclarations TypeScript pour la brique HolafTokens (holaf-lib v0.5.0).
+// Déclarations TypeScript pour la brique HolafTokens (holaf-lib v0.6.0).
 // Copie pinnée dans vendor/holaf — le fichier .js est du JS pur (sans types),
 // on déclare ici l'API publique pour que tsc passe sans `any` implicite.
-// API calquée sur js/holaf-tokens.js (version 0.5.0). La brique est
+// API calquée sur js/holaf-tokens.js (version 0.6.0). La brique est
 // CLASSIC-COMPATIBLE : aucun export top-level, l'API est exposée via
 // `window.HolafTokens` (repli `globalThis`). On peut donc l'importer par effet
 // de bord (`import "./holaf-tokens.js"`) puis lire le global.

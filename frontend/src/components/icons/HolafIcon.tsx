@@ -1,4 +1,4 @@
-// ── HolafIcon — adaptateur React de la brique HolafIcons (holaf-lib v0.1.4) ──
+// ── HolafIcon — adaptateur React de la brique HolafIcons (holaf-lib v0.1.6) ──
 //
 // Rôle : rendre une icône de la brique `holaf-icons` (copie pinnée dans
 // `src/vendor/holaf/holaf-icons.js`) sous une forme **compatible avec l'usage

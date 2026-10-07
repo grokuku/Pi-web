@@ -1,4 +1,4 @@
-// ── holaf-toast — wrapper React de la brique HolafToast (holaf-lib v0.5.0) ──
+// ── holaf-toast — wrapper React de la brique HolafToast (holaf-lib v0.8.0) ──
 // Une SEULE instance (singleton de la brique), créée paresseusement, exposant
 // `toast(message, type, duration?)`.
 //

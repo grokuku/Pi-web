@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Pi-Web — thème unifié sur la brique `tokens` de holaf-lib (>= 0.5.0)
+// Pi-Web — thème unifié sur la brique `tokens` de holaf-lib (>= 0.6.0)
 // ─────────────────────────────────────────────────────────────────────────────
 // SOURCE UNIQUE DE COULEURS : la brique HolafTokens est la SEULE à poser les
 // variables `--holaf-*` sur `:root`. Les variables historiques de Pi-Web
@@ -251,7 +251,7 @@ export function getHolafTokens(): HolafTokensApi {
   if (!api || typeof api.getPreset !== "function" || typeof api.setTokens !== "function") {
     throw new Error(
       "[pi-web-theme] brique HolafTokens introuvable — vérifiez " +
-        "src/vendor/holaf/holaf-tokens.js (v0.5.0)."
+        "src/vendor/holaf/holaf-tokens.js (v0.6.0)."
     );
   }
   return api;
@@ -299,7 +299,7 @@ const MODE_DEFAULTS: Readonly<Record<ThemeMode, PiWebModeDefaults>> = {
  * Repli STATIQUE de la famille `matrix` (valeurs Pi-Web d'avant), utilisé
  * UNIQUEMENT si la brique vendordée ne fournit pas les presets `matrix-*`
  * (brique trop ancienne) : garantit un rendu correct plutôt qu'un écran cassé.
- * N'est jamais atteint avec la brique vendue (>= 0.5.0).
+ * N'est jamais atteint avec la brique vendue (>= 0.6.0).
  */
 const PI_WEB_STATIC_FALLBACK: Readonly<Record<ThemeMode, HolafTokenMap>> = {
   dark: {

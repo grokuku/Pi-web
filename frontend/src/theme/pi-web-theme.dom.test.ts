@@ -86,7 +86,9 @@ describe("Pose des tokens par la brique sur :root (jsdom)", () => {
     expect(inline("--holaf-accent")).toBe("#00ff41");
     applyPiWebTheme("dark", "corail");
     expect(inline("--holaf-accent")).toBe("#fa7fb5");
-    expect(inline("--holaf-surface")).toBe("#36252c");
+    // Tokens 0.6.0 (variante C) : fonds GRIS NEUTRE partagés par les familles,
+    // seul l'ACCENT distingue la famille (corail-dark surface #36252c → #171717).
+    expect(inline("--holaf-surface")).toBe("#171717");
     applyPiWebTheme("dark", "turquoise");
     expect(inline("--holaf-accent")).toBe("#0ec7de");
   });
@@ -136,7 +138,9 @@ describe("Pose des tokens par la brique sur :root (jsdom)", () => {
     applyPiWebTheme("light", "corail");
     const lightSurface = inline("--holaf-surface");
     expect(darkSurface).not.toBe(lightSurface);
-    expect(darkSurface).toBe("#36252c");
-    expect(lightSurface).toBe("#ffe3ed");
+    // Tokens 0.6.0 (variante C) : surface sombre #171717, surface claire #eeeeee
+    // (avant : #36252c / #ffe3ed — fonds teintés remplacés par des gris neutres).
+    expect(darkSurface).toBe("#171717");
+    expect(lightSurface).toBe("#eeeeee");
   });
 });

@@ -1,9 +1,12 @@
-// Déclarations TypeScript pour la brique HolafToast (holaf-lib v0.5.0).
+// Déclarations TypeScript pour la brique HolafToast (holaf-lib v0.8.0).
 // Copie pinnée dans vendor/holaf — le fichier .js est du JS pur (sans types),
 // on déclare ici l'API publique pour que tsc --noEmit passe sans `any` implicite.
-// API calquée sur js/holaf-toast.js (version 0.5.0) : show + helpers,
+// API calquée sur js/holaf-toast.js (version 0.8.0) : show + helpers,
 // update/hide (id métier ou contrôleur), setTheme/clearTheme, configure() et
-// le registre de thèmes (themes.register/get/list/update).
+// le registre de thèmes (themes.register/get/list/update). Ajouts additifs
+// depuis 0.5.0 : setStyleNonce()/getCss() (CSP strict / CSS externe) et les
+// options d'appel `nonce`/`injectStyles` (2ᵉ argument de show(), helpers
+// inclus) — aucune signature existante n'a changé.
 
 export type HolafToastType = "info" | "success" | "warning" | "error";
 
@@ -56,8 +59,24 @@ export interface HolafToastOptions {
   progress?: "manual";
   /** Actions cliquables affichées sous le message. */
   actions?: HolafToastAction[];
+  /**
+   * Nonce CSP appliqué au `<style>` injecté (v0.5.1). Équivalent au champ de
+   * même nom du 2ᵉ argument de `show()` ; prime sur `setStyleNonce()`.
+   */
+  nonce?: string | null;
+  /**
+   * `false` : n'injecte AUCUN `<style>` (l'hôte sert `getCss()` comme fichier
+   * .css statique) — v0.5.2. Prime sur le réglage global `configure()`.
+   */
+  injectStyles?: boolean;
   onShow?: (ctrl: HolafToastController) => void;
   onClose?: (reason: HolafToastCloseReason) => void;
+}
+
+/** 2ᵉ argument optionnel de `show()` — prime sur les champs de `options`. */
+export interface HolafToastCallOptions {
+  nonce?: string | null;
+  injectStyles?: boolean;
 }
 
 /** Patch accepté par `ctrl.update()` / `HolafToast.update()`. */
@@ -82,15 +101,33 @@ export interface HolafToastConfigureOptions {
   duration?: number;
   theme?: HolafThemeSpec;
   newestFirst?: boolean;
+  /** `false` : désactive globalement l'injection du `<style>` (v0.5.2). */
+  injectStyles?: boolean;
 }
 
 export interface HolafToastApi {
   version: string;
-  show(options: HolafToastOptions): HolafToastController;
-  success(message: string | number, options?: HolafToastOptions): HolafToastController;
-  error(message: string | number, options?: HolafToastOptions): HolafToastController;
-  warning(message: string | number, options?: HolafToastOptions): HolafToastController;
-  info(message: string | number, options?: HolafToastOptions): HolafToastController;
+  show(options: HolafToastOptions, callOptions?: HolafToastCallOptions): HolafToastController;
+  success(
+    message: string | number,
+    options?: HolafToastOptions,
+    callOptions?: HolafToastCallOptions
+  ): HolafToastController;
+  error(
+    message: string | number,
+    options?: HolafToastOptions,
+    callOptions?: HolafToastCallOptions
+  ): HolafToastController;
+  warning(
+    message: string | number,
+    options?: HolafToastOptions,
+    callOptions?: HolafToastCallOptions
+  ): HolafToastController;
+  info(
+    message: string | number,
+    options?: HolafToastOptions,
+    callOptions?: HolafToastCallOptions
+  ): HolafToastController;
   update(
     idOrCtrl: string | HolafToastController,
     options?: HolafToastPatch
@@ -98,6 +135,10 @@ export interface HolafToastApi {
   hide(idOrCtrl: string | HolafToastController): boolean;
   setTheme(spec: HolafThemeSpec | null): void;
   clearTheme(): void;
+  /** Nonce CSP global (v0.5.1) ; `null` le réinitialise. */
+  setStyleNonce(nonce: string | null): void;
+  /** CSS complet de la brique (v0.5.2) — pour le mode CSS externe. */
+  getCss(): string;
   configure(options: HolafToastConfigureOptions): void;
   themes: {
     register(name: string, vars: HolafThemeVars): HolafThemeVars | null;
