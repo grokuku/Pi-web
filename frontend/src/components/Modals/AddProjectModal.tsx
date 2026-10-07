@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { ArrowLeft } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { FileBrowser } from "../common/FileBrowser";
@@ -597,7 +596,7 @@ export function AddProjectModal({ onClose, onCreated }: Props) {
                 onClick={handleBack}
                 className="btn-hacker text-xs flex items-center gap-1"
               >
-                <ArrowLeft size={12} />
+                <HolafIcon name="arrow-left" size={12} />
                 {t('addProject.back')}
               </button>
             )}

@@ -1,4 +1,3 @@
-import { MessageSquarePlus } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation } from "../../i18n";
@@ -50,7 +49,7 @@ export function NewChatConfirmModal({ open, onClose, onConfirm }: Props) {
           onClick={onConfirm}
           className="btn-hacker danger text-xs flex items-center gap-1.5"
         >
-          <MessageSquarePlus size={12} />
+          <HolafIcon name="message-square-plus" size={12} />
           {t("common.confirm")}
         </button>
       </div>

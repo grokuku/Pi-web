@@ -27,7 +27,6 @@ import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { ImageOff } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { copyToClipboard } from "../../utils/clipboard";
@@ -246,7 +245,7 @@ const MarkdownImage = memo(function MarkdownImage({
       return (
         <a href={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer noopener" title={t('markdown.imageLoadFailed')}>
           <span className="inline-flex items-center gap-1 text-xs text-hacker-text-dim underline">
-            <ImageOff size={12} /> {alt || t('markdown.imageLoadFailed')}
+            <HolafIcon name="image-off" size={12} /> {alt || t('markdown.imageLoadFailed')}
           </span>
         </a>
       );
@@ -262,7 +261,7 @@ const MarkdownImage = memo(function MarkdownImage({
       title={alt ? `${t('markdown.loadExternalImage')} — ${alt}` : t('markdown.loadExternalImage')}
       className="inline-flex items-center gap-1.5 rounded border border-hacker-border bg-hacker-bg/60 px-2 py-1 text-xs text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-accent/60 transition-colors cursor-pointer"
     >
-      <ImageOff size={12} />
+      <HolafIcon name="image-off" size={12} />
       <span>{t('markdown.loadExternalImage')}</span>
       {alt ? <span className="opacity-60">({alt})</span> : null}
     </button>

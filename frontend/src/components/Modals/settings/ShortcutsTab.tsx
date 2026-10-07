@@ -1,4 +1,4 @@
-import { Keyboard, Send, Wrench } from "lucide-react";
+import { HolafIcon } from "../../icons/HolafIcon";
 
 // ── Shortcuts Tab ────────────────────────────────────────────
 function ShortcutsTab() {
@@ -9,7 +9,7 @@ function ShortcutsTab() {
   const CATEGORIES: Category[] = [
     {
       name: "Application",
-      icon: <Keyboard size={12} />,
+      icon: <HolafIcon name="keyboard" size={12} />,
       shortcuts: [
         { keys: ["Ctrl", "L"], desc: "Ouvrir Settings", scope: "global" },
         { keys: ["Ctrl", "Shift", "D"], desc: "Toggle debug overlay", scope: "global" },
@@ -18,7 +18,7 @@ function ShortcutsTab() {
     },
     {
       name: "Chat",
-      icon: <Send size={12} />,
+      icon: <HolafIcon name="send" size={12} />,
       shortcuts: [
         { keys: ["Ctrl", "T"], desc: "Déplier/Replier le détail d'affichage (blocs réflexion, sorties d'outils, sous-agents)", scope: "chat" },
         { keys: ["Shift", "Tab"], desc: "Cycle niveau de réflexion (off→high)", scope: "chat" },
@@ -28,7 +28,7 @@ function ShortcutsTab() {
     },
     {
       name: "Modales",
-      icon: <Wrench size={12} />,
+      icon: <HolafIcon name="wrench" size={12} />,
       shortcuts: [
         { keys: ["Enter"], desc: "Confirmer / sauvegarder", scope: "modal" },
         { keys: ["Esc"], desc: "Fermer la modale", scope: "modal" },

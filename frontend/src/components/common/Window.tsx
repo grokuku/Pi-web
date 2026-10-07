@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 
 // ── Persisted window geometry ──

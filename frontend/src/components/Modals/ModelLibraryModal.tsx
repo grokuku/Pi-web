@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
-import { Wifi, Power, TestTube2, Gauge } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { ModelLibrary, RegisteredModel, ProviderConfig, DiscoveredModel, ProviderType } from "../../types";
@@ -209,7 +208,7 @@ export function ProvidersTab({ providers, setProviders, setError }: {
               </span>
               <button onClick={() => handleTest(p.id)}
                 className="btn-hacker text-[0.6875rem] px-2 py-0.5 flex items-center gap-1">
-                <TestTube2 size={10} /> {t('modelLibrary.test')}
+                <HolafIcon name="test-tube" size={10} /> {t('modelLibrary.test')}
               </button>
               <button onClick={() => openEdit(p)}
                 className="text-hacker-text-dim hover:text-hacker-accent"><HolafIcon name="edit" size={11} /></button>
@@ -358,7 +357,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
 
       <div className="mb-2">
         <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
-          <Wifi size={10} /> {t('modelLibrary.baseUrl')}
+          <HolafIcon name="wifi" size={10} /> {t('modelLibrary.baseUrl')}
         </label>
         <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
           className="input-hacker w-full text-xs" placeholder={PROVIDER_PRESETS[type].defaultBaseUrl} />
@@ -384,7 +383,7 @@ function ProviderEditPanel({ provider, onSave, onCancel }: {
       {/* Limite de concurrence : nombre d'appels LLM menés en parallèle vers ce provider. */}
       <div className="mb-2">
         <label className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 mb-1">
-          <Gauge size={10} /> {t('modelLibrary.maxConcurrentCalls')}
+          <HolafIcon name="gauge" size={10} /> {t('modelLibrary.maxConcurrentCalls')}
         </label>
         <input
           type="number"

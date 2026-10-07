@@ -20,7 +20,6 @@ import { ThemePicker } from "./components/Header/ThemePicker";
 import { Window } from "./components/common/Window";
 import { PreviewWindow } from "./components/Preview/PreviewWindow";
 import { LayoutRenderer, loadPersistedLayout, savePersistedLayout } from "./components/Layout/LayoutRenderer";
-import { X } from "lucide-react";
 import type { Project, PanelId, Activity } from "./types";
 import { I18nProvider, useTranslation, getT } from "./i18n";
 import { hasOpenOverlay } from "./hooks/useOverlayStack";
@@ -356,9 +355,9 @@ function App() {
   }, [theme]);
 
   // ── Thème unifié : la brique `tokens` (holaf-lib) est la source unique ──
-  // Chaque changement de mode ou de thème rejoue le pack correspondant
-  // (`pi-web-<accent>-<mode>` ou `pi-web-lib-<famille>-<mode>`). L'anti-flash du
-  // boot est fait dans main.tsx, avant le premier rendu.
+  // Chaque changement de mode ou de famille rejoue le preset `<famille>-<mode>`
+  // de la bibliothèque holaf (défaut : `matrix-dark`). L'anti-flash du boot est
+  // fait dans main.tsx, avant le premier rendu.
   useEffect(() => {
     applyPiWebTheme(theme, themeName);
   }, [theme, themeName]);

@@ -32,7 +32,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Unlink } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
@@ -334,7 +333,7 @@ export function LinkedProjectMenu({
             <>
               <div className="border-t border-hacker-border/30" />
               <div className="px-3 pt-2 pb-1 text-[10px] text-hacker-text-dim font-bold tracking-wider flex items-center gap-1">
-                <Unlink size={10} className="shrink-0" />
+                <HolafIcon name="unlink" size={10} className="shrink-0" />
                 {t('sidebar.linkedMenu.unlinkSection')}
               </div>
               <div className="px-2 pb-2 flex flex-col gap-0.5">

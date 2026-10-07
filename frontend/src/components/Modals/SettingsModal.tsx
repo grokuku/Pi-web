@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { PiLogo } from "../common/PiLogo";
-import { Keyboard } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
@@ -441,7 +440,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     { id: "general", icon: "⚙", label: t('settings.tabs.general') },
     { id: "memory", icon: <HolafIcon name="brain" size={14} />, label: t('settings.tabs.memory') },
     { id: "security", icon: <HolafIcon name="shield" size={14} />, label: t('settings.tabs.security') },
-    { id: "shortcuts", icon: <Keyboard size={14} />, label: "Raccourcis" },
+    { id: "shortcuts", icon: <HolafIcon name="keyboard" size={14} />, label: "Raccourcis" },
     { id: "layout", icon: "⊞", label: t('settings.tabs.layout') },
     { id: "api-keys", icon: "🔑", label: "API Keys" },
   ];

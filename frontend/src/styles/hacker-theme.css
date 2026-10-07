@@ -3,14 +3,14 @@
 @import "tailwindcss/utilities";
 
 /* ═══════════════════════════════════════════════════════════════
-   THEME SYSTEM — CSS custom properties + data-accent presets
+   THEME SYSTEM — CSS custom properties (alias des tokens holaf)
    All colors use CSS variables so dark/light and accent colors
    can be swapped without touching Tailwind classes.
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── Dark (default) ─────────────────────────────── */
 /* Chaque variable Pi-Web est un ALIAS d'un token --holaf-* posé par la brique
-   `tokens` (packs pi-web-<accent>-<mode>, src/theme/pi-web-theme.ts). Le 2e
+   `tokens` (presets `<famille>-<mode>`, src/theme/pi-web-theme.ts). Le 2e
    argument de var() est le REPLI historique : si la brique n'a pas chargé, on
    retrouve EXACTEMENT les couleurs d'avant (zéro changement visuel garanti). */
 :root {
@@ -91,11 +91,12 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   ACCENT PRESETS — each defines accent + accent-dim for both
-   dark and light modes. Applied via data-accent="" on <html>.
+   ACCENT — la SEULE couleur d'accent de Pi-Web (vert néon) est un
+   ALIAS du token --holaf-accent posé par la brique `tokens`. Plus
+   aucun preset d'accent maison : les thèmes viennent de la brique.
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── Green (default, no data-accent needed) ─────────────────── */
+/* ── Accent vert (défaut) ─────────────────────────────────────── */
 :root {
   --accent: var(--holaf-accent, #00ff41);
   --accent-rgb: var(--holaf-accent-rgb, 0 255 65);
@@ -109,67 +110,6 @@
   --accent-dim: var(--holaf-accent-hover, #15803d);
   --accent-dim-rgb: var(--holaf-accent-dim-rgb, 21 128 61);
 }
-
-/* ── Purple ──────────────────────────────────────────────────── */
-[data-accent="purple"] {
-  --accent: var(--holaf-accent, #c084fc);
-  --accent-rgb: var(--holaf-accent-rgb, 192 132 252);
-  --accent-dim: var(--holaf-accent-hover, #a855f7);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 168 85 247);
-}
-.light[data-accent="purple"],
-[data-accent="purple"].light {
-  --accent: var(--holaf-accent, #8b5cf6);
-  --accent-rgb: var(--holaf-accent-rgb, 139 92 246);
-  --accent-dim: var(--holaf-accent-hover, #7c3aed);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 124 58 237);
-}
-
-/* ── Orange ──────────────────────────────────────────────────── */
-[data-accent="orange"] {
-  --accent: var(--holaf-accent, #fb923c);
-  --accent-rgb: var(--holaf-accent-rgb, 251 146 60);
-  --accent-dim: var(--holaf-accent-hover, #f97316);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 249 115 22);
-}
-.light[data-accent="orange"],
-[data-accent="orange"].light {
-  --accent: var(--holaf-accent, #ea580c);
-  --accent-rgb: var(--holaf-accent-rgb, 234 88 12);
-  --accent-dim: var(--holaf-accent-hover, #c2410c);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 194 65 12);
-}
-
-/* ── Cyan ────────────────────────────────────────────────────── */
-[data-accent="cyan"] {
-  --accent: var(--holaf-accent, #22d3ee);
-  --accent-rgb: var(--holaf-accent-rgb, 34 211 238);
-  --accent-dim: var(--holaf-accent-hover, #06b6d4);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 6 182 212);
-}
-.light[data-accent="cyan"],
-[data-accent="cyan"].light {
-  --accent: var(--holaf-accent, #0891b2);
-  --accent-rgb: var(--holaf-accent-rgb, 8 145 178);
-  --accent-dim: var(--holaf-accent-hover, #0e7490);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 14 116 144);
-}
-
-/* ── Rose ────────────────────────────────────────────────────── */
-[data-accent="rose"] {
-  --accent: var(--holaf-accent, #f472b6);
-  --accent-rgb: var(--holaf-accent-rgb, 244 114 182);
-  --accent-dim: var(--holaf-accent-hover, #ec4899);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 236 72 153);
-}
-.light[data-accent="rose"],
-[data-accent="rose"].light {
-  --accent: var(--holaf-accent, #db2777);
-  --accent-rgb: var(--holaf-accent-rgb, 219 39 119);
-  --accent-dim: var(--holaf-accent-hover, #be185d);
-  --accent-dim-rgb: var(--holaf-accent-dim-rgb, 190 24 93);
-}
-
 /* ═══════════════════════════════════════════════════════════════
    BASE STYLES
    ═══════════════════════════════════════════════════════════════ */
@@ -650,9 +590,9 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SELECT ARROW + MATRIX BG per accent preset
+   SELECT ARROW + MATRIX BG (vert)
    Cannot use var() inside data: URIs, so we define
-   --select-arrow and --matrix-bg-image per preset.
+   --select-arrow and --matrix-bg-image statically (accent vert).
    ═══════════════════════════════════════════════════════════════ */
 
 :root {
@@ -663,24 +603,6 @@ body {
   --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23166534' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
   --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%23166534' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
 }
-
-[data-accent="purple"] {
-  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23c084fc' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-  --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%23c084fc' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E");
-}
-.light[data-accent="purple"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b5cf6' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%238b5cf6' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E"); }
-[data-accent="orange"] {
-  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23fb923c' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-.light[data-accent="orange"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ea580c' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%23ea580c' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E"); }
-[data-accent="cyan"] {
-  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2322d3ee' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-.light[data-accent="cyan"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%230891b2' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%230891b2' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E"); }
-[data-accent="rose"] {
-  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23f472b6' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-.light[data-accent="rose"] { --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23db2777' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); --matrix-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ctext x='10' y='20' fill='%23db2777' font-family='monospace' font-size='20'%3E0 1 0 1 1 0%3C/text%3E%3C/svg%3E"); }
 
 /* ─── Thinking Block ──────────────────────── */
 .thinking-block {

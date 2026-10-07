@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { PlusSquare } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
@@ -406,7 +405,7 @@ function GitProjectSection({
                 {actionLoading === "init" ? (
                   <HolafIcon name="refresh" size={10} className="animate-spin" />
                 ) : (
-                  <PlusSquare size={12} />
+                  <HolafIcon name="plus-square" size={12} />
                 )}
                 {t("gitPanel.gitInitRemote")}
               </button>

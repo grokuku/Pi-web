@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { X, FolderOpen, Code } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useOverlayStack, isTopOverlay } from "../../hooks/useOverlayStack";
 import { useTranslation } from "../../i18n";
@@ -248,7 +247,7 @@ export function CbmStatsModal({ onClose }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-hacker-border-bright bg-hacker-surface shrink-0">
         <div className="flex items-center gap-2">
-          <Code size={16} className="text-hacker-accent" />
+          <HolafIcon name="code" size={16} className="text-hacker-accent" />
           <span className="text-hacker-accent text-xs font-bold tracking-widest">{t('cbmStats.title')}</span>
           {stats && (
             <span className="text-hacker-text-dim text-[10px] ml-2">
@@ -335,7 +334,7 @@ export function CbmStatsModal({ onClose }: Props) {
                 {/* Stats cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <StatCard icon={<HolafIcon name="file-text" size={14} />} value={formatNum(stats.totalCodeFiles)} label={t('cbmStats.codeFiles')} color="#00d4aa" />
-                  <StatCard icon={<Code size={14} />} value={formatNum(stats.totalCodeLines)} label={t('cbmStats.codeLines')} color="#f7df1e" />
+                  <StatCard icon={<HolafIcon name="code" size={14} />} value={formatNum(stats.totalCodeLines)} label={t('cbmStats.codeLines')} color="#f7df1e" />
                   <StatCard icon={<HolafIcon name="file-text" size={14} />} value={formatNum(stats.totalLines)} label={t('cbmStats.totalLines')} color="#6a4afc" />
                   <StatCard icon={<HolafIcon name="image" size={14} />} value={formatBytes(stats.totalSize)} label={t('cbmStats.size')} color="#fc5c7d" />
                 </div>

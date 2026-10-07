@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Mail } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 
@@ -86,7 +85,7 @@ export function GitIdentityModal({ project, onClose, onConfigured }: Props) {
 
           <div>
             <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
-              <Mail size={10} />
+              <HolafIcon name="mail" size={10} />
               EMAIL
             </label>
             <input

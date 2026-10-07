@@ -1,7 +1,7 @@
-// Déclarations TypeScript pour la brique HolafIcons (holaf-lib v0.1.4).
+// Déclarations TypeScript pour la brique HolafIcons (holaf-lib v0.1.6).
 // Copie pinnée dans vendor/holaf — le fichier .js est du JS pur (sans types),
 // on déclare ici l'API publique pour que tsc --noEmit passe sans `any` implicite.
-// API calquée sur js/holaf-icons.js (version 0.1.4) : list/get/render.
+// API calquée sur js/holaf-icons.js (version 0.1.6) : list/get/render.
 // Style : tracés 24×24, `stroke="currentColor"`, `stroke-width="2"`, `fill="none"`.
 
 /** Options de `render()` : taille (width/height) et classe CSS du `<svg>`. */
@@ -15,7 +15,7 @@ export interface HolafIconsRenderOptions {
 }
 
 export interface HolafIconsApi {
-  /** Version de la brique (ex. "0.1.4"). */
+  /** Version de la brique (ex. "0.1.6"). */
   version: string;
   /** Noms de toutes les icônes disponibles (ordre de définition). */
   list(): string[];

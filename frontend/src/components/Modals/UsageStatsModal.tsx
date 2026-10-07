@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Calendar, Hash, PieChart as PieIcon, TrendingUp } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { Bar, Pie, Line } from "react-chartjs-2";
 import {
@@ -57,22 +56,25 @@ const COLORS = {
   output: "#60a5fa", // blue
 };
 
-// Adaptateur : la table CHART_TYPES mélange des composants holaf (HolafIcon via
-// un alias local) et lucide-react. Le type commun accepte { size, className },
-// ce qui couvre les deux sources.
+// Adaptateurs : la table CHART_TYPES référence des composants (tous issus de
+// la brique holaf via HolafIcon) sous un type commun { size, className }.
 const BarChartIcon = (props: { size?: number; className?: string }) => (
   <HolafIcon name="bar-chart" {...props} />
+);
+const TrendingUpIcon = (props: { size?: number; className?: string }) => (
+  <HolafIcon name="trending-up" {...props} />
+);
+const PieChartIcon = (props: { size?: number; className?: string }) => (
+  <HolafIcon name="pie-chart" {...props} />
 );
 
 const CHART_TYPES: {
   type: ChartType;
-  // Type commun aux deux sources d'icônes (holaf et lucide) : `any` localisé,
-  // le temps de la migration — les composants sont rendus avec { size, className }.
-  icon: React.ComponentType<any>;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
 }[] = [
   { type: "bar", icon: BarChartIcon },
-  { type: "line", icon: TrendingUp },
-  { type: "pie", icon: PieIcon },
+  { type: "line", icon: TrendingUpIcon },
+  { type: "pie", icon: PieChartIcon },
 ];
 
 function formatTokens(n: number): string {
@@ -246,7 +248,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-hacker-border/50">
           {/* Period */}
           <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide flex items-center gap-1">
-            <Calendar size={10} /> {t('usage.period')}
+            <HolafIcon name="calendar" size={10} /> {t('usage.period')}
           </span>
           {(["today", "week", "month", "all"] as Period[]).map((p) => (
             <button
@@ -266,7 +268,7 @@ export function UsageStatsModal({ onClose }: { onClose: () => void }) {
 
           {/* Grouping */}
           <span className="text-[10px] text-hacker-text-dim uppercase tracking-wide flex items-center gap-1">
-            <Hash size={10} /> {t('usage.group')}
+            <HolafIcon name="hash" size={10} /> {t('usage.group')}
           </span>
           {(["hour", "day", "model"] as GroupBy[]).map((g) => {
             const disabled = g === "hour" && period !== "today";

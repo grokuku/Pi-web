@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Code, Save, CheckSquare, Square, CheckCheck } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -87,7 +86,7 @@ const FILES_TREE_MAX_RATIO = 0.6;  // max 60% de la largeur du panneau
 function getFileIcon(name: string) {
   const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : "";
   if (IMAGE_EXTS.has(ext)) return <HolafIcon name="image" size={16} className="text-hacker-info shrink-0" />;
-  if (CODE_EXTS.has(ext)) return <Code size={16} className="text-hacker-accent shrink-0" />;
+  if (CODE_EXTS.has(ext)) return <HolafIcon name="code" size={16} className="text-hacker-accent shrink-0" />;
   return <HolafIcon name="file-text" size={16} className="text-hacker-text-dim shrink-0" />;
 }
 
@@ -136,9 +135,9 @@ function DirNode({
           onClick={(e) => { e.stopPropagation(); onToggleSelect(node.path, node.type); }}
         >
           {isSelected ? (
-            <CheckSquare size={11} className="text-hacker-accent" />
+            <HolafIcon name="check-square" size={11} className="text-hacker-accent" />
           ) : (
-            <Square size={11} className="text-hacker-text-dim" />
+            <HolafIcon name="square" size={11} className="text-hacker-text-dim" />
           )}
         </span>
         {isDir ? (
@@ -532,7 +531,7 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
             {/* Select all */}
             {tree && (
               <button onClick={selectAll} className="text-hacker-text-dim hover:text-hacker-accent" title="Select all files">
-                <CheckCheck size={12} />
+                <HolafIcon name="check-check" size={12} />
               </button>
             )}
             {/* Upload button */}
@@ -617,7 +616,7 @@ export function FileExplorer({ project, onReferenceFile, on }: Props) {
                   <>
                     <button onClick={handleSave} disabled={saving}
                       className="btn-hacker text-[10px] px-1.5 py-0.5 flex items-center gap-1 text-hacker-accent" title="Save changes">
-                      <Save size={10} /> {saving ? "SAVING..." : "SAVE"}
+                      <HolafIcon name="save" size={10} /> {saving ? "SAVING..." : "SAVE"}
                     </button>
                     <button onClick={() => { setEditMode(false); setEditContent(""); }}
                       className="btn-hacker text-[10px] px-1.5 py-0.5 flex items-center gap-1" title="Cancel editing">

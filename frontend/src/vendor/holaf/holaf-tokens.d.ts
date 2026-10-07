@@ -1,7 +1,7 @@
-// Déclarations TypeScript pour la brique HolafTokens (holaf-lib v0.3.0).
+// Déclarations TypeScript pour la brique HolafTokens (holaf-lib v0.5.0).
 // Copie pinnée dans vendor/holaf — le fichier .js est du JS pur (sans types),
 // on déclare ici l'API publique pour que tsc passe sans `any` implicite.
-// API calquée sur js/holaf-tokens.js (version 0.3.0). La brique est
+// API calquée sur js/holaf-tokens.js (version 0.5.0). La brique est
 // CLASSIC-COMPATIBLE : aucun export top-level, l'API est exposée via
 // `window.HolafTokens` (repli `globalThis`). On peut donc l'importer par effet
 // de bord (`import "./holaf-tokens.js"`) puis lire le global.
@@ -47,7 +47,7 @@ export interface HolafTokensApi {
   applyPalette(accentHex: string, opts?: Record<string, unknown>): HolafThemeResult;
   /** Retire TOUTES les variables `--holaf-*` posées par la brique. */
   reset(): void;
-  /** Noms valides : 14 intégrés PUIS packs hôte (ordre d'enregistrement). */
+  /** Noms valides : 18 intégrés (14 presets + 4 alias) PUIS packs hôte. */
   listPresets(): string[];
   listFamilies(): string[];
   registerPreset(name: string, tokens?: HolafTokenMap, options?: HolafPresetOptions): HolafPresetResult;
@@ -59,6 +59,8 @@ export interface HolafTokensApi {
   readonly PRESETS: Record<string, HolafTokenMap>;
   readonly FAMILIES: Record<string, Record<string, unknown>>;
   readonly ALIASES: Record<string, string>;
+  /** Table de migration ancien→nouveau nom (fournie aux hôtes). */
+  readonly MIGRATIONS: Record<string, string>;
 }
 
 declare global {

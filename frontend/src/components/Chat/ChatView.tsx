@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, useMemo, useDeferredValue, type RefObject } from "react";
-import { Paperclip, File, ZoomIn, ZoomOut } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { MarkdownContent } from "../Markdown/markdown";
 import type { PiEvent, ToolCallInfo, Attachment, DisplayMessage, AssistantBlock, Activity } from "../../types";
@@ -118,7 +117,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 function getFileExtensionIcon(category: Attachment["category"], fileName: string) {
-  switch (category) { case "image": return <HolafIcon name="image" size={14} />; case "text": return <HolafIcon name="file-text" size={14} />; case "audio": return <HolafIcon name="alert-triangle" size={14} />; case "binary": return <File size={14} />; }
+  switch (category) { case "image": return <HolafIcon name="image" size={14} />; case "text": return <HolafIcon name="file-text" size={14} />; case "audio": return <HolafIcon name="alert-triangle" size={14} />; case "binary": return <HolafIcon name="file" size={14} />; }
 }
 
 interface Props {
@@ -1339,8 +1338,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
                   {/* Badge zoom % + contrôles HolafViewport (design hacker existant) */}
                   <span className="text-hacker-text-dim text-xs tabular-nums ml-2 shrink-0">{viewerZoom}%</span>
                   <button onClick={() => viewerVpRef.current?.fit()} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.fit')} aria-label={t('viewer.fit')}>⤢</button>
-                  <button onClick={() => viewerVpRef.current?.zoomBy(1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomIn')} aria-label={t('viewer.zoomIn')}><ZoomIn size={16} /></button>
-                  <button onClick={() => viewerVpRef.current?.zoomBy(1 / 1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomOut')} aria-label={t('viewer.zoomOut')}><ZoomOut size={16} /></button>
+                  <button onClick={() => viewerVpRef.current?.zoomBy(1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomIn')} aria-label={t('viewer.zoomIn')}><HolafIcon name="zoom-in" size={16} /></button>
+                  <button onClick={() => viewerVpRef.current?.zoomBy(1 / 1.1)} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={t('viewer.zoomOut')} aria-label={t('viewer.zoomOut')}><HolafIcon name="zoom-out" size={16} /></button>
                   <button onClick={toggleFullscreen} className="text-hacker-text-dim hover:text-hacker-accent ml-2 shrink-0" title={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')} aria-label={isFullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')}>
                     {isFullscreen ? <HolafIcon name="minimize" size={16} /> : <HolafIcon name="maximize" size={16} />}
                   </button>
@@ -2360,7 +2359,7 @@ const ChatInputArea = memo(function ChatInputArea({ onSend, onAbort, isStreaming
         />
         <div className="flex flex-col gap-1">
           <button onClick={handleSendClick} className="btn-hacker flex-1 px-4" disabled={!input.trim()&&attachments.length===0}>{isStreaming ? t('chat.steer') : t('chat.send')}</button>
-          <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('chat.attachFiles')} aria-label={t('chat.attachFiles')}><Paperclip size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">{t('chat.abort')}</button>}</div>
+          <div className="flex gap-1"><button onClick={()=>fileInputRef.current?.click()} className="btn-hacker px-2 text-xs" title={t('chat.attachFiles')} aria-label={t('chat.attachFiles')}><HolafIcon name="paperclip" size={14}/></button>{isStreaming&&<button onClick={onAbort} className="btn-hacker danger px-4 text-xs">{t('chat.abort')}</button>}</div>
         </div>
       </div>
       <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,application/json,application/xml,application/javascript,application/x-shellscript,.js,.ts,.tsx,.jsx,.py,.rb,.rs,.go,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.sh,.bash,.sql,.yaml,.yml,.toml,.ini,.cfg,.env,.md,.txt,.log,.css,.scss,.less,.html,.svg" onChange={handleFileSelect} className="hidden"/>

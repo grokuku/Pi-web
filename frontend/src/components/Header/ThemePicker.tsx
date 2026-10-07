@@ -1,17 +1,17 @@
 // ── ThemePicker — sélecteur de THÈME de Pi-Web ───────────────────────────────
-// Remplace l'ancien sélecteur d'« accent » (AccentPicker) : la notion affichée
-// est désormais un thème nommé (Matrix, Violet, Orange, Cyan, Rose + les thèmes
-// de la bibliothèque holaf), mappé vers les packs `pi-web-*` existants.
+// Pi-Web n'affiche QUE les thèmes de la brique `tokens` de holaf-lib : une
+// FAMILLE (identité `matrix` puis les 6 familles couleur) + le MODE sombre/clair
+// → preset appliqué `<famille>-<mode>` (défaut `matrix-dark`). Aucun thème maison.
 //
-// • Déclencheur : pastille de couleur + NOM du thème courant (ex. « ● MATRIX »).
-// • Panneau (createPortal + useAnchorPosition, comme l'ancien composant) :
+// • Déclencheur : pastille de couleur + NOM de la famille courante (ex. « ● MATRIX »).
+// • Panneau (createPortal + useAnchorPosition) :
+//     – nom du preset réellement appliqué (ex. `matrix-dark`) ;
 //     – mode segmenté Sombre / Clair — le bouton ☀/☾ du header passe par le
 //       MÊME état (App.tsx), les deux restent donc synchronisés ;
-//     – liste des thèmes d'identité : pastille + nom + ligne active encadrée et
-//       cochée, badge « DÉFAUT » sur Matrix ;
-//     – thèmes de la bibliothèque holaf en puces ;
+//     – liste des familles : pastille + nom + sous-titre `<famille>-dark · <famille>-light`,
+//       ligne active encadrée et cochée, badge « DÉFAUT » sur Matrix ;
 //     – toggle Scanlines (conservé) ;
-//     – note de migration des anciens accents.
+//     – note de migration des anciens accents/thèmes.
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "../../i18n";
@@ -32,10 +32,6 @@ export interface ThemePickerProps {
   onModeChange: (mode: "dark" | "light") => void;
   onScanlinesToggle: () => void;
 }
-
-/** Thèmes d'identité Pi-Web (Matrix en tête) et thèmes de la bibliothèque. */
-const PRIMARY_THEMES = PI_WEB_THEMES.filter((def) => !def.library);
-const LIBRARY_THEMES = PI_WEB_THEMES.filter((def) => !!def.library);
 
 export function ThemePicker({
   theme,
@@ -103,7 +99,7 @@ export function ThemePicker({
           style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 60 }}
           className="p-2 border border-hacker-border bg-hacker-surface-raised shadow-lg space-y-2 w-[262px] max-h-[75vh] overflow-y-auto"
         >
-          {/* En-tête : titre + pack réellement appliqué */}
+          {/* En-tête : titre + preset de la brique réellement appliqué */}
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-[10px] tracking-widest text-hacker-accent">{t('themes.title')}</span>
             <span className="text-[9px] text-hacker-text-dim truncate" data-testid="theme-picker-pack">
@@ -141,9 +137,9 @@ export function ThemePicker({
             </button>
           </div>
 
-          {/* Thèmes d'identité Pi-Web */}
+          {/* Familles de la brique holaf-lib (identité Matrix + familles couleur) */}
           <div className="space-y-0.5">
-            {PRIMARY_THEMES.map((def) => {
+            {PI_WEB_THEMES.map((def) => {
               const isActive = def.id === themeName;
               return (
                 <button
@@ -172,42 +168,10 @@ export function ThemePicker({
                       )}
                     </span>
                     <span className="block text-[9px] text-hacker-text-dim truncate">
-                      {def.accent ? `pi-web-${def.accent}-*` : `${def.library}-dark · ${def.library}-light`}
+                      {`${def.id}-dark · ${def.id}-light`}
                     </span>
                   </span>
                   <span className="text-hacker-accent text-[11px] w-3 text-center shrink-0">{isActive ? "✓" : ""}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Thèmes de la bibliothèque holaf */}
-          <div className="flex items-center gap-2 text-[9px] tracking-widest text-hacker-text-dim">
-            <span className="h-px flex-1 bg-hacker-border" />
-            {t('themes.library')}
-            <span className="h-px flex-1 bg-hacker-border" />
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {LIBRARY_THEMES.map((def) => {
-              const isActive = def.id === themeName;
-              return (
-                <button
-                  type="button"
-                  key={def.id}
-                  onClick={() => onThemeChange(def.id)}
-                  aria-pressed={isActive}
-                  data-testid={`theme-option-${def.id}`}
-                  className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[10px] transition-colors ${
-                    isActive
-                      ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10"
-                      : "border-hacker-border text-hacker-text hover:text-hacker-accent"
-                  }`}
-                >
-                  <span
-                    className="inline-block w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: themeSwatchColor(def.id, theme) }}
-                  />
-                  {t(def.labelKey)}
                 </button>
               );
             })}
@@ -230,7 +194,7 @@ export function ThemePicker({
             {t('themes.scanlines')}
           </button>
 
-          {/* Note de migration (anciens accents repris en thèmes équivalents) */}
+          {/* Note de migration (anciens accents/thèmes repris en familles de la brique) */}
           <div className="text-[9px] leading-snug text-hacker-text-dim border-l-2 border-hacker-accent/60 bg-hacker-bg/40 px-1.5 py-1">
             {t('themes.migrationNote')}
           </div>

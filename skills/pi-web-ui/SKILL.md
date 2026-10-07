@@ -1,6 +1,6 @@
 ---
 name: pi-web-ui
-description: "Conventions d'interface de Pi-Web (React + Tailwind + Vite). À consulter AVANT de créer ou modifier un composant d'interface, d'ajouter un bloc d'affichage de détail, ou de toucher au thème / aux icônes. Déclencheurs : nouveau composant frontend, bloc de détail (réflexion, sortie d'outil, journal d'agent, résultat de sous-agent), repli/dépli d'un bloc, réglage « déplier le détail d'affichage », thème / couleurs / pack pi-web-*, Matrix, icône, HolafIcon, hacker-theme.css, vendor/holaf."
+description: "Conventions d'interface de Pi-Web (React + Tailwind + Vite). À consulter AVANT de créer ou modifier un composant d'interface, d'ajouter un bloc d'affichage de détail, ou de toucher au thème / aux icônes. Déclencheurs : nouveau composant frontend, bloc de détail (réflexion, sortie d'outil, journal d'agent, résultat de sous-agent), repli/dépli d'un bloc, réglage « déplier le détail d'affichage », thème / couleurs / famille de la brique holaf, Matrix, icône, HolafIcon, hacker-theme.css, vendor/holaf."
 ---
 
 # Pi-Web — conventions d'interface
@@ -11,18 +11,22 @@ description: "Conventions d'interface de Pi-Web (React + Tailwind + Vite). À co
 
 ## 1. Thème : la brique `tokens` est la seule source de couleurs
 - Brique vendorisée : `frontend/src/vendor/holaf/holaf-tokens.js` (version pinnée
-  dans `frontend/src/vendor/holaf/holaf-manifest.json`).
-- Module : `frontend/src/theme/pi-web-theme.ts`. Packs enregistrés dans la brique :
-  `pi-web-base-<mode>`, `pi-web-<accent>-<mode>` (5 accents × sombre/clair) et
-  `pi-web-lib-<famille>-<mode>` (thèmes de la bibliothèque holaf). Thème par
-  défaut : **Matrix** (`DEFAULT_THEME_ID`).
+  dans `frontend/src/vendor/holaf/holaf-manifest.json`, ≥ 0.5.0).
+- Module : `frontend/src/theme/pi-web-theme.ts`. Pi-Web n'enregistre AUCUN thème
+  maison : le sélecteur n'offre QUE les FAMILLES de la brique — `matrix` (identité,
+  défaut) puis les 6 familles couleur (corail, ambre, emeraude, turquoise,
+  amethyste, neutre) — appliquées via le preset `<famille>-<mode>`. Thème par
+  défaut : **`matrix-dark`** (famille `matrix` en mode sombre).
 - Application : `initPiWebTheme()` (`main.tsx`, avant le premier rendu) et
   `applyPiWebTheme()` (`App.tsx`) ; sélecteur : `frontend/src/components/Header/ThemePicker.tsx`.
 - CSS : `frontend/src/styles/hacker-theme.css` — chaque variable Pi-Web est un
   **alias** `var(--holaf-…, <repli>)`. Ne pas écrire de couleur en dur dans un composant.
 - ⚠️ Piège RGB : Tailwind mappe les classes `hacker-*` via
   `rgb(var(--<x>-rgb) / <alpha-value>)` ; les triples `-rgb` sont **calculés en JS**
-  (`hexToRgbTriple`) car la brique fournit du hex — ne jamais les écrire en CSS.
+  (`hexToRgbTriple`, via la couche hôte `buildPiWebOverlay`) car la brique fournit
+  du hex — ne jamais les écrire en CSS.
+- Ne PAS réintroduire de packs `pi-web-*` : Matrix et les thèmes vivent dans la
+  brique holaf-lib (dépôt séparé).
 
 ## 2. Icônes : brique `icons` via `HolafIcon`
 - Utiliser `frontend/src/components/icons/HolafIcon.tsx`

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * Tests du sélecteur de THÈME (ThemePicker) :
- *   • déclencheur : pastille + NOM du thème courant (plus de pastille anonyme) ;
- *   • panneau : mode segmenté Sombre/Clair, liste des 5 thèmes (ligne active
- *     encadrée + coche, badge DÉFAUT sur Matrix), puces de la bibliothèque
- *     holaf, toggle Scanlines conservé, note de migration ;
- *   • interactions : sélection d'un thème, changement de mode, scanlines ;
+ * Tests du sélecteur de THÈME (ThemePicker) — branché sur la brique holaf-lib :
+ *   • déclencheur : pastille + NOM de la famille courante (ex. « ● MATRIX ») ;
+ *   • panneau : preset appliqué (`matrix-dark`), mode segmenté Sombre/Clair,
+ *     liste des familles de la brique (identité Matrix + 6 familles couleur),
+ *     badge DÉFAUT sur Matrix, toggle Scanlines, note de migration ;
+ *   • interactions : sélection d'une famille, changement de mode, scanlines ;
  *   • SYNCHRONISATION avec le bouton ☀/☾ du header (même état partagé).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "../../i18n";
 import { ThemePicker, type ThemePickerProps } from "./ThemePicker";
-import type { PiWebThemeId } from "../../theme/pi-web-theme";
+import { PI_WEB_FAMILY_ORDER, type PiWebThemeId } from "../../theme/pi-web-theme";
 
 function renderPicker(overrides: Partial<ThemePickerProps> = {}) {
   const props: ThemePickerProps = {
@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe("déclencheur", () => {
-  it("affiche le NOM du thème courant + sa pastille (fini la pastille anonyme)", () => {
+  it("affiche le NOM de la famille courante + sa pastille (fin de la pastille anonyme)", () => {
     renderPicker();
     const trigger = screen.getByTestId("theme-picker-trigger");
     expect(screen.getByTestId("theme-picker-current").textContent).toBe("Matrix");
@@ -68,33 +68,32 @@ describe("déclencheur", () => {
     expect(swatchOf(trigger)).toMatch(/00ff41|rgb\(0, 255, 65\)/i);
   });
 
-  it("suit la prop themeName (autre thème → autre nom et autre pastille)", () => {
+  it("suit la prop themeName (autre famille → autre nom et autre pastille)", () => {
     const { rerenderWith } = renderPicker();
-    rerenderWith({ themeName: "violet" as PiWebThemeId });
-    expect(screen.getByTestId("theme-picker-current").textContent).toBe("Violet");
-    expect(swatchOf(screen.getByTestId("theme-picker-trigger"))).toMatch(/c084fc|rgb\(192, 132, 252\)/i);
+    rerenderWith({ themeName: "turquoise" as PiWebThemeId });
+    expect(screen.getByTestId("theme-picker-current").textContent).toBe("Turquoise");
+    expect(swatchOf(screen.getByTestId("theme-picker-trigger"))).toMatch(/0ec7de|rgb\(14, 199, 222\)/i);
   });
 });
 
 describe("panneau", () => {
-  it("présente titre, pack appliqué, mode, thèmes, bibliothèque, scanlines et note de migration", () => {
+  it("présente titre, preset appliqué, mode, familles de la brique, scanlines et note", () => {
     renderPicker();
     expect(screen.queryByTestId("theme-picker-panel")).toBeNull();
     const panel = openPanel();
     expect(document.body.contains(panel)).toBe(true); // portail dans <body>
     expect(screen.getByText("THÈME")).toBeTruthy();
-    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("pi-web-green-dark");
+    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("matrix-dark");
     expect(screen.getByTestId("theme-mode-dark")).toBeTruthy();
     expect(screen.getByTestId("theme-mode-light")).toBeTruthy();
-    for (const id of ["matrix", "violet", "orange", "cyan", "rose", "indigo", "emerald", "midnight", "slate", "amber"]) {
-      expect(screen.getByTestId(`theme-option-${id}`), id).toBeTruthy();
+    for (const family of PI_WEB_FAMILY_ORDER) {
+      expect(screen.getByTestId(`theme-option-${family}`), family).toBeTruthy();
     }
-    expect(screen.getByText("BIBLIOTHÈQUE HOLAF")).toBeTruthy();
     expect(screen.getByTestId("theme-scanlines-toggle")).toBeTruthy();
     expect(screen.getByText(/Migration/)).toBeTruthy();
   });
 
-  it("met la ligne Matrix en évidence : encadrée, cochée, badge DÉFAUT", () => {
+  it("met Matrix en évidence : encadrée, cochée, badge DÉFAUT, sous-titre de presets", () => {
     renderPicker();
     openPanel();
     const matrix = screen.getByTestId("theme-option-matrix");
@@ -102,33 +101,48 @@ describe("panneau", () => {
     expect(matrix.className).toContain("border-hacker-accent");
     expect(matrix.textContent).toContain("✓");
     expect(matrix.textContent).toContain("DÉFAUT");
-    expect(matrix.textContent).toContain("pi-web-green-*");
-    // Les autres lignes ne sont pas marquées.
-    const violet = screen.getByTestId("theme-option-violet");
-    expect(violet.getAttribute("aria-pressed")).toBe("false");
-    expect(violet.textContent).not.toContain("DÉFAUT");
-    expect(violet.textContent).not.toContain("✓");
+    expect(matrix.textContent).toContain("matrix-dark · matrix-light");
+    const turquoise = screen.getByTestId("theme-option-turquoise");
+    expect(turquoise.getAttribute("aria-pressed")).toBe("false");
+    expect(turquoise.textContent).not.toContain("DÉFAUT");
+    expect(turquoise.textContent).not.toContain("✓");
   });
 
-  it("remonte le thème choisi et déplace la sélection", () => {
+  it("remonte la famille choisie et déplace la sélection (preset piégé mis à jour)", () => {
     const { props, rerenderWith } = renderPicker();
     openPanel();
-    fireEvent.click(screen.getByTestId("theme-option-violet"));
-    expect(props.onThemeChange).toHaveBeenCalledWith("violet");
-    rerenderWith({ themeName: "violet" as PiWebThemeId });
-    expect(screen.getByTestId("theme-option-violet").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByTestId("theme-option-turquoise"));
+    expect(props.onThemeChange).toHaveBeenCalledWith("turquoise");
+    rerenderWith({ themeName: "turquoise" as PiWebThemeId });
+    expect(screen.getByTestId("theme-option-turquoise").getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByTestId("theme-option-matrix").getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("pi-web-purple-dark");
+    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("turquoise-dark");
   });
 
-  it("sélectionne aussi un thème de la bibliothèque holaf", () => {
-    const { props, rerenderWith } = renderPicker();
+  it("ne propose QUE les familles de la brique : exactement 7 entrées, aucune héritée", () => {
+    renderPicker();
     openPanel();
-    fireEvent.click(screen.getByTestId("theme-option-indigo"));
-    expect(props.onThemeChange).toHaveBeenCalledWith("indigo");
-    rerenderWith({ themeName: "indigo" as PiWebThemeId });
-    expect(screen.getByTestId("theme-option-indigo").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("pi-web-lib-indigo-dark");
+    for (const family of PI_WEB_FAMILY_ORDER) {
+      expect(screen.getByTestId(`theme-option-${family}`), family).toBeTruthy();
+    }
+    // Les anciens thèmes supprimés ne sont plus proposés.
+    expect(screen.queryByTestId("theme-option-violet")).toBeNull();
+    expect(screen.queryByTestId("theme-option-indigo")).toBeNull();
+    expect(screen.queryByTestId("theme-option-rose")).toBeNull();
+  });
+
+  it("affiche pour chaque famille le sous-titre de ses deux presets <id>-dark · <id>-light", () => {
+    renderPicker();
+    openPanel();
+    for (const family of PI_WEB_FAMILY_ORDER) {
+      expect(screen.getByTestId(`theme-option-${family}`).textContent).toContain(`${family}-dark · ${family}-light`);
+    }
+  });
+
+  it("n'expose plus aucune section « bibliothèque » séparée", () => {
+    renderPicker();
+    openPanel();
+    expect(screen.queryByText("BIBLIOTHÈQUE HOLAF")).toBeNull();
   });
 
   it("ferme au clic extérieur", () => {
@@ -140,7 +154,7 @@ describe("panneau", () => {
 });
 
 describe("mode sombre / clair", () => {
-  it("reflète le mode courant et remonte le changement", () => {
+  it("reflète le mode courant et remonte le changement (preset <famille>-<mode>)", () => {
     const { props, rerenderWith } = renderPicker({ theme: "dark" });
     openPanel();
     expect(screen.getByTestId("theme-mode-dark").getAttribute("aria-pressed")).toBe("true");
@@ -150,7 +164,7 @@ describe("mode sombre / clair", () => {
     rerenderWith({ theme: "light" });
     expect(screen.getByTestId("theme-mode-light").getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByTestId("theme-mode-dark").getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("pi-web-green-light");
+    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("matrix-light");
   });
 });
 
@@ -197,7 +211,7 @@ describe("synchronisation avec le bouton ☀/☾ du header", () => {
     fireEvent.click(screen.getByTestId("theme-mode-light"));
     expect(screen.getByTestId("mode-toggle").textContent).toBe("☾");
     expect(screen.getByTestId("theme-mode-light").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("pi-web-green-light");
+    expect(screen.getByTestId("theme-picker-pack").textContent).toBe("matrix-light");
   });
 
   it("le bouton ☀/☾ met à jour le mode affiché dans le panneau", () => {

@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
 import { PiLogo } from "../common/PiLogo";
-import { Package, CheckCircle, Cpu } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 import { sortProjectsByName } from "../../utils/project-sort";
@@ -120,7 +119,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
                 <span className="text-hacker-text-bright font-mono">{formatUptime(status.uptimeSeconds)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Cpu size={9} className="text-hacker-text-dim" />
+                <HolafIcon name="cpu" size={9} className="text-hacker-text-dim" />
                 <span className="text-hacker-text-bright font-mono">{t('welcome.sessions', status.activeSessions)}</span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -143,7 +142,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
                   </span>
                 ) : (
                   <span className="text-green-400 flex items-center gap-1">
-                    <CheckCircle size={10} />
+                    <HolafIcon name="check-circle" size={10} />
                     {t('welcome.upToDate')}
                   </span>
                 )
@@ -177,7 +176,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
         {status && status.extensions.length > 0 && (
           <div className="border border-hacker-border bg-hacker-surface/30 rounded px-3 py-2">
             <div className="flex items-center gap-1.5 mb-1">
-              <Package size={11} className="text-hacker-accent" />
+              <HolafIcon name="package" size={11} className="text-hacker-accent" />
               <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">{t('welcome.extensions')}</span>
               <span className="text-[9px] text-hacker-text-dim">({status.extensions.length})</span>
             </div>
@@ -185,7 +184,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
               {status.extensions.map(ext => (
                 <div key={ext.source} className="flex items-center gap-1">
                   {ext.installed ? (
-                    <CheckCircle size={10} className="text-green-400 shrink-0" />
+                    <HolafIcon name="check-circle" size={10} className="text-green-400 shrink-0" />
                   ) : (
                     <HolafIcon name="alert-triangle" size={10} className="text-hacker-error shrink-0" />
                   )}

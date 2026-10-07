@@ -1,4 +1,4 @@
-import { Puzzle, Lightbulb, Package, Palette, ToggleLeft, ToggleRight } from "lucide-react";
+import { HolafIcon } from "../../icons/HolafIcon";
 import type { ResourceType } from "./types";
 
 // ── Resource section ────────────────────────────────────
@@ -12,11 +12,13 @@ interface ResourceSectionProps {
   disabled: boolean;
 }
 
-const RESOURCE_ICONS: Record<ResourceType, typeof Package> = {
-  extensions: Puzzle,
-  skills: Lightbulb,
-  prompts: Package,
-  themes: Palette,
+// Nom d'icône de la brique holaf par type de ressource (les icônes sont
+// rendues via <HolafIcon>, pas des composants importés).
+const RESOURCE_ICONS: Record<ResourceType, string> = {
+  extensions: "puzzle",
+  skills: "lightbulb",
+  prompts: "package",
+  themes: "palette",
 };
 
 const RESOURCE_LABELS: Record<ResourceType, string> = {
@@ -36,14 +38,13 @@ function parseItem(raw: string): { label: string; disabled: boolean } {
 }
 
 function ResourceSection({ type, items, available, onToggle, onAdd, disabled }: ResourceSectionProps) {
-  const Icon = RESOURCE_ICONS[type];
   const label = RESOURCE_LABELS[type];
   const itemLabels = items.map(i => parseItem(i).label);
 
   return (
     <div>
       <div className="flex items-center gap-1.5 mb-1.5">
-        <Icon size={12} className="text-hacker-accent" />
+        <HolafIcon name={RESOURCE_ICONS[type]} size={12} className="text-hacker-accent" />
         <span className="text-xs text-hacker-text-bright font-bold tracking-wider">{label}</span>
         <span className="text-[10px] text-hacker-text-dim">({items.length})</span>
       </div>
@@ -58,7 +59,7 @@ function ResourceSection({ type, items, available, onToggle, onAdd, disabled }: 
               <div key={raw} className="flex items-center gap-2 py-1 opacity-60">
                 <button onClick={() => onToggle(type, itemLabel, true)} disabled={disabled}
                   className="text-hacker-text-dim hover:text-hacker-accent shrink-0" title="Enable">
-                  <ToggleLeft size={14} />
+                  <HolafIcon name="toggle-left" size={14} />
                 </button>
                 <span className="text-xs text-hacker-text-dim font-mono truncate flex-1">{itemLabel}</span>
               </div>
@@ -66,7 +67,7 @@ function ResourceSection({ type, items, available, onToggle, onAdd, disabled }: 
               <div key={raw} className="flex items-center gap-2 py-1">
                 <button onClick={() => onToggle(type, itemLabel, false)} disabled={disabled}
                   className="text-hacker-accent hover:text-hacker-error shrink-0" title="Disable">
-                  <ToggleRight size={14} />
+                  <HolafIcon name="toggle-right" size={14} />
                 </button>
                 <span className="text-xs text-hacker-text-bright font-mono truncate flex-1">{itemLabel}</span>
               </div>
@@ -76,7 +77,7 @@ function ResourceSection({ type, items, available, onToggle, onAdd, disabled }: 
             <div key={source} className="flex items-center gap-2 py-1 opacity-60">
               <button onClick={() => onAdd(source)} disabled={disabled}
                 className="text-hacker-text-dim hover:text-hacker-accent shrink-0" title="Enable">
-                <ToggleLeft size={14} />
+                <HolafIcon name="toggle-left" size={14} />
               </button>
               <span className="text-xs text-hacker-text-dim font-mono truncate flex-1">{source}</span>
             </div>

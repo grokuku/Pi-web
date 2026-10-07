@@ -1,28 +1,34 @@
 /**
- * Tests de l'unification du thème Pi-Web sur la brique `tokens` (holaf-lib).
+ * Tests du thème Pi-Web branché sur la brique `tokens` (holaf-lib >= 0.5.0).
  *
- * Objectif n°1 : AUCUN changement visuel. Ce fichier PROUVE l'équivalence en
- * comparant, pour CHAQUE variable :
- *   • la valeur de repli écrite dans hacker-theme.css (= la valeur d'AVANT), et
- *   • la valeur résolue des packs `pi-web-*` (= la valeur d'APRÈS via la brique).
- * Si les deux sont égales pour tous les modes/accents, alors appliquer la brique
- * donne exactement les couleurs d'avant.
- *
- * On vérifie aussi : le mapping d'aliasing complet (aucune variable orpheline),
- * le calcul des triples RGB (support d'opacité Tailwind) et l'alignement du
- * tailwind.config.js sur le motif `rgb(var(--*-rgb) / <alpha-value>)`.
+ * Pi-Web n'enregistre AUCUN thème maison : le sélecteur n'expose QUE les FAMILLES
+ * de la brique (identité `matrix` + 6 familles couleur) et applique le preset
+ * `<famille>-<mode>` (`matrix-dark` par défaut). Ce fichier PROUVE, au niveau
+ * VALEUR :
+ *   • le catalogue affiché = les familles de la brique (matrix en tête) ;
+ *   • la migration des anciens thèmes/accents vers une famille valide ;
+ *   • l'aliasing complet des variables Pi-Web vers les tokens `--holaf-*` (avec
+ *     les replis d'avant) et l'absence de tout preset d'accent maison ;
+ *   • le support d'opacité Tailwind (triples RGB) ;
+ *   • que le preset `matrix-*` de la brique + la couche hôte redonnent les valeurs
+ *     EXACTES d'avant (le « ZÉRO CHANGEMENT VISUEL » de Matrix).
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  PI_WEB_ACCENTS,
-  BASE_PACK_DARK,
-  BASE_PACK_LIGHT,
-  themePackName,
+  PI_WEB_THEMES,
+  PI_WEB_FAMILY_ORDER,
+  DEFAULT_THEME_ID,
+  normalizeThemeId,
+  themeFromLegacyAccent,
+  LEGACY_ACCENT_TO_THEME,
+  LEGACY_THEME_TO_FAMILY,
+  getThemeDefinition,
+  themePackNameFor,
+  themeSwatchColor,
   hexToRgbTriple,
+  buildPiWebOverlay,
   getHolafTokens,
-  registerPiWebPacks,
-  __resetPacksRegistrationForTests,
 } from "./pi-web-theme";
 
 // Contenu réel du CSS et de la config Tailwind, lus depuis le disque.
@@ -30,11 +36,12 @@ const css = readFileSync(new URL("../styles/hacker-theme.css", import.meta.url),
 const tailwind = readFileSync(new URL("../../tailwind.config.js", import.meta.url), "utf8");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table « AVANT » : valeurs littérales extraites de hacker-theme.css d'origine.
+// Table « AVANT » : valeurs littérales d'origine du thème Matrix (= repli CSS).
 // (Écrites ici indépendamment du module pour que la comparaison ait du sens.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE_DARK: Record<string, string> = {
+/** Valeurs Pi-Web d'AVANT pour les clés sémantiques du preset matrix-*. */
+const BEFORE_MATRIX_DARK = {
   surface: "#0a0a0a",
   "surface-elev": "#161616",
   "surface-raised": "#1e1e1e",
@@ -49,20 +56,11 @@ const BASE_DARK: Record<string, string> = {
   "code-inline-bg": "rgba(0, 0, 0, 0.3)",
   "code-block-bg": "rgba(0, 0, 0, 0.4)",
   "tool-output-bg": "rgba(0, 0, 0, 0.3)",
-  "bg-rgb": "10 10 10",
-  "surface-rgb": "22 22 22",
-  "surface-raised-rgb": "30 30 30",
-  "border-rgb": "42 42 42",
-  "border-bright-rgb": "58 58 58",
-  "text-rgb": "192 192 192",
-  "text-bright-rgb": "224 224 224",
-  "text-dim-rgb": "136 136 136",
-  "info-rgb": "0 170 255",
-  "warn-rgb": "255 170 0",
-  "error-rgb": "255 68 68",
+  accent: "#00ff41",
+  "accent-hover": "#00cc34",
 };
 
-const BASE_LIGHT: Record<string, string> = {
+const BEFORE_MATRIX_LIGHT = {
   surface: "#eeece6",
   "surface-elev": "#f8f7f4",
   "surface-raised": "#ffffff",
@@ -77,50 +75,13 @@ const BASE_LIGHT: Record<string, string> = {
   "code-inline-bg": "rgba(0, 0, 0, 0.06)",
   "code-block-bg": "rgba(0, 0, 0, 0.08)",
   "tool-output-bg": "rgba(0, 0, 0, 0.05)",
-  "bg-rgb": "238 236 230",
-  "surface-rgb": "248 247 244",
-  "surface-raised-rgb": "255 255 255",
-  "border-rgb": "208 208 200",
-  "border-bright-rgb": "184 184 176",
-  "text-rgb": "61 61 58",
-  "text-bright-rgb": "26 26 24",
-  "text-dim-rgb": "119 119 112",
-  "info-rgb": "0 112 204",
-  "warn-rgb": "204 136 0",
-  "error-rgb": "204 34 34",
+  accent: "#166534",
+  "accent-hover": "#15803d",
 };
 
-/** accent + accent-hover (dim) + leurs triples RGB, par accent × mode. */
-const ACCENT_EXPECTED: Record<string, Record<string, Record<string, string>>> = {
-  green: {
-    dark: { accent: "#00ff41", "accent-hover": "#00cc34", "accent-rgb": "0 255 65", "accent-dim-rgb": "0 204 52" },
-    light: { accent: "#166534", "accent-hover": "#15803d", "accent-rgb": "22 101 52", "accent-dim-rgb": "21 128 61" },
-  },
-  purple: {
-    dark: { accent: "#c084fc", "accent-hover": "#a855f7", "accent-rgb": "192 132 252", "accent-dim-rgb": "168 85 247" },
-    light: { accent: "#8b5cf6", "accent-hover": "#7c3aed", "accent-rgb": "139 92 246", "accent-dim-rgb": "124 58 237" },
-  },
-  orange: {
-    dark: { accent: "#fb923c", "accent-hover": "#f97316", "accent-rgb": "251 146 60", "accent-dim-rgb": "249 115 22" },
-    light: { accent: "#ea580c", "accent-hover": "#c2410c", "accent-rgb": "234 88 12", "accent-dim-rgb": "194 65 12" },
-  },
-  cyan: {
-    dark: { accent: "#22d3ee", "accent-hover": "#06b6d4", "accent-rgb": "34 211 238", "accent-dim-rgb": "6 182 212" },
-    light: { accent: "#0891b2", "accent-hover": "#0e7490", "accent-rgb": "8 145 178", "accent-dim-rgb": "14 116 144" },
-  },
-  rose: {
-    dark: { accent: "#f472b6", "accent-hover": "#ec4899", "accent-rgb": "244 114 182", "accent-dim-rgb": "236 72 153" },
-    light: { accent: "#db2777", "accent-hover": "#be185d", "accent-rgb": "219 39 119", "accent-dim-rgb": "190 24 93" },
-  },
-};
-
-beforeEach(() => {
-  const HT = getHolafTokens();
-  HT.reset();
-  __resetPacksRegistrationForTests();
-  registerPiWebPacks();
-});
-
+// ─────────────────────────────────────────────────────────────────────────────
+// hexToRgbTriple
+// ─────────────────────────────────────────────────────────────────────────────
 describe("hexToRgbTriple", () => {
   it("convertit #rrggbb et #rgb en triple décimal espacé", () => {
     expect(hexToRgbTriple("#0a0a0a")).toBe("10 10 10");
@@ -135,69 +96,214 @@ describe("hexToRgbTriple", () => {
   });
 
   it("reproduit EXACTEMENT les triples historiques de hacker-theme.css", () => {
-    for (const hexToTriple of [
+    for (const { hex, t } of [
       { hex: "#0a0a0a", t: "10 10 10" },
       { hex: "#161616", t: "22 22 22" },
       { hex: "#1e1e1e", t: "30 30 30" },
       { hex: "#2a2a2a", t: "42 42 42" },
-      { hex: "#3a3a3a", t: "58 58 58" },
       { hex: "#c0c0c0", t: "192 192 192" },
-      { hex: "#e0e0e0", t: "224 224 224" },
-      { hex: "#888888", t: "136 136 136" },
-      { hex: "#00aaff", t: "0 170 255" },
-      { hex: "#ffaa00", t: "255 170 0" },
-      { hex: "#ff4444", t: "255 68 68" },
+      { hex: "#00ff41", t: "0 255 65" },
     ]) {
-      expect(hexToRgbTriple(hexToTriple.hex)).toBe(hexToTriple.t);
+      expect(hexToRgbTriple(hex)).toBe(t);
     }
   });
 });
 
-describe("Packs Pi-Web — enregistrement & valeurs exactes (aucune régression)", () => {
-  it("expose les 2 packs de base + 10 packs accent×mode", () => {
-    const names = getHolafTokens().listPresets();
-    expect(names).toContain(BASE_PACK_DARK);
-    expect(names).toContain(BASE_PACK_LIGHT);
-    for (const accent of PI_WEB_ACCENTS) {
-      expect(names).toContain(themePackName(accent, "dark"));
-      expect(names).toContain(themePackName(accent, "light"));
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// Catalogue = les familles de la brique
+// ─────────────────────────────────────────────────────────────────────────────
+describe("catalogue des thèmes (familles de la brique)", () => {
+  it("Matrix en tête, puis les 6 familles couleur ; 7 familles exactement", () => {
+    expect(PI_WEB_THEMES.map((def) => def.id)).toEqual([
+      "matrix",
+      "corail",
+      "ambre",
+      "emeraude",
+      "turquoise",
+      "amethyste",
+      "neutre",
+    ]);
+    expect(PI_WEB_FAMILY_ORDER).toEqual(PI_WEB_THEMES.map((def) => def.id));
   });
 
-  it("les packs de base portent EXACTEMENT les valeurs d'avant", () => {
-    for (const [pack, expected] of [
-      [BASE_PACK_DARK, BASE_DARK],
-      [BASE_PACK_LIGHT, BASE_LIGHT],
-    ] as const) {
-      const preset = getHolafTokens().getPreset(pack);
-      expect(preset).not.toBeNull();
-      for (const [key, value] of Object.entries(expected)) {
-        expect(preset![key], `${pack}.${key}`).toBe(value);
+  it("n'a qu'un seul thème par défaut : Matrix", () => {
+    const defaults = PI_WEB_THEMES.filter((def) => def.isDefault);
+    expect(defaults.map((def) => def.id)).toEqual(["matrix"]);
+    expect(DEFAULT_THEME_ID).toBe("matrix");
+  });
+
+  it("chaque thème porte une clé i18n unique et est résolu par getThemeDefinition", () => {
+    const labelKeys = new Set<string>();
+    for (const def of PI_WEB_THEMES) {
+      expect(def.labelKey).toBe(`themes.names.${def.id}`);
+      expect(labelKeys.has(def.labelKey), def.labelKey).toBe(false);
+      labelKeys.add(def.labelKey);
+      expect(getThemeDefinition(def.id)).toBe(def);
+    }
+    expect(getThemeDefinition("inconnu")).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalisation & migration (fonctions pures)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("normalizeThemeId / themeFromLegacyAccent", () => {
+  it("laisse passer les familles de la brique (casse/espaces normalisés)", () => {
+    for (const family of PI_WEB_FAMILY_ORDER) {
+      expect(normalizeThemeId(family)).toBe(family);
+    }
+    expect(normalizeThemeId("  MATRIX ")).toBe("matrix");
+    expect(normalizeThemeId("Turquoise")).toBe("turquoise");
+  });
+
+  it("redirige les anciens thèmes supprimés vers la famille la plus proche", () => {
+    expect(normalizeThemeId("violet")).toBe("amethyste");
+    expect(normalizeThemeId("indigo")).toBe("amethyste");
+    expect(normalizeThemeId("midnight")).toBe("amethyste");
+    expect(normalizeThemeId("orange")).toBe("ambre");
+    expect(normalizeThemeId("amber")).toBe("ambre");
+    expect(normalizeThemeId("cyan")).toBe("turquoise");
+    expect(normalizeThemeId("rose")).toBe("corail");
+    expect(normalizeThemeId("emerald")).toBe("emeraude");
+    expect(normalizeThemeId("slate")).toBe("neutre");
+  });
+
+  it("convertit les 5 anciens accents vers leur famille (vert → matrix)", () => {
+    expect(themeFromLegacyAccent("green")).toBe("matrix");
+    expect(themeFromLegacyAccent("purple")).toBe("amethyste");
+    expect(themeFromLegacyAccent("orange")).toBe("ambre");
+    expect(themeFromLegacyAccent("cyan")).toBe("turquoise");
+    expect(themeFromLegacyAccent("rose")).toBe("corail");
+    expect(LEGACY_ACCENT_TO_THEME).toEqual({
+      green: "matrix",
+      purple: "amethyste",
+      orange: "ambre",
+      cyan: "turquoise",
+      rose: "corail",
+    });
+  });
+
+  it("retombe sur Matrix pour toute valeur inconnue / absente / vide", () => {
+    for (const value of ["", "  ", "turquoise-x", "nope", null, undefined, 42, {}]) {
+      expect(normalizeThemeId(value), String(value)).toBe("matrix");
+      expect(themeFromLegacyAccent(value), String(value)).toBe("matrix");
+    }
+    // La table des anciens thèmes ne contient que des familles valides.
+    for (const family of Object.values(LEGACY_THEME_TO_FAMILY)) {
+      expect(PI_WEB_FAMILY_ORDER).toContain(family);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Nom de preset & pastille
+// ─────────────────────────────────────────────────────────────────────────────
+describe("themePackNameFor / themeSwatchColor", () => {
+  it("compose <famille>-<mode> et accepte les anciennes valeurs", () => {
+    expect(themePackNameFor("matrix", "dark")).toBe("matrix-dark");
+    expect(themePackNameFor("turquoise", "light")).toBe("turquoise-light");
+    expect(themePackNameFor("green", "dark")).toBe("matrix-dark");
+    expect(themePackNameFor("violet", "light")).toBe("amethyste-light");
+    expect(themePackNameFor("nope", "dark")).toBe("matrix-dark");
+  });
+
+  it("rend l'accent réel du preset de la brique (ou le vert si inconnu)", () => {
+    expect(themeSwatchColor("matrix", "dark")).toBe("#00ff41");
+    expect(themeSwatchColor("matrix", "light")).toBe("#166534");
+    expect(themeSwatchColor("corail", "dark")).toBe("#fa7fb5");
+    expect(themeSwatchColor("neutre", "light")).toBe("#515457");
+    expect(themeSwatchColor("green", "dark")).toBe("#00ff41"); // ancien accent
+    expect(themeSwatchColor("nope", "dark")).toBe("#00ff41"); // repli
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preset `matrix-*` de la brique + couche hôte == valeurs d'avant
+// ─────────────────────────────────────────────────────────────────────────────
+describe("preset matrix-* de la brique", () => {
+  it("existe pour les 2 modes et porte les 7 clés hôte Pi-Web", () => {
+    for (const mode of ["dark", "light"] as const) {
+      const preset = getHolafTokens().getPreset(`matrix-${mode}`);
+      expect(preset, `matrix-${mode}`).not.toBeNull();
+      for (const key of ["border-bright", "text-bright", "info", "warn", "code-inline-bg", "code-block-bg", "tool-output-bg"]) {
+        expect(typeof preset![key], `matrix-${mode}.${key}`).toBe("string");
       }
     }
   });
 
-  for (const accent of PI_WEB_ACCENTS) {
-    for (const mode of ["dark", "light"] as const) {
-      it(`pack ${themePackName(accent, mode)} : accent + base conformes`, () => {
-        const pack = themePackName(accent, mode);
-        const preset = getHolafTokens().getPreset(pack);
-        expect(preset).not.toBeNull();
-        // Accent + accent-dim (mappé sur accent-hover) + triples RGB.
-        for (const [key, value] of Object.entries(ACCENT_EXPECTED[accent][mode])) {
-          expect(preset![key], `${pack}.${key}`).toBe(value);
-        }
-        // Le pack hérite du pack de base du mode (extends).
-        const base = mode === "dark" ? BASE_DARK : BASE_LIGHT;
-        for (const [key, value] of Object.entries(base)) {
-          expect(preset![key], `${pack}.${key}`).toBe(value);
-        }
-      });
+  it("porte EXACTEMENT les valeurs principales d'avant (sombre)", () => {
+    const preset = getHolafTokens().getPreset("matrix-dark")!;
+    for (const [key, value] of Object.entries(BEFORE_MATRIX_DARK)) {
+      expect(preset[key], `matrix-dark.${key}`).toBe(value);
     }
-  }
+  });
+
+  it("porte EXACTEMENT les valeurs principales d'avant (clair)", () => {
+    const preset = getHolafTokens().getPreset("matrix-light")!;
+    for (const [key, value] of Object.entries(BEFORE_MATRIX_LIGHT)) {
+      expect(preset[key], `matrix-light.${key}`).toBe(value);
+    }
+  });
+
+  it("preset + couche hôte == valeurs d'avant, pour les 2 modes", () => {
+    for (const [mode, before] of [
+      ["dark", BEFORE_MATRIX_DARK],
+      ["light", BEFORE_MATRIX_LIGHT],
+    ] as const) {
+      const preset = getHolafTokens().getPreset(`matrix-${mode}`)!;
+      const values = { ...preset, ...buildPiWebOverlay(preset, mode) };
+      for (const [key, value] of Object.entries(before)) {
+        expect(values[key], `matrix-${mode}.${key}`).toBe(value);
+      }
+    }
+  });
 });
 
-describe("Mapping d'aliasing complet — avant (repli CSS) == après (pack)", () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Couche hôte — triples RGB & replis par mode
+// ─────────────────────────────────────────────────────────────────────────────
+describe("buildPiWebOverlay", () => {
+  it("calcule les 13 triples RGB depuis les hex du preset", () => {
+    const preset = getHolafTokens().getPreset("matrix-dark")!;
+    const overlay = buildPiWebOverlay(preset, "dark");
+    expect(overlay["bg-rgb"]).toBe("10 10 10");
+    expect(overlay["surface-rgb"]).toBe("22 22 22");
+    expect(overlay["text-rgb"]).toBe("192 192 192");
+    expect(overlay["accent-rgb"]).toBe("0 255 65");
+    expect(overlay["accent-dim-rgb"]).toBe("0 204 52");
+    expect(overlay["error-rgb"]).toBe("255 68 68");
+    for (const key of [
+      "bg-rgb", "surface-rgb", "surface-raised-rgb", "border-rgb", "border-bright-rgb",
+      "text-rgb", "text-bright-rgb", "text-dim-rgb", "info-rgb", "warn-rgb", "error-rgb",
+      "accent-rgb", "accent-dim-rgb",
+    ]) {
+      expect(overlay[key], key).toMatch(/^\d{1,3} \d{1,3} \d{1,3}$/);
+    }
+  });
+
+  it("complète les clés sémantiques absentes avec le repli du mode (vert)", () => {
+    const overlay = buildPiWebOverlay(
+      { surface: "#101010", border: "#202020", text: "#d0d0d0", accent: "#00ff41" },
+      "dark",
+    );
+    expect(overlay["border-bright"]).toBe("#3a3a3a");
+    expect(overlay["text-bright"]).toBe("#e0e0e0");
+    expect(overlay.info).toBe("#00aaff");
+    expect(overlay.warn).toBe("#ffaa00");
+    expect(overlay["code-inline-bg"]).toBe("rgba(0, 0, 0, 0.3)");
+  });
+
+  it("omet un triple dont la couleur source n'est pas un hex exploitable", () => {
+    const overlay = buildPiWebOverlay({ accent: "var(--brand)", surface: "#101010" }, "dark");
+    expect(overlay["accent-rgb"]).toBeUndefined();
+    expect(overlay["bg-rgb"]).toBe("16 16 16");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aliasing CSS — aucune variable orpheline, plus aucun preset d'accent maison
+// ─────────────────────────────────────────────────────────────────────────────
+describe("aliasing des variables Pi-Web vers les tokens holaf", () => {
   const BASE_ALIASES: Array<[string, string]> = [
     ["--bg", "surface"],
     ["--surface", "surface-elev"],
@@ -224,68 +330,61 @@ describe("Mapping d'aliasing complet — avant (repli CSS) == après (pack)", ()
     ["--info-rgb", "info-rgb"],
     ["--warn-rgb", "warn-rgb"],
     ["--error-rgb", "error-rgb"],
+    ["--accent", "accent"],
+    ["--accent-rgb", "accent-rgb"],
+    ["--accent-dim", "accent-hover"],
+    ["--accent-dim-rgb", "accent-dim-rgb"],
   ];
 
-  it("chaque variable de base est aliasée vers un token holaf", () => {
+  it("chaque variable Pi-Web est aliasée vers un token holaf (avec repli)", () => {
     for (const [piVar, holafKey] of BASE_ALIASES) {
       expect(css, `${piVar}`).toContain(`${piVar}: var(--holaf-${holafKey},`);
     }
   });
 
-  it("chaque variable d'accent est aliasée vers un token holaf", () => {
-    for (const [piVar, holafKey] of [
-      ["--accent", "accent"],
-      ["--accent-rgb", "accent-rgb"],
-      ["--accent-dim", "accent-hover"],
-      ["--accent-dim-rgb", "accent-dim-rgb"],
-    ] as Array<[string, string]>) {
-      expect(css, `${piVar}`).toContain(`${piVar}: var(--holaf-${holafKey},`);
+  it("les replis CSS == valeurs Matrix d'avant (sombre & clair)", () => {
+    for (const [key, value] of Object.entries(BEFORE_MATRIX_DARK)) {
+      expect(css, key).toContain(`var(--holaf-${key}, ${value})`);
+    }
+    for (const key of ["surface", "surface-elev", "surface-raised", "border", "border-bright", "text", "text-bright", "text-muted", "info", "warn", "danger", "accent", "accent-hover"]) {
+      const value = (BEFORE_MATRIX_LIGHT as Record<string, string>)[key];
+      expect(css, key).toContain(`var(--holaf-${key}, ${value})`);
     }
   });
 
-  it("les valeurs de repli du CSS == valeurs des packs (base, dark & light)", () => {
-    for (const [pack, expected] of [
-      [BASE_PACK_DARK, BASE_DARK],
-      [BASE_PACK_LIGHT, BASE_LIGHT],
-    ] as const) {
-      const preset = getHolafTokens().getPreset(pack)!;
-      for (const holafKey of Object.keys(expected)) {
-        const fallback = expected[holafKey];
-        expect(preset[holafKey]).toBe(fallback);
-        expect(css).toContain(`var(--holaf-${holafKey}, ${fallback})`);
-      }
-    }
-  });
-
-  it("les valeurs de repli du CSS == valeurs des packs (accent, 5×2)", () => {
-    for (const accent of PI_WEB_ACCENTS) {
-      for (const mode of ["dark", "light"] as const) {
-        const preset = getHolafTokens().getPreset(themePackName(accent, mode))!;
-        const expected = ACCENT_EXPECTED[accent][mode];
-        const piVars: Record<string, string> = {
-          accent: "--accent",
-          "accent-rgb": "--accent-rgb",
-          "accent-hover": "--accent-dim",
-          "accent-dim-rgb": "--accent-dim-rgb",
-        };
-        for (const holafKey of Object.keys(expected)) {
-          const fallback = expected[holafKey];
-          expect(preset[holafKey]).toBe(fallback);
-          expect(css).toContain(`${piVars[holafKey]}: var(--holaf-${holafKey}, ${fallback});`);
-        }
-      }
-    }
-  });
-
-  it("aucune variable de thème ne reste en valeur littérale non aliasée", () => {
-    // Les seules valeurs littérales tolérées sont les replis DANS var(...).
-    // On vérifie qu'il n'existe pas de `--bg: #…` (ou autre) hors alias.
+  it("plus AUCUN preset d'accent maison (data-accent) ni valeur littérale non aliasée", () => {
+    expect(css).not.toContain("data-accent");
     const bareDecl = /--(bg|surface|surface-raised|border|border-bright|text|text-bright|text-dim|info|warn|error|accent|accent-dim)(-rgb)?:\s*#/;
     expect(bareDecl.test(css)).toBe(false);
   });
 });
 
-describe("Support d'opacité Tailwind (piège RGB)", () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Liaison avec la brique holaf-lib
+// ─────────────────────────────────────────────────────────────────────────────
+describe("liaison avec la brique holaf-lib", () => {
+  it("les 14 presets <famille>-<mode> (7 familles × 2 modes) existent dans la brique", () => {
+    for (const family of PI_WEB_FAMILY_ORDER) {
+      for (const mode of ["dark", "light"] as const) {
+        expect(getHolafTokens().getPreset(`${family}-${mode}`), `${family}-${mode}`).not.toBeNull();
+      }
+    }
+  });
+
+  it("les familles offertes par Pi-Web sont exactement celles publiées par la brique", () => {
+    expect(getHolafTokens().listFamilies()).toEqual([...PI_WEB_FAMILY_ORDER]);
+  });
+
+  it("aucun preset maison pi-web-* n'est enregistré dans la brique", () => {
+    const names = getHolafTokens().listPresets();
+    expect(names.some((n) => n.startsWith("pi-web"))).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Support d'opacité Tailwind (piège RGB)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("support d'opacité Tailwind (piège RGB)", () => {
   it("tailwind.config.js mappe hacker-* sur rgb(var(--*-rgb) / <alpha-value>)", () => {
     const expected: Array<[string, string]> = [
       ["bg", "bg-rgb"],
@@ -306,28 +405,6 @@ describe("Support d'opacité Tailwind (piège RGB)", () => {
       expect(tailwind, `hacker.${tailwindKey}`).toContain(
         `rgb(var(--${rgbVar}) / <alpha-value>)`
       );
-    }
-  });
-
-  it("chaque -rgb consommé par Tailwind est posé par un pack (triple valide)", () => {
-    const rgbVars = [
-      "bg-rgb",
-      "surface-rgb",
-      "surface-raised-rgb",
-      "border-rgb",
-      "border-bright-rgb",
-      "accent-rgb",
-      "accent-dim-rgb",
-      "text-rgb",
-      "text-bright-rgb",
-      "text-dim-rgb",
-      "warn-rgb",
-      "error-rgb",
-      "info-rgb",
-    ];
-    const preset = getHolafTokens().getPreset(themePackName("rose", "light"))!;
-    for (const key of rgbVars) {
-      expect(preset[key], key).toMatch(/^\d{1,3} \d{1,3} \d{1,3}$/);
     }
   });
 });

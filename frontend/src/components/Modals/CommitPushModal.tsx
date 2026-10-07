@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { GitCommit, Sparkles, Cpu } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation, type TFunction } from "../../i18n";
@@ -277,7 +276,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                   <div key={r.projectId} className="border border-hacker-border bg-hacker-bg/30 p-2">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-hacker-accent text-xs font-bold flex items-center gap-1.5">
-                        <GitCommit size={12} />
+                        <HolafIcon name="git-commit" size={12} />
                         {r.name}
                       </span>
                       {r.error ? (
@@ -340,7 +339,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
             {/* Changes summary */}
             <div className="text-[10px] space-y-0.5 bg-hacker-bg/30 border border-hacker-border p-2">
               <div className="text-hacker-text-dim flex items-center gap-1.5 mb-1">
-                <GitCommit size={12} />
+                <HolafIcon name="git-commit" size={12} />
                 CHANGES DETECTED
               </div>
               {(stats?.staged.length ?? 0) > 0 && (
@@ -395,7 +394,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                     {aiLoading ? (
                       <HolafIcon name="refresh" size={10} className="animate-spin" />
                     ) : (
-                      <Sparkles size={10} />
+                      <HolafIcon name="sparkles" size={10} />
                     )}
                     {hasAiResult ? "✓ AI generated" : "Generate with AI"}
                   </button>
@@ -404,7 +403,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                   {modelInfo && modelInfo.source !== "none" && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-[9px] text-hacker-text-dim flex items-center gap-1">
-                        <Cpu size={8} />
+                        <HolafIcon name="cpu" size={8} />
                         <span className="text-hacker-text">{modelInfo.provider}</span>
                         <span className="text-hacker-text-dim">/</span>
                         <span className="text-hacker-info font-mono">{modelInfo.modelId}</span>

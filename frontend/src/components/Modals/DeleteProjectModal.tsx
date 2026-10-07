@@ -1,4 +1,3 @@
-import { FolderX } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
@@ -98,7 +97,7 @@ export function DeleteProjectModal({ project, onClose, onConfirm }: Props) {
               onClick={() => onConfirm(true)}
               className="w-full py-2 text-xs flex items-center justify-center gap-2 border border-hacker-warn/50 text-hacker-warn hover:bg-hacker-warn/10 transition-colors"
             >
-              <FolderX size={14} />
+              <HolafIcon name="folder-x" size={14} />
               <span>
                 Delete project + files
               </span>

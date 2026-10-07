@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { File, FolderPlus } from "lucide-react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
 
@@ -197,7 +196,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
               key={entry.name}
               className="flex items-center gap-2 px-3 py-1 text-hacker-text-dim/50"
             >
-              <File size={14} className="shrink-0" />
+              <HolafIcon name="file" size={14} className="shrink-0" />
               <span className="truncate">{entry.name}</span>
               <span className="ml-auto text-[10px] shrink-0">
                 {formatSize(entry.size)}
@@ -210,7 +209,7 @@ export function FileBrowser({ initialPath, storage, onSelect, selectedPath }: Pr
       {/* New folder input */}
       {showNewFolder && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-hacker-border bg-hacker-surface/50">
-          <FolderPlus size={12} className="text-hacker-accent shrink-0" />
+          <HolafIcon name="folder-plus" size={12} className="text-hacker-accent shrink-0" />
           <input
             type="text"
             value={newFolderName}
