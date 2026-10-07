@@ -630,12 +630,12 @@ export type LayoutType =
   | "top-2-bottom-1" | "top-1-bottom-2"
   | "left-2-right-1" | "left-1-right-2";
 
-export type PanelId = "pi" | "terminal" | "files";
+export type PanelId = "pi" | "terminal" | "files" | "skills";
 
 export interface LayoutConfig {
   layout2: "horizontal-2" | "vertical-2";
   layout3: LayoutType & ("horizontal-3" | "vertical-3" | "top-2-bottom-1" | "top-1-bottom-2" | "left-2-right-1" | "left-1-right-2");
-  slotOrder: PanelId[];               // ["pi", "terminal", "files"] — order of panels in slots
+  slotOrder: PanelId[];               // ["pi", "terminal", "files", "skills"] — order of panels in slots
   sizes: Record<string, number[]>;    // per-layout-type sizes (e.g. { "horizontal-2": [0.6,0.4] })
 }
 
@@ -643,6 +643,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   pi: "PI (Chat)",
   terminal: "Terminal",
   files: "Files",
+  skills: "Skills",
 };
 
 // ── Design Tool Types ──────────────────────────────────────
@@ -704,6 +705,6 @@ export interface DesignProject {
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   layout2: "horizontal-2",
   layout3: "horizontal-3",
-  slotOrder: ["pi", "terminal", "files"],
+  slotOrder: ["pi", "terminal", "files", "skills"],
   sizes: {},
 };

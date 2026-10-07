@@ -96,6 +96,42 @@ version dans le dépôt (`skills/<nom>/SKILL.md`). La version du dépôt sert au
 **prochaines installations** : elle ne se propage pas vers les copies locales
 existantes (voir ci-dessous).
 
+## Panneau SKILLS (interface)
+
+Le panneau **SKILLS** (onglet du header, comme PI / TERM / FILES) liste les
+fiches installées dans `~/.pi/agent/skills/` et permet de les gérer sans
+terminal :
+
+| Statut | Signification |
+|---|---|
+| **LIVRÉE** | vient du dépôt Pi-Web (`skills/`), installée par le seed |
+| **ÉCOSYSTÈME** | vient d'une racine externe (par défaut `/projects/holaf-lib/skills`) |
+| **GÉNÉRÉE** | écrite par le binaire CBM (`codebase-memory`) — **verrouillée**, lecture seule |
+| **PERSONNELLE** | créée localement (aucune référence de comparaison) |
+
+Un badge **MODIFIÉE** signale une copie locale qui a divergé de sa version de
+référence (livrée ou écosystème) ; un bouton **« RESTAURER L'ORIGINE »** (double
+clic de confirmation) la remplace alors par cette référence. Le panneau permet
+aussi :
+
+- **activer / désactiver** une skill (même mécanisme que les Paramètres :
+  `!<nom>` dans `settings.skills`) ;
+- **éditer** la fiche (`SKILL.md`) et **enregistrer** (écriture atomique) ;
+- **créer** une nouvelle skill (nom + description, dossier + `SKILL.md` générés) ;
+- **recharger la session** active pour appliquer les changements immédiatement
+  (sinon ils s'appliquent à la prochaine session de l'agent).
+
+La skill `codebase-memory` est **en lecture seule** : le binaire CBM la réécrit à
+chaque mise à jour, éditer la copie locale serait donc perdu. Pour l'ignorer,
+la désactiver.
+
+Routes (backend) : `GET /api/skills` (liste + statut + état activé),
+`GET /api/skills/:name` (fiche + référence), `PUT /api/skills/:name`,
+`POST /api/skills/:name/restore`, `POST /api/skills` (création). Les noms sont
+validés selon le spec Agent Skills (aucune traversée de chemin possible) et
+toutes les écritures sont atomiques (`backend/src/pi/skills-store.ts`). Le
+toggle reste sur `POST /api/pi/toggle`.
+
 ## Mise à jour et retour à la version d'origine
 
 **Stratégie retenue : seed-only (première itération).** Une copie locale
@@ -111,10 +147,16 @@ livrée a évolué dans le dépôt. C'est la solution la plus **simple** et la p
 
 **Retrouver la version d'origine d'une fiche :**
 
-1. supprimer la copie locale : `rm -rf ~/.pi/agent/skills/<nom>` ;
-2. redémarrer le backend — la fiche est re-semée depuis `skills/` du dépôt.
+1. depuis le panneau SKILLS : badge **MODIFIÉE** → bouton **« RESTAURER
+   L'ORIGINE »** (double clic de confirmation) ;
+2. ou en ligne de commande :
+   - supprimer la copie locale : `rm -rf ~/.pi/agent/skills/<nom>` ;
+   - redémarrer le backend — la fiche est re-semée depuis `skills/` du dépôt.
 
 **Voir si votre copie a divergé de la version livrée :**
+
+Le panneau SKILLS affiche directement le badge **MODIFIÉE**. En ligne de
+commande :
 
 ```bash
 diff -r ~/.pi/agent/skills/<nom> /chemin/vers/Pi-Web/skills/<nom>

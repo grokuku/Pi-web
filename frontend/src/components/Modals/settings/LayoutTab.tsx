@@ -25,7 +25,7 @@ function LayoutTab({ onLayoutChange }: { onLayoutChange: () => void }) {
     return saved || {
       layout2: "horizontal-2" as const,
       layout3: "horizontal-3" as LayoutType,
-      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId],
+      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId, "skills" as PanelId],
       sizes: {} as Record<string, number[]>,
     };
   });
@@ -42,7 +42,7 @@ function LayoutTab({ onLayoutChange }: { onLayoutChange: () => void }) {
   return (
     <div className="p-3 space-y-4">
       <div className="text-[11px] text-hacker-text-dim">
-        Configure the layout for 2 and 3 active panels. Switch panels ON/OFF via the header buttons.
+        Configure the layout for 2 and 3 active panels (4+ falls back to equal panes). Switch panels ON/OFF via the header buttons.
         Use the dropdown in each panel's header to swap modules.
       </div>
 

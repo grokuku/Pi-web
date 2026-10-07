@@ -27,6 +27,9 @@ import filesRouter from "./routes/files.js";
 import attachmentsRouter from "./routes/attachments.js";
 import { usageRouter, recordUsage } from "./routes/usage.js";
 import piSettingsRouter from "./routes/pi-settings.js";
+// Panneau SKILLS : liste/édition/restauration des skills installées
+// (agentDir) — le toggle activé/désactivé reste sur POST /api/pi/toggle.
+import skillsRouter from "./routes/skills.js";
 import agentRouter from "./routes/agent.js";
 import agentKeysRouter, { validateToken } from "./routes/agent-keys.js";
 import cbmRouter from "./routes/cbm.js";
@@ -204,6 +207,7 @@ app.use("/api/files", filesRouter);
 app.use("/api/attachments", attachmentsRouter);
 app.use("/api/usage", usageRouter);
 app.use("/api/pi", piSettingsRouter);
+app.use("/api/skills", skillsRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/agent-keys", agentKeysRouter);
 app.use("/api/cbm", cbmRouter);

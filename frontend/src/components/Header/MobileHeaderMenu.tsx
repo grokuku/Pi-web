@@ -5,7 +5,7 @@
 // (h-10 + overflow-x-auto). Fermeture au clic extérieur (pattern ModelQuickSwitch).
 //
 // Contenu :
-//   1. Section PANNEAUX : 3 boutons compacts PI/TERM/FILES (toggle visible)
+//   1. Section PANNEAUX : 4 boutons compacts PI/TERM/FILES/SKILLS (toggle visible)
 //   2. Section MODE : 2 chips default/harness (basculent le mode actif)
 //   3. Bouton « ⚙ Configurer le routage » : ouvre RoutingConfigModal en
 //      auto-chargeant /api/model-library et /api/providers, puis sauvegarde
@@ -91,7 +91,7 @@ export function MobileHeaderMenu({ panels, onTogglePanel, activeMode, onModeSwit
     ? (library?.projectModes?.[activeProjectId] || defaultProjectMode())
     : defaultProjectMode();
 
-  const panelIds: PanelId[] = ["pi", "terminal", "files"];
+  const panelIds: PanelId[] = ["pi", "terminal", "files", "skills"];
 
   const toggle = () => {
     // La position du dropdown est calculée par useAnchorPosition à l'ouverture
@@ -257,6 +257,7 @@ const PANEL_SHORT: Record<PanelId, string> = {
   pi: "PI",
   terminal: "TERM",
   files: "FILES",
+  skills: "SKILLS",
 };
 
 function defaultProjectMode(): ProjectModeConfig {

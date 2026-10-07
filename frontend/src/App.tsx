@@ -6,6 +6,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { ChatView } from "./components/Chat/ChatView";
 import { TerminalView } from "./components/Terminal/TerminalView";
 import { FileExplorer } from "./components/Files/FileExplorer";
+import { SkillsPanel } from "./components/Skills/SkillsPanel";
 import { DesignPanel } from "./components/Design/DesignPanel";
 import { WelcomeView } from "./components/Sidebar/WelcomeView";
 import { AddProjectModal } from "./components/Modals/AddProjectModal";
@@ -14,6 +15,7 @@ import { UsageStatsModal } from "./components/Modals/UsageStatsModal";
 import { Graph3DModal } from "./components/Modals/Graph3DModal";
 import { CbmStatsModal } from "./components/Modals/CbmStatsModal";
 import { PiLogo } from "./components/common/PiLogo";
+import { HolafIcon } from "./components/icons/HolafIcon";
 import { ModelQuickSwitch } from "./components/Header/ModelQuickSwitch";
 import { MobileHeaderMenu } from "./components/Header/MobileHeaderMenu";
 import { ThemePicker } from "./components/Header/ThemePicker";
@@ -86,7 +88,7 @@ function App() {
 
   // ── Panel State ──
   interface PanelState { visible: boolean; floating: boolean; }
-  const DEFAULT_PANELS: Record<PanelId, PanelState> = { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false } };
+  const DEFAULT_PANELS: Record<PanelId, PanelState> = { pi: { visible: true, floating: false }, terminal: { visible: false, floating: false }, files: { visible: false, floating: false }, skills: { visible: false, floating: false } };
   const [panels, setPanels] = useState<Record<PanelId, PanelState>>(() => {
     const saved = localStorage.getItem("pi-web-panels");
     if (saved) {
@@ -140,18 +142,21 @@ function App() {
     }
   };
 
-  // Helper to render panel buttons in header
-  const renderPanelSwitch = (id: PanelId, label: string) => {
+  // Helper to render panel buttons in header. `icon` : pictogramme de famille
+  // (PiLogo / HolafIcon) qui identifie visuellement le groupe PANNEAUX.
+  const renderPanelSwitch = (id: PanelId, label: string, icon?: ReactNode) => {
     const panel = panels[id] ?? { visible: false, floating: false };
     const isOn = panel.visible && !panel.floating;
     return (
       <button
         onClick={() => togglePanel(id)}
-        className={`hidden md:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+        data-testid={`panel-switch-${id}`}
+        className={`hidden md:inline-flex items-center gap-1 text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
           isOn ? "border-hacker-accent text-hacker-accent bg-hacker-accent/10" : "border-transparent text-hacker-text-dim hover:text-hacker-text hover:border-hacker-border"
         }`}
         title={`${isOn ? t('header.hidePanel', label) : t('header.showPanel', label)}`}
       >
+        {icon}
         {isOn ? `[${label}]` : label}
       </button>
     );
@@ -270,12 +275,12 @@ function App() {
     return {
       layout2: "horizontal-2" as const,
       layout3: "horizontal-3" as const,
-      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId],
+      slotOrder: ["pi" as PanelId, "terminal" as PanelId, "files" as PanelId, "skills" as PanelId],
       sizes: {} as Record<string, number[]>,
     };
   });
 
-  const activeDocked = (["pi", "terminal", "files"] as PanelId[])
+  const activeDocked = (["pi", "terminal", "files", "skills"] as PanelId[])
     .filter(id => panels[id]?.visible && !panels[id]?.floating);
 
   // Ordered panels for LayoutRenderer
@@ -927,7 +932,7 @@ function App() {
       if (event.data.type === 'restore-panel') {
         const panelId = event.data.panelId as PanelId;
         // Restore the panel in the main interface
-        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files")) {
+        if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files" || panelId === "skills")) {
           // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
           const p = { ...panels };
           p[panelId] = { ...(p[panelId] ?? { visible: false, floating: false }), visible: true, floating: false };
@@ -992,6 +997,13 @@ function App() {
             <div className="h-full flex flex-col">
               <div className="flex-1 overflow-hidden">
                 <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
+              </div>
+            </div>
+          )}
+          {standalonePanel === "skills" && (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 overflow-hidden">
+                <SkillsPanel activeProjectId={activeProject?.id} />
               </div>
             </div>
           )}
@@ -1061,51 +1073,70 @@ function App() {
 
         <div className="w-px h-4 bg-hacker-border-right hidden md:block" />
 
-        {/* Panel Switches (ON/OFF) */}
-        {renderPanelSwitch("pi", "PI")}
-        {renderPanelSwitch("terminal", "TERM")}
-        {renderPanelSwitch("files", "FILES")}
+        {/* ── PANNEAUX (famille « conteneur ») ──
+            Distinction visuelle demandée : les panneaux PI/TERM/FILES/SKILLS
+            vivent dans un conteneur bordé et segmenté (icône par panneau),
+            alors que les OUTILS ci-dessous restent des boutons plats sans
+            cadre — deux familles immédiatement reconnaissables. */}
+        <div
+          data-testid="header-panel-switcher"
+          className="hidden md:flex items-center border border-hacker-border bg-hacker-bg/50 mx-1"
+        >
+          <span className="hidden xl:inline px-1.5 text-[9px] tracking-widest text-hacker-text-dim select-none border-r border-hacker-border/60 mr-0.5">
+            {t('header.panelsGroup')}
+          </span>
+          {renderPanelSwitch("pi", "PI", <PiLogo className="w-3 h-3" />)}
+          {renderPanelSwitch("terminal", "TERM", <HolafIcon name="terminal" size={11} />)}
+          {renderPanelSwitch("files", "FILES", <HolafIcon name="folder" size={11} />)}
+          {renderPanelSwitch("skills", "SKILLS", <HolafIcon name="lightbulb" size={11} />)}
+        </div>
 
         <div className="w-px h-4 bg-hacker-border-right hidden lg:block" />
 
-        {/* Preview button — rouvre la dernière preview (grisé si aucune).
-            Respecte le mode courant : popup si actif, sinon fenêtre interne. */}
-        <button
-          onClick={() => {
-            if (!lastPreview) return;
-            if (previewModeRef.current === "popup") openPreviewPopup(lastPreview.url);
-            else setPreviewOpen(true);
-          }}
-          disabled={!lastPreview}
-          className={`hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
-            lastPreview
-              ? "border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
-              : "border-transparent text-hacker-text-dim/40 cursor-not-allowed"
-          }`}
-          title={lastPreview ? t('header.preview') : t('header.previewDisabled')}
-          aria-label={t('header.preview')}
-        >
-          PREVIEW
-        </button>
+        {/* ── OUTILS (famille « action directe » : boutons plats) ── */}
+        <div data-testid="header-tools" className="hidden lg:flex items-center">
+          <span className="hidden xl:inline px-1 text-[9px] tracking-widest text-hacker-text-dim select-none">
+            {t('header.toolsGroup')}
+          </span>
+          {/* Preview button — rouvre la dernière preview (grisé si aucune).
+              Respecte le mode courant : popup si actif, sinon fenêtre interne. */}
+          <button
+            onClick={() => {
+              if (!lastPreview) return;
+              if (previewModeRef.current === "popup") openPreviewPopup(lastPreview.url);
+              else setPreviewOpen(true);
+            }}
+            disabled={!lastPreview}
+            className={`hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all ${
+              lastPreview
+                ? "border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+                : "border-transparent text-hacker-text-dim/40 cursor-not-allowed"
+            }`}
+            title={lastPreview ? t('header.preview') : t('header.previewDisabled')}
+            aria-label={t('header.preview')}
+          >
+            PREVIEW
+          </button>
 
-        {/* Graph 3D button */}
-        <button
-          onClick={() => setShowGraph3D(true)}
-          className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
-          title={t('header.graph3d')}
-          aria-label={t('header.graph3d')}
-        >
-          📊
-        </button>
-        {/* CBM stats button */}
-        <button
-          onClick={() => setShowCbmStats(true)}
-          className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
-          title={t('header.cbmStats')}
-          aria-label={t('header.cbmStats')}
-        >
-          📈
-        </button>
+          {/* Graph 3D button */}
+          <button
+            onClick={() => setShowGraph3D(true)}
+            className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+            title={t('header.graph3d')}
+            aria-label={t('header.graph3d')}
+          >
+            📊
+          </button>
+          {/* CBM stats button */}
+          <button
+            onClick={() => setShowCbmStats(true)}
+            className="hidden lg:inline-flex text-xs px-2 py-1 border font-bold tracking-wide transition-all border-transparent text-hacker-text-dim hover:text-hacker-accent hover:border-hacker-border"
+            title={t('header.cbmStats')}
+            aria-label={t('header.cbmStats')}
+          >
+            📈
+          </button>
+        </div>
 
         <div className="w-px h-4 bg-hacker-border-right hidden lg:block" />
 
@@ -1232,6 +1263,9 @@ function App() {
                   files: (
                     <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
                   ),
+                  skills: (
+                    <SkillsPanel activeProjectId={activeProject?.id} />
+                  ),
 
                 }}
                 onSwap={handleSwap}
@@ -1272,6 +1306,11 @@ function App() {
       {panels.files?.visible && panels.files?.floating && (
         <Window id="files-float" title="FILES" icon="📁" onClose={() => hidePanel("files")} onDock={() => dockPanel("files")}>
           <FileExplorer project={activeProject} onReferenceFile={handleReferenceFile} on={on} />
+        </Window>
+      )}
+      {panels.skills?.visible && panels.skills?.floating && (
+        <Window id="skills-float" title="SKILLS" icon={<HolafIcon name="lightbulb" size={12} className="text-hacker-accent" />} onClose={() => hidePanel("skills")} onDock={() => dockPanel("skills")}>
+          <SkillsPanel activeProjectId={activeProject?.id} />
         </Window>
       )}
 

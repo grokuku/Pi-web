@@ -39,7 +39,9 @@ interface PackageInfo {
 
 // ── Helpers ──────────────────────────────────────────────
 
-function loadSettings(): PiSettings {
+// Exporté : le router des skills (routes/skills.ts) réutilise la même lecture
+// de settings.json pour dériver l'état activé/désactivé (`!<nom>`).
+export function loadSettings(): PiSettings {
   try {
     if (existsSync(SETTINGS_FILE)) {
       return JSON.parse(readFileSync(SETTINGS_FILE, "utf-8"));

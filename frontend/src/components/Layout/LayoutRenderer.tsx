@@ -15,7 +15,7 @@ export interface PersistedLayout {
   sizes: Record<string, number[]>;
 }
 
-const DEFAULT_SLOT_ORDER: PanelId[] = ["pi", "terminal", "files"];
+const DEFAULT_SLOT_ORDER: PanelId[] = ["pi", "terminal", "files", "skills"];
 
 export function loadPersistedLayout(): PersistedLayout | null {
   try {
@@ -77,15 +77,27 @@ export function LayoutRenderer({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const count = orderedPanels.length;
-  const layoutKey = count <= 1 ? "single" : layoutType;
-  const rawCurrentSizes = sizes[layoutKey] || defaultSizes(layoutKey, count);
+  // ── Au-delà de 3 panneaux visibles ──
+  // Les presets 2/3 slots ne couvrent que 1 à 3 panneaux : avec 4 panneaux (ou
+  // plus), on retombe sur une disposition plate à parts égales, stockée sous la
+  // clé `flat-N` (indépendante du preset choisi, qui reste conservé pour quand
+  // l'utilisateur revient à 3 panneaux).
+  const tooManyForPreset = count >= 4;
+  const isCompoundLayout =
+    count === 3 &&
+    (layoutType === "top-2-bottom-1" || layoutType === "top-1-bottom-2" ||
+      layoutType === "left-2-right-1" || layoutType === "left-1-right-2");
+  const layoutKey = count <= 1 ? "single" : tooManyForPreset ? `flat-${count}` : layoutType;
+  const savedSizes = sizes[layoutKey];
+  const rawCurrentSizes =
+    savedSizes && (isCompoundLayout ? savedSizes.length >= 2 : savedSizes.length === count)
+      ? savedSizes
+      : defaultSizes(layoutKey, count);
 
   // Compound layouts use exactly 2 values [main, solo] that must sum to 1
-  const currentSizes =
-    layoutType === "top-2-bottom-1" || layoutType === "top-1-bottom-2" ||
-    layoutType === "left-2-right-1" || layoutType === "left-1-right-2"
-      ? normalizeSizes(rawCurrentSizes.slice(0, 2))
-      : rawCurrentSizes;
+  const currentSizes = isCompoundLayout
+    ? normalizeSizes(rawCurrentSizes.slice(0, 2))
+    : rawCurrentSizes;
 
   const [localSizes, setLocalSizes] = useState<number[]>(currentSizes);
   const [innerSizes, setInnerSizes] = useState<number[]>([0.5, 0.5]);
@@ -108,12 +120,8 @@ export function LayoutRenderer({
     if (!isDragging) setLocalSizes(currentSizes);
   }, [layoutKey, isDragging]);
 
-  // Detect compound layouts
-  const isCompound =
-    layoutType === "top-2-bottom-1" ||
-    layoutType === "top-1-bottom-2" ||
-    layoutType === "left-2-right-1" ||
-    layoutType === "left-1-right-2";
+  // Detect compound layouts (3 panneaux seulement — cf. isCompoundLayout)
+  const isCompound = isCompoundLayout;
 
   // ── Resize ──
   const handleDividerDown = (
@@ -177,7 +185,9 @@ export function LayoutRenderer({
       setIsDragging(false);
       if (dragRef.current) {
         if (dragRef.current.type === "outer") {
-          onSizesChange(layoutKey, [...sizesRef.current]);
+          // `layoutKey` peut être une clé interne (`flat-N` pour 4+ panneaux) :
+          // la persistance la stocke telle quelle, comme les autres clés.
+          onSizesChange(layoutKey as LayoutType, [...sizesRef.current]);
         }
       }
       dragRef.current = null;
@@ -191,7 +201,7 @@ export function LayoutRenderer({
   }, [isDragging, layoutKey, onSizesChange]);
 
   // ── All 4 slots ALWAYS in the DOM (display:none when inactive) ──
-  const ALL_PANELS: PanelId[] = ["pi", "terminal", "files"];
+  const ALL_PANELS: PanelId[] = ["pi", "terminal", "files", "skills"];
 
   if (count === 0) {
     return (
@@ -229,7 +239,10 @@ export function LayoutRenderer({
           order: position,
           overflow: "hidden",
         }}
-        className="flex flex-col min-w-0 min-h-0"
+        // Cadre de panneau : quand plusieurs panneaux sont ouverts, chacun est
+        // délimité (distinction « panneau = zone encadrée » vs boutons d'outils
+        // plats du header). En panneau unique, pas de cadre (place maximale).
+        className={`flex flex-col min-w-0 min-h-0 ${count > 1 ? "border border-hacker-border/60" : ""}`}
       >
         {/* Header — only when multiple panels visible */}
         {count > 1 && (
@@ -371,6 +384,8 @@ export function LayoutRenderer({
 
 function defaultSizes(layoutKey: string, count: number): number[] {
   if (count <= 1) return [1];
+  // 4 panneaux ou plus : parts égales (les presets 2/3 slots ne s'appliquent pas).
+  if (count >= 4) return Array.from({ length: count }, () => 1 / count);
   if (count === 2) return [0.6, 0.4];
   if (layoutKey === "horizontal-3" || layoutKey === "vertical-3") return [0.4, 0.3, 0.3];
   // Compound: sizes = [subContainerFlex, soloFlex] (inner split uses separate state)
