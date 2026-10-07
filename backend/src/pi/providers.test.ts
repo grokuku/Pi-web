@@ -44,6 +44,7 @@ import {
   OLLAMA_THINKING_LEVEL_MAP,
   buildOllamaThinkingLevelMap,
   normalizeReasoningEffortValue,
+  ollamaCompatOptions,
   ollamaReasoningModelOptions,
   parseOllamaThinking,
   saveProviders,
@@ -236,6 +237,28 @@ describe("ollamaReasoningModelOptions", () => {
 
   it("autre provider → aucune option (non-régression)", () => {
     expect(ollamaReasoningModelOptions({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1" })).toEqual({});
+  });
+});
+
+describe("ollamaCompatOptions (rôle `developer` refusé par Ollama → 400)", () => {
+  it("Ollama Cloud (openai-compatible + ollama.com) → supportsDeveloperRole false (cas de la session bloquée)", () => {
+    expect(ollamaCompatOptions({ type: "openai-compatible", baseUrl: "https://ollama.com/v1" }))
+      .toEqual({ compat: { supportsDeveloperRole: false } });
+  });
+
+  it("Ollama local détecté par l'URL (localhost:11434) → idem", () => {
+    expect(ollamaCompatOptions({ baseUrl: "http://localhost:11434/v1" }))
+      .toEqual({ compat: { supportsDeveloperRole: false } });
+  });
+
+  it("Ollama local détecté par le type (URL custom) → idem", () => {
+    expect(ollamaCompatOptions({ type: "ollama", baseUrl: "http://192.168.1.20:8080/v1" }))
+      .toEqual({ compat: { supportsDeveloperRole: false } });
+  });
+
+  it("autre provider (OpenAI) → AUCUN compat (non-régression : le rôle developer reste permis)", () => {
+    expect(ollamaCompatOptions({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1" })).toEqual({});
+    expect(ollamaCompatOptions({ type: "openai-compatible", baseUrl: "https://openrouter.ai/api/v1" })).toEqual({});
   });
 });
 

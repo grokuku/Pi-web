@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
-import { inferContextWindow, ollamaReasoningModelOptions } from "./providers.js";
+import { inferContextWindow, ollamaCompatOptions, ollamaReasoningModelOptions } from "./providers.js";
 import { resolveModelCapability } from "./model-library.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 
@@ -57,6 +57,12 @@ export async function writeModelsJson(
     const piProvider: any = {
       baseUrl: provider.baseUrl || preset.defaultBaseUrl,
       api: apiType,
+      // Ollama (local ET Cloud) refuse le rôle `developer` que le SDK émet pour
+      // les modèles reasoning → 400 « body.messages.0: Input tag 'developer' ».
+      // Provider-level : le SDK reporte `config.compat` dans chaque modèle
+      // composé depuis models.json (provider-composer.js, modelFromJson →
+      // mergeCompat(providerConfig.compat, definition.compat)).
+      ...ollamaCompatOptions(provider),
     };
 
     if (apiKey) {

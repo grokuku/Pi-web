@@ -163,6 +163,13 @@ const TASK_RELEVANCE_MARKER_END = "<!-- /PI_TASK_RELEVANCE -->";
 // emplacements globaux/projet/.agents + activation/désactivation settings.json).
 import { renderSkillsBlock } from "../../backend/src/pi/skills-announce.js";
 
+// ── Compat Ollama (rôle `developer` refusé → 400) ─────
+// Les sous-agents re-régistrent chaque provider du runtime avec SA liste de
+// modèles : le SDK REMPLACE alors les modèles composés (provider-composer.js,
+// applyExtension) et ne reporte PAS le compat provider-level de models.json →
+// chaque définition doit porter le compat (Ollama local ET Cloud).
+import { ollamaCompatOptions } from "../../backend/src/pi/providers.js";
+
 // ── Rappel ferme « HARNESS → déléguer » ───────────────
 // Problème observé : l'orchestrator tente d'utiliser les tools d'exécution
 // directs (bash, edit, read…) — retirés de sa session en mode harness — puis
@@ -1615,6 +1622,10 @@ export default function (pi: ExtensionAPI) {
                 contextWindow: m.contextWindow ?? 128000,
                 maxTokens: m.maxTokens ?? 16384,
                 cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                // Ollama (local ET Cloud) : le SDK émettrait `role:"developer"`
+                // pour les modèles reasoning → 400 « body.messages.0: Input tag
+                // 'developer' » ; compat porté par CHAQUE modèle (voir import).
+                ...ollamaCompatOptions({ baseUrl: provider.baseUrl }),
               })),
             });
             console.log(`[harness-orchestrator] Provider ré-enregistré dans la tempSession : ${pid} (clé ${existingApiKey ? "existante" : "sentinelle"})`);

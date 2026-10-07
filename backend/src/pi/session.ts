@@ -19,7 +19,7 @@ import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
-import { getProviderDisplayName, ollamaReasoningModelOptions } from "./providers.js";
+import { getProviderDisplayName, ollamaCompatOptions, ollamaReasoningModelOptions } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
@@ -2392,6 +2392,11 @@ async function applyModelAndThinking(
               cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               // Ollama : contrôle « off » réel (voir ollamaReasoningModelOptions).
               ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
+              // Ollama (local ET Cloud) : jamais de rôle `developer` (400). Un
+              // registerProvider avec liste `models` REMPLACE les modèles
+              // composés (applyExtension) sans reporter le compat
+              // provider-level de models.json → chaque définition en a besoin.
+              ...ollamaCompatOptions({ baseUrl: providerBaseUrl }),
             };
           }
           return {
@@ -2403,6 +2408,10 @@ async function applyModelAndThinking(
             contextWindow: m.contextWindow ?? 128000,
             maxTokens: m.maxTokens ?? 16384,
             cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            // Idem : toute la liste étant remplacée, les AUTRES modèles du
+            // provider Ollama doivent porter le compat eux aussi (sinon 400
+            // dès qu'une session rebascule sur l'un d'eux).
+            ...ollamaCompatOptions({ baseUrl: providerBaseUrl }),
           };
         });
 
@@ -2418,6 +2427,7 @@ async function applyModelAndThinking(
             maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
             cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
+            ...ollamaCompatOptions({ baseUrl: providerBaseUrl }),
           });
         }
 

@@ -394,6 +394,31 @@ export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?:
   return isOllamaProvider(provider) ? { thinkingLevelMap: buildOllamaThinkingLevelMap() } : {};
 }
 
+/**
+ * Compat à poser pour les providers Ollama (local ET Cloud) : Ollama ne
+ * connaît PAS le rôle `developer` que le SDK émet pour les modèles `reasoning`
+ * (`instructionRole = model.reasoning && compat.supportsDeveloperRole
+ * ? "developer" : "system"`, pi-ai `api/openai-completions.js`). Sans ce champ,
+ * le prompt système part en `role: "developer"` et Ollama répond 400 :
+ * « body.messages.0: Input tag 'developer' found using 'role' does not match
+ * any of the expected tags: system, user, assistant, tool ».
+ *
+ * C'est le piège documenté par le README de pi-ai : « Some OpenAI-compatible
+ * servers do not understand the `developer` role used for reasoning-capable
+ * models. For those providers, set `compat.supportsDeveloperRole` to `false` …
+ * This commonly applies to Ollama, vLLM, SGLang ». Le SDK ne classe PAS
+ * ollama.com dans ses providers « non-standard » (detectCompat) → le défaut
+ * reste `true` et c'est à Pi-Web de déclarer l'exception.
+ *
+ * ⚠️ Ne touche PAS à `supportsReasoningEffort` : le thinking Ollama Cloud
+ * fonctionne tel quel, seule la conversion du rôle système est corrigée.
+ */
+export function ollamaCompatOptions(provider: { type?: string; baseUrl?: string }): {
+  compat?: { supportsDeveloperRole: false };
+} {
+  return isOllamaProvider(provider) ? { compat: { supportsDeveloperRole: false } } : {};
+}
+
 export function inferVision(modelId: string, family?: string): boolean {
   const name = (family || modelId).toLowerCase();
   // Known vision families (Ollama / model architecture)

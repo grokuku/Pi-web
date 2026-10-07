@@ -177,3 +177,59 @@ describe("writeModelsJson — sentinelle apiKey sur tous les types", () => {
     expect(all["provider_1788877705392_kx0r7"].apiKey).toBe("ollama");
   });
 });
+
+// ── writeModelsJson — compat Ollama (rôle `developer` → 400) ──
+
+describe("writeModelsJson — compat Ollama (rôle `developer` refusé)", () => {
+  it("provider Ollama Cloud (openai-compatible + ollama.com) → compat provider-level écrit (cas utilisateur)", async () => {
+    const provider = makeProvider({
+      id: "provider_1779417542317_igjvu",
+      type: "openai-compatible",
+      baseUrl: "https://ollama.com/v1",
+      apiKey: "key",
+    });
+    const library = makeLibrary([
+      makeModel({
+        id: "mc",
+        providerId: "provider_1779417542317_igjvu",
+        modelId: "mistral-large-4",
+        reasoning: true,
+      }),
+    ]);
+
+    await writeModelsJson([provider], library);
+
+    // Provider-level : le SDK le reporte dans chaque modèle composé
+    // (provider-composer.js, modelFromJson → mergeCompat) → `developer`
+    // n'est plus émis pour les modèles reasoning de ce provider.
+    expect(writtenProvider("provider_1779417542317_igjvu").compat)
+      .toEqual({ supportsDeveloperRole: false });
+  });
+
+  it("provider Ollama local → compat présent", async () => {
+    const provider = makeProvider({ id: "provider_o", type: "ollama", baseUrl: "http://localhost:11434/v1" });
+    const library = makeLibrary([
+      makeModel({ id: "mo", providerId: "provider_o", modelId: "qwen3:8b", reasoning: true }),
+    ]);
+
+    await writeModelsJson([provider], library);
+
+    expect(writtenProvider("provider_o").compat).toEqual({ supportsDeveloperRole: false });
+  });
+
+  it("provider OpenAI → AUCUN compat écrit (non-régression)", async () => {
+    const provider = makeProvider({
+      id: "provider_openai",
+      type: "openai-compatible",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-openai",
+    });
+    const library = makeLibrary([
+      makeModel({ id: "mg", providerId: "provider_openai", modelId: "gpt-4o", reasoning: true }),
+    ]);
+
+    await writeModelsJson([provider], library);
+
+    expect(writtenProvider("provider_openai").compat).toBeUndefined();
+  });
+});
