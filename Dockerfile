@@ -28,6 +28,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# ─── Toolchain Go (compilation croisée de l'agent d'exécution — Lot 4 Yuki) ───
+# L'agent d'exécution de Yuki (Lot 4) est un programme Go à compiler pour Linux
+# et Windows (amd64/arm64) DANS ce conteneur. Installé à la volée, Go ne vivrait
+# que dans la couche d'écriture ÉPHÉMÈRE du conteneur (/usr/local/go sur /) et
+# disparaîtrait à chaque `docker compose up --build` — il DOIT donc être dans
+# l'image. Tarball de la distribution OFFICIELLE go.dev/dl (aucun dépôt tiers,
+# aucune clé APT). Épinglé par version ET par sha256 (règle maison : jamais de
+# `latest`) : le sha256 du fichier est vérifié AVANT extraction, donc toute
+# altération du binaire fait échouer le build. `curl` est fourni par le bloc
+# « System packages » ci-dessus, `sha256sum` par coreutils (base Debian slim).
+# Placé AVANT les COPY de code : cette couche ne s'invalide que si Go change.
+ARG GO_VERSION=1.27.1
+ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+RUN curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+ && echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c - \
+ && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz \
+ && ln -sf /usr/local/go/bin/go    /usr/local/bin/go \
+ && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+ && go version
+
 RUN mkdir -p /projects /sessions /mnt/smb && \
     git config --system --add safe.directory '*'
 

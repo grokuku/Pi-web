@@ -1,5 +1,17 @@
 # Services Partagés — Documentation pour Agents
 
+> ⚠️ **AVERTISSEMENT — document partiellement périmé (constaté le 2026-10-09).**
+> Plusieurs descriptions ci-dessous contredisent le code actuel :
+> **authentification à deux couches** (jeton agent `Authorization: Bearer` PUIS
+> clé `X-API-Key: lib-…` — l'exemple ci-dessous n'envoie qu'une couche),
+> forme des réponses de `/librarian/status` (`totalDocs`/`lastUpdated`, pas
+> `docs`/`lastUpdate`), `/search` (le champ `num` n'est jamais lu ; pas de
+> scraping dans `/search`), `/archive` (reçoit un **contenu structuré**, il ne
+> scrape pas d'URL), et chemin UI des clés (« Settings → API Keys », plus
+> « Analysis »).
+> **Référence à jour : [`docs/librarian-api.md`](librarian-api.md)**
+> (complétée par [`docs/agent-api.md`](agent-api.md) pour l'authentification).
+
 > Ce document décrit les services exposés par Pi-Web accessibles aux agents externes.
 
 ## Généralités
