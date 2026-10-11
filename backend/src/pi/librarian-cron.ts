@@ -1,213 +1,95 @@
 import { scanProjectInventory, getAllItems, type InventoryItem } from "./librarian-scanner.js";
 import { loadIndex, saveIndex, archiveDoc, webclawScrape, webclawSearch, type DocEntry, type DocContent } from "./librarian-service.js";
-import { getModelRegistry, getModelRuntime, reloadModelRegistry } from "./session.js";
-import { loadModelLibrary, getLibrarianModel as getLibrarianModelConfig } from "./model-library.js";
-import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
+import {
+  getLibrarianBackend,
+  libryFetch,
+  librySearch,
+  libryArchive,
+  type LibrarianBackend,
+} from "../libry/client.js";
 
 const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
 const SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000; // Check toutes les 6h
 
 let cronTimer: NodeJS.Timeout | null = null;
 
-// ── Model resolution ──
+// ── Récupération du contenu brut (sans synthèse LLM) ──
+// Lot B : la synthèse IA a été RETIRÉE de ce fichier (découplage du SDK Pi).
+// Le contenu brut est désormais archivé tel quel, que le libraire soit local
+// (archiveDoc) ou Libry (libryArchive). Le CRON reste le seul mécanisme
+// d'entretien ; il se contente d'un « inventaire → push ».
 
-async function getLibrarianModel(): Promise<any | null> {
-  try {
-    await reloadModelRegistry();
-    const registry = getModelRegistry();
-    const library = loadModelLibrary();
+async function fetchRawContent(
+  item: InventoryItem,
+  backend: LibrarianBackend,
+): Promise<{ content: string; sourceUrl?: string }> {
+  let rawContent = "";
+  let sourceUrl = item.source;
 
-    // 1. Try librarian model from library config, then fall back to default
-    let model: any = null;
-
-    const librarianModel = getLibrarianModelConfig(library);
-    if (librarianModel) {
-      model = registry.find(librarianModel.providerId, librarianModel.modelId);
+  // 1. Si on a une URL source, récupérer directement.
+  if (sourceUrl) {
+    try {
+      rawContent =
+        backend === "libry"
+          ? (await libryFetch(sourceUrl)).content
+          : (await webclawScrape(sourceUrl)).content;
+    } catch (e) {
+      console.log(`[Librarian] Direct scrape failed for ${item.name}, trying search...`);
     }
-
-    // 2. Fallback: first available model
-    if (!model?.id) {
-      const available = registry.getAvailable();
-      if (available.length > 0) {
-        model = available[0];
-      }
-    }
-
-    if (!model?.id) {
-      console.warn("[Librarian] No model available for synthesis");
-      return null;
-    }
-
-    return model;
-  } catch (e: any) {
-    console.error("[Librarian] Failed to resolve model:", e.message);
-    return null;
-  }
-}
-
-// ── Synthèse LLM ──
-
-async function synthesizeDoc(item: InventoryItem, rawContent: string): Promise<DocContent> {
-  const modelInfo = await getLibrarianModel();
-  if (!modelInfo) {
-    return {
-      meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
-      summary: "No LLM model available for synthesis",
-      keyPoints: [],
-      api: [],
-      examples: [],
-    };
   }
 
-  const prompt = `Tu es un libraire technique. Synthétise la documentation suivante en une référence concise et utile pour un développeur.
-
-Outil: ${item.name} v${item.version}
-Type: ${item.type}
-
-Documentation brute:
-${rawContent.substring(0, 8000)}
-
-Produis un JSON avec cette structure exacte:
-{
-  "summary": "Résumé en 2-3 phrases de ce qu'est cet outil",
-  "keyPoints": ["Point clé 1", "Point clé 2", ...],
-  "api": [{ "signature": "fonction(params)", "description": "ce qu'elle fait" }],
-  "examples": [{ "title": "Titre", "code": "code exemple" }]
-}
-
-Règles:
-- Sois CONCIS: pas de blabla, pas de répétition
-- Inclus seulement l'API principale (pas toutes les fonctions)
-- 2-3 exemples maximum, les plus utiles
-- Pas plus de 10 key points
-- Si le contenu n'est pas pertinent, retourne un JSON vide avec un summary qui dit "Documentation non disponible"
-- Réponds en français si la doc est en français, sinon en anglais`;
-
-  const context = {
-    systemPrompt: "Tu es un libraire technique expert. Tu produis de la documentation concise et précise en format JSON.",
-    messages: [
-      {
-        role: "user" as const,
-        content: prompt,
-        timestamp: Date.now(),
-      },
-    ],
-  };
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
-
-    const response = await (async () => {
-      // Phase 2 : call LLM réel — slot du provider du modèle libraire, libéré
-      // dans le finally (succès/erreur/timeout).
-      const libProvider = (modelInfo as any)?.providerId || (modelInfo as any)?.provider || DEFAULT_LLM_PROVIDER;
-      const libSlotKey = `librarian::${libProvider}::${Date.now()}`;
-      await concurrencyManager.acquireLLMSlot(libSlotKey, "librarian", libProvider);
-      try {
-        return await getModelRuntime().completeSimple(modelInfo, context, {
-          temperature: 0.3,
-          maxTokens: 2000,
-          signal: controller.signal,
-        });
-      } finally {
-        concurrencyManager.releaseLLMSlot(libSlotKey);
-      }
-    })();
-    clearTimeout(timeout);
-
-    // Extraire le texte de la réponse
-    const text = response.content
-      ?.filter((c: any) => c.type === "text")
-      ?.map((c: any) => c.text || "")
-      ?.join("\n")
-      ?.trim() || "";
-
-    if (!text) {
-      return {
-        meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
-        summary: "Documentation synthesis failed (empty response)",
-        keyPoints: [],
-        api: [],
-        examples: [],
-      };
-    }
-
-    // Extraire le JSON de la réponse
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      // Si pas de JSON, utiliser le texte brut comme summary
-      return {
-        meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
-        summary: text.substring(0, 200),
-        keyPoints: [],
-        api: [],
-        examples: [],
-      };
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    return {
-      meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
-      summary: parsed.summary || "",
-      keyPoints: parsed.keyPoints || [],
-      api: parsed.api || [],
-      examples: parsed.examples || [],
-    };
-  } catch (error: any) {
-    console.error(`[Librarian] Synthesis failed for ${item.name}:`, error.message);
-    return {
-      meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
-      summary: `Error: ${error.message}`,
-      keyPoints: [],
-      api: [],
-      examples: [],
-    };
-  }
-}
-
-// ── Fetch + synthesize pour un item ──
-
-async function fetchAndArchiveDoc(item: InventoryItem): Promise<boolean> {
-  try {
-    console.log(`[Librarian] Fetching doc for ${item.name} v${item.version}...`);
-
-    // 1. Si on a une URL source, scraper directement
-    let rawContent = "";
-    let sourceUrl = item.source;
-
-    if (sourceUrl) {
-      try {
-        const scraped = await webclawScrape(sourceUrl);
-        rawContent = scraped.content;
-      } catch (e) {
-        console.log(`[Librarian] Direct scrape failed for ${item.name}, trying search...`);
-      }
-    }
-
-    // 2. Si pas de contenu, rechercher
-    if (!rawContent) {
-      try {
+  // 2. Sinon, rechercher puis prendre le premier contenu.
+  if (!rawContent) {
+    try {
+      if (backend === "libry") {
+        const search = await librySearch(`${item.name} ${item.version} documentation`);
+        if (search.results.length > 0 && search.results[0].content) {
+          rawContent = search.results[0].content;
+          sourceUrl = search.results[0].url;
+        }
+      } else {
         const results = await webclawSearch(`${item.name} ${item.version} documentation`, 3);
         if (results.length > 0 && results[0].content) {
           rawContent = results[0].content;
           sourceUrl = results[0].url;
         }
-      } catch (e) {
-        console.log(`[Librarian] Search failed for ${item.name}: ${(e as Error).message}`);
       }
+    } catch (e) {
+      console.log(`[Librarian] Search failed for ${item.name}: ${(e as Error).message}`);
     }
+  }
 
+  return { content: rawContent, sourceUrl };
+}
+
+/** Construit le doc à partir du contenu BRUT (plus de synthèse LLM). */
+function buildInventoryDoc(item: InventoryItem, rawContent: string): DocContent {
+  const summary = rawContent.replace(/\s+/g, " ").trim().substring(0, 200);
+  return {
+    meta: { name: item.name, version: item.version, type: item.type, updatedAt: new Date().toISOString() },
+    summary,
+    keyPoints: [],
+    api: [],
+    examples: [],
+    rawContent,
+  };
+}
+
+// ── Récupération + archivage pour un item ──
+
+async function fetchAndArchiveDoc(item: InventoryItem, backend: LibrarianBackend): Promise<boolean> {
+  try {
+    console.log(`[Librarian] Fetching doc for ${item.name} v${item.version}...`);
+
+    const { content: rawContent, sourceUrl } = await fetchRawContent(item, backend);
     if (!rawContent) {
       console.log(`[Librarian] No content found for ${item.name}`);
       return false;
     }
 
-    // 3. Synthétiser avec le LLM
-    const docContent = await synthesizeDoc(item, rawContent);
+    const docContent = buildInventoryDoc(item, rawContent);
     docContent.meta.sourceUrl = sourceUrl;
 
-    // 4. Archiver
     const filePath = `tools/${item.name}@${item.version}.json`;
     const entry: DocEntry = {
       name: item.name,
@@ -220,8 +102,25 @@ async function fetchAndArchiveDoc(item: InventoryItem): Promise<boolean> {
       sourceUrl,
     };
 
-    archiveDoc(entry, docContent);
-    console.log(`[Librarian] Archived doc for ${item.name} v${item.version}`);
+    if (backend === "libry") {
+      await libryArchive({
+        name: item.name,
+        version: item.version,
+        type: item.type,
+        sourceUrl,
+        content: {
+          summary: docContent.summary,
+          keyPoints: docContent.keyPoints,
+          api: docContent.api,
+          examples: docContent.examples,
+          rawContent: docContent.rawContent,
+        },
+      });
+    } else {
+      archiveDoc(entry, docContent);
+    }
+
+    console.log(`[Librarian] Archived doc for ${item.name} v${item.version} (${backend})`);
     return true;
   } catch (error: any) {
     console.error(`[Librarian] Failed to fetch doc for ${item.name}:`, error.message);
@@ -233,6 +132,9 @@ async function fetchAndArchiveDoc(item: InventoryItem): Promise<boolean> {
 
 export async function updateLibrary(projectCwds: string[]): Promise<{ scanned: number; updated: number; failed: number }> {
   console.log("[Librarian] Starting library update...");
+
+  // Lot B : le backend est résolu UNE fois par cycle (relecture à chaud au tick suivant).
+  const backend = getLibrarianBackend();
 
   // 1. Collecter tous les items de tous les projets
   const allItems: InventoryItem[] = [];
@@ -274,12 +176,12 @@ export async function updateLibrary(projectCwds: string[]): Promise<{ scanned: n
 
   console.log(`[Librarian] ${itemsToUpdate.length} items need update`);
 
-  // 4. Fetch + synthesize (rate limited: 2s entre chaque)
+  // 4. Fetch + archive (rate limited: 2s entre chaque)
   let updated = 0;
   let failed = 0;
 
   for (const item of itemsToUpdate) {
-    const success = await fetchAndArchiveDoc(item);
+    const success = await fetchAndArchiveDoc(item, backend);
     if (success) updated++;
     else failed++;
 

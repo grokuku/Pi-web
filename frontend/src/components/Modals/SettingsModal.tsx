@@ -17,6 +17,7 @@ import SecurityTab from "./settings/SecurityTab";
 import LayoutTab from "./settings/LayoutTab";
 import ApiKeysTab from "./settings/ApiKeysTab";
 import ResourceSection from "./settings/ResourceSection";
+import LibrySection from "./settings/LibrySection";
 
 // ── Bornes du délai d'attente en file (secondes) ───────
 // Alignées sur MIN_QUEUE_TIMEOUT_MS / MAX_QUEUE_TIMEOUT_MS du backend
@@ -837,6 +838,11 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   </div>
                 </div>
               </div>
+
+              {/* Libry — service libraire (Pi-Web en est client) + interrupteur
+                  `librarian.backend` (local | libry). Coexiste provisoirement
+                  avec WebClaw/Tavily (leur retrait = Lot C, après la bascule). */}
+              <LibrySection />
             </div>
           )}
 

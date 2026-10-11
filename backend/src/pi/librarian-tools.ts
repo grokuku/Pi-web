@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { webclawScrape, archiveDoc } from "./librarian-service.js";
 import type { DocEntry, DocContent } from "./librarian-service.js";
+import { getLibrarianBackend, librySearch, libryFetch, libryArchive } from "../libry/client.js";
 
 // Schéma
 const librarianSearchSchema = Type.Object({
@@ -32,7 +33,16 @@ export const librarianSearchToolDef = defineTool({
   ) {
     const { searchAndArchive } = await import("./librarian-service.js");
     try {
-      const { results, archived } = await searchAndArchive(params.query);
+      // Lot B : branchement selon l'interrupteur `librarian.backend`, lu à chaud.
+      // Défaut "local" → libraire local de Pi-Web (comportement inchangé).
+      // "libry" → service Libry (non activé par défaut).
+      let results: Awaited<ReturnType<typeof searchAndArchive>>["results"];
+      let archived: boolean;
+      if (getLibrarianBackend() === "libry") {
+        ({ results, archived } = await librySearch(params.query));
+      } else {
+        ({ results, archived } = await searchAndArchive(params.query));
+      }
 
       if (results.length === 0) {
         return {
@@ -100,7 +110,31 @@ export async function executeArchive(args: {
   description?: string;
 }): Promise<string> {
   try {
-    // 1. Scraperr l'URL
+    // Lot B : "libry" → contenu récupéré puis archivé via le service Libry.
+    // (Le contrat Libry exige un `content` déjà extrait, d'où le /fetch préalable.)
+    if (getLibrarianBackend() === "libry") {
+      const fetched = await libryFetch(args.url);
+      if (!fetched.content || fetched.content.length < 50) {
+        return `Could not retrieve content from ${args.url}`;
+      }
+      const safeName = args.name.replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, 50);
+      await libryArchive({
+        name: safeName,
+        version: "latest",
+        type: "documentation",
+        sourceUrl: args.url,
+        content: {
+          summary: args.description || fetched.description || fetched.title || "",
+          keyPoints: [],
+          api: [],
+          examples: [],
+          rawContent: fetched.content,
+        },
+      });
+      return `Successfully archived "${safeName}" from ${args.url} (${fetched.content.length} chars)`;
+    }
+
+    // 1. Scraprer l'URL (libraire local — comportement inchangé)
     const scraped = await webclawScrape(args.url);
     if (!scraped.content || scraped.content.length < 50) {
       return `Could not retrieve content from ${args.url}`;

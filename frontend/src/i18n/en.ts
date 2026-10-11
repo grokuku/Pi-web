@@ -253,6 +253,25 @@ export const en = {
           `☎️ LLM (global default): ${used}/${max} in use${queue > 0 ? ` · ${queue} queued` : ""}`,
         saveError: "Failed to save concurrency settings",
       },
+      // ── Libry (Lot B): Pi-Web is a CLIENT of the Libry librarian service.
+      // Service URL + API key (key is never echoed back) and the
+      // `librarian.backend` switch: "local" = Pi-Web built-in librarian (default),
+      // "libry" = Libry service. Switch is read hot, reversible.
+      libry: {
+        title: "LIBRY — LIBRARIAN SERVICE",
+        description: "Libry is the librarian service (documents, web search, screenshots). Pi-Web is its client: librarian searches and archives go through this service.",
+        backendLabel: "Librarian backend",
+        backendLocal: "Pi-Web (local)",
+        backendLibry: "Libry service",
+        activeBackend: (backend: string) => `Active backend: ${backend}`,
+        backendHint: 'On "Libry service", the librarian_search and librarian_archive tools and the automatic upkeep go through the Libry service. Reversible at any time: switching back to "Pi-Web (local)" is enough.',
+        urlLabel: "Service URL",
+        apiKeyLabel: "API Key",
+        apiKeyHint: "Leave empty to keep the current key.",
+        envManaged: "Managed by environment",
+        save: "SAVE",
+        saveError: "Failed to save the Libry settings",
+      },
       additional: "Additional parameters will be added here as needed.",
     },
     security: {

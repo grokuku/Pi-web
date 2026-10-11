@@ -253,6 +253,25 @@ export const fr = {
           `☎️ LLM (défaut global) : ${used}/${max} utilisé${queue > 0 ? ` · ${queue} en attente` : ""}`,
         saveError: "Échec de l'enregistrement de la concurrence",
       },
+      // ── Libry (Lot B) : Pi-Web est CLIENT du service libraire Libry.
+      // URL + clé API (la clé n'est jamais réaffichée) et interrupteur
+      // `librarian.backend` : "local" = libraire interne de Pi-Web (défaut),
+      // "libry" = service Libry. Bascule relue à chaud, réversible.
+      libry: {
+        title: "LIBRY — SERVICE LIBRAIRE",
+        description: "Libry est le service libraire (documents, recherche web, capture d'écran). Pi-Web en est le client : ses recherches et archivages du libraire passent par ce service.",
+        backendLabel: "Backend du libraire",
+        backendLocal: "Pi-Web (local)",
+        backendLibry: "Service Libry",
+        activeBackend: (backend: string) => `Backend actif : ${backend}`,
+        backendHint: "Sur « Service Libry », les outils librarian_search et librarian_archive ainsi que l'entretien automatique passent par le service Libry. Réversible à tout moment : revenir sur « Pi-Web (local) » suffit.",
+        urlLabel: "URL du service",
+        apiKeyLabel: "Clé API",
+        apiKeyHint: "Laisser vide pour conserver la clé actuelle.",
+        envManaged: "Géré par l'environnement",
+        save: "ENREGISTRER",
+        saveError: "Échec de l'enregistrement des réglages Libry",
+      },
       additional: "Des paramètres supplémentaires seront ajoutés ici si nécessaire.",
     },
     security: {

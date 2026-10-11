@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { getWebclawConfig, setWebclawConfig } from "../webclaw.js";
 import { getTavilyConfig, setTavilyConfig } from "../tavily.js";
+import { getLibryConfig, setLibryConfig, toPublicLibryConfig } from "../libry/client.js";
 import { ensureDockerHubLogin, getDockerHubStatus } from "../pi/docker-auth.js";
 import {
   getUiAllowedOrigins,
@@ -360,6 +361,36 @@ router.post("/tavily", (req: Request, res: Response) => {
     if (apiKey === undefined) return res.json({ ok: true, kept: true });
     setTavilyConfig({ apiKey });
     res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ── Libry (Lot B : Pi-Web devient CLIENT du service Libry) ──
+// Même contrat que Webclaw : la clé n'est JAMAIS renvoyée en clair, le POST
+// garde la clé existante si `apiKey` est absent/vide (keep-if-absent).
+// Le service Libry reste OPTIONNEL : tant que l'interrupteur est sur "local",
+// le libraire local de Pi-Web reste intégralement actif.
+
+router.get("/libry", (_req: Request, res: Response) => {
+  try {
+    res.json(toPublicLibryConfig(getLibryConfig()));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/libry", (req: Request, res: Response) => {
+  try {
+    const { url, apiKey, librarianBackend } = req.body ?? {};
+    // apiKey absent/vide → on garde la clé existante (seule l'URL est mise à jour).
+    // librarianBackend : uniquement "local" | "libry" (une autre valeur est ignorée → inchangé).
+    const config = setLibryConfig({
+      ...(typeof url === "string" ? { url } : {}),
+      ...(apiKey !== undefined ? { apiKey } : {}),
+      ...(librarianBackend === "local" || librarianBackend === "libry" ? { librarianBackend } : {}),
+    });
+    res.json(toPublicLibryConfig(config));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
