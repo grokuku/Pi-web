@@ -536,10 +536,15 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = [
  * Niveaux de réflexion PROPOSABLES dans les sélecteurs pour un modèle donné.
  *
  * Source de vérité : les niveaux DÉCLARÉS par le provider (Ollama /api/show →
- * `thinking.values`, persistés en `reasoningLevels` ; « off » y est inclus quand
- * le provider accepte `false`). On n'expose donc QUE ces niveaux — jamais un niveau
+ * `thinking.values`, persistés en `reasoningLevels`). On n'expose pas de niveau
  * « inventé » (minimal/medium/xhigh) auquel le provider donnerait un sens
  * arbitraire. Le défaut du provider est toujours proposé.
+ *
+ * ⚠️ « off » (désactivée) est TOUJOURS proposé pour un modèle raisonneur, MÊME
+ * quand le provider ne le déclare pas : mesuré sur Ollama Cloud `/v1/chat/…` ET
+ * DeepSeek, `reasoning_effort: "none"` coupe réellement la réflexion sans
+ * provoquer de 400. Ne pas l'exposer retirait à l'utilisateur le seul moyen
+ * d'éteindre la réflexion (DeepSeek déclare `[low, high, max]`, sans « off »).
  *
  * Information INCONNUE (`reasoningLevels` absent) → TOUS les niveaux : on conserve
  * le comportement historique pour ne rien casser.
@@ -550,7 +555,15 @@ export function thinkingLevelsForModel(m: RegisteredModel): readonly ThinkingLev
     : [];
   if (declared.length === 0) return THINKING_LEVELS;
   const allowed = new Set(declared);
-  const levels = THINKING_LEVELS.filter(l => allowed.has(l));
+  const known = THINKING_LEVELS.filter(l => allowed.has(l));
+  // Niveaux déclarés tous inconnus du SDK → repli historique sur tous les niveaux
+  // (on ne réduit pas la liste à « off » sur une donnée non comprise).
+  if (known.length === 0) return THINKING_LEVELS;
+  // Un modèle raisonneur accepte toujours l'extinction « none » (mesuré) ; un
+  // modèle non-raisonneur n'a de toute façon que « off ». Dans les deux cas,
+  // « off » reste proposable.
+  const allowOff = m.reasoning !== false;
+  const levels = THINKING_LEVELS.filter(l => known.includes(l) || (allowOff && l === "off"));
   // Défaut du provider : l'inclure s'il est un niveau SDK valide et absent de la
   // liste déclarée (le provider le documente légitimement via `thinking.default`).
   const def = typeof m.reasoningDefault === "string" ? (m.reasoningDefault.trim().toLowerCase() as ThinkingLevel) : ("" as ThinkingLevel);

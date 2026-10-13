@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import type { ProviderConfig, ProviderType } from "./providers.js";
 import type { RegisteredModel, ModelLibrary } from "./model-library.js";
-import { inferContextWindow, ollamaCompatOptions, ollamaReasoningModelOptions } from "./providers.js";
+import { inferContextWindow, ollamaCompatOptions, reasoningLevelMapForModel } from "./providers.js";
 import { resolveModelCapability } from "./model-library.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 
@@ -85,6 +85,13 @@ export async function writeModelsJson(
         const input: ("text" | "image" | "audio")[] = ["text"];
         if (vision) input.push("image");
         if (audio) input.push("audio");
+        // Table de traduction niveau SDK → `reasoning_effort` :
+        //  - Ollama : rend le contrôle « off » RÉEL ("none"), sinon Ollama
+        //    ré-active le thinking de lui-même (contrôle fantôme) ;
+        //  - compatible OpenAI : dérivée des niveaux DÉCLARÉS (effort.supported_levels)
+        //    pour ne jamais envoyer de valeur non acceptée ;
+        //  - informations inconnues : aucune table (comportement SDK par défaut).
+        const thinkingLevelMap = reasoningLevelMapForModel(provider, m);
         return {
           id: m.modelId,
           name: `${m.name} (${provider.name})`,
@@ -93,9 +100,7 @@ export async function writeModelsJson(
           contextWindow,
           maxTokens: m.maxTokens > 0 ? m.maxTokens : 16384,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          // Ollama : rend le contrôle « off » RÉEL (reasoning_effort:"none"),
-          // sinon Ollama ré-active le thinking de lui-même (contrôle fantôme).
-          ...ollamaReasoningModelOptions(provider),
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         };
       });
     }

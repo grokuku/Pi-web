@@ -32,9 +32,9 @@ describe("thinkingLevelsForModel", () => {
     expect(levels).not.toContain("minimal");
   });
 
-  it("déclaré SANS off (values sans false) → pas d'extinction proposée", () => {
-    expect(thinkingLevelsForModel(model({ reasoningLevels: ["low", "high"], reasoningDefault: "high" })))
-      .toEqual(["low", "high"]);
+  it("déclaré SANS off (ex. DeepSeek [low,high,max]) → « désactivée » TOUJOURS proposée", () => {
+    expect(thinkingLevelsForModel(model({ reasoningLevels: ["low", "high", "max"], reasoningDefault: "high" })))
+      .toEqual(["off", "low", "high", "max"]);
   });
 
   it("information INCONNUE (reasoningLevels absent) → tous les niveaux (non-régression)", () => {

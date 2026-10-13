@@ -19,7 +19,7 @@ import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
 import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
-import { getProviderDisplayName, ollamaCompatOptions, ollamaReasoningModelOptions } from "./providers.js";
+import { getProviderDisplayName, ollamaCompatOptions, reasoningLevelMapForModel } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
 import { concurrencyManager, DEFAULT_LLM_PROVIDER } from "./concurrency.js";
 import { StreamSilenceDetector, hardTimeoutMessage, streamSilenceMessage } from "./stream-silence.js";
@@ -2374,6 +2374,11 @@ async function applyModelAndThinking(
         const providerApi = (piModel as any).api || "openai-completions";
         const providerBaseUrl = (piModel as any).baseUrl || "";
 
+        // Table de traduction niveau SDK → `reasoning_effort` dérivée des niveaux
+        // DÉCLARÉS : Ollama (contrôle « off » réel) ou compatible OpenAI
+        // (effort.supported_levels). Inconnu → aucune table (défaut SDK).
+        const thinkingLevelMap = reasoningLevelMapForModel({ baseUrl: providerBaseUrl }, model);
+
         // Get ALL models from this provider in the registry
         const allProviderModels = sharedModelRegistry!.getAvailable()
           .filter((m: any) => m.provider === model.providerId);
@@ -2390,8 +2395,8 @@ async function applyModelAndThinking(
               contextWindow: model.contextWindow ?? m.contextWindow ?? 128000,
               maxTokens: model.maxTokens ?? m.maxTokens ?? 16384,
               cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              // Ollama : contrôle « off » réel (voir ollamaReasoningModelOptions).
-              ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
+              // Table de traduction des niveaux (Ollama / OpenAI-compatible).
+              ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
               // Ollama (local ET Cloud) : jamais de rôle `developer` (400). Un
               // registerProvider avec liste `models` REMPLACE les modèles
               // composés (applyExtension) sans reporter le compat
@@ -2426,7 +2431,7 @@ async function applyModelAndThinking(
             contextWindow: model.contextWindow ?? piModel.contextWindow ?? 128000,
             maxTokens: model.maxTokens ?? piModel.maxTokens ?? 16384,
             cost: (piModel as any).cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            ...ollamaReasoningModelOptions({ baseUrl: providerBaseUrl }),
+            ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
             ...ollamaCompatOptions({ baseUrl: providerBaseUrl }),
           });
         }

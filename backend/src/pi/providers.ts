@@ -395,6 +395,167 @@ export function ollamaReasoningModelOptions(provider: { type?: string; baseUrl?:
 }
 
 /**
+ * Vocabulaire SDK des niveaux de réflexion (miroir de `THINKING_LEVELS` côté
+ * frontend, `types.ts`) — sert de référence commune pour la lecture des niveaux
+ * DÉCLARÉS par les providers compatibles OpenAI.
+ */
+const SDK_THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Ordre d'INTENSITÉ (croissant) utilisé pour replier un niveau non déclaré. */
+const THINKING_INTENSITY_ORDER: readonly string[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Normalise une valeur brute du provider en niveau SDK exploitable, sinon `null`.
+ * Les synonymes d'extinction (`none`, `off`, `disabled`, `false`, `0`…) sont
+ * ramenés à `"off"` — jamais une valeur arbitraire.
+ */
+export function normalizeOpenAiReasoningLevel(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (v === "") return null;
+  if (REASONING_OFF_ALIASES.has(v)) return "off";
+  return SDK_THINKING_LEVELS.includes(v) ? v : null;
+}
+
+/**
+ * Lit `effort.supported_levels` exposé par `GET {baseUrl}/models` des providers
+ * compatibles OpenAI (ex. DeepSeek → `["low","medium","high"]`). Accepte aussi
+ * un tableau direct ou un objet `{ supported_levels | supportedLevels | levels }`.
+ * Renvoie `null` si le provider n'expose rien : on n'INVENTE jamais de niveau.
+ */
+export function parseEffortLevels(effort: unknown): string[] | null {
+  let supported: unknown;
+  if (Array.isArray(effort)) supported = effort;
+  else if (effort && typeof effort === "object") {
+    const obj = effort as Record<string, unknown>;
+    supported = obj.supported_levels ?? obj.supportedLevels ?? obj.levels;
+  }
+  if (!Array.isArray(supported)) return null;
+  const levels: string[] = [];
+  for (const raw of supported) {
+    const level = normalizeOpenAiReasoningLevel(raw);
+    if (level && !levels.includes(level)) levels.push(level);
+  }
+  return levels.length > 0 ? levels : null;
+}
+
+/**
+ * Lit `supported_parameters` d'OpenRouter : ce provider publie les paramètres
+ * ACCEPTÉS (dont `reasoning`) sans exposer les niveaux. On en déduit seulement
+ * que la réflexion est supportée — jamais des niveaux inventés.
+ */
+export function parseSupportedParameters(params: unknown): { reasoning?: boolean } | null {
+  if (!Array.isArray(params)) return null;
+  const names = params.filter((p): p is string => typeof p === "string").map((p) => p.toLowerCase());
+  const reasoning = names.some((n) => n === "reasoning" || n === "include_reasoning" || n === "reasoning_effort");
+  return reasoning ? { reasoning: true } : null;
+}
+
+/** Vrai si une liste de modalités d'entrée mentionne l'image. */
+function inputModalitiesIncludeImage(value: unknown): boolean {
+  return Array.isArray(value) && value.some((v) => typeof v === "string" && /image|vision/i.test(v));
+}
+
+/**
+ * Reporte sur un `DiscoveredModel` les capacités DÉCLARÉES par une entrée
+ * `GET {baseUrl}/models` d'un provider compatible OpenAI. Ne remplit un champ
+ * que si le provider l'expose réellement (`effort`, `supported_parameters`,
+ * `context_window`, `input_modalities`) — sinon le modèle reste INCHANGÉ.
+ */
+export function applyOpenAiCapabilities(model: DiscoveredModel, entry: Record<string, unknown>): void {
+  const levels = parseEffortLevels(entry.effort);
+  if (levels) {
+    model.reasoning = true;
+    model.reasoningLevels = levels;
+    const def = normalizeOpenAiReasoningLevel((entry.effort as Record<string, unknown> | undefined)?.default);
+    if (def) model.reasoningDefault = def;
+  }
+  if (parseSupportedParameters(entry.supported_parameters)?.reasoning) model.reasoning = true;
+  if (!model.contextWindow) {
+    const cw = entry.context_window ?? entry.context_length ?? entry.max_context_length;
+    if (typeof cw === "number" && cw > 0) model.contextWindow = cw;
+  }
+  if (model.vision === undefined && inputModalitiesIncludeImage(entry.input_modalities)) model.vision = true;
+}
+
+/**
+ * Table de traduction niveau SDK → `reasoning_effort` pour un provider
+ * **compatible OpenAI** (`effort.supported_levels`, cf. `parseEffortLevels`).
+ * Pendant générique de `buildOllamaThinkingLevelMap`.
+ *
+ *  - « off » → `"none"` (`OLLAMA_DISABLE_REASONING_VALUE`) TOUJOURS : mesuré sur
+ *    Ollama Cloud `/v1/chat/completions` ET DeepSeek, `reasoning_effort: "none"`
+ *    coupe réellement la réflexion, même quand le provider NE DÉCLARE aucun
+ *    moyen d'éteindre (aucun 400). Sans cette clé, le SDK n'envoie RIEN quand
+ *    l'utilisateur choisit « désactivée » et le provider garde son défaut
+ *    (Ollama : `high`) → « contrôle fantôme » : l'utilisateur croit avoir coupé
+ *    la réflexion, elle continue.
+ *  - niveau DÉCLARÉ → envoyé tel quel (identité) ;
+ *  - niveau NON déclaré → replié sur le niveau déclaré le plus proche en intensité ;
+ *  - AUCUN niveau déclaré → identité pour tous les niveaux SDK (on préserve le
+ *    comportement historique du SDK et on n'ajoute QUE l'extinction).
+ */
+export function buildOpenAiThinkingLevelMap(declaredLevels: string[]): Record<string, string> {
+  const declared = new Set(declaredLevels);
+  const map: Record<string, string> = { off: OLLAMA_DISABLE_REASONING_VALUE };
+  if (declared.size === 0) {
+    // Information inconnue : identité pour tous les niveaux. Ce sont exactement
+    // les valeurs que le SDK enverrait SANS table — on n'invente rien, on ne fait
+    // que rendre l'extinction (« none ») réelle.
+    for (const level of THINKING_INTENSITY_ORDER) map[level] = level;
+    return map;
+  }
+  const intensity = THINKING_INTENSITY_ORDER.filter((l) => declared.has(l));
+  for (const level of THINKING_INTENSITY_ORDER) {
+    if (declared.has(level)) {
+      map[level] = level;
+      continue;
+    }
+    const nearest = nearestDeclaredLevel(level, intensity);
+    if (nearest) map[level] = nearest;
+  }
+  return map;
+}
+
+/** Niveau déclaré le plus proche en intensité d'un niveau arbitraire. */
+function nearestDeclaredLevel(level: string, declaredIntensity: readonly string[]): string | undefined {
+  if (declaredIntensity.length === 0) return undefined;
+  const idx = THINKING_INTENSITY_ORDER.indexOf(level);
+  let best = declaredIntensity[0];
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const candidate of declaredIntensity) {
+    const dist = Math.abs(THINKING_INTENSITY_ORDER.indexOf(candidate) - idx);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * `thinkingLevelMap` à poser sur un modèle donné :
+ *  - Ollama → table historique (`buildOllamaThinkingLevelMap`), INCHANGÉE ;
+ *  - provider compatible OpenAI → table dérivée (`buildOpenAiThinkingLevelMap`),
+ *    qui expose TOUJOURS l'extinction « off → none » (mesurée fiable) : sans
+ *    elle, choisir « désactivée » n'émet AUCUN champ et la réflexion reste
+ *    active (défaut du provider). Les niveaux non déclarés sont repliés au plus
+ *    proche, information inconnue → identité (aucune valeur inventée).
+ */
+export function reasoningLevelMapForModel(
+  provider: { type?: string; baseUrl?: string },
+  model: { reasoningLevels?: string[] },
+): Record<string, string> | undefined {
+  if (isOllamaProvider(provider)) return buildOllamaThinkingLevelMap();
+  const declared = [...new Set(
+    (model.reasoningLevels || [])
+      .map((l) => normalizeOpenAiReasoningLevel(l))
+      .filter((l): l is string => l !== null),
+  )];
+  return buildOpenAiThinkingLevelMap(declared);
+}
+
+/**
  * Compat à poser pour les providers Ollama (local ET Cloud) : Ollama ne
  * connaît PAS le rôle `developer` que le SDK émet pour les modèles `reasoning`
  * (`instructionRole = model.reasoning && compat.supportsDeveloperRole
@@ -607,6 +768,55 @@ function deriveNativeOllamaUrl(baseUrl: string): string {
 }
 
 /**
+ * Enrichit les modèles d'un provider **compatible OpenAI non-Ollama** avec les
+ * capacités DÉCLARÉES par `GET {baseUrl}/models`. Pendant non-Ollama de
+ * `enrichWithOllamaCapabilities` : il n'appelle JAMAIS `/api/show` (endpoint
+ * NATIF Ollama, voué à l'échec sur tout autre hôte — c'était le bug).
+ *
+ * `preFetchedEntries` : la liste déjà récupérée par l'appelant (évite un second
+ * GET /models lors d'un `testProviderConnection`).
+ *
+ * Best-effort : timeout court, toute erreur réseau est journalisée et laisse les
+ * capacités INCHANGÉES (jamais de blocage du scan, jamais de secret persisté).
+ */
+export async function enrichWithOpenAiCapabilities(
+  provider: ProviderConfig,
+  models: DiscoveredModel[],
+  preFetchedEntries?: unknown[],
+): Promise<void> {
+  let entries = preFetchedEntries;
+  if (!Array.isArray(entries)) {
+    try {
+      const baseUrl = (provider.baseUrl || "").replace(/\/+$/, "");
+      const headers: Record<string, string> = {};
+      if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+      const resp = await fetch(`${baseUrl}/models`, { headers, signal: AbortSignal.timeout(10000) });
+      if (!resp.ok) return;
+      const data: { data?: unknown; models?: unknown } = await resp.json();
+      entries = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+    } catch (e: any) {
+      // Provider injoignable : capacités de réflexion INCONNUES → on ne change rien.
+      console.warn(
+        `[providers] /models indisponible pour ${provider.name || provider.id} — capacités de réflexion laissées inchangées (${e?.message || e})`,
+      );
+      return;
+    }
+  }
+
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const rec = entry as Record<string, unknown>;
+    const id = rec.id ?? rec.model ?? rec.name ?? rec.digest;
+    if (typeof id === "string" && id && !byId.has(id)) byId.set(id, rec);
+  }
+  for (const model of models) {
+    const entry = byId.get(model.id);
+    if (entry) applyOpenAiCapabilities(model, entry);
+  }
+}
+
+/**
  * Fetch real model capabilities from the Ollama native /api/show endpoint.
  * This populates contextWindow, vision, reasoning on DiscoveredModel.
  */
@@ -691,13 +901,14 @@ async function enrichWithOllamaCapabilities(
 /**
  * Rétro-renseignement (backfill) des niveaux de réflexion supportés sur les
  * modèles DÉJÀ ENREGISTRÉS d'un provider, à partir des capacités fraîchement
- * découvertes (`enrichWithOllamaCapabilities` → objet `thinking`).
+ * découvertes (Ollama : `enrichWithOllamaCapabilities` → objet `thinking` ;
+ * compatible OpenAI : `enrichWithOpenAiCapabilities` → `effort.supported_levels`).
  *
- * DÉCLENCHEUR : à chaque découverte/scan RÉUSSI d'un provider Ollama
- * (`testProviderConnection`, appelé par `POST /api/providers/:id/test` →
- * `handleScanAll`). Le coût réseau `POST /api/show` (concurrence 5, timeout 15 s)
- * est donc DÉJÀ payé par `enrichWithOllamaCapabilities` ; ce backfill ne fait que
- * persister la donnée (lecture + écriture de model-library.json).
+ * DÉCLENCHEUR : à chaque découverte/scan RÉUSSI d'un provider (Ollama ou
+ * compatible OpenAI — `testProviderConnection`, appelé par
+ * `POST /api/providers/:id/test` → `handleScanAll`). Le coût réseau est donc
+ * DÉJÀ payé par la fonction d'enrichissement ; ce backfill ne fait que persister
+ * la donnée (lecture + écriture de model-library.json).
  *
  * RÈGLES :
  *  - jamais d'ÉCRASEMENT d'une valeur existante (`reasoningLevels` déjà présent) ;
@@ -711,7 +922,10 @@ export async function backfillRegisteredModelReasoningLevels(
   provider: ProviderConfig,
   models: DiscoveredModel[],
 ): Promise<number> {
-  if (!isOllamaProvider(provider)) return 0;
+  // Providers exposant des niveaux DÉCLARÉS : Ollama (objet `thinking`) ET
+  // compatible OpenAI (`effort.supported_levels` via GET /models). Anthropic et
+  // Google n'en exposent pas → no-op.
+  if (provider.type === "anthropic" || provider.type === "google") return 0;
   try {
     const { loadModelLibrary, saveModelLibrary } = await import("./model-library.js");
     const library = loadModelLibrary();
@@ -764,6 +978,10 @@ export async function backfillRegisteredModelReasoningLevels(
  * reçu leurs niveaux) : un simple redémarrage du backend suffit alors, sans
  * rescanner ni passer par l'UI.
  *
+ * ⚠️ Le nom historique dit « Ollama » mais couvre désormais TOUT provider
+ * exposant des niveaux déclarés (Ollama `thinking`, compatible OpenAI
+ * `effort.supported_levels`) ; Anthropic / Google sont ignorés.
+ *
  * Best-effort et borné : jamais d'exception, jamais d'écrasement d'une valeur
  * existante (règles portées par `backfillRegisteredModelReasoningLevels`).
  *
@@ -773,8 +991,10 @@ export async function backfillAllOllamaProvidersReasoningLevels(): Promise<numbe
   let total = 0;
   try {
     for (const provider of loadProviders()) {
-      // Seuls les providers Ollama exposent l'objet `thinking` (niveaux déclarés).
-      if (!isOllamaProvider(provider)) continue;
+      // Providers exposant des niveaux DÉCLARÉS : Ollama (`thinking`) et
+      // compatible OpenAI (`effort.supported_levels`). Anthropic / Google n'en
+      // exposent pas → ignorés.
+      if (provider.type === "anthropic" || provider.type === "google") continue;
       const cached = provider.discoveredModels || [];
       if (cached.length === 0) continue;
       try {
@@ -806,6 +1026,9 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
 
   try {
     let models: DiscoveredModel[] = [];
+    // Liste BRUTE de GET /models (OpenAI-compatible) : réutilisée pour lire les
+    // capacités déclarées (effort.supported_levels…) SANS second appel réseau.
+    let openAiEntries: unknown[] | undefined;
 
     if (provider.type === "ollama" || provider.type === "openai-compatible") {
       // OpenAI-compatible /v1/models endpoint
@@ -820,6 +1043,7 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
 
       const data = await resp.json();
       const rawModels = data.data || data.models || [];
+      openAiEntries = rawModels;
 
       models = rawModels.map((m: any) => ({
         id: m.id || m.model || m.name || m.digest || "",
@@ -857,9 +1081,17 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
       })).filter((m: DiscoveredModel) => m.id);
     }
 
-    // ── Enrich with real capabilities from Ollama native API ──
+    // ── Enrich with real capabilities ──
     if (provider.type === "ollama" || provider.type === "openai-compatible") {
-      await enrichWithOllamaCapabilities(provider, models);
+      if (isOllamaProvider(provider)) {
+        // Ollama (local ET Cloud via URL) : API NATIVE /api/show (objet `thinking`).
+        await enrichWithOllamaCapabilities(provider, models);
+      } else {
+        // Compatible OpenAI non-Ollama : capacités DÉCLARÉES par GET /models
+        // (effort.supported_levels…). On n'envoie JAMAIS /api/show à un hôte
+        // non-Ollama (endpoint natif, voué à l'échec).
+        await enrichWithOpenAiCapabilities(provider, models, openAiEntries);
+      }
     }
 
     // ── Backfill best-effort des niveaux de réflexion des modèles DÉJÀ

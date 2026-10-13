@@ -30,9 +30,12 @@ vi.mock("fs", () => ({
 import {
   PROVIDER_PRESETS,
   addProvider,
+  applyOpenAiCapabilities,
   backfillAllOllamaProvidersReasoningLevels,
   backfillRegisteredModelReasoningLevels,
+  buildOpenAiThinkingLevelMap,
   deleteProvider,
+  enrichWithOpenAiCapabilities,
   getProvider,
   getProviderDisplayName,
   inferContextWindow,
@@ -46,7 +49,10 @@ import {
   normalizeReasoningEffortValue,
   ollamaCompatOptions,
   ollamaReasoningModelOptions,
+  parseEffortLevels,
   parseOllamaThinking,
+  parseSupportedParameters,
+  reasoningLevelMapForModel,
   saveProviders,
   testProviderConnection,
   toPublicProvider,
@@ -177,6 +183,108 @@ describe("parseOllamaThinking", () => {
     expect(parseOllamaThinking(undefined)).toBeNull();
     expect(parseOllamaThinking({})).toBeNull();
     expect(parseOllamaThinking({ values: "high" })).toBeNull();
+  });
+});
+
+// ── Lecture des niveaux DÉCLARÉS par les providers compatibles OpenAI ──
+describe("parseEffortLevels (effort.supported_levels, GET /models)", () => {
+  it("objet { supported_levels } → niveaux normalisés (cas DeepSeek)", () => {
+    expect(parseEffortLevels({ supported_levels: ["low", "medium", "high"] }))
+      .toEqual(["low", "medium", "high"]);
+  });
+
+  it("accepte aussi un tableau direct et les alias supportedLevels / levels", () => {
+    expect(parseEffortLevels(["low", "high"])).toEqual(["low", "high"]);
+    expect(parseEffortLevels({ supportedLevels: ["low"] })).toEqual(["low"]);
+    expect(parseEffortLevels({ levels: ["medium"] })).toEqual(["medium"]);
+  });
+
+  it("normalise les synonymes d'extinction vers 'off' et déduplique", () => {
+    expect(parseEffortLevels({ supported_levels: ["none", "off", "low", "high"] }))
+      .toEqual(["off", "low", "high"]);
+  });
+
+  it("fournisseur muet / formes inexploitables → null (jamais de niveau inventé)", () => {
+    expect(parseEffortLevels(undefined)).toBeNull();
+    expect(parseEffortLevels(null)).toBeNull();
+    expect(parseEffortLevels({})).toBeNull();
+    expect(parseEffortLevels({ supported_levels: "high" })).toBeNull();
+    expect(parseEffortLevels({ supported_levels: [] })).toBeNull();
+    expect(parseEffortLevels({ supported_levels: ["banana"] })).toBeNull();
+  });
+});
+
+describe("parseSupportedParameters (OpenRouter)", () => {
+  it("'reasoning' parmi les paramètres acceptés → réflexion supportée", () => {
+    expect(parseSupportedParameters(["temperature", "reasoning", "tools"]))
+      .toEqual({ reasoning: true });
+  });
+  it("aucun paramètre de réflexion / forme invalide → null", () => {
+    expect(parseSupportedParameters(["temperature"])).toBeNull();
+    expect(parseSupportedParameters(undefined)).toBeNull();
+    expect(parseSupportedParameters("reasoning")).toBeNull();
+  });
+});
+
+describe("applyOpenAiCapabilities", () => {
+  it("entrée avec effort → reasoning + niveaux (+ défaut si exposé)", () => {
+    const model: DiscoveredModel = { id: "deepseek-chat", name: "x" };
+    applyOpenAiCapabilities(model, {
+      id: "deepseek-chat",
+      effort: { supported_levels: ["low", "medium", "high"], default: "medium" },
+    });
+    expect(model.reasoning).toBe(true);
+    expect(model.reasoningLevels).toEqual(["low", "medium", "high"]);
+    expect(model.reasoningDefault).toBe("medium");
+  });
+  it("entrée SANS effort ni paramètres → modèle INCHANGÉ (rien inventé)", () => {
+    const model: DiscoveredModel = { id: "m", name: "x" };
+    applyOpenAiCapabilities(model, { id: "m" });
+    expect(model.reasoning).toBeUndefined();
+    expect(model.reasoningLevels).toBeUndefined();
+  });
+});
+
+describe("buildOpenAiThinkingLevelMap / reasoningLevelMapForModel (traduction)", () => {
+  it("niveaux déclarés → identité ; non déclarés → repliés au plus proche ; off TOUJOURS émis en 'none'", () => {
+    const map = buildOpenAiThinkingLevelMap(["low", "medium", "high"]);
+    expect(map).toEqual({ off: "none", minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" });
+    // Mesuré (Ollama /v1 + DeepSeek) : « none » coupe la réflexion même non déclaré.
+    expect(map.off).toBe("none");
+  });
+
+  it("'off' déclaré → émis en 'none' (valeur canonique d'extinction)", () => {
+    expect(buildOpenAiThinkingLevelMap(["off", "low", "high"]).off).toBe("none");
+  });
+
+  it("aucun niveau déclaré → identité + extinction (jamais undefined : off réel)", () => {
+    expect(buildOpenAiThinkingLevelMap([])).toEqual({
+      off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max",
+    });
+  });
+
+  it("Ollama → table historique inchangée (non-régression)", () => {
+    expect(reasoningLevelMapForModel({ type: "ollama" }, { reasoningLevels: ["low"] }))
+      .toEqual(OLLAMA_THINKING_LEVEL_MAP);
+    expect(reasoningLevelMapForModel({ baseUrl: "https://ollama.com/v1" }, {}))
+      .toEqual(OLLAMA_THINKING_LEVEL_MAP);
+  });
+
+  it("compatible OpenAI non-Ollama : dérivée des niveaux déclarés, extinction TOUJOURS présente", () => {
+    expect(reasoningLevelMapForModel(
+      { type: "openai-compatible", baseUrl: "https://api.deepseek.com" },
+      { reasoningLevels: ["low", "medium", "high"] },
+    )).toEqual({ off: "none", minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" });
+    // Régression corrigée : DeepSeek déclare [low,high,max] SANS « off » ; on doit
+    // quand même pouvoir éteindre la réflexion (mesuré : "none" est accepté).
+    expect(reasoningLevelMapForModel(
+      { type: "openai-compatible", baseUrl: "https://api.deepseek.com" },
+      { reasoningLevels: ["low", "high", "max"] },
+    )?.off).toBe("none");
+    // Information inconnue → identité + extinction (plus jamais undefined).
+    expect(reasoningLevelMapForModel(
+      { type: "openai-compatible", baseUrl: "https://api.openai.com/v1" }, {},
+    )).toEqual({ off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" });
   });
 });
 
@@ -492,6 +600,82 @@ describe("testProviderConnection (aucun appel réseau réel)", () => {
     expect(stored?.connectionError).toBe("ECONNREFUSED simulé");
     expect(stored?.lastTestedAt).toBeTruthy();
   });
+
+  it("openai-compatible NON-Ollama : lit effort.supported_levels depuis GET /models, jamais /api/show", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey: "sk-x" });
+    saveProviders([provider]);
+
+    const urls: string[] = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      urls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          data: [{ id: "deepseek-chat", object: "model", effort: { supported_levels: ["low", "medium", "high"] } }],
+        }),
+      };
+    });
+
+    const result = await testProviderConnection(provider);
+    expect(result.ok).toBe(true);
+    expect(result.models[0].reasoningLevels).toEqual(["low", "medium", "high"]);
+    // Aucun POST /api/show (endpoint NATIF Ollama) envoyé à un hôte non-Ollama.
+    expect(urls.some((u) => u.includes("/api/show"))).toBe(false);
+  });
+
+  it("openai-compatible muet (aucun effort exposé) : aucun niveau rempli, aucun crash", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1", apiKey: "sk-x" });
+    saveProviders([provider]);
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: "gpt-4o" }] }) });
+
+    const result = await testProviderConnection(provider);
+    expect(result.ok).toBe(true);
+    expect(result.models[0].reasoningLevels).toBeUndefined();
+  });
+});
+
+// ── enrichWithOpenAiCapabilities (best-effort, aucun appel réseau réel) ──
+describe("enrichWithOpenAiCapabilities", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fsState.files = {};
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("erreur réseau pendant l'enrichissement → modèles INCHANGÉS (aucune exception)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.groq.com/openai/v1", apiKey: "k" });
+    fetchMock.mockRejectedValue(new Error("ETIMEDOUT simulé"));
+    const models: DiscoveredModel[] = [{ id: "llama-3.3-70b", name: "Llama 3.3" }];
+
+    await expect(enrichWithOpenAiCapabilities(provider, models)).resolves.toBeUndefined();
+    expect(models[0].reasoningLevels).toBeUndefined();
+  });
+
+  it("HTTP non-OK → modèles INCHANGÉS", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.x.com/v1", apiKey: "k" });
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    const models: DiscoveredModel[] = [{ id: "m", name: "M" }];
+
+    await enrichWithOpenAiCapabilities(provider, models);
+    expect(models[0].reasoningLevels).toBeUndefined();
+  });
+
+  it("entrées pré-récupérées → AUCUN second appel réseau", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey: "k" });
+    const models: DiscoveredModel[] = [{ id: "deepseek-chat", name: "DeepSeek" }];
+
+    await enrichWithOpenAiCapabilities(provider, models, [
+      { id: "deepseek-chat", effort: { supported_levels: ["low", "high"] } },
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(models[0].reasoningLevels).toEqual(["low", "high"]);
+  });
 });
 
 // ── Backfill des niveaux de réflexion (rétro-renseignement) ──
@@ -584,14 +768,25 @@ describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
     expect(persisted.reasoningDefault).toBe("low");
   });
 
-  it("provider non-Ollama → no-op (aucune lecture/écriture)", async () => {
-    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.openai.com/v1" });
+  it("provider Anthropic (aucun niveau déclaré) → no-op (aucune lecture/écriture)", async () => {
+    const provider = makeProvider({ type: "anthropic", baseUrl: "https://api.anthropic.com" });
     seedRegisteredModel();
     const changed = await backfillRegisteredModelReasoningLevels(provider, [
       { id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] },
     ]);
     expect(changed).toBe(0);
     expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
+  });
+
+  it("provider compatible OpenAI non-Ollama → backfill EXÉCUTÉ (effort.supported_levels)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com" });
+    seedRegisteredModel();
+    const changed = await backfillRegisteredModelReasoningLevels(provider, [
+      { id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "medium", "high"] },
+    ]);
+    expect(changed).toBe(1);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels)
+      .toEqual(["low", "medium", "high"]);
   });
 
   it("modèle non enregistré auprès du provider → rien à faire (0)", async () => {
@@ -664,10 +859,10 @@ describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
     expect(persisted.reasoningDefault).toBe("high");
   });
 
-  it("backfillAll… : provider non-Ollama jamais touché, même avec des niveaux en cache", async () => {
+  it("backfillAll… : provider Anthropic jamais touché, même avec des niveaux en cache", async () => {
     const provider = makeProvider({
-      type: "openai-compatible",
-      baseUrl: "https://api.openai.com/v1",
+      type: "anthropic",
+      baseUrl: "https://api.anthropic.com",
       discoveredModels: [{ id: "deepseek-v4.1-flash", name: "x", reasoningLevels: ["low", "high"] }],
     });
     saveProviders([provider]);
@@ -676,5 +871,25 @@ describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
     const filled = await backfillAllOllamaProvidersReasoningLevels();
     expect(filled).toBe(0);
     expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels).toBeUndefined();
+  });
+
+  it("backfillAll… : provider compatible OpenAI non-Ollama → niveaux cachés appliqués", async () => {
+    const provider = makeProvider({
+      type: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      discoveredModels: [{
+        id: "deepseek-v4.1-flash",
+        name: "x",
+        reasoning: true,
+        reasoningLevels: ["low", "medium", "high"],
+      }],
+    });
+    saveProviders([provider]);
+    seedRegisteredModel();
+
+    const filled = await backfillAllOllamaProvidersReasoningLevels();
+    expect(filled).toBe(1);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels)
+      .toEqual(["low", "medium", "high"]);
   });
 });
