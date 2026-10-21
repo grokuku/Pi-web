@@ -1143,7 +1143,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
             sendPiHistory(ws, pid, win.messages, "pi_prompt_needs_history", Date.now() - t0, win);
           }
         }
-        const result = await sendPrompt(message, pid, images);
+        const result = await sendPrompt(message, pid, images, msg.timeZone);
         // If it was a slash command, send the result back
         if (result && result.command) {
           ws.send(JSON.stringify({
@@ -1234,7 +1234,7 @@ async function handleWsMessage(ws: ExtendedWS, msg: any) {
       try {
         // BUG-6 : transmettre les images au steer pour ne pas les perdre
         // pendant le streaming (le SDK supporte steer(text, images?)).
-        await steerPrompt(message, pid, images);
+        await steerPrompt(message, pid, images, msg.timeZone);
       } catch (e: any) {
         ws.send(JSON.stringify({ type: "error", error: e.message }));
       }

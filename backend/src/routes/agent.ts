@@ -485,7 +485,7 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found" });
 
-    const { message, images, timeout: timeoutSecs } = req.body;
+    const { message, images, timeout: timeoutSecs, timeZone } = req.body;
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "message (string) is required" });
     }
@@ -531,7 +531,7 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
 
     let status: string;
     try {
-      await sendPrompt(message, project.id, images);
+      await sendPrompt(message, project.id, images, timeZone);
       status = "completed";
     } catch (e: any) {
       if (timedOut) {

@@ -28,7 +28,7 @@ import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
 import { applyPiWebTheme, persistThemeName, readSavedThemeName, THEME_STORAGE_KEY, type PiWebThemeId } from "./theme/pi-web-theme";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
-import { mergeServerSessionState } from "./utils/session-sync";
+import { mergeServerSessionState, clientTimeZone } from "./utils/session-sync";
 import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
 
 // ── Error boundary to prevent white/dark screen of death ──
@@ -861,7 +861,7 @@ function App() {
     if (!activeProject) return;
     // Send a special prompt prefix that the backend can interpret as a file reference
     const referencePrompt = `@file ${filePath}`;
-    send({ type: "pi_prompt", projectId: activeProject.id, message: referencePrompt, isReference: true });
+    send({ type: "pi_prompt", projectId: activeProject.id, message: referencePrompt, isReference: true, timeZone: clientTimeZone() });
     console.log(`[FileExplorer] Referenced file: ${filePath}`);
   }, [activeProject, send]);
 
@@ -1203,7 +1203,7 @@ function App() {
             send={send}
             onSendCommand={(cmd: string) => {
               if (activeProject) {
-                send({ type: "pi_prompt", projectId: activeProject.id, message: cmd });
+                send({ type: "pi_prompt", projectId: activeProject.id, message: cmd, timeZone: clientTimeZone() });
               }
             }}
             onRefreshGit={() => {

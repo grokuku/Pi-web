@@ -33,7 +33,7 @@ import { DaySeparator } from "./DaySeparator";
 import { withDaySeparators } from "../../utils/day-separator";
 import { parseChatCacheSnapshot } from "../../utils/chat-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
-import { promptMessageType } from "../../utils/session-sync";
+import { promptMessageType, clientTimeZone } from "../../utils/session-sync";
 import { buildProviderErrorRun, groupProviderFailures } from "../../utils/llm-errors";
 import { retryStateFromEvent, type RetryBannerState } from "../../utils/retry-banner";
 import { buildRetrySendArgs } from "../../utils/retry-message";
@@ -1147,7 +1147,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     // de renvoi systématique à chaque prompt). Pas de marqueur sur les steers
     // (streaming actif = état live déjà en main) ni sur les slash commands.
     const needsHistory = msgType === "pi_prompt" && !fullMessage.trim().startsWith("/") && !historyReceivedRef.current.has(projectId);
-    send({ type:msgType, projectId, message:fullMessage, images: imagesData.length > 0 ? imagesData : undefined, needsHistory: needsHistory || undefined });
+    // `timeZone` : zone IANA du navigateur → le backend formate le repère
+    // `[horodatage]` injecté au modèle dans la MÊME zone que l'heure affichée
+    // dans le fil (sans quoi le repère suivait l'UTC du conteneur).
+    send({ type:msgType, projectId, message:fullMessage, images: imagesData.length > 0 ? imagesData : undefined, needsHistory: needsHistory || undefined, timeZone: clientTimeZone() });
     // Force-scroll to bottom after sending (instant — critical for streaming)
     // Uses direct scrollTop assignment which is synchronous with DOM layout,
     // unlike smooth scrolling which conflicts with ResizeObserver.

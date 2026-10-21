@@ -46,9 +46,10 @@ import {
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import { createPromptExtension, type PiWebPromptContext } from "./system-prompt.js";
-// Contexte temporel pour le MODÈLE (date + heure locales compactes). Injecté
-// via un CustomMessage display:false → invisible pour l'utilisateur, visible
-// par le LLM (cf. date-context.ts).
+// Contexte temporel pour le MODÈLE (date + heure de l'UTILISATEUR, compactes).
+// Injecté via un CustomMessage display:false → invisible pour l'utilisateur,
+// visible par le LLM (cf. date-context.ts). La zone vient du navigateur : le
+// process backend tourne en UTC, son « heure locale » n'est pas la sienne.
 import { buildDateContextMessage, dateContextDeliveryOptions } from "./date-context.js";
 import { resolveProviderApiKey } from "./provider-auth.js";
 // LOT 2 (orchestrateur interactif) : réinjection des résultats de sous-agents.
@@ -1159,9 +1160,17 @@ async function applyMessageRouting(
 }
 
 /**
- * Injecte un repère temporel (date + heure LOCALES, format compact) dans le
- * contexte de session, JUSTE AVANT le message utilisateur : le LLM peut ainsi
- * situer chaque échange dans le temps et détecter un changement de jour.
+ * Injecte un repère temporel (date + heure LOCALES DE L'UTILISATEUR, format
+ * compact) dans le contexte de session, JUSTE AVANT le message utilisateur : le
+ * LLM peut ainsi situer chaque échange dans le temps et détecter un changement
+ * de jour.
+ *
+ * `timeZone` = zone IANA du NAVIGATEUR de l'utilisateur, transmise par le client
+ * avec le message (voir `pi_prompt`/`pi_steer`). C'est la seule source de vérité
+ * d'affichage : le contexte injecté doit montrer la même heure que le fil de
+ * discussion. Le process backend tourne en UTC : s'en servir comme « heure
+ * locale » décalait le repère (bug historique). Absent/invalide → repli sur le
+ * fuseau du process, jamais d'exception.
  *
  * Mécanisme : `sendCustomMessage` (CustomMessageEntry persistée → le repère
  * survit au rechargement, l'agent garde donc la chronologie des messages déjà
@@ -1175,11 +1184,11 @@ async function applyMessageRouting(
  *
  * Ne jette jamais : un repère temporel manquant ne doit pas casser un tour.
  */
-async function injectDateContext(session: any): Promise<void> {
+async function injectDateContext(session: any, timeZone?: string | null): Promise<void> {
   try {
     const streaming = !!session?.isStreaming;
     await session.sendCustomMessage(
-      buildDateContextMessage(new Date()),
+      buildDateContextMessage(new Date(), timeZone),
       dateContextDeliveryOptions(streaming),
     );
   } catch (e: any) {
@@ -1190,7 +1199,9 @@ async function injectDateContext(session: any): Promise<void> {
 export async function sendPrompt(
   message: string,
   projectId: string,
-  images?: { data: string; mimeType: string }[]
+  images?: { data: string; mimeType: string }[],
+  /** Zone IANA du navigateur de l'utilisateur (repère temporel injecté). */
+  timeZone?: string | null,
 ): Promise<{ command?: string; result?: string } | void> {
   // ── Attente d'une création de session en vol (anti-course pi_start/pi_prompt) ──
   const state = await getReadySession(projectId);
@@ -1438,7 +1449,7 @@ export async function sendPrompt(
       // `state.session.isStreaming` de façon synchrone). Supprimée (Phase 2).
       console.log("[prompt] Harness mode streaming — steering message (no abort, function in progress)");
       // Contexte temporel : repère déposé dans la file de steer juste avant le message.
-      await injectDateContext(state.session);
+      await injectDateContext(state.session, timeZone);
       try { await state.session.steer(message); } catch (e: any) {
         console.error("[prompt] steer() failed:", e.message);
       }
@@ -1450,7 +1461,7 @@ export async function sendPrompt(
     try { await state.session.abort(); } catch {}
     console.log("[prompt] Aborted previous stream, calling session.prompt()...");
     // Contexte temporel : la session est idle après l'abort → repère ajouté avant le prompt.
-    await injectDateContext(state.session);
+    await injectDateContext(state.session, timeZone);
     // Option A : pas de timeout global en mode code (un tour d'agent peut
     // légitimement durer > 5 min, ex. refactor multi-fichiers). L'utilisateur
     // garde le bouton ABORT pour interrompre manuellement.
@@ -1470,7 +1481,7 @@ export async function sendPrompt(
     }
     console.log("[prompt] Calling session.prompt()...");
     // Contexte temporel : session idle → repère ajouté avant le message.
-    await injectDateContext(state.session);
+    await injectDateContext(state.session, timeZone);
     // En mode harness, l'orchestrator peut déléguer à plusieurs fonctions de routage successivement.
     // Chaque fonction a son propre timeout (300s dans l'extension), mais le total peut dépasser 5 min.
     // On désactive le timeout global en harness pour ne pas tuer l'orchestrator en pleine délégation.
@@ -1499,7 +1510,9 @@ export async function sendPrompt(
 export async function steerPrompt(
   message: string,
   projectId: string,
-  images?: { data: string; mimeType: string }[]
+  images?: { data: string; mimeType: string }[],
+  /** Zone IANA du navigateur de l'utilisateur (repère temporel injecté). */
+  timeZone?: string | null,
 ): Promise<void> {
   const state = await getReadySession(projectId);
   if (!state?.session) {
@@ -1535,7 +1548,7 @@ export async function steerPrompt(
       const options: any = {};
       if (imageContent && imageContent.length > 0) options.images = imageContent;
       // Contexte temporel : session idle → repère ajouté avant le prompt complet.
-      await injectDateContext(state.session);
+      await injectDateContext(state.session, timeZone);
       await withLLMSlot(
         state.session.model?.provider,
         projectId,
@@ -1546,13 +1559,13 @@ export async function steerPrompt(
     }
     console.log("[steer] Harness mode — no abort timeout (function in progress)");
     // Contexte temporel : repère dans la file de steer juste avant le message.
-    await injectDateContext(state.session);
+    await injectDateContext(state.session, timeZone);
     await state.session.steer(message, imageContent);
     return;
   }
   // Option A : pas de timeout global en mode code (cf. sendPrompt).
   // Contexte temporel : repère dans la file de steer juste avant le message.
-  await injectDateContext(state.session);
+  await injectDateContext(state.session, timeZone);
   await state.session.steer(message, imageContent);
 }
 
