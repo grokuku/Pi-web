@@ -13,43 +13,46 @@ if [ -f "/app/VERSION" ]; then
   node -e "const v='${PI_WEB_VERSION}';['/app/backend/package.json','/app/frontend/package.json'].forEach(f=>{try{const p=JSON.parse(require('fs').readFileSync(f,'utf8'));p.version=v;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n');}catch(e){}})"
 fi
 
-# ─── Backend ──────────────────────────────────
+# ─── Dépendances & compilation : PRÉ-INSTALLÉES DANS L'IMAGE ──────────
+#
+# L'image est AUTOPORTANTE (Dockerfile multi-étages : deps → build →
+# runtime). `node_modules` et `dist` sont déjà présents et compilés.
+# Plus AUCUN `npm install` ni `npm run build` ici :
+#  - le démarrage ne dépend plus du réseau ni du registre npm ;
+#  - le code exécuté est exactement celui qui a passé la CI ;
+#  - `docker compose up` ne recompile plus à chaque redémarrage.
+#
+# Ce bloc ne fait donc que VÉRIFIER l'intégrité de l'image (échec explicite
+# plutôt qu'un plantage obscur plus tard) et journaliser la version du SDK.
 cd /app/backend
 
-if [ ! -f "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
-  echo "[PI-WEB] Installing backend dependencies..."
-  npm install --prefer-offline --no-audit --no-fund
-  touch node_modules/.package-lock.json
-else
-  echo "[PI-WEB] Backend dependencies up to date"
+if [ ! -d "node_modules" ]; then
+  echo "[PI-WEB] ERROR: /app/backend/node_modules absent — image non autoportante (Dockerfile multi-étages attendu)" >&2
+  exit 1
 fi
-
-# Version PINNÉE — monter de version uniquement manuellement : vérifier le changelog
-# et les breaking changes d'abord (les nouveaux tools apparaissent sans garde-fou OS,
-# ex: powershell en 0.84)
-echo "[PI-WEB] Checking for pi-coding-agent updates..."
-npm install @earendil-works/pi-coding-agent@0.87.1 --no-audit --no-fund --save 2>&1 | tail -3 || true
-
-# Read installed version for display
-PI_SDK_VERSION=$(node -p "try{require('@earendil-works/pi-coding-agent/package.json').version}catch(e){'unknown'}" 2>/dev/null)
-echo "[PI-WEB] pi-coding-agent version: ${PI_SDK_VERSION}"
-
-echo "[PI-WEB] Building backend..."
-npm run build
-
-# ─── Frontend ─────────────────────────────────
-cd /app/frontend
-
-if [ ! -f "node_modules/.package-lock.json" ] || [ package.json -nt node_modules/.package-lock.json ]; then
-  echo "[PI-WEB] Installing frontend dependencies..."
-  npm install --prefer-offline --no-audit --no-fund
-  touch node_modules/.package-lock.json
-else
-  echo "[PI-WEB] Frontend dependencies up to date"
+if [ ! -f "dist/index.js" ]; then
+  echo "[PI-WEB] ERROR: /app/backend/dist/index.js absent — le build backend n'a pas été embarqué dans l'image" >&2
+  exit 1
 fi
+if [ ! -f "/app/frontend/dist/index.html" ]; then
+  echo "[PI-WEB] WARNING: /app/frontend/dist/index.html absent — l'interface ne sera pas servie sur /" >&2
+fi
+echo "[PI-WEB] Image autoportante : node_modules + dist présents (aucune installation au démarrage)"
 
-echo "[PI-WEB] Building frontend..."
-npm run build
+# Version PINNÉE du SDK — monter de version uniquement manuellement : vérifier
+# le changelog et les breaking changes d'abord (les nouveaux tools apparaissent
+# sans garde-fou OS, ex: powershell en 0.84).
+# On n'INSTALLE plus le SDK ici : il est figé par backend/package.json (0.87.1)
+# et installé au build. On VÉRIFIE seulement qu'il est bien conforme, et on
+# TRACE l'écart au lieu de l'avaler silencieusement (ancien `|| true`).
+PI_SDK_PINNED=$(node -p "try{require('/app/backend/package.json').dependencies['@earendil-works/pi-coding-agent']}catch(e){'unknown'}" 2>/dev/null || echo "unknown")
+# Tolère une plage simple (`^x.y.z` / `~x.y.z`) : on ne compare que le triplet.
+PI_SDK_PINNED_EXACT="${PI_SDK_PINNED#[\^\~]}"
+PI_SDK_VERSION=$(node -p "try{require('@earendil-works/pi-coding-agent/package.json').version}catch(e){'unknown'}" 2>/dev/null || echo "unknown")
+echo "[PI-WEB] pi-coding-agent version: ${PI_SDK_VERSION} (épinglée : ${PI_SDK_PINNED})"
+if [ "${PI_SDK_VERSION}" != "${PI_SDK_PINNED_EXACT}" ]; then
+  echo "[PI-WEB] WARNING: pi-coding-agent ${PI_SDK_VERSION} != ${PI_SDK_PINNED_EXACT} — image incohérente avec le pin de backend/package.json" >&2
+fi
 
 # ─── Extensions Pi : check & install ROBUSTE (recalcul inconditionnel) ───
 #

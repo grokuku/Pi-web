@@ -1,0 +1,293 @@
+# ══════════════════════════════════════════════════════════════════════
+# Release image — Pi-Web
+#
+# Rôle : publier une version (déclenchement MANUEL uniquement), puis
+# incrémenter le patch de `VERSION` et commiter sous `github-actions[bot]`.
+#
+# Doctrine maison (identique à Yuki/Switchy/Libry) :
+#   • produit `<version>` + `latest` + `sha-<court>` ;
+#   • `version.txt`/`VERSION` à la racine = source unique de vérité ;
+#   • le workflow LIT `VERSION`, REFUSE tout ce qui n'est pas strictement
+#     `MAJOR.MINOR.PATCH`, PUBLIE d'abord, PUIS incrémente le patch ;
+#   • AUCUN tag Git ;
+#   • anti-boucle : déclencheur manuel uniquement + `concurrency` non annulable ;
+#   • aucun secret : `GITHUB_TOKEN` suffit ;
+#   • aucun `${{ }}` interpolé dans un script shell (tout via `env:`),
+#     `set -euo pipefail`, `::error::` explicites.
+# ══════════════════════════════════════════════════════════════════════
+name: Release image
+
+on:
+  workflow_dispatch:
+
+# cancel-in-progress: false — une release ne doit JAMAIS être interrompue en
+# cours de publication (image poussée mais version non incrémentée = dérive).
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  NODE_VERSION: "22"
+  BASE_IMAGE: public.ecr.aws/docker/library/node:22-slim
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # QUALITÉ — workflow autonome (pas de `workflow_call` : la release doit
+  # rester déclenchable et lisible seule). `cache-dependency-path` explicite
+  # car Pi-Web n'a pas de package.json racine.
+  # ────────────────────────────────────────────────────────────────────
+  quality:
+    name: quality (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [backend, frontend]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Typecheck extensions
+        if: matrix.package == 'backend'
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run typecheck:extensions
+
+      - name: Tests
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm test
+
+      - name: Build
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm run build
+
+  # ────────────────────────────────────────────────────────────────────
+  # PUBLISH — lit VERSION, construit et pousse l'image, puis bumpe.
+  # ────────────────────────────────────────────────────────────────────
+  publish:
+    name: publish (build + push + bump)
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Historique complet + credentials persistés pour le push du bot.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Compute image name
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE_NAME=ghcr.io/${REPO,,}" >> "$GITHUB_ENV"
+          echo "RELEASE_IMAGE_LOCAL=ghcr.io/${REPO,,}:release-local" >> "$GITHUB_ENV"
+
+      # Source unique de vérité : le fichier VERSION à la racine.
+      # Tout suffixe pré-release (-beta, -rc, …) est REFUSÉ : les tags Docker
+      # `:<version>` et la comparaison de version du backend supposent un
+      # triplet strictement numérique.
+      - name: Read and validate VERSION
+        run: |
+          set -euo pipefail
+          if [ ! -f VERSION ]; then
+            echo "::error::Fichier VERSION absent à la racine du dépôt"
+            exit 1
+          fi
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$version"; then
+            echo "::error::VERSION « ${version} » invalide — format attendu MAJOR.MINOR.PATCH sans suffixe"
+            exit 1
+          fi
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "::notice::Version à publier : ${version}"
+
+      - name: Pre-pull base image
+        env:
+          IMG: ${{ env.BASE_IMAGE }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Tentative ${attempt}/3 : docker pull ${IMG}"
+            if docker pull "${IMG}"; then
+              echo "::notice::Image de base disponible : ${IMG}"
+              exit 0
+            fi
+            echo "::warning::Pull de ${IMG} échoué (tentative ${attempt}/3)"
+            sleep $((attempt * 20))
+          done
+          echo "::error::Impossible de télécharger ${IMG} après 3 tentatives (rate limit public.ecr.aws ?)"
+          exit 1
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ⚠ `latest` DOIT être publiée (l'utilisateur ne s'en sert pas, mais elle
+      # doit exister). `load: true` : on garde l'image locale pour un smoke
+      # test AVANT tout push — on ne publie que ce qui démarre.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.RELEASE_IMAGE_LOCAL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (GET /api/health + GET /)
+        env:
+          CONTAINER: pi-web-release-smoke
+          HOST_PORT: "18081"
+        run: |
+          set -euo pipefail
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          docker run -d \
+            --name "$CONTAINER" \
+            -p "127.0.0.1:${HOST_PORT}:3000" \
+            -e ALLOWED_ORIGINS='*' \
+            -e WS_ALLOWED_ORIGINS='*' \
+            -e PI_CACHE_RETENTION=long \
+            "$RELEASE_IMAGE_LOCAL"
+
+          deadline=$(( $(date +%s) + 1500 ))
+          ok=0
+          health=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if health=$(curl -fsS --max-time 5 "http://127.0.0.1:${HOST_PORT}/api/health" 2>/dev/null); then
+              if printf '%s' "$health" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+            fi
+            running=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo "false")
+            if [ "$running" != "true" ]; then
+              echo "::error::Le conteneur s'est arrêté avant d'être sain"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::GET /api/health n'a pas répondu {\"status\":\"ok\"} dans le budget de 25 min"
+            exit 1
+          fi
+
+          index=$(curl -fsS --max-time 10 "http://127.0.0.1:${HOST_PORT}/")
+          if ! grep -q '<div id="root">' <<< "$index"; then
+            echo "::error::GET / ne renvoie pas l'index du frontend"
+            exit 1
+          fi
+          echo "::notice::Smoke test OK (health=${health})"
+
+      - name: Container logs
+        if: always()
+        env:
+          CONTAINER: pi-web-release-smoke
+        run: |
+          set -uo pipefail
+          if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+            docker logs --tail 300 "$CONTAINER" 2>&1 || true
+          else
+            echo "(aucun conteneur $CONTAINER)"
+          fi
+
+      - name: Summary (logs du conteneur si échec)
+        if: failure()
+        env:
+          CONTAINER: pi-web-release-smoke
+        run: |
+          set -uo pipefail
+          {
+            echo "### Échec du smoke test — logs du conteneur"
+            echo '```'
+            docker logs --tail 400 "$CONTAINER" 2>&1 || echo "(aucun log disponible)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup container
+        if: always()
+        env:
+          CONTAINER: pi-web-release-smoke
+        run: |
+          set -uo pipefail
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+
+      # Publication : `<version>` + `latest` + `sha-<court>`.
+      - name: Push :<version> + :latest + :sha-<court>
+        env:
+          VERSION: ${{ env.RELEASE_VERSION }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short="${SHA:0:7}"
+          docker tag "$RELEASE_IMAGE_LOCAL" "${IMAGE_NAME}:${VERSION}"
+          docker tag "$RELEASE_IMAGE_LOCAL" "${IMAGE_NAME}:latest"
+          docker tag "$RELEASE_IMAGE_LOCAL" "${IMAGE_NAME}:sha-${short}"
+          docker push "${IMAGE_NAME}:${VERSION}"
+          docker push "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:sha-${short}"
+          {
+            echo "### Image publiée"
+            echo ""
+            echo "| tag | référence |"
+            echo "| --- | --- |"
+            echo "| \`:${VERSION}\` | \`${IMAGE_NAME}:${VERSION}\` |"
+            echo "| \`:latest\` | \`${IMAGE_NAME}:latest\` |"
+            echo "| \`:sha-${short}\` | \`${IMAGE_NAME}:sha-${short}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ⚠ APRÈS la publication seulement : on n'incrémente que ce qui est
+      # réellement sorti. Aucun tag Git (doctrine maison). La version publiée
+      # reste celle du fichier au moment du build (la variable d'env est
+      # figée, pas relue du disque).
+      - name: Bump patch version and push
+        env:
+          VERSION: ${{ env.RELEASE_VERSION }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          IFS='.' read -r major minor patch <<< "$VERSION"
+          next="${major}.${minor}.$((10#$patch + 1))"
+          printf '%s\n' "$next" > VERSION
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION
+          git commit -m "chore: bump version to ${next}"
+          git push origin "HEAD:${REF_NAME}"
+          echo "::notice::VERSION → ${next} (commit chore: bump version to ${next})"
+          {
+            echo "### Version suivante"
+            echo ""
+            echo "\`${VERSION}\` → \`${next}\` (commit \`chore: bump version to ${next}\`)"
+          } >> "$GITHUB_STEP_SUMMARY"

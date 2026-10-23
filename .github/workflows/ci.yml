@@ -1,0 +1,265 @@
+# ══════════════════════════════════════════════════════════════════════
+# CI image (validate & publish :test) — Pi-Web
+#
+# Rôle : valider la qualité (backend + frontend) puis construire l'image
+# Docker UNE SEULE FOIS, la tester (smoke test réseau réel) et publier —
+# uniquement hors pull_request — les tags `:test` et `:sha-<court>`.
+#
+# Doctrine maison (identique à Yuki/Switchy/Libry) :
+#   • on ne publie JAMAIS sur `pull_request` ;
+#   • `:latest` et `:<version>` ne sont JAMAIS produits ici (release only) ;
+#   • image nommée `ghcr.io/<github.repository>` EN MINUSCULES, jamais en dur ;
+#   • `linux/amd64` seule ; cache `type=gha, mode=max` ;
+#   • aucun secret : `GITHUB_TOKEN` suffit ;
+#   • aucun `${{ }}` interpolé dans un script shell (tout passe par `env:`),
+#     `set -euo pipefail`, `::error::` explicites.
+# ══════════════════════════════════════════════════════════════════════
+name: CI image (validate & publish :test)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Un push qui enchaîne plusieurs commits annule le run précédent : les tags
+# `:test` / `:sha-<court>` du run annulé ne sont simplement jamais publiés.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  # Miroir public officiel (contournement du quota de pulls anonymes Docker Hub).
+  BASE_IMAGE: public.ecr.aws/docker/library/node:22-slim
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # QUALITÉ — un job par paquet. Pi-Web n'a PAS de package.json racine :
+  # sans `cache-dependency-path` explicite, setup-node ne trouve aucun
+  # lockfile et le cache npm est silencieusement inopérant.
+  # ────────────────────────────────────────────────────────────────────
+  quality:
+    name: quality (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [backend, frontend]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      # `tsc -p tsconfig.extensions.json` : contrôle de types des extensions
+      # maison (extensions/*/index.ts), qui ne sont pas dans le build backend.
+      - name: Typecheck extensions
+        if: matrix.package == 'backend'
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run typecheck:extensions
+
+      - name: Tests
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm test
+
+      # backend : `tsc` (+ copie de git-askpass.sh)
+      # frontend : `tsc -b && vite build` → le contrôle de types est inclus.
+      - name: Build
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          npm run build
+
+  # ────────────────────────────────────────────────────────────────────
+  # IMAGE — pré-pull de la base (3 tentatives), UN SEUL build, smoke test,
+  # puis publication `:test` + `:sha-<court>` (jamais sur PR).
+  # ────────────────────────────────────────────────────────────────────
+  image:
+    name: image (build + smoke test + :test)
+    runs-on: ubuntu-latest
+    needs: [quality]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Le registre GHCR exige un nom de dépôt en minuscules : `grokuku/Pi-web`
+      # → `ghcr.io/grokuku/pi-web`. Jamais écrit en dur.
+      - name: Compute image name
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE_NAME=ghcr.io/${REPO,,}" >> "$GITHUB_ENV"
+          echo "CI_IMAGE_LOCAL=ghcr.io/${REPO,,}:ci-smoke" >> "$GITHUB_ENV"
+
+      # public.ecr.aws renvoie parfois HTTP 429 : trois tentatives, backoff
+      # croissant. Sans ce pré-pull, c'est le build lui-même qui échoue avec
+      # un message moins lisible.
+      - name: Pre-pull base image
+        env:
+          IMG: ${{ env.BASE_IMAGE }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Tentative ${attempt}/3 : docker pull ${IMG}"
+            if docker pull "${IMG}"; then
+              echo "::notice::Image de base disponible : ${IMG}"
+              exit 0
+            fi
+            echo "::warning::Pull de ${IMG} échoué (tentative ${attempt}/3)"
+            sleep $((attempt * 20))
+          done
+          echo "::error::Impossible de télécharger ${IMG} après 3 tentatives (rate limit public.ecr.aws ?)"
+          exit 1
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `load: true` : l'image reste dans le daemon du runner pour le smoke
+      # test. Un seul build — le push se fait ensuite par re-tag, pas par un
+      # second build.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.CI_IMAGE_LOCAL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Budget large (25 min) : l'entrypoint prépare des choses au premier
+      # démarrage (settings Pi, binaire codebase-memory-mcp ~286 Mo téléchargé
+      # dans le volume /app/.data/bin).
+      - name: Smoke test (GET /api/health + GET /)
+        env:
+          CONTAINER: pi-web-smoke
+          HOST_PORT: "18080"
+        run: |
+          set -euo pipefail
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          docker run -d \
+            --name "$CONTAINER" \
+            -p "127.0.0.1:${HOST_PORT}:3000" \
+            -e ALLOWED_ORIGINS='*' \
+            -e WS_ALLOWED_ORIGINS='*' \
+            -e PI_CACHE_RETENTION=long \
+            "$CI_IMAGE_LOCAL"
+
+          deadline=$(( $(date +%s) + 1500 ))
+          ok=0
+          health=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if health=$(curl -fsS --max-time 5 "http://127.0.0.1:${HOST_PORT}/api/health" 2>/dev/null); then
+              if printf '%s' "$health" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+            fi
+            running=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo "false")
+            if [ "$running" != "true" ]; then
+              echo "::error::Le conteneur s'est arrêté avant d'être sain"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::GET /api/health n'a pas répondu {\"status\":\"ok\"} dans le budget de 25 min"
+            exit 1
+          fi
+          echo "::notice::/api/health → ${health}"
+
+          index=$(curl -fsS --max-time 10 "http://127.0.0.1:${HOST_PORT}/")
+          if ! grep -q '<div id="root">' <<< "$index"; then
+            echo "::error::GET / ne renvoie pas l'index du frontend (frontend/dist non servi ?)"
+            exit 1
+          fi
+          echo "::notice::GET / sert bien l'index du frontend"
+
+      - name: Container logs
+        if: always()
+        env:
+          CONTAINER: pi-web-smoke
+        run: |
+          set -uo pipefail
+          if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+            docker logs --tail 300 "$CONTAINER" 2>&1 || true
+          else
+            echo "(aucun conteneur $CONTAINER)"
+          fi
+
+      - name: Summary (logs du conteneur si échec)
+        if: failure()
+        env:
+          CONTAINER: pi-web-smoke
+        run: |
+          set -uo pipefail
+          {
+            echo "### Échec du smoke test — logs du conteneur"
+            echo '```'
+            docker logs --tail 400 "$CONTAINER" 2>&1 || echo "(aucun log disponible)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup container
+        if: always()
+        env:
+          CONTAINER: pi-web-smoke
+        run: |
+          set -uo pipefail
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+
+      # ⚠ Jamais de publication sur pull_request.
+      # ⚠ Jamais `:latest` ni `:<version>` ici (réservés au workflow Release).
+      - name: Publish :test + :sha-<court>
+        if: github.event_name != 'pull_request'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short="${SHA:0:7}"
+          docker tag "$CI_IMAGE_LOCAL" "${IMAGE_NAME}:test"
+          docker tag "$CI_IMAGE_LOCAL" "${IMAGE_NAME}:sha-${short}"
+          docker push "${IMAGE_NAME}:test"
+          docker push "${IMAGE_NAME}:sha-${short}"
+          {
+            echo "### Image publiée"
+            echo ""
+            echo "| tag | référence |"
+            echo "| --- | --- |"
+            echo "| \`:test\` | \`${IMAGE_NAME}:test\` |"
+            echo "| \`:sha-${short}\` | \`${IMAGE_NAME}:sha-${short}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

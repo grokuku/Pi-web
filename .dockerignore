@@ -5,12 +5,14 @@
 # de cette liste) :
 #   COPY VERSION
 #   COPY backend/       → package.json, package-lock.json, tsconfig.json,
+#                         tsconfig.extensions.json (typecheck:extensions),
 #                         src/ (incl. src/projects/git-askpass.sh copié par
 #                         "npm run build"), vitest.config.ts
 #   COPY frontend/      → package.json, package-lock.json, tsconfig.json,
 #                         index.html, vite.config.ts, tailwind.config.js,
 #                         postcss.config.js, src/, vitest.config.ts
 #   COPY extensions/    → */index.ts, */package.json (+ lock éventuel)
+#   COPY skills/        → SKILL.md + annexes (semées au boot)
 #   COPY entrypoint.sh
 #
 # ⚠ PIÈGE DE SYNTAXE : un pattern sans "**" ne matche que la RACINE du
@@ -19,22 +21,23 @@
 # backend/node_modules (411 Mo) + frontend/node_modules (149 Mo), d'où un
 # contexte de build de 3.127 Go. D'où les "**/" systématiques ci-dessous.
 #
-# Le build tsc/vite a lieu DANS entrypoint.sh (npm install + npm run build
-# au démarrage du conteneur) : seuls les SOURCES et les manifests npm sont
-# nécessaires dans le contexte.
+# Depuis le Dockerfile MULTI-ÉTAGES, l'installation et la compilation ont
+# lieu PENDANT le build (étages deps/build) : seuls les SOURCES et les
+# manifests npm sont nécessaires dans le contexte.
 # ══════════════════════════════════════════════════════════════════════
 
 # ─── Dépendances installées ────────────────────────────────────────────
-# Régénérées par entrypoint.sh (npm install backend + frontend au boot).
-# backend/node_modules ≈ 411 Mo, frontend/node_modules ≈ 149 Mo,
+# Installées PENDANT le build par les étages deps/build du Dockerfile
+# (**/node_modules/ ≈ 570 Mo au total) puis copiées dans l'étage runtime.
 # extensions/compaction-checkpoint/node_modules ≈ 9 Mo (better-sqlite3,
 # non requis : index.ts n'importe que des modules Node natifs + un import
 # type-only éliminé au runtime).
 **/node_modules/
 
 # ─── Artefacts de build ────────────────────────────────────────────────
-# backend/dist (≈ 2,1 Mo) et frontend/dist (≈ 3,2 Mo) régénérés par
-# "npm run build" de l'entrypoint ; caches incrémentaux tsc -b.
+# backend/dist (≈ 2,1 Mo) et frontend/dist (≈ 3,2 Mo) sont reconstruits par
+# les étages deps/build du Dockerfile (jamais réutilisés depuis l'hôte, pour
+# que l'image soit TOUJOURS le produit exact des sources livrées).
 **/dist/
 **/build/
 **/*.tsbuildinfo
@@ -88,6 +91,10 @@ docs/
 LICENSE
 docker-compose.yml
 .dockerignore
+
+# ─── CI ────────────────────────────────────────────────────────────────
+# Les workflows ne sont jamais copiés dans l'image.
+.github/
 
 # ─── Tests : GARDÉS volontairement (ne pas exclure) ────────────────────
 # backend/tsconfig.json a "include": ["src/**/*"] : les *.test.ts vivent
