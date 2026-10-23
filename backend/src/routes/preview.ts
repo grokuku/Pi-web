@@ -27,7 +27,8 @@
  * (même origine apparente), le sandbox assurant l'isolation réelle.
  */
 
-import { Router, type Request, type Response } from "express";
+import { Router, type Request as ExpressRequest, type Response } from "express";
+import type { Request } from "../utils/http-types.js";
 import { randomBytes } from "crypto";
 import { existsSync, statSync } from "fs";
 import path from "path";
@@ -137,9 +138,15 @@ export function resolveProjectFile(projectId: string, relPath: string): ResolveR
 const router = Router();
 
 // GET /api/preview/:projectId/*path → sert un fichier du projet.
-router.get("/preview/:projectId/*", (req: Request, res: Response) => {
-  const { projectId } = req.params;
-  const relPath = req.params[0] || "";
+// Express 5 (path-to-regexp v8) REFUSE le joker anonyme `/*` : il faut un joker
+// NOMMÉ, et les accolades le rendent optionnel (l'ancien `*` d'express 4
+// tolérait un chemin vide). `req.params.path` est alors un TABLEAU de segments.
+router.get("/preview/:projectId{/*path}", (req: ExpressRequest, res: Response) => {
+  const { projectId, path: segments } = req.params as {
+    projectId: string;
+    path?: string | string[];
+  };
+  const relPath = Array.isArray(segments) ? segments.join("/") : segments || "";
   const result = resolveProjectFile(projectId, relPath);
 
   if (!result.ok) {

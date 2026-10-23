@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Response } from "express";
+import type { Request } from "../utils/http-types.js";
 import { execSync } from "child_process";
 import { readdirSync, statSync, existsSync, readFileSync } from "fs";
 import path from "path";

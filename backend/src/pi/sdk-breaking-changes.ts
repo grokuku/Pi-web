@@ -27,7 +27,10 @@ export interface SdkBreakingChange {
 
 /**
  * Ruptures / changements notables connus, TRIÉS par version croissante.
- * Source : retour d'expérience réel des bascules 0.85.1 → 0.87.1.
+ * Sources : retour d'expérience réel des bascules 0.85.1 → 0.87.1, puis le
+ * CHANGELOG publié du paquet pour 0.88 → 1.4.0 (releases 1.0.0, 1.0.1, 1.0.3,
+ * 1.2.0, 1.3.0, 1.4.0 relues à la main — cf. `npm pack
+ * @earendil-works/pi-coding-agent@1.4.0` → `CHANGELOG.md`).
  * Toute nouvelle rupture doit être ajoutée ici lors d'une montée de version.
  */
 export const SDK_BREAKING_CHANGES: readonly SdkBreakingChange[] = [
@@ -66,6 +69,62 @@ export const SDK_BREAKING_CHANGES: readonly SdkBreakingChange[] = [
     summary: "0.87.1 — correctifs providers (dont z.ai « Prompt too long »)",
     details: [
       "Correctifs providers (dont z.ai « Prompt too long ») — aucune rupture d'API connue.",
+    ],
+  },
+  {
+    version: "1.0.0",
+    summary: "1.0.0 — PREMIÈRE MAJEURE : TUI plein écran par défaut, stack experimentale retirée",
+    details: [
+      "Le TUI passe en plein écran par défaut (`tuiMode: \"regular\"` pour revenir au scrollback) — sans effet sur Pi-Web, qui n'utilise pas la TUI.",
+      "Codemode allégé (~40 % de tokens de prompt en moins) et nouveaux `models.classify()` / `models.generateImages()`.",
+      "La stack expérimentale serveur/client/plugin (`./client`, `./experimental/plugin`) et les paquets `pi-client` / `pi-protocol` / `pi-server` sont RETIRÉS ; la dépendance `@earendil-works/chord` aussi.",
+      "Le provider Azure est encore nommé `azure-openai-responses` à ce stade (renommé en 1.0.3).",
+    ],
+  },
+  {
+    version: "1.0.1",
+    summary: "1.0.1 — `npm-shrinkwrap.json` retiré du paquet publié",
+    details: [
+      "Les dépendances TRANSITIVES du SDK ne sont plus épinglées par le paquet : c'est à l'hôte de verrouiller (Pi-Web s'appuie sur son `backend/package-lock.json`).",
+      "Conséquence : après une install, relire `npm ls` / l'audit — deux installs du même pin peuvent résoudre des transitives différentes si le lock change.",
+    ],
+  },
+  {
+    version: "1.0.3",
+    summary: "1.0.3 — le provider Azure est renommé `azure-openai-responses` → `azure`",
+    details: [
+      "Renommer la clé du provider dans `auth.json` (ou refaire `/login`), `models.json`, et `settings.json` (`defaultProvider`, motifs `enabledModels`, clés `modelThinkingLevels`).",
+      "Les variables d'environnement `AZURE_OPENAI_*` sont inchangées.",
+      "Sans renommage : la session retombe sur un autre modèle et son cache de prompt n'est pas réutilisé.",
+    ],
+  },
+  {
+    version: "1.2.0",
+    summary: "1.2.0 — `before_agent_start` devient une UNION sur `messageType` (RUPTURE pour les extensions)",
+    details: [
+      "`BeforeAgentStartEvent` est une union : les événements `user` portent `prompt` + `images`, les événements `custom` portent `message` et PAS `prompt`. Un handler qui ne veut agir que sur un prompt utilisateur doit tester `event.messageType === \"user\"` (Pi-Web utilise `before_agent_start` et lit `event.systemPromptOptions` / `event.systemPrompt`, communs aux deux variantes).",
+      "`before_agent_start` se déclenche AUSSI pour les runs lancés par `pi.sendMessage(..., { triggerTurn: true })`.",
+      "La session est considérée OCCUPÉE pendant le démarrage d'un run : `ctx.isIdle()` vaut false, `pi.sendMessage()` met en file au lieu de démarrer un 2e run, `pi.sendUserMessage()` exige alors `deliverAs`.",
+      "Thèmes : schéma publié sur https://pi.dev/schemas/theme.schema.json, validé aussi au démarrage (références `$schema`, couleurs réutilisables sous `vars`, métadonnées non supportées à retirer).",
+      "`serializeConversation()` (compaction, résumés de branche) OMET désormais les blocs de réflexion.",
+      "`pi mcp list --json` renvoie `resources: true` au lieu de compteurs.",
+    ],
+  },
+  {
+    version: "1.3.0",
+    summary: "1.3.0 — changement de modèle : les blocs de réflexion de l'ancien modèle sont retirés",
+    details: [
+      "Le provider `kimi-coding` passe par OpenAI Chat Completions sur `https://api.kimi.com/coding/v1` : une surcharge de `baseUrl` dans `models.json` doit inclure `/v1`.",
+      "Au changement de modèle, les blocs de réflexion des messages assistants produits par un AUTRE modèle sont supprimés (au lieu d'être envoyés en texte brut).",
+    ],
+  },
+  {
+    version: "1.4.0",
+    summary: "1.4.0 — `generateSummary()` ignore `reserveTokens` ; attribution des en-têtes provider",
+    details: [
+      "`generateSummary()` / `generateSummaryWithUsage()` IGNORENT leur paramètre `reserveTokens` : les résumés utilisent la limite de sortie du modèle (le réglage `compaction.reserveTokens` reste accepté mais n'a plus d'effet sur ces appels).",
+      "Les handlers `before_provider_headers` ne voient plus les en-têtes d'attribution OpenRouter / NVIDIA NIM / OpenCode (retourner `null` les retire toujours).",
+      "Support du terminal Rex (OSC 8, truecolor, images inline) — sans effet sur une intégration sans TUI.",
     ],
   },
 ];

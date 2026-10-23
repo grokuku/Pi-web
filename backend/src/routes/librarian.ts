@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Response } from "express";
+import type { Request } from "../utils/http-types.js";
 import { getDocContent, listLibrary, getLibraryStatus, searchAndArchive, archiveDoc, sanitizeDocPathComponent, type DocEntry, type DocContent } from "../pi/librarian-service.js";
 import { librarianAuth, librarianAdminOnly, loadKeys, createKey, revokeKey, keyIdOf, maskSecret } from "../pi/librarian-auth.js";
 import { getAllProjects } from "../projects/manager.js";

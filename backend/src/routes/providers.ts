@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Response } from "express";
+import type { Request } from "../utils/http-types.js";
 import {
   loadProviders,
   addProvider,

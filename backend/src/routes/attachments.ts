@@ -9,7 +9,8 @@
  * content from files (PDF text, image descriptions, etc.)
  */
 
-import { Router, type Request, type Response } from "express";
+import { Router, type Response } from "express";
+import type { Request } from "../utils/http-types.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, createReadStream, unlinkSync, copyFileSync, rmSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";

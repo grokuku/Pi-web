@@ -158,6 +158,19 @@ app.use("/api/shared-memory", sharedMemLimiter);
 
 app.use(express.json({ limit: "50mb" }));
 
+// ── Compat Express 4 → 5 : `req.body` vaut `{}` et non `undefined` ──
+// En Express 5 (body-parser 2), une requête SANS corps — ou sans Content-Type
+// JSON — laisse `req.body` à `undefined` ; en Express 4 il valait `{}`. Les
+// routes de Pi-Web déstructurent `req.body` (`const { name } = req.body`,
+// `req.body.apiKey`, …) : sans ce filet, une requête sans corps lèverait un
+// `TypeError` → 500, là où l'on attendait le 400 de validation. On restaure donc
+// la sémantique « body toujours un objet ». Les routes multipart restent
+// correctes : multer réécrit `req.body` avec les champs du formulaire.
+app.use((req, _res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
+
 // ── Serve frontend static files FIRST (before CBM proxy) ──
 // This ensures Pi-web's own JS/CSS assets are served correctly.
 // Without this, the CBM proxy on /assets intercepts them and returns
@@ -493,8 +506,13 @@ app.get("/api/sessions/:projectId/tools", (req, res) => {
 
 // ── SPA fallback: serve index.html for all unmatched routes ──
 // (frontend static assets are already served above, before the CBM proxy)
+//
+// ⚠️ Express 5 (path-to-regexp v8) refuse le joker anonyme `*` : il faut un
+// joker NOMMÉ (`/{*splat}`) — les accolades le rendent optionnel, donc `/` est
+// toujours servi comme avant (express 4 : `app.get("*")`). Route réservée au
+// GET, comme auparavant.
 if (existsSync(frontendDist)) {
-  app.get("*", (req, res) => {
+  app.get("/{*splat}", (req, res) => {
     // Les routes /api non matchées doivent renvoyer du JSON (404) et NON
     // index.html : sinon un fetch frontend qui attend du JSON recevrait du
     // HTML et planterait sur le parse ("JSON.parse: unexpected character") —

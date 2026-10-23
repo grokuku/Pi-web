@@ -167,6 +167,20 @@ describe("preview — CSP sandbox (SEC-05)", () => {
     });
   });
 
+  // Express 5 (path-to-regexp v8) refuse le joker anonyme : la route est
+  // devenue `/preview/:projectId{/*path}` et `req.params.path` est un TABLEAU.
+  // Ce test verrouille la jointure des segments (chemin imbriqué).
+  it("sert un fichier situé dans un sous-dossier (joker nommé express 5)", async () => {
+    fs.mkdirSync(path.join(PROJ, "assets", "css"), { recursive: true });
+    fs.writeFileSync(path.join(PROJ, "assets", "css", "app.css"), "body{color:red}");
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/preview/projA/assets/css/app.css`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("text/css");
+      expect(await res.text()).toBe("body{color:red}");
+    });
+  });
+
   it("pose le même CSP sur les mockups inline (chemin nouvel onglet inclus)", async () => {
     const id = storeInlineHtml("<script>document.title='x'</script>");
     await withServer(async (base) => {
