@@ -99,8 +99,8 @@ mkdir -p "$NPM_GLOBAL_ROOT" "$PI_AGENT_DIR"
 # memory :
 #  - tools à nom NU (search_code, search_graph...) au lieu des cbm_* officiels ;
 #  - spawn EN DUR de /root/.local/bin/codebase-memory-mcp — chemin NULLE PART
-#    chez nous (le binaire vit dans le volume persistant /app/.data/bin,
-#    exporté via CBM_BIN_PATH) → « spawn ENOENT » à chaque appel.
+#    chez nous (le binaire est livré par l'image dans /opt/cbm/bin, exporté via
+#    CBM_BIN_PATH) → « spawn ENOENT » à chaque appel.
 # Le SDK charge AUTOMATIQUEMENT tout *.ts de ~/.pi/agent/extensions/ (scan du
 # dossier global extensions/, cf. discoverExtensionsInDir du loader) et
 # l'ancien garde extensionsOverride a disparu avec le loader custom : la seule
@@ -212,44 +212,29 @@ node -e "
     console.error('[PI-WEB] settings.json write skipped:', e.message);
   }
 "
-# ── codebase-memory-mcp : binaire PERSISTANT sur le volume /app/.data ──
+# ── codebase-memory-mcp : binaire EMBARQUÉ DANS L'IMAGE (version épinglée) ──
 #
-# Deux régressions corrigées ici :
-#  1. `--ui` n'existe PLUS dans l'installeur upstream (vérifié : « install.sh:
-#     unknown option '--ui' ») — l'ancienne commande échouait donc TOUJOURS.
-#     L'erreur était avalée par `2>&1 | tail -3 || true`, d'où un CBM jamais
-#     installé sur un Pi-Web neuf (le binaire « --ui » est désormais inclus
-#     dans l'archive portable : aucun flag d'installeur n'est nécessaire).
-#  2. $HOME/.local/bin n'est PAS un volume : le binaire (~286 Mo) était perdu à
-#     chaque rebuild. On l'installe dans /app/.data/bin (volume pi-appdata) et
-#     on exporte CBM_BIN_PATH, lu par le backend (routes/cbm.ts) et par
-#     l'extension extensions/codebase-memory/index.ts.
-CBM_BIN_DIR="/app/.data/bin"
-CBM_BIN="$CBM_BIN_DIR/codebase-memory-mcp"
-CBM_INSTALL_URL="https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
+# Le binaire est livré par l'image (Dockerfile, étape `runtime` : release
+# v0.11.0 épinglée + sha256, extraite dans /opt/cbm/bin). Il n'est PLUS installé
+# au démarrage : plus de CBM_INSTALL_URL, plus de curl, plus de `install.sh`, et
+# plus aucune version « dernière de main » qui change à chaque redémarrage.
+#
+# Pourquoi /opt/cbm/bin et pas /app/.data/bin (ancien emplacement) : le volume
+# `pi-appdata:/app/.data` (docker-compose.yml) MASQUE tout ce qui est écrit sous
+# /app/.data dans l'image. Un binaire livré là serait invisible au démarrage.
+#
+# Mise à jour de CBM = NOUVELLE IMAGE (changer CBM_VERSION/CBM_SHA256 dans le
+# Dockerfile). Les boutons de mise à jour qui écrasaient le binaire (commande
+# agent /cbm-update et POST /api/cbm/update) ont été retirés pour cette raison.
+#
+# CBM_BIN_PATH n'est posé QUE s'il n'est pas déjà fourni : le compose (ou
+# `docker run -e`) doit pouvoir surcharger le chemin.
+CBM_BIN="${CBM_BIN_PATH:-/opt/cbm/bin/codebase-memory-mcp}"
 export CBM_BIN_PATH="$CBM_BIN"
-mkdir -p "$CBM_BIN_DIR"
-if [ ! -f "$CBM_BIN" ]; then
-  echo "[PI-WEB] Installing codebase-memory-mcp into persistent volume ($CBM_BIN_DIR)..."
-  # Téléchargement du script PUIS exécution (pas de pipe) : avec `curl | bash`,
-  # le code de sortie vu par le shell est celui de bash (0) même si curl a
-  # échoué — impossible de détecter l'échec.
-  if curl -fsSL "$CBM_INSTALL_URL" -o /tmp/cbm-install.sh \
-     && bash /tmp/cbm-install.sh --dir "$CBM_BIN_DIR" --skip-config; then
-    if [ -f "$CBM_BIN" ]; then
-      echo "[PI-WEB] ✓ codebase-memory-mcp installed: $CBM_BIN"
-    else
-      echo "[PI-WEB] WARNING: installer exited 0 but no binary at $CBM_BIN"
-    fi
-  else
-    echo "[PI-WEB] WARNING: codebase-memory-mcp install failed (see errors above) — graph tools will be unavailable"
-  fi
-  rm -f /tmp/cbm-install.sh
-else
-  echo "[PI-WEB] codebase-memory-mcp already installed: $CBM_BIN"
-fi
 
-# Persist CBM cache on the /app/.data volume (survives Docker rebuilds)
+# Persist CBM cache on the /app/.data volume (survives Docker rebuilds).
+# Les DONNÉES du graphe (index, projets) restent sur le volume : seul le
+# BINAIRE vient de l'image.
 export CBM_CACHE_DIR="/app/.data/cbm"
 mkdir -p "$CBM_CACHE_DIR"
 
@@ -262,9 +247,19 @@ mkdir -p "$CBM_CACHE_DIR"
 # this HTTP server is kept alive for the Pi-Web 3D graph UI (/cbm-ui/).
 # The binary is an MCP stdio server — it exits if stdin closes.
 # We keep stdin open with `tail -f /dev/null` so the HTTP UI stays alive.
-if [ -f "$CBM_BIN" ]; then
+#
+# FILET DE SÉCURITÉ : binaire absent (image ancienne ? CBM_BIN_PATH faux ?) →
+# message EXPLICITE et on CONTINUE. Décision : Pi-Web démarre quand même (chat,
+# projets, terminal ne dépendent pas de CBM) ; seuls les tools cbm_* et le
+# graphe 3D sont indisponibles, et le backend le dit dans /api/cbm/status.
+# Planter ici couperait tout Pi-Web pour un service annexe : non.
+if [ ! -x "$CBM_BIN" ]; then
+  echo "[PI-WEB] ERREUR: codebase-memory-mcp introuvable ou non exécutable ($CBM_BIN)." >&2
+  echo "[PI-WEB]         Le binaire doit venir de l'image (/opt/cbm/bin) — reconstruire/mettre à jour l'image," >&2
+  echo "[PI-WEB]         ou définir CBM_BIN_PATH vers un binaire valide. Tools cbm_* et graphe 3D INDISPONIBLES." >&2
+else
   tail -f /dev/null | nohup "$CBM_BIN" --ui=true --port=9749 > /tmp/cbm-server.log 2>&1 &
-  echo "[PI-WEB] codebase-memory-mcp server starting on port 9749 (PID $!)"
+  echo "[PI-WEB] codebase-memory-mcp server starting on port 9749 (PID $!) — $CBM_BIN"
 fi
 
 # ─── Start ────────────────────────────────────

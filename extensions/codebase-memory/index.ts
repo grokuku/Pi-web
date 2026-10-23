@@ -5,7 +5,9 @@
  * codebase-memory-mcp binary (https://github.com/DeusData/codebase-memory-mcp).
  *
  * On first session start:
- *   1. Downloads the binary if not installed (~15 MB, ~5s)
+ *   1. Vérifie la présence du binaire EMBARQUÉ DANS L'IMAGE Docker
+ *      (/opt/cbm/bin/codebase-memory-mcp, version épinglée par le Dockerfile).
+ *      Aucun téléchargement : une mise à jour de CBM = une nouvelle image.
  *   2. Starts the HTTP server on localhost:9749 (3D graph UI — the Pi-Web
  *      frontend embeds it via /cbm-ui/)
  *   3. Spawns a stdio MCP client for the FULL tool surface.
@@ -29,11 +31,16 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
+import { existsSync, lstatSync, readdirSync, realpathSync } from "fs";
 import { join } from "path";
 import { execSync, spawn, type ChildProcess } from "child_process";
-import { homedir, tmpdir } from "os";
-import { dirname } from "path";
+
+// ── Chemin du binaire CBM : SOURCE DE VÉRITÉ UNIQUE ──
+// Importé de backend/src/pi/cbm-bin.ts (même constante que le client MCP stdio
+// et que routes/cbm.ts). Le binaire est EMBARQUÉ DANS L'IMAGE Docker
+// (/opt/cbm/bin, hors volume /app/.data), version épinglée par le Dockerfile.
+// Il n'est plus téléchargé au démarrage du conteneur ni par l'extension.
+import { CBM_BIN_PATH as BIN_PATH } from "../../backend/src/pi/cbm-bin.js";
 
 // ── Carte du Repo (P1) : helper PUR de rendu + types ──
 // Même pattern que harness-stream.ts/harness-archive.ts côté harness-orchestrator :
@@ -104,16 +111,8 @@ function isLinkedProject(cwd: string): boolean {
 
 // ── Config ──────────────────────────────────────────────
 
-// Chemin du binaire : CBM_BIN_PATH (exporté par entrypoint.sh → volume
-// persistant /app/.data/bin) sinon repli historique ~/.local/bin. Les deux
-// modules qui lisent ce chemin (cette extension + routes/cbm.ts) DOIVENT
-// utiliser la même résolution, sinon l'un croit le binaire absent.
-const BIN_PATH =
-  process.env.CBM_BIN_PATH || join(homedir(), ".local", "bin", "codebase-memory-mcp");
 const PORT = 9749;
 const BASE = `http://127.0.0.1:${PORT}`;
-const DOWNLOAD_URL =
-  "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh";
 
 // Shared state — readable by the Express route /api/cbm/status
 interface CbmStatus {
@@ -354,60 +353,42 @@ function getVersion(): string | null {
   }
 }
 
+/**
+ * Vérifie la présence du binaire livré par l'image.
+ *
+ * AUCUN téléchargement : depuis que CBM est embarqué dans l'image, une mise à
+ * jour = une nouvelle image (Dockerfile, ARG CBM_VERSION). Télécharger ici
+ * écraserait la version épinglée — c'est exactement ce qu'on veut supprimer.
+ *
+ * En cas d'absence (image ancienne ? chemin faux ?) on LÈVE une erreur claire :
+ * les appelants (session_start, before_agent_start, ensureStdioClient)
+ * l'attrapent et dégradent proprement (Pi-Web démarre, les tools cbm_* sont
+ * indisponibles pour la session).
+ */
 async function ensureBinary(): Promise<void> {
   if (existsSync(BIN_PATH)) {
     status.installed = true;
     status.version = getVersion();
+    status.error = null;
     return;
   }
 
-  console.log("[cbm] Binary not found, downloading...");
-  status.error = null;
-
-  // Installer DANS le dossier du binaire (et non ~/.local/bin en dur) :
-  // entrypoint.sh installe dans le volume persistant et exporte CBM_BIN_PATH —
-  // ce fallback doit viser le MÊME chemin, sinon le binaire téléchargé reste
-  // invisible pour BIN_PATH.
-  const binDir = dirname(BIN_PATH);
-  if (!existsSync(binDir)) {
-    mkdirSync(binDir, { recursive: true });
-  }
-
-  // Téléchargement en 2 temps (script puis exécution) pour détecter réellement
-  // un échec de curl (avec `curl | bash`, le code retour observé est celui de
-  // bash, qui vaut 0 même si curl a échoué).
-  // NB : execSync bloque la boucle d'événements pendant le téléchargement
-  // (~286 Mo) ; ce chemin n'est qu'un FILET DE SÉCURITÉ — l'installation est
-  // faite au démarrage du conteneur par entrypoint.sh.
-  const script = join(tmpdir(), `cbm-install-${process.pid}.sh`);
-  try {
-    execSync(`curl -fsSL "${DOWNLOAD_URL}" -o "${script}"`, { timeout: 60_000, encoding: "utf-8" });
-    execSync(`bash "${script}" --dir "${binDir}" --skip-config`, {
-      timeout: 240_000,
-      encoding: "utf-8",
-    });
-    status.installed = existsSync(BIN_PATH);
-    status.version = getVersion();
-    console.log(`[cbm] Downloaded version ${status.version}`);
-  } catch (e: any) {
-    status.error = `Download failed: ${e.message}`;
-    console.error("[cbm] Download failed:", e.message);
-    throw e;
-  } finally {
-    try {
-      rmSync(script, { force: true });
-    } catch {}
-  }
+  status.installed = false;
+  status.version = null;
+  status.error =
+    `Binaire codebase-memory-mcp absent (${BIN_PATH}). Il est livré par l'image Pi-Web : `
+    + "mettre à jour l'image (le pin de version est dans le Dockerfile), ou définir CBM_BIN_PATH.";
+  console.error(`[cbm] ${status.error}`);
+  throw new Error(status.error);
 }
 
-// Flag module-level : UNE seule tentative d'auto-install depuis ensureStdioClient
-// (évite les boucles de re-téléchargement à chaque appel de tool cbm_* quand le
-// téléchargement échoue).
-let attemptedAutoInstall = false;
+// Flag module-level : UNE seule vérification par process (évite de relancer un
+// `--version` à chaque appel de tool cbm_* quand le binaire est absent).
+let binaryCheckDone = false;
 
-// Sérialise les tentatives de téléchargement : session_start, before_agent_start
-// et ensureStdioClient peuvent appeler ensureBinary() quasi simultanément → un
-// seul téléchargement à la fois, les appelants en attente partagent la même
+// Sérialise les vérifications : session_start, before_agent_start
+// et ensureStdioClient peuvent appeler ensureBinary() quasi simultanément → une
+// seule vérification à la fois, les appelants en attente partagent la même
 // promesse (même pattern que spawnPromise plus bas).
 let downloadInFlight: Promise<void> | null = null;
 function ensureBinaryOnce(): Promise<void> {
@@ -549,27 +530,24 @@ async function ensureStdioClient(): Promise<void> {
   stdioReadyPromise = (async () => {
     if (stdioChild && stdioReady) return;
     if (!existsSync(BIN_PATH)) {
-      // Auto-réparation à l'appel : le binaire manque → UNE seule tentative de
-      // téléchargement (flag module-level attemptedAutoInstall contre les boucles
-      // et les téléchargements concurrents), puis re-check.
-      if (!attemptedAutoInstall) {
-        attemptedAutoInstall = true;
-        console.log("[cbm] binaire absent à l'appel d'un tool cbm_*, tentative de téléchargement...");
+      // Une seule vérification par process (flag module-level), puis erreur
+      // ACTIONNABLE pour le LLM : ne pas retenter les cbm_* cette session.
+      // Aucun téléchargement : le binaire vient de l'image (voir cbm-bin.ts).
+      if (!binaryCheckDone) {
+        binaryCheckDone = true;
         try {
           await ensureBinaryOnce();
         } catch (e: any) {
-          console.warn("[cbm] téléchargement automatique échoué :", e.message);
+          console.warn("[cbm] binaire absent :", e.message);
         }
       }
       if (!existsSync(BIN_PATH)) {
-        // Erreur ACTIONNABLE pour le LLM : ne pas retenter les cbm_* cette session.
         throw new Error(
-          "codebase-memory-mcp n'est pas installé et la tentative de téléchargement automatique a échoué. " +
-            "Les tools cbm_* sont INDISPONIBLES pour toute cette session — ne les réessayez PAS. " +
-            "Utilisez grep et la lecture directe des fichiers à la place."
+          "codebase-memory-mcp est absent de l'image (" + BIN_PATH + "). "
+            + "Les tools cbm_* sont INDISPONIBLES pour toute cette session — ne les réessayez PAS. "
+            + "Utilisez grep et la lecture directe des fichiers à la place."
         );
       }
-      console.log("[cbm] binaire téléchargé, poursuite du démarrage du client stdio");
     }
     stdioError = null;
     console.log("[cbm] Starting MCP client over stdio (full tool surface)");
@@ -638,24 +616,6 @@ async function ensureStdioClient(): Promise<void> {
     stdioReadyPromise = null;
   });
   return stdioReadyPromise;
-}
-
-function stopStdioClient(): void {
-  if (stdioChild) {
-    try {
-      stdioChild.stdin?.end();
-    } catch {
-      /* ignore */
-    }
-    stdioChild.kill();
-    stdioChild = null;
-  }
-  stdioReady = false;
-  for (const p of stdioPending.values()) {
-    clearTimeout(p.timer);
-    p.reject(new Error("codebase-memory-mcp stdio stopped"));
-  }
-  stdioPending.clear();
 }
 
 async function mcpCallStdio(
@@ -1798,24 +1758,20 @@ const schemaParams = {
 export default async function (pi: ExtensionAPI) {
   console.log("[cbm] Extension loaded");
 
-  // ── session_start: download, spawn, index (NON-BLOCKING) ──
+  // ── session_start: vérification binaire, spawn, index (NON-BLOCKING) ──
   // Fire-and-forget so session creation is not delayed by CBM init.
   pi.on("session_start", (_event, ctx) => {
     (async () => {
       try {
-        // Auto-réparation au boot : si le binaire manque, on tente de le
-        // télécharger (ensureBinary sait le faire) au lieu de skipper la session.
-        // Non-bloquant : en cas d'échec, cbm reste indisponible mais la session
-        // démarre normalement (comme avant).
+        // Le binaire vient de l'IMAGE (version épinglée par le Dockerfile).
+        // S'il manque, on le signale et on n'initialise pas CBM : la session
+        // Pi-Web démarre normalement, cbm reste indisponible (aucun
+        // téléchargement — il contournerait le pin de version).
         if (!status.running && !existsSync(BIN_PATH)) {
-          console.log("[cbm] session_start: binaire absent, tentative de téléchargement...");
-          try {
-            await ensureBinaryOnce();
-          } catch (e: any) {
+          await ensureBinaryOnce().catch((e: any) => {
             console.warn("[cbm] session_start: cbm indisponible cette session :", e.message);
-            return;
-          }
-          console.log("[cbm] session_start: binaire téléchargé, poursuite de l'init");
+          });
+          if (!existsSync(BIN_PATH)) return;
         }
         if (isLinkedProject(ctx.cwd)) {
           console.log(`[cbm] session_start: linked workspace — indexing subprojects (fédération) for ${ctx.cwd}`);
@@ -1842,24 +1798,18 @@ export default async function (pi: ExtensionAPI) {
 
   // ── Fallback: before_agent_start — ensure server + index if needed ──
   // NON-BLOCKING: fire-and-forget so the LLM can start immediately.
-  // CBM init (download, spawn, index) can take minutes — we must not block the agent.
+  // CBM init (spawn, index) can take minutes — we must not block the agent.
   pi.on("before_agent_start", (_event, ctx) => {
     // Fire-and-forget: start/init in background, don't await
     (async () => {
       try {
-        // Auto-réparation au boot : si le binaire manque, on tente de le
-        // télécharger (ensureBinary sait le faire) au lieu de skipper le turn.
-        // Non-bloquant : en cas d'échec, cbm reste indisponible mais l'agent
-        // démarre normalement (comme avant).
+        // Le binaire vient de l'IMAGE (version épinglée par le Dockerfile).
+        // Absent → cbm indisponible pour le turn, l'agent démarre quand même.
         if (!status.running && !existsSync(BIN_PATH)) {
-          console.log("[cbm] before_agent_start: binaire absent, tentative de téléchargement...");
-          try {
-            await ensureBinaryOnce();
-          } catch (e: any) {
-            console.warn("[cbm] before_agent_start: cbm indisponible cette session :", e.message);
-            return;
-          }
-          console.log("[cbm] before_agent_start: binaire téléchargé, poursuite de l'init");
+          await ensureBinaryOnce().catch((e: any) => {
+            console.warn("[cbm] before_agent_start: cbm indisponible ce turn :", e.message);
+          });
+          if (!existsSync(BIN_PATH)) return;
         }
         if (isLinkedProject(ctx.cwd)) {
           console.log(`[cbm] before_agent_start: linked workspace — indexing subprojects (fédération) for ${ctx.cwd}`);
@@ -2190,43 +2140,10 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-  // ── Command: update the binary ──
-  pi.registerCommand("cbm-update", {
-    description: "Update codebase-memory-mcp binary to the latest version",
-    handler: async (_args, ctx) => {
-      if (!existsSync(BIN_PATH)) {
-        ctx.ui.notify("Binary not installed. It will download on next session start.", "info");
-        return;
-      }
-      ctx.ui.setStatus("cbm", "Updating...");
-      try {
-        const output = execSync(`"${BIN_PATH}" update`, {
-          timeout: 120_000,
-          encoding: "utf-8",
-        });
-        const newVersion = getVersion();
-        status.version = newVersion;
-
-        // Restart the server (HTTP UI) + stdio MCP client
-        if (child) {
-          child.kill();
-          child = null;
-        }
-        stopStdioClient();
-        status.running = false;
-        await spawnServer();
-        await ensureStdioClient().catch((e: any) =>
-          console.warn("[cbm] stdio respawn after update failed:", e.message)
-        );
-
-        ctx.ui.setStatus("cbm", `Ready (v${newVersion})`);
-        ctx.ui.notify(`Updated to ${newVersion}!`, "info");
-        console.log("[cbm] Update output:", output.slice(-200));
-      } catch (e: any) {
-        ctx.ui.setStatus("cbm", "Update failed");
-        ctx.ui.notify(`Update failed: ${e.message}`, "error");
-        console.error("[cbm] Update failed:", e.message);
-      }
-    },
-  });
+  // ── Mise à jour de CBM : SUPPRIMÉE (ancienne commande `/cbm-update`) ──
+  // Le binaire est EMBARQUÉ DANS L'IMAGE, version épinglée dans le Dockerfile
+  // (ARG CBM_VERSION + sha256). `"$BIN_PATH" update` écrase un fichier de
+  // l'image et contourne ce pin : une mise à jour de CBM passe désormais par
+  // une NOUVELLE IMAGE. La route POST /api/cbm/update (UI) a été retirée pour
+  // la même raison — extension et backend restent alignés.
 }

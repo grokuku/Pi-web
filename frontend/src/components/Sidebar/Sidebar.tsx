@@ -74,8 +74,6 @@ export function Sidebar({
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [cbmVersion, setCbmVersion] = useState<string | null>(null);
   const [cbmInstalled, setCbmInstalled] = useState(false);
-  const [cbmUpdateAvailable, setCbmUpdateAvailable] = useState(false);
-  const [cbmUpdating, setCbmUpdating] = useState(false);
   const { t } = useTranslation();
 
   // Check for updates on mount
@@ -91,26 +89,12 @@ export function Sidebar({
       if (Array.isArray(data.breakingChanges)) setPiAgentBreaking(data.breakingChanges);
       setPiAgentRequiresAck(!!data.requiresAck);
     }).catch(() => {});
-    // Check CBM status
+    // Check CBM status (version livrée par l'image — plus de bouton de mise à
+    // jour : elle passe par une nouvelle image, voir Dockerfile).
     fetch("/api/cbm/status").then(r => r.json()).then(data => {
       setCbmInstalled(data.installed);
       setCbmVersion(data.version);
-      setCbmUpdateAvailable(data.updateAvailable);
     }).catch(() => {});
-  }, []);
-
-  const handleCbmUpdate = useCallback(() => {
-    setCbmUpdating(true);
-    fetch("/api/cbm/update", { method: "POST" })
-      .then(r => r.json())
-      .then((data) => {
-        if (data.newVersion) setCbmVersion(data.newVersion);
-        setCbmUpdateAvailable(false);
-        setCbmUpdating(false);
-      })
-      .catch(() => {
-        setCbmUpdating(false);
-      });
   }, []);
 
   // ── Placeholder lié : masquage des origines (option A) ──
@@ -277,19 +261,10 @@ export function Sidebar({
         {cbmInstalled && (
           <div className="flex items-center justify-between px-2 py-1 text-[10px] text-hacker-text-dim border-t border-hacker-border/30">
             <span>cbm</span>
-            {cbmUpdateAvailable ? (
-              <button
-                onClick={handleCbmUpdate}
-                disabled={cbmUpdating}
-                className="text-hacker-warn hover:text-hacker-warn/80 flex items-center gap-0.5 font-bold"
-                title={t('sidebar.updateCbm')}
-              >
-                <HolafIcon name="arrow-up-circle" size={10} />
-                {cbmUpdating ? "..." : t('sidebar.update')}
-              </button>
-            ) : (
-              <span className="text-hacker-text-dim/50">{cbmVersion ? `v${cbmVersion}` : "..."}</span>
-            )}
+            {/* Version FIGÉE par l'image : pas de bouton de mise à jour (elle
+                écraserait le binaire de l'image — une mise à jour de CBM =
+                une nouvelle image). Version seule, informative. */}
+            <span className="text-hacker-text-dim/50">{cbmVersion ? `v${cbmVersion}` : "..."}</span>
           </div>
         )}
       </div>

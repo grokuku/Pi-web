@@ -1,20 +1,15 @@
 import { Router, type Request, type Response } from "express";
 import { existsSync, readdirSync, statSync, readFileSync, realpathSync } from "fs";
 import { execSync } from "child_process";
-import { join, extname, basename, relative, resolve, dirname } from "path";
+import { join, extname, basename, relative, resolve } from "path";
 import { isPathAllowed } from "../utils/path-security.js";
-import os from "os";
+
+// Chemin du binaire : SOURCE DE VÉRITÉ UNIQUE dans backend/src/pi/cbm-bin.ts.
+// Le binaire est EMBARQUÉ DANS L'IMAGE (/opt/cbm/bin, hors volume /app/.data) et
+// surchargeable par CBM_BIN_PATH. Ne jamais recopier de littéral ici.
+import { CBM_BIN_PATH as BIN_PATH } from "../pi/cbm-bin.js";
 
 const router = Router();
-
-// Même résolution de chemin que l'extension extensions/codebase-memory/
-// index.ts : entrypoint.sh installe le binaire dans le volume
-// persistant /app/.data/bin et exporte CBM_BIN_PATH. Sans cette variable, un
-// binaire installé là serait vu comme « absent » par cette route.
-const BIN_PATH =
-  process.env.CBM_BIN_PATH || join(os.homedir(), ".local", "bin", "codebase-memory-mcp");
-const CBM_INSTALL_URL =
-  "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh";
 
 /**
  * Extrait « 0.11.0 » de la sortie de `--version` (« codebase-memory-mcp 0.11.0 »).
@@ -45,27 +40,6 @@ function getCbmVersion(): string | null {
 }
 
 /**
- * Check the latest release tag on GitHub.
- * Returns null if the request fails.
- */
-async function getLatestVersion(): Promise<string | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    const res = await fetch(
-      "https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest",
-      { signal: controller.signal, headers: { "User-Agent": "pi-web" } }
-    );
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    const data = await res.json() as { tag_name?: string };
-    return data.tag_name || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Check if the CBM HTTP server is running on port 9749.
  */
 function isServerRunning(): boolean {
@@ -80,7 +54,7 @@ function isServerRunning(): boolean {
   }
 }
 
-// GET /api/cbm/status — version info and update availability
+// GET /api/cbm/status — version installée + état du serveur
 router.get("/status", async (_req: Request, res: Response) => {
   try {
     // `installed` ne dépend QUE de la présence du binaire : une lecture de
@@ -90,7 +64,6 @@ router.get("/status", async (_req: Request, res: Response) => {
     const installed = existsSync(BIN_PATH);
     const version = installed ? getCbmVersion() : null;
     const running = installed && isServerRunning();
-    const latestVersion = await getLatestVersion();
 
     // IndexedProjects (jauge) : rafraîchir le registre CBM du process AVANT de
     // lire les stats. Best-effort et no-op si déjà rafraîchi récemment : sans
@@ -128,18 +101,9 @@ router.get("/status", async (_req: Request, res: Response) => {
       /* ignore */
     }
 
-    // Update available if latest is different from current (normalize v-prefix)
-    let updateAvailable = false;
-    if (latestVersion && version) {
-      const normCurrent = version.startsWith("v") ? version : `v${version}`;
-      updateAvailable = normCurrent !== latestVersion;
-    }
-
     res.json({
       installed,
       version,
-      latestVersion,
-      updateAvailable,
       running,
       binaryPath: installed ? BIN_PATH : null,
       // Usage stats from the extension (tracked per CBM tool call). `since` et
@@ -152,61 +116,6 @@ router.get("/status", async (_req: Request, res: Response) => {
       // `indexedProjects` et l'anneau `recent` (non cumulables).
       cumulative,
     });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/cbm/update — update the binary and restart the server
-router.post("/update", async (_req: Request, res: Response) => {
-  try {
-    if (!existsSync(BIN_PATH)) {
-      return res.status(400).json({ error: "Binary not installed. It will be auto-downloaded on next session start." });
-    }
-
-    // Run the built-in updater
-    const updateOutput = execSync(`"${BIN_PATH}" update`, {
-      timeout: 120_000,
-      encoding: "utf-8",
-    });
-
-    // Read the new version
-    const newVersion = getCbmVersion();
-    const latestVersion = await getLatestVersion();
-    let updateAvailable = false;
-    if (latestVersion && newVersion) {
-      const normCurrent = newVersion.startsWith("v") ? newVersion : `v${newVersion}`;
-      updateAvailable = normCurrent !== latestVersion;
-    }
-
-    res.json({
-      success: true,
-      newVersion,
-      latestVersion,
-      updateAvailable,
-      output: updateOutput.slice(-500),  // last 500 chars of output
-    });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/cbm/download — manually trigger download (if not installed)
-router.post("/download", async (_req: Request, res: Response) => {
-  try {
-    if (existsSync(BIN_PATH)) {
-      return res.json({ success: true, message: "Already installed", version: getCbmVersion() });
-    }
-
-    // Download using the official install script — dans le dossier de BIN_PATH
-    // (volume persistant) pour que le binaire soit bien celui que le backend lit.
-    const output = execSync(
-      `curl -fsSL ${CBM_INSTALL_URL} | bash -s -- --dir "${dirname(BIN_PATH)}" --skip-config`,
-      { timeout: 300_000, encoding: "utf-8" }
-    );
-
-    const version = getCbmVersion();
-    res.json({ success: true, version, output: output.slice(-500) });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

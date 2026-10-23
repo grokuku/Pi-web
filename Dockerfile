@@ -10,6 +10,10 @@
 # tous les hôtes (plus de dérive « ça compile chez moi »), et un `docker
 # pull` ne redéclenche aucune installation réseau.
 #
+# Le binaire codebase-memory-mcp (CBM) est lui aussi EMBARQUÉ (étape `runtime`,
+# /opt/cbm/bin, version épinglée + sha256) : plus aucun téléchargement au
+# démarrage. Ses DONNÉES (CBM_CACHE_DIR) restent sur le volume /app/.data.
+#
 # CE QUI EST INCHANGÉ (comportement production strictement identique) :
 #   • root, `ENV HOME=/root` (Chromium en root exige --no-sandbox, et
 #     node-pty / le terminal / le binaire CBM supposent cet utilisateur) ;
@@ -134,6 +138,48 @@ RUN curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar
 
 RUN mkdir -p /projects /sessions /mnt/smb && \
     git config --system --add safe.directory '*'
+
+# ─── codebase-memory-mcp (CBM) — EMBARQUÉ DANS L'IMAGE ────────────────────
+# CBM fait partie intégrante de Pi-Web (tools cbm_* de l'agent + graphe 3D servis
+# par le backend) : il est livré PAR L'IMAGE, à version FIGÉE, et non plus
+# téléchargé au démarrage du conteneur (l'ancien `install.sh` de `main` prenait
+# la dernière release, donc chaque redémarrage pouvait changer de version).
+#
+# ⚠ EMPLACEMENT : /opt/cbm/bin, HORS du volume `pi-appdata:/app/.data` monté par
+# docker-compose.yml. Tout ce qui serait écrit sous /app/.data dans l'image
+# serait MASQUÉ par le volume au démarrage → un binaire livré là serait
+# invisible. L'ancien emplacement (/app/.data/bin) est donc abandonné ; les
+# DONNÉES du graphe (`CBM_CACHE_DIR`) restent, elles, sur le volume.
+#
+# ⚠ VERSION : 0.11.0 — la version de PRODUCTION (mesurée), pas 0.12.x dont le
+# CHANGELOG annonce des ruptures qui touchent exactement ce dont Pi-Web dépend
+# (noms qualifiés, requêtes Cypher en dur, noms d'outils). Monter de version =
+# changer CES DEUX LIGNES (CBM_VERSION + CBM_SHA256) puis reconstruire l'image :
+# c'est le SEUL endroit à modifier.
+#
+# ⚠ ASSET : `-portable` = la variante que `install.sh` choisit pour linux (elle
+# embarque le binaire `--ui`, nécessaire au graphe 3D) ; le tag `ui-` porte le
+# même contenu (sha256 identique dans checksums.txt).
+#
+# ⚠ INTÉGRITÉ : sha256 vérifié AVANT extraction (somme publiée dans
+# `checksums.txt` de la release). Toute altération de l'archive fait échouer le
+# build. `--version` en fin de bloc : garde-fou, un binaire non exécutable casse
+# le build ICI et pas au démarrage en production.
+ARG CBM_VERSION=0.11.0
+ARG CBM_SHA256=1f9e8293eb2bc5c05cfa27a7e8fc033da6d729ffad525ccfcdaa3fd606306683
+RUN curl -fsSL -o /tmp/cbm.tgz \
+      "https://github.com/DeusData/codebase-memory-mcp/releases/download/v${CBM_VERSION}/codebase-memory-mcp-linux-amd64-portable.tar.gz" \
+ && echo "${CBM_SHA256}  /tmp/cbm.tgz" | sha256sum -c - \
+ && mkdir -p /opt/cbm/bin \
+ && tar -C /opt/cbm/bin -xzf /tmp/cbm.tgz codebase-memory-mcp \
+ && chmod +x /opt/cbm/bin/codebase-memory-mcp \
+ && rm -f /tmp/cbm.tgz \
+ && /opt/cbm/bin/codebase-memory-mcp --version
+
+# Chemin par défaut lu par le backend (backend/src/pi/cbm-bin.ts) et par
+# l'extension codebase-memory. Une valeur fournie par l'environnement (compose)
+# PREND LE DESSUS : l'entrypoint n'écrase jamais un CBM_BIN_PATH existant.
+ENV CBM_BIN_PATH=/opt/cbm/bin/codebase-memory-mcp
 
 WORKDIR /app
 

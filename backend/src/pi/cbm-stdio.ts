@@ -1,7 +1,8 @@
 /**
  * backend/src/pi/cbm-stdio.ts
  *
- * MCP stdio client for the codebase-memory-mcp binary (v0.10.5).
+ * MCP stdio client for the codebase-memory-mcp binary (embarqué dans l'image,
+ * version épinglée dans le Dockerfile — 0.11.0).
  *
  * WHY THIS EXISTS:
  *   In --ui mode (--ui=true --port=9749) the binary only exposes list_projects
@@ -24,15 +25,12 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 
-// Même résolution que l'extension extensions/codebase-memory et routes/cbm.ts (contrat
-// documenté là-bas) : CBM_BIN_PATH (exporté par entrypoint.sh → volume persistant
-// /app/.data/bin) sinon repli historique ~/.local/bin. En dur, ce module croyait
-// le binaire absent alors qu'il est dans le volume (proxy /cbm-ui/ cassé).
-const BIN_PATH =
-  process.env.CBM_BIN_PATH || join(homedir(), ".local", "bin", "codebase-memory-mcp");
+// Chemin du binaire : SOURCE DE VÉRITÉ UNIQUE dans backend/src/pi/cbm-bin.ts
+// (binaire embarqué dans l'image → /opt/cbm/bin, surchargeable par CBM_BIN_PATH).
+// Ne jamais recopier un littéral ici : l'extension codebase-memory et
+// routes/cbm.ts importent la MÊME constante.
+import { CBM_BIN_PATH as BIN_PATH } from "./cbm-bin.js";
 const INIT_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 120_000; // graph queries on big repos can be slow
 const CLIENT_NAME = "pi-web-backend";
