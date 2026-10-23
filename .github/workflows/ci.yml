@@ -34,8 +34,6 @@ permissions:
 
 env:
   NODE_VERSION: "22"
-  # Miroir public officiel (contournement du quota de pulls anonymes Docker Hub).
-  BASE_IMAGE: public.ecr.aws/docker/library/node:22-slim
 
 jobs:
   # ────────────────────────────────────────────────────────────────────
@@ -115,25 +113,70 @@ jobs:
           echo "IMAGE_NAME=ghcr.io/${REPO,,}" >> "$GITHUB_ENV"
           echo "CI_IMAGE_LOCAL=ghcr.io/${REPO,,}:ci-smoke" >> "$GITHUB_ENV"
 
-      # public.ecr.aws renvoie parfois HTTP 429 : trois tentatives, backoff
-      # croissant. Sans ce pré-pull, c'est le build lui-même qui échoue avec
-      # un message moins lisible.
+      # Registres publics : les pulls ANONYMES sont quota-tés PAR IP et les
+      # runners GitHub partagent leurs IP — d'où le « 429 toomanyrequests » de
+      # Docker Hub et le « toomanyrequests: Data limit exceeded » de
+      # public.ecr.aws, que trois tentatives ne pouvaient pas contourner (ce
+      # n'est pas un incident passager, c'est un quota). Secours : on tire
+      # l'image de base AVANT le build, avec 3 tentatives et des pauses
+      # croissantes ; buildx la réutilise ensuite depuis le cache local.
+      # L'image est LUE dans le Dockerfile (source de vérité unique), donc rien
+      # n'est recopié ici : changer de registre = éditer le Dockerfile seul.
+      # Aucun identifiant : le registre visé est public.
       - name: Pre-pull base image
-        env:
-          IMG: ${{ env.BASE_IMAGE }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            echo "Tentative ${attempt}/3 : docker pull ${IMG}"
-            if docker pull "${IMG}"; then
-              echo "::notice::Image de base disponible : ${IMG}"
-              exit 0
+          # Tous les FROM distincts du Dockerfile (étages deps/build/runtime),
+          # en résolvant une éventuelle indirection `ARG X=...` + `FROM ${X}`
+          # (cas de Pi-Web) et en ignorant un `FROM` qui ne référence qu'un
+          # étage déjà construit.
+          mapfile -t BASES < <(
+            awk '
+              /^[[:space:]]*ARG[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=/ {
+                line = $0
+                sub(/^[[:space:]]*ARG[[:space:]]+/, "", line)
+                eq = index(line, "=")
+                v = substr(line, eq + 1)
+                gsub(/["\047]/, "", v)
+                args[substr(line, 1, eq - 1)] = v
+                next
+              }
+              /^[[:space:]]*FROM[[:space:]]/ {
+                img = ""; alias = ""
+                for (i = 2; i <= NF; i++) {
+                  if ($i == "AS" || $i == "as") { alias = $(i + 1); continue }
+                  if (img == "" && $i !~ /^--/) img = $i
+                }
+                if (img ~ /^\$/) { n = img; gsub(/[${}]/, "", n); img = args[n] }
+                if (alias != "") stages[alias] = 1
+                if (img != "" && img != "scratch" && !(img in stages)) print img
+                next
+              }
+            ' Dockerfile | sort -u
+          )
+          if [ "${#BASES[@]}" -eq 0 ]; then
+            echo "::error::aucun FROM exploitable trouvé dans le Dockerfile."
+            exit 1
+          fi
+          for BASE in "${BASES[@]}"; do
+            echo "Image de base : ${BASE}"
+            pulled=""
+            for i in 1 2 3; do
+              if docker pull "${BASE}"; then
+                pulled="oui"
+                echo "::notice::Image de base disponible : ${BASE}"
+                break
+              fi
+              if [ "${i}" -lt 3 ]; then
+                echo "::warning::tentative ${i}/3 échouée pour ${BASE}, nouvelle tentative dans $((i * 20))s…"
+                sleep $((i * 20))
+              fi
+            done
+            if [ -z "${pulled}" ]; then
+              echo "::error::impossible de télécharger ${BASE} après 3 tentatives (quota du registre ? voir l'ARG BASE_IMAGE du Dockerfile)."
+              exit 1
             fi
-            echo "::warning::Pull de ${IMG} échoué (tentative ${attempt}/3)"
-            sleep $((attempt * 20))
           done
-          echo "::error::Impossible de télécharger ${IMG} après 3 tentatives (rate limit public.ecr.aws ?)"
-          exit 1
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3

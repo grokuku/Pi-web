@@ -23,13 +23,15 @@
 # Le pré-téléchargement de l'image de base (3 tentatives) est fait par les
 # workflows AVANT le build ; ce Dockerfile reste utilisable seul.
 # ══════════════════════════════════════════════════════════════════════
-ARG BASE_IMAGE=public.ecr.aws/docker/library/node:22-slim
+ARG BASE_IMAGE=mirror.gcr.io/library/node:22-slim
 
 # ──────────────────────────────────────────────────────────────────────
 # ÉTAGE 1 — deps : dépendances uniquement (couche cache maximale)
 # ──────────────────────────────────────────────────────────────────────
-# Miroir public Amazon ECR (contournement du quota de pulls anonymes Docker
-# Hub, HTTP 429 « toomanyrequests »). Contenu STRICTEMENT identique au tag
+# Miroir Google `mirror.gcr.io` (contournement des quotas de pulls ANONYMES,
+# qui sont comptés PAR IP et partagés par les runners GitHub : Docker Hub
+# répond « 429 toomanyrequests » et public.ecr.aws « toomanyrequests: Data
+# limit exceeded »). Contenu STRICTEMENT identique au tag
 # docker.io/library/node:22-slim — seule la provenance change.
 FROM ${BASE_IMAGE} AS deps
 
