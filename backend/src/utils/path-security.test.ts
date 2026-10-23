@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
 import { isCwdAllowed, isPathAllowed, getAllowedRoots } from "./path-security.js";
+import { createAllowedRootMirror } from "./allowed-root-mirror.test-util.js";
 
 // Mock du gestionnaire de projets pour contrôler les cwd sans dépendre du disque.
 const { getAllProjectsMock } = vi.hoisted(() => ({ getAllProjectsMock: vi.fn() }));
@@ -9,19 +10,30 @@ vi.mock("../projects/manager.js", () => ({
   getAllProjects: getAllProjectsMock,
 }));
 
-// Racine de test sous /projects (racine autorisée par défaut).
-const TEST_ROOT = "/projects/__piweb_test__";
+// Aucune écriture hors du dépôt : le dossier de travail des tests vit dans
+// os.tmpdir() et la résolution de la racine par défaut « /projects » y est
+// redirigée (voir allowed-root-mirror.test-util.ts). La logique testée, elle,
+// est inchangée : deny-list, traversée ../, liens symboliques réels, préfixe
+// « strictement sous la racine ».
+const mirror = createAllowedRootMirror("pathsec-");
+const TEST_ROOT = mirror.projects; // joue le rôle de /projects
 const PROJ = path.join(TEST_ROOT, "projA");
 
 beforeEach(() => {
+  mirror.install();
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(PROJ, { recursive: true });
   getAllProjectsMock.mockReset();
   getAllProjectsMock.mockReturnValue([]);
 });
 
-afterAll(() => {
+afterEach(() => {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+  mirror.uninstall();
+});
+
+afterAll(() => {
+  mirror.dispose();
 });
 
 describe("isCwdAllowed", () => {
@@ -111,6 +123,14 @@ describe("isPathAllowed", () => {
 
 describe("getAllowedRoots", () => {
   it("inclut les racines par défaut", () => {
+    const roots = getAllowedRoots();
+    expect(roots).toContain(TEST_ROOT);
+    expect(roots).toContain(mirror.smb);
+  });
+
+  it("inclut les vraies racines par défaut (lecture seule, sans droits root)", () => {
+    // Sans redirection : la constante de sécurité doit bien rester /projects.
+    mirror.uninstall();
     const roots = getAllowedRoots();
     expect(roots).toContain("/projects");
     expect(roots).toContain("/mnt/smb");

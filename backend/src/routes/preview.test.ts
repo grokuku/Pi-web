@@ -3,7 +3,7 @@
  * Aucun serveur HTTP : on teste la logique pure exportée (stockage inline,
  * résolution de fichier projet, mapping MIME) — pattern des tests existants.
  */
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
 import express from "express";
@@ -14,6 +14,7 @@ import {
   resolveProjectFile,
 } from "./preview.js";
 import previewRouter from "./preview.js";
+import { createAllowedRootMirror } from "../utils/allowed-root-mirror.test-util.js";
 
 // Mock du gestionnaire de projets pour contrôler le cwd sans dépendre du disque.
 const { getProjectMock } = vi.hoisted(() => ({ getProjectMock: vi.fn() }));
@@ -21,18 +22,29 @@ vi.mock("../projects/manager.js", () => ({
   getProject: getProjectMock,
 }));
 
-const TEST_ROOT = "/projects/__piweb_preview_test__";
+// Le cwd du projet doit être sous une racine autorisée pour que
+// resolveProjectFile() passe la garde isPathAllowed(..., cwd). On ne peut pas
+// écrire dans /projects (droits) : le dossier vit dans os.tmpdir() et la
+// racine par défaut y est redirigée (voir allowed-root-mirror.test-util.ts).
+const mirror = createAllowedRootMirror("preview-");
+const TEST_ROOT = mirror.projects; // joue le rôle de /projects
 const PROJ = path.join(TEST_ROOT, "projA");
 
 beforeEach(() => {
+  mirror.install();
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(PROJ, { recursive: true });
   getProjectMock.mockReset();
   getProjectMock.mockReturnValue({ id: "projA", cwd: PROJ });
 });
 
-afterAll(() => {
+afterEach(() => {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+  mirror.uninstall();
+});
+
+afterAll(() => {
+  mirror.dispose();
 });
 
 // ── preview-inline : stockage / TTL / 404 / taille max ──
