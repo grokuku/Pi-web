@@ -147,12 +147,41 @@ export function resolveSubagentEmitter(): RawSubagentEmitter | null {
 // ── Identifiant de délégation ────────────────────────────
 
 /**
- * Identifiant de run de délégation : `d-<epochMs>-<4 aléa>` (hex).
+ * Source du suffixe aléatoire d'un identifiant de délégation (8 hexa, minuscules).
+ * Injectable UNIQUEMENT pour rendre les tests déterministes : en production la
+ * source par défaut (4 octets cryptographiques) est toujours utilisée.
+ */
+export type DelegateRunSuffixSource = () => string;
+
+/**
+ * Source par défaut : 4 octets de `crypto.randomBytes` → 8 hexa (4 294 967 296
+ * valeurs). À suffixe de 4 hexa (65 536 valeurs) la collision à 50 % tombait dès
+ * ~302 identifiants générés à la MÊME milliseconde ; elle est repoussée à ~77 000.
+ * L'identifiant étant la CLÉ DE REGROUPEMENT des runs (Map frontend + registre
+ * backend), une collision fusionnerait deux délégations — d'où l'élargissement.
+ */
+const defaultSuffixSource: DelegateRunSuffixSource = () => randomBytes(4).toString("hex");
+
+/**
+ * Identifiant de run de délégation : `d-<epochMs>-<8 aléa>` (hex).
  * Unique par appel du tool delegate ; porte l'enveloppe et permet au
  * frontend de regrouper les événements d'une même délégation.
+ *
+ * À instants DISTINCTS l'identifiant est déterministe (l'epochMs suffit) ; au
+ * MÊME instant, l'unicité repose entièrement sur le suffixe aléatoire. Le 2e
+ * paramètre n'existe que pour que les tests puissent vérifier cette propriété
+ * sans dépendre du hasard — les appelants de production ne le passent jamais.
+ *
+ * ⚠️ COMPATIBILITÉ : aucun code ne PARSE ce format (chaîne opaque partout) ;
+ * les identifiants HISTORIQUES `d-<epochMs>-<4 hexa>` déjà persistés (messages,
+ * résumés d'activité, checkpoints) restent donc lus tels quels — les deux
+ * longueurs de suffixe coexistent dans l'historique.
  */
-export function makeDelegateRunId(now: number = Date.now()): string {
-  return `d-${now}-${randomBytes(2).toString("hex")}`;
+export function makeDelegateRunId(
+  now: number = Date.now(),
+  suffixSource: DelegateRunSuffixSource = defaultSuffixSource,
+): string {
+  return `d-${now}-${suffixSource()}`;
 }
 
 // ── Enveloppe + émission ─────────────────────────────────

@@ -105,7 +105,7 @@ import {
 //   le pont globalThis publié par session.ts (rawEmitToSubscribers) — try/catch
 //   permanent, no-op si non résolvable (un échec de streaming ne doit JAMAIS
 //   faire échouer une délégation) ;
-// - makeDelegateRunId : identifiant `d-<epochMs>-<4 aléa>` par délégation ;
+// - makeDelegateRunId : identifiant `d-<epochMs>-<8 aléa>` par délégation ;
 // - createSubagentEventGate : quota de sécurité (≤20 événements enveloppés/s,
 //   fusion des tool_execution_update consécutifs d'un même toolCallId,
 //   compteur droppedEvents) ;

@@ -257,6 +257,23 @@ describe("routeSubagentEnvelope — rattachement FIFO + args.function", () => {
     expect(getRun("r2")?.toolCallId).toBe("a-tc1");
   });
 
+  it("regroupe par id : un id HISTORIQUE (4 hexa) et un id récent (8 hexa) restent deux runs distincts", () => {
+    // Compatibilité de lecture : des `delegateRunId` à suffixe 4 hexa existent
+    // déjà dans l'historique (messages, résumés d'activité). L'id est une
+    // CHAÎNE OPAQUE (jamais parsée) → la Map les distingue normalement.
+    const messages: DisplayMessage[] = [msg("a", ["execute", "execute"])];
+    const legacyId = "d-1736400000000-abcd";
+    const freshId = "d-1736400000000-1a2b3c4d";
+
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: legacyId }), messages);
+    routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: freshId }), messages);
+
+    expect(getRun(legacyId)?.id).toBe(legacyId);
+    expect(getRun(freshId)?.id).toBe(freshId);
+    expect(getRun(legacyId)?.toolCallId).toBe("a-tc0");
+    expect(getRun(freshId)?.toolCallId).toBe("a-tc1");
+  });
+
   it("fonction re-classée (aucun match) → repli sur le premier tool call libre", () => {
     const messages: DisplayMessage[] = [msg("a", ["planning"])];
     routeSubagentEnvelope(env({ type: "subagent_start" }, { delegateRunId: "r1", delegateFunction: "integrate" }), messages);

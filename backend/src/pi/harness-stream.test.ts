@@ -73,9 +73,9 @@ const base: SubagentEventBase = {
 };
 
 describe("makeDelegateRunId", () => {
-  it("respecte le format d-<epochMs>-<4 aléa>", () => {
+  it("respecte le format d-<epochMs>-<8 aléa>", () => {
     const id = makeDelegateRunId(1736400000000);
-    expect(id).toMatch(/^d-\d{13}-[0-9a-f]{4}$/);
+    expect(id).toMatch(/^d-\d{13}-[0-9a-f]{8}$/);
     expect(id.startsWith("d-1736400000000-")).toBe(true);
   });
 
@@ -86,12 +86,56 @@ describe("makeDelegateRunId", () => {
     expect(ids.size).toBe(100);
   });
 
-  it("tire des suffixes aléatoires distincts pour un même instant (échantillon réduit)", () => {
-    // 4 chars hexa = 65536 combinaisons : un grand échantillon au même instant
-    // rendrait ce test intrinsèquement floppé (paradoxe des anniversaires) —
-    // on borne l'échantillon (collision résiduelle < 0.5%).
-    const ids = new Set(Array.from({ length: 20 }, () => makeDelegateRunId(1736400000000)));
-    expect(ids.size).toBe(20);
+  it("produit des suffixes distincts pour un même instant (source d'aléa injectée)", () => {
+    // Propriété visée : au MÊME instant, deux identifiants ne diffèrent que par
+    // leur suffixe. On injecte une source déterministe (compteur) pour vérifier
+    // cette unicité SANS dépendre du hasard : l'ancien test tirait 20 fois sur
+    // 65 536 valeurs (~0,3 % de collision, paradoxe des anniversaires) et
+    // échouait donc au hasard.
+    let calls = 0;
+    const countingSource = (): string => (++calls).toString(16).padStart(4, "0");
+
+    const ids = Array.from({ length: 20 }, () => makeDelegateRunId(1736400000000, countingSource));
+
+    expect(new Set(ids).size).toBe(20);
+    // … uniquement à cause du suffixe : l'instant est identique dans tous.
+    expect(new Set(ids.map((id) => id.replace(/-[^-]+$/, "")))).toEqual(new Set(["d-1736400000000"]));
+    // Une seule lecture de la source par identifiant.
+    expect(calls).toBe(20);
+  });
+
+  it("une source qui répète le même suffixe produit une collision (unicité au même instant = aléa seul)", () => {
+    // Documente HONNÊTEMENT la dépendance : sans aléa distinct, rien d'autre ne
+    // distingue deux identifiants d'un même instant. Si ceci changeait (ajout
+    // d'un compteur interne, par ex.), ce test le signalerait.
+    const constantSource = (): string => "abcd";
+    const ids = new Set(Array.from({ length: 20 }, () => makeDelegateRunId(1736400000000, constantSource)));
+    expect(ids.size).toBe(1);
+    expect([...ids]).toEqual(["d-1736400000000-abcd"]);
+  });
+
+  it("la source par défaut reste cryptographique (8 hexa) et n'est pas modifiée par les tests", () => {
+    // Garantit que l'injection ne fuit pas dans le comportement de production :
+    // sans 2e argument, le suffixe vient toujours de crypto.randomBytes(4).
+    const id = makeDelegateRunId(1736400000000);
+    expect(id).toMatch(/^d-1736400000000-[0-9a-f]{8}$/);
+  });
+
+  it("un identifiant HISTORIQUE (suffixe 4 hexa) reste une chaîne opaque traitée telle quelle", () => {
+    // Compatibilité de lecture : des ids `d-<epochMs>-<4 hexa>` existent déjà
+    // dans les messages/résumés persistés. Aucun code ne parse le format, donc
+    // un id ancien traverse l'enveloppe SANS normalisation ni troncature et
+    // reste une clé de regroupement valide (à côté des nouveaux ids 8 hexa).
+    const legacyId = "d-1736400000000-abcd";
+    const envelope = buildSubagentEnvelope(
+      { ...base, delegateRunId: legacyId },
+      { type: "subagent_start" },
+    );
+    expect(envelope.delegateRunId).toBe(legacyId);
+
+    // Le format n'est pas contraint : un id ancien et un id récent cohabitent.
+    const freshId = makeDelegateRunId(1736400000000);
+    expect(freshId).not.toBe(legacyId);
   });
 });
 
