@@ -19,6 +19,10 @@
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentMode } from "./model-library.js";
+// Garde-fou git : texte de consigne partagé (aussi injecté dans les 4 prompts de
+// rôle de l'extension harness-orchestrator) + hook `tool_call` qui BLOQUE les
+// écritures git avant exécution (cf. bash-guard.ts).
+import { GIT_SAFETY_RULES, guardBashToolCall, type ToolCallLike } from "./bash-guard.js";
 
 // ── Marqueurs (identiques à l'ancien mécanisme `_baseSystemPrompt`) ──
 const MODE_IDENTITY_MARKER = "<!-- PI_IDENTITY -->";
@@ -42,7 +46,7 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
 - Test your changes mentally — think about edge cases and error paths
 - If a change affects multiple files, list all affected files before starting
 - Keep commits atomic — one logical change per commit when possible
-- Après chaque modification logique de fichiers, appelle le tool log_commit_note avec un résumé concis (1 ligne) de ce que tu as modifié et pourquoi. Cela construit incrémentalement le message de commit.
+- Après chaque modification logique de fichiers, appelle le tool log_commit_note avec un résumé concis (1 ligne) de ce que tu as modifié et pourquoi. Cela construit incrémentalement le message de commit — ce tool n'écrit RIEN dans git : le commit lui-même revient à l'utilisateur.
 
 ## Code exploration: prefer graph tools over grep/find/ls
 When the project has been indexed by the knowledge graph (cbm_* tools are visible):
@@ -61,7 +65,7 @@ Règles opérationnelles (déclencheurs concrets) :
   projet : Dockerfile, entrypoint.sh, config, script non indexé) ou si cbm_* est absent.
 
 These are 100x more token-efficient than file-by-file exploration. Use them when possible.
-grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.`,
+grep/find/ls are still available as fallback for files outside the project or if cbm_* tools are not available.` + GIT_SAFETY_RULES,
   harness: `## Mode HARNESS — Chef de Projet
 
 Tu es le chef de projet. Tu discutes avec l'utilisateur et délègues l'exécution aux fonctions de routage.
@@ -237,6 +241,22 @@ export function createPromptExtension(
       } catch (e: any) {
         // Ne jamais casser un tour à cause du prompt : on laisse le prompt SDK.
         console.warn(`[system-prompt] build failed: ${e?.message || e}`);
+        return undefined;
+      }
+    });
+
+    // Garde-fou git (session PRINCIPALE, outil bash uniquement). Le SDK permet de
+    // BLOQUER un appel avant exécution : `pi.on("tool_call", …)` →
+    // ToolCallEventResult { block, reason } (types.d.ts:974-980, 1089-1092, 1224).
+    // `guardBashToolCall` ne s'applique qu'à `toolName === "bash"`, ne bloque que
+    // sur un verdict explicite et ne plante jamais (erreur → laisser passer + tracer).
+    pi.on("tool_call", (event) => {
+      try {
+        return guardBashToolCall(event as unknown as ToolCallLike, {
+          log: (message) => console.warn(`[system-prompt] ${message}`),
+        });
+      } catch (e: any) {
+        console.warn(`[system-prompt] bash-guard hook failed (call allowed): ${e?.message || e}`);
         return undefined;
       }
     });

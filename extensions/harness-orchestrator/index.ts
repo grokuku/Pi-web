@@ -37,6 +37,19 @@ import {
   swallowRejection,
 } from "../../backend/src/pi/harness-abort.js";
 
+// ── Garde-fou git (incident : un sous-agent a fait `git reset --mixed HEAD~1`
+// sur le commit de l'utilisateur « pour annuler un commit qu'il croyait
+// extérieur »). Le prompt des sous-agents étant REMPLACÉ (before_agent_start
+// ci-dessous), les interdictions du mode `code` de system-prompt.ts ne les
+// atteignaient jamais : on injecte donc GIT_SAFETY_RULES dans les 4 prompts de
+// rôle ET on branche un refus TECHNIQUE sur `tool_call`. Module backend PUR
+// (aucun import Express), résolu par jiti comme harness-archive.
+import {
+  GIT_SAFETY_RULES,
+  guardBashToolCall,
+  type ToolCallLike,
+} from "../../backend/src/pi/bash-guard.js";
+
 // ── LOT 1 (orchestrateur interactif) : REGISTRE des runs en cours ───────────
 // Chaque délégation enregistre un handle (cancel/steer) et le désenregistre
 // dans un finally. Le registre est PUBLIÉ sur globalThis (pont identique à
@@ -298,7 +311,7 @@ Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu 
 - Sois précis et concis
 - Liste les fichiers à créer/modifier
 - Décris l'approche technique et les dépendances
-- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
+- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
     // read-only : exploration (CBM + fichiers) + analyse de fichiers.
     tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
@@ -318,7 +331,7 @@ Règles :
 - Suis les conventions existantes du projet
 - Fais des changements atomiques, un fichier à la fois
 - Gère les erreurs et edge cases
-- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
+- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
     // écriture/édition + bash + exploration (CBM + fichiers) + analyse + capture UI.
     tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
@@ -337,7 +350,7 @@ Règles :
 - Vérifie les edge cases non gérés
 - Signale les bugs avec fichier:ligne
 - Suggère des corrections concrètes
-- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
+- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
     // read-only STRICT (pas d'edit/write/bash) : exploration, analyse, capture UI.
     tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
@@ -354,7 +367,7 @@ Règles :
 - Agrège les plans, implémentations et relectures
 - Rédige un rapport final clair et actionnable
 - Mets en évidence les décisions, les changements et les risques restants
-- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE,
+- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
     // read-only : exploration CBM + fichiers + analyse pour vérifier la synthèse.
     tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
@@ -1537,6 +1550,22 @@ export default function (pi: ExtensionAPI) {
         // l'identique. Préfixe byte-stable pour un couple (projet, rôle) → cache P3.
         const subagentPromptState: { systemPrompt: string } = { systemPrompt: "" };
         const subagentPromptExtension = (pi: any) => {
+          // Garde-fou git : couvre TOUS les sous-agents (la tempSession n'hérite
+          // pas de l'extension de la session principale). Le SDK peut BLOQUER un
+          // appel avant exécution : `pi.on("tool_call", …)` →
+          // ToolCallEventResult { block, reason } (types.d.ts:974-980, 1224).
+          // Ne s'applique qu'à l'outil `bash`, jamais aux autres ; ne plante
+          // jamais (erreur → laisser passer + tracer).
+          pi.on("tool_call", (event: any) => {
+            try {
+              return guardBashToolCall(event as ToolCallLike, {
+                log: (message) => console.warn(`[harness-orchestrator] ${message}`),
+              });
+            } catch (e: any) {
+              console.warn(`[harness-orchestrator] bash-guard hook failed (call allowed): ${e?.message || e}`);
+              return undefined;
+            }
+          });
           pi.on("before_agent_start", (event: any) => {
             try {
               if (!subagentPromptState.systemPrompt) return undefined;

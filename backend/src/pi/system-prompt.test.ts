@@ -110,7 +110,13 @@ describe("createPromptExtension", () => {
   it("relit le mode à chaque run (bascule code → harness)", async () => {
     let current: AgentMode = "code";
     let handler: ((event: any) => any) | undefined;
-    const fakePi = { on: (_n: string, h: any) => { handler = h; } } as unknown as ExtensionAPI;
+    // Le fake ne capture QUE `before_agent_start` : l'extension enregistre aussi
+    // le garde-fou `tool_call` (bash-guard), qui n'a pas la même signature.
+    const fakePi = {
+      on: (name: string, h: any) => {
+        if (name === "before_agent_start") handler = h;
+      },
+    } as unknown as ExtensionAPI;
 
     await (createPromptExtension(ctxFor("code", { getMode: () => current })) as any).factory(fakePi);
 
