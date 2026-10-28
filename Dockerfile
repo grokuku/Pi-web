@@ -82,7 +82,7 @@ RUN node -e "const fs=require('fs');const v=fs.readFileSync('/app/VERSION','utf8
 # compilées par le build backend).
 RUN cd backend && npm run typecheck:extensions
 
-# backend : `tsc` + copie de src/projects/git-askpass.sh dans dist/projects/
+# backend : `tsc` → dist/ (aucun script annexe à copier)
 RUN cd backend && npm run build
 
 # frontend : `tsc -b && vite build` → frontend/dist (servi sur `/`)
@@ -189,7 +189,7 @@ RUN chmod +x entrypoint.sh
 
 # ─── Artefacts DÉJÀ CONSTRUITS (plus aucun npm install/build à l'exécution) ───
 # backend : package.json + node_modules (dont node-pty compilé dans `deps`) +
-#           dist/ (dont projects/git-askpass.sh) + sources TS (2 Mo, conservées
+#           dist/ + sources TS (2 Mo, conservées
 #           à l'identique de l'image historique).
 # frontend : dist/ servi sur `/` + node_modules (outillage conservé).
 COPY --from=build /app/backend  ./backend

@@ -5,6 +5,7 @@ import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
+import { decideGitFailure } from "../../utils/git-errors";
 
 // ── Libellés i18n pré-traduits pour parseJsonResponse ──
 // (le helper utils n'a pas accès au hook useTranslation : on lui passe des
@@ -153,7 +154,17 @@ function GitProjectSection({
   const [message, setMessage] = useState("");
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
   const [commitMessage, setCommitMessage] = useState<{ subject: string; body: string } | null>(null);
-  const [pendingAuthAction, setPendingAuthAction] = useState<{ url: string; action: ActionType } | null>(null);
+  const [pendingAuthAction, setPendingAuthAction] = useState<{
+    url: string;
+    action: ActionType;
+    // Message RÉEL de l'échec : transmis à la modale (sinon perdu).
+    error: string;
+  } | null>(null);
+  // Nombre d'ouvertures de la modale d'identifiants (borné : plus de boucle).
+  const [authAttempts, setAuthAttempts] = useState(0);
+  // Action bloquée après la borne : l'utilisateur garde la main (« Réessayer »).
+  const [blockedAction, setBlockedAction] = useState<{ url: string; action: ActionType } | null>(null);
+  const [forgettingCredentials, setForgettingCredentials] = useState(false);
   const [showPushModal, setShowPushModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
 
@@ -251,16 +262,49 @@ function GitProjectSection({
         setMessage(data.result || `${action} successful`);
       }
 
+      // Succès : la boucle d'identifiants repart de zéro.
+      setAuthAttempts(0);
+      setBlockedAction(null);
       await fetchStatus();
     } catch (err: any) {
-      if (err?.data?.code === "GIT_AUTH_REQUIRED") {
-        setPendingAuthAction({ url, action });
+      const failure = decideGitFailure(err, authAttempts, {
+        authLimitReached: (max) => t("git.authLimitReached", max),
+      });
+      // Le vrai message est TOUJOURS affiché (avant : remplacé par la modale).
+      setError(failure.message);
+      if (failure.showAuthModal) {
+        setAuthAttempts((n) => n + 1);
+        setBlockedAction(null);
+        setPendingAuthAction({ url, action, error: failure.message });
         setShowAuthModal(true);
         return;
       }
-      setError(err.message);
+      if (failure.blocked) {
+        // Borne atteinte : plus de modale, mais un vrai bouton « Réessayer ».
+        setBlockedAction({ url, action });
+      }
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // ── Oublier les identifiants (route DELETE existante, jamais appelée avant) ──
+  // Sans ça, un token inutilisable restait chiffré sur disque et rechargé au boot.
+  const forgetCredentials = async () => {
+    setForgettingCredentials(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git/credentials`, { method: "DELETE" });
+      await parseJsonResponse<{ success?: boolean }>(res, apiErrorLabels(t));
+      setPendingAuthAction(null);
+      setBlockedAction(null);
+      setAuthAttempts(0);
+      setMessage(t("gitPanel.credentialsForgotten"));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setForgettingCredentials(false);
     }
   };
 
@@ -349,9 +393,25 @@ function GitProjectSection({
       )}
 
       {error && (
-        <div className="text-hacker-error text-[0.75rem] mb-1.5 px-1 flex items-center gap-1">
-          <HolafIcon name="alert-triangle" size={10} />
-          {error}
+        <div className="text-hacker-error text-[0.75rem] mb-1.5 px-1 flex items-start gap-1">
+          <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
+          <span className="flex-1 break-words">{error}</span>
+          {/* Borne des tentatives atteinte : on ne rouvre plus la modale, on
+              laisse l'utilisateur relancer LUI-MÊME (aucune boucle auto). */}
+          {blockedAction && (
+            <button
+              onClick={() => {
+                const target = blockedAction;
+                setBlockedAction(null);
+                setAuthAttempts(0);
+                doAction(target.action, target.url);
+              }}
+              disabled={actionLoading !== null}
+              className="shrink-0 border border-hacker-error/40 px-1.5 py-0.5 hover:bg-hacker-error/10 transition-colors disabled:opacity-40"
+            >
+              {t("git.retry")}
+            </button>
+          )}
         </div>
       )}
 
@@ -531,6 +591,21 @@ function GitProjectSection({
               {t("gitPanel.push")}
             </button>
           </div>
+
+          {/* Les identifiants SONT persistés (chiffrés) : donner le moyen de les effacer. */}
+          <button
+            onClick={forgetCredentials}
+            disabled={forgettingCredentials || actionLoading !== null}
+            title={t("gitPanel.forgetCredentialsTitle")}
+            className="w-full flex items-center justify-center gap-1 px-2 py-0.5 text-[0.6875rem] text-hacker-text-dim hover:text-hacker-error transition-colors disabled:opacity-40"
+          >
+            {forgettingCredentials ? (
+              <HolafIcon name="refresh" size={9} className="animate-spin" />
+            ) : (
+              <HolafIcon name="trash" size={9} />
+            )}
+            {t("gitPanel.forgetCredentials")}
+          </button>
         </div>
       )}
 
@@ -551,17 +626,16 @@ function GitProjectSection({
       {showAuthModal && (
         <GitAuthModal
           project={project}
+          initialError={pendingAuthAction?.error}
           onClose={() => setShowAuthModal(false)}
           onConfigured={() => {
+            // AUCUNE relance automatique (c'était la boucle « mouline puis
+            // redemande ») : on informe, l'utilisateur relance PULL/PUSH.
             setShowAuthModal(false);
+            setPendingAuthAction(null);
             setError("");
-            if (pendingAuthAction) {
-              const { url, action } = pendingAuthAction;
-              setPendingAuthAction(null);
-              doAction(action, url);
-            } else {
-              fetchStatus();
-            }
+            setMessage(t("git.credentialsSaved"));
+            fetchStatus();
           }}
         />
       )}

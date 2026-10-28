@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && cp src/projects/git-askpass.sh dist/projects/git-askpass.sh",
+    "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck:extensions": "tsc -p tsconfig.extensions.json",

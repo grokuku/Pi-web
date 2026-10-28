@@ -2,18 +2,26 @@ import { useState } from "react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import type { Project } from "../../types";
+import { looksLikeSshRemote, suggestedHttpsRemote } from "../../utils/git-errors";
 
 interface Props {
   project: Project;
   onClose: () => void;
+  /** Identifiants enregistrés : le parent NE relance PAS l'action automatiquement. */
   onConfigured: () => void;
+  /**
+   * Message d'erreur RÉEL qui a déclenché l'ouverture (ex. « authentication
+   * failed », « timed out »). Affiché tel quel : avant, il était perdu et
+   * l'utilisateur ne voyait qu'un formulaire qui revenait en boucle.
+   */
+  initialError?: string;
 }
 
-export function GitAuthModal({ project, onClose, onConfigured }: Props) {
+export function GitAuthModal({ project, onClose, onConfigured, initialError }: Props) {
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError ?? "");
 
   const handleSave = async () => {
     if (!username.trim() || !token.trim()) {
@@ -38,6 +46,10 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
       setLoading(false);
     }
   };
+
+  const remote = project.git?.remote;
+  const sshRemote = looksLikeSshRemote(remote);
+  const httpsEquiv = sshRemote ? suggestedHttpsRemote(remote) : null;
 
   const provider = project.git?.provider;
   const isGitHub = provider === "github";
@@ -108,9 +120,30 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
             </p>
           )}
           <p className="text-hacker-text-dim/70 text-[10px]">
-            Credentials are stored in memory only and never written to disk permanently.
+            Credentials are saved encrypted (AES-256-GCM) in Pi-Web's data volume
+            (<span className="font-mono">.data/credentials.enc</span>) — never in the repository and never in
+            the remote URL. Use “Forget credentials” in the Git panel to delete them.
           </p>
         </div>
+
+        {/* Origin en SSH : prévenir AVANT la saisie (le backend refusera avec
+            GIT_REMOTE_SCHEME — on ne réécrit pas le remote en silence). */}
+        {sshRemote && (
+          <div className="text-hacker-warn text-xs mb-3 border border-hacker-warn/40 bg-hacker-warn/5 p-2 space-y-1">
+            <div className="flex items-center gap-1.5">
+              <HolafIcon name="alert-triangle" size={12} />
+              This repository uses an <strong>SSH</strong> remote (<span className="font-mono">{remote}</span>).
+            </div>
+            <div className="text-hacker-text-dim text-[10px]">
+              A token can only be used over HTTPS. Switch the remote first, then save your token:
+            </div>
+            <code className="block text-[10px] font-mono text-hacker-info break-all">
+              {httpsEquiv
+                ? `git remote set-url origin ${httpsEquiv}`
+                : "git remote set-url origin https://<host>/<owner>/<repo>.git"}
+            </code>
+          </div>
+        )}
 
         {error && (
           <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
@@ -171,7 +204,7 @@ export function GitAuthModal({ project, onClose, onConfigured }: Props) {
             ) : (
               <HolafIcon name="key" size={12} />
             )}
-            {loading ? "SAVING..." : "SAVE & RETRY"}
+            {loading ? "SAVING..." : "SAVE"}
           </button>
         </div>
     </ModalDialog>

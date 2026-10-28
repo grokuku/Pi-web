@@ -153,7 +153,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string, git?: Si
           }
         } catch {}
       }
-      reject(new Error(`${label} timed out after ${ms / 1000}s — this usually means authentication is required or the remote is unreachable`));
+      // Message SANS ambiguïté : un timeout est un problème réseau, pas un
+      // problème d'identifiants (ne pas renvoyer l'utilisateur vers le token).
+      reject(new Error(`${label} timed out after ${ms / 1000}s — the remote did not answer (network unreachable or port blocked)`));
     }, ms);
     promise
       .then((v) => { if (!settled) { clearTimeout(timer); settled = true; resolve(v); } })
@@ -325,10 +327,7 @@ export async function gitPull(cwd: string): Promise<string> {
           : "Already up to date";
       } catch (error: any) {
         const msg = error.message || "";
-        if (isAuthError(msg)) {
-          throw new GitAuthError(`Git pull authentication failed: ${msg}`);
-        }
-        throw new Error(`Git pull failed: ${msg}`);
+        throw classifyGitFailure("Git pull", msg, await readRemoteUrl(cwd));
       } finally {
         try {
           await restoreRemoteUrl(cwd);
@@ -352,10 +351,15 @@ export async function gitPush(cwd: string): Promise<string> {
           : "Nothing to push";
       } catch (error: any) {
         const msg = error.message || "";
-        if (isAuthError(msg)) {
-          throw new GitAuthError(`Git push authentication failed: ${msg}`);
+        // Non-fast-forward : le distant a avancé → action utilisateur explicite.
+        if (isNonFastForwardMessage(msg)) {
+          const branch = await currentBranchSafe(cwd);
+          throw new GitPushRejectedError(
+            `Push rejected: the remote repository has commits you do not have, and it will not accept this push. ` +
+            `Pull first (git pull --rebase origin ${branch}), then push again.`
+          );
         }
-        throw new Error(`Git push failed: ${msg}`);
+        throw classifyGitFailure("Git push", msg, await readRemoteUrl(cwd));
       } finally {
         try {
           await restoreRemoteUrl(cwd);
@@ -457,15 +461,97 @@ export class GitAuthError extends Error {
   }
 }
 
+/**
+ * L'origin du dépôt n'est pas en HTTPS (`git@host:owner/repo.git`, `ssh://…`).
+ *
+ * Pi-Web n'authentifie que par token inséré dans une URL HTTPS : sur un remote
+ * SSH, les identifiants stockés ne peuvent PAS être transmis (aucune clé SSH
+ * n'est gérée par l'application). On refuse donc explicitement, avec une
+ * commande de correction, plutôt que de réécrire le remote en silence — et on
+ * ne présente plus cela comme une « erreur d'authentification » (une saisie de
+ * token ne peut pas la corriger).
+ */
+export class GitRemoteSchemeError extends Error {
+  constructor(message: string, readonly remoteUrl?: string, readonly httpsUrl?: string) {
+    super(message);
+    this.name = "GitRemoteSchemeError";
+  }
+}
+
+/**
+ * Le dépôt distant est injoignable (DNS, firewall, port SSH filtré, timeout).
+ * Distinct de GitAuthError : aucun identifiant ne corrige un problème réseau.
+ */
+export class GitUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitUnreachableError";
+  }
+}
+
+/**
+ * Push refusé par le serveur (non-fast-forward / [rejected]) : le distant a des
+ * commits que le local n'a pas. Action utilisateur requise (pull --rebase).
+ */
+export class GitPushRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitPushRejectedError";
+  }
+}
+
+/**
+ * Vrai uniquement pour une VRAIE erreur d'authentification (le token est
+ * refusé ou absent). `Permission denied` (SSH) et `timed out` (réseau) en sont
+ * volontairement EXCLUS : ils sont désormais routés vers
+ * GitRemoteSchemeError / GitUnreachableError (cf. classifyGitFailure).
+ */
 function isAuthError(msg: string): boolean {
   return (
     msg.includes("could not read Username") ||
     msg.includes("Authentication failed") ||
     msg.includes("403") ||
     msg.includes("credential") ||
-    msg.includes("Permission denied") ||
-    msg.includes("fatal: could not read") ||
-    msg.includes("timed out") // timeout often means auth needed
+    msg.includes("fatal: could not read")
+  );
+}
+
+/** Échec côté SSH (clé publique) : un token HTTPS n'y changerait rien. */
+function isSshFailureMessage(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("permission denied (publickey)") ||
+    m.includes("host key verification failed") ||
+    m.includes("could not open a connection to your authentication agent") ||
+    (m.includes("permission denied") && m.includes("ssh"))
+  );
+}
+
+/** Distant injoignable / opération coupée par le timeout. */
+function isUnreachableMessage(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("timed out") ||
+    m.includes("timeout") ||
+    m.includes("could not resolve host") ||
+    m.includes("connection refused") ||
+    m.includes("connection reset") ||
+    m.includes("network is unreachable") ||
+    m.includes("no route to host") ||
+    m.includes("failed to connect") ||
+    m.includes("unable to access")
+  );
+}
+
+/** Push rejeté : le distant a avancé (non-fast-forward). */
+function isNonFastForwardMessage(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("non-fast-forward") ||
+    m.includes("[rejected]") ||
+    m.includes("updates were rejected") ||
+    m.includes("fetch first") ||
+    m.includes("remote contains work")
   );
 }
 
@@ -518,6 +604,92 @@ async function withAskpassTempFile<T>(cwd: string, fn: () => Promise<T>): Promis
 }
 
 /**
+ * true si l'URL du remote est en HTTPS (seul schéma où Pi-Web sait injecter un token).
+ */
+export function isHttpsRemoteUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+/**
+ * Convertit une URL de remote SSH en son équivalent HTTPS (suggestion affichée
+ * à l'utilisateur ; le remote n'est JAMAIS réécrit automatiquement).
+ *
+ *   git@github.com:owner/repo.git      → https://github.com/owner/repo.git
+ *   ssh://git@github.com/owner/repo.git → https://github.com/owner/repo.git
+ */
+export function sshRemoteToHttps(url: string): string | null {
+  const trimmed = url.trim();
+  const scpLike = trimmed.match(/^git@([^:/]+):(.+)$/);
+  if (scpLike) return `https://${scpLike[1]}/${scpLike[2]}`;
+  const sshUrl = trimmed.match(/^ssh:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i);
+  if (sshUrl) return `https://${sshUrl[1]}/${sshUrl[2]}`;
+  return null;
+}
+
+/**
+ * Message actionnable pour un remote non-HTTPS : dit ce qui se passe et donne
+ * la commande exacte à exécuter (URL sans identifiants embarqués).
+ */
+export function buildRemoteSchemeMessage(remoteUrl: string): string {
+  const safeUrl = redactUrl(remoteUrl);
+  const httpsUrl = sshRemoteToHttps(remoteUrl);
+  const command = httpsUrl
+    ? `git remote set-url origin ${httpsUrl}`
+    : "git remote set-url origin https://<host>/<owner>/<repo>.git";
+  return (
+    `This repository's origin uses SSH (${safeUrl}). ` +
+    `Pi-Web authenticates with a personal token over HTTPS and cannot send it over SSH. ` +
+    `Switch origin to HTTPS, then retry: ${command}`
+  );
+}
+
+/** Lit l'URL de l'origin sans lever d'erreur (null si non disponible). */
+async function readRemoteUrl(cwd: string): Promise<string | null> {
+  try {
+    const url = (await simpleGit(cwd).raw(["remote", "get-url", "origin"])).trim();
+    return url || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Nom de la branche courante, pour un message de correction (« pull --rebase origin <branche> »). */
+async function currentBranchSafe(cwd: string): Promise<string> {
+  try {
+    const branch = (
+      await simpleGit(cwd).raw(["rev-parse", "--abbrev-ref", "HEAD"])
+    ).trim();
+    if (branch && branch !== "HEAD") return branch;
+  } catch {
+    // pas de commit / pas un dépôt — repli ci-dessous
+  }
+  return "main";
+}
+
+/**
+ * Transforme un message d'échec git en erreur typée, pour que la route réponde
+ * un code DISTINCT par cause (plus de « tout est un problème de token »).
+ */
+function classifyGitFailure(label: string, msg: string, remoteUrl?: string | null): Error {
+  // Ordre important : « unable to access … 403 » est une erreur d'IDENTIFIANTS
+  // (le serveur a répondu), donc l'auth est testée avant l'injoignabilité.
+  if (isSshFailureMessage(msg)) {
+    return new GitRemoteSchemeError(
+      buildRemoteSchemeMessage(remoteUrl || "git@<host>:<owner>/<repo>.git"),
+      remoteUrl || undefined,
+      sshRemoteToHttps(remoteUrl || "") || undefined
+    );
+  }
+  if (isAuthError(msg)) {
+    return new GitAuthError(`${label} authentication failed: ${msg}`);
+  }
+  if (isUnreachableMessage(msg)) {
+    return new GitUnreachableError(`${label} failed: the remote did not answer (${msg})`);
+  }
+  return new Error(`${label} failed: ${msg}`);
+}
+
+/**
  * Create a simple-git instance with credentials embedded in the remote URL.
  *
  * Instead of GIT_ASKPASS (blocked by git >=2.36 unless allowUnsafeAskPass
@@ -526,36 +698,53 @@ async function withAskpassTempFile<T>(cwd: string, fn: () => Promise<T>): Promis
  *   https://x-access-token:TOKEN@github.com/user/repo.git
  *
  * This works with GitHub, GitLab, Bitbucket personal access tokens.
+ *
+ * Refus explicite si l'origin n'est pas HTTPS (SSH) : voir GitRemoteSchemeError.
+ * On ne convertit JAMAIS le remote en silence (le protocole d'un dépôt ne se
+ * change pas dans le dos de l'utilisateur).
  */
 async function gitWithAuth(cwd: string): Promise<SimpleGit> {
   const git = simpleGit(cwd);
 
+  let remoteUrl: string;
   try {
-    const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
-    const host = extractHost(remoteUrl);
-    console.log(`[git] gitWithAuth: remoteUrl=${redactUrl(remoteUrl)}, host=${host}, hasCreds=${host ? credentialStore.has(host) : false}`);
-
-    if (host && credentialStore.has(host)) {
-      const creds = credentialStore.get(host)!;
-      const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
-      console.log(`[git] gitWithAuth: injecting credentials, result=${redactUrl(authUrl)}`);
-      // Temporarily set the remote URL with credentials for this operation
-      await git.raw(["remote", "set-url", "origin", authUrl]);
-      // Git 2.38+ may reject credentials in URLs — explicitly allow it
-      try {
-        await git.raw(["config", "transfer.credentialsInUrl", "allow"]);
-      } catch {
-        // config may not support this option (older git), ignore
-      }
-      // Return the git instance (caller will use it for pull/push/etc)
-      return git;
-    }
+    remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
   } catch (e: any) {
-    console.log(`[git] gitWithAuth: error (will proceed without auth): ${e?.message || e}`);
-    // Not a git repo or no remote — proceed without auth
+    console.log(`[git] gitWithAuth: no origin remote (${e?.message || e}) — proceeding without auth`);
+    return git;
   }
 
-  // No credentials stored — use default (will fail on auth-required remotes)
+  const host = extractHost(remoteUrl);
+  const hasCreds = !!host && credentialStore.has(host);
+  console.log(`[git] gitWithAuth: remoteUrl=${redactUrl(remoteUrl)}, host=${host}, hasCreds=${hasCreds}`);
+
+  if (!host || !hasCreds) {
+    // Pas d'identifiants pour cet hôte : on tente sans auth (l'échec éventuel
+    // sera classé par classifyGitFailure → GIT_AUTH_REQUIRED / GIT_REMOTE_SCHEME).
+    return git;
+  }
+
+  // Remote SSH + identifiants stockés : le token ne peut pas passer → refus net.
+  if (!isHttpsRemoteUrl(remoteUrl)) {
+    throw new GitRemoteSchemeError(
+      buildRemoteSchemeMessage(remoteUrl),
+      remoteUrl,
+      sshRemoteToHttps(remoteUrl) || undefined
+    );
+  }
+
+  const creds = credentialStore.get(host)!;
+  const authUrl = injectCredentialsInUrl(remoteUrl, creds.username, creds.password);
+  console.log(`[git] gitWithAuth: injecting credentials, result=${redactUrl(authUrl)}`);
+  // Temporarily set the remote URL with credentials for this operation
+  await git.raw(["remote", "set-url", "origin", authUrl]);
+  // Git 2.38+ may reject credentials in URLs — explicitly allow it
+  try {
+    await git.raw(["config", "transfer.credentialsInUrl", "allow"]);
+  } catch {
+    // config may not support this option (older git), ignore
+  }
+  // Return the git instance (caller will use it for pull/push/etc)
   return git;
 }
 
@@ -642,7 +831,7 @@ export async function setGitCredentials(
   password: string
 ): Promise<void> {
   const host = await getRemoteHost(cwd);
-  console.log(`[git] setGitCredentials: host=${host}, username=${username}, password=${password.length} chars`);
+  console.log(`[git] setGitCredentials: host=${host}, username=${username}`);
   credentialStore.set(host, username, password);
   // Credentials are now injected into remote URLs at operation time
   // (no ASKPASS script needed with git >= 2.36)
@@ -873,17 +1062,11 @@ export async function gitCommitAndPush(
     // Non-critical
   }
 
-  // 7. Push
-  try {
-    const pushResult = await gitPush(cwd);
-    result.pushResult = pushResult;
-  } catch (error: any) {
-    // If it's an auth error, propagate it so the caller can ask for credentials
-    if (error instanceof GitAuthError) {
-      throw error;
-    }
-    result.pushResult = `Push failed: ${error.message}`;
-  }
+  // 7. Push — AUCUN échec n'est avalé : répondre 200 avec un `pushResult`
+  // « Push failed: … » faisait croire à un push réussi à l'UI (faux succès).
+  // Toute erreur remonte donc à l'appelant avec son type (auth / SSH /
+  // injoignable / push rejeté), et la route répond en erreur.
+  result.pushResult = await gitPush(cwd);
 
   return result;
 }
@@ -932,7 +1115,7 @@ export async function gitClone(
   // Inject credentials into remote URL if available
   if (host && credentialStore.has(host)) {
     const creds = credentialStore.get(host)!;
-    console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}, password=${creds.password.length} chars`);
+    console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}`);
     // Temp file GIT_ASKPASS transitoire : vit pendant TOUTE la commande clone,
     // supprimé en finally (même en cas d'erreur/timeout).
     return credentialStore.withTempFile(host, creds.username, creds.password, async () => {
@@ -959,10 +1142,7 @@ export async function gitClone(
       } catch (error: any) {
         const msg = error.message || "";
         console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
-        if (isAuthError(msg)) {
-          throw new GitAuthError(`Git clone authentication failed: ${msg}`);
-        }
-        throw new Error(`Git clone failed: ${msg}`);
+        throw classifyGitFailure("Git clone", msg, remote);
       }
     });
   }
@@ -988,10 +1168,7 @@ export async function gitClone(
   } catch (error: any) {
     const msg = error.message || "";
     console.error(`[git-clone] Clone WITHOUT auth FAILED: ${msg}`);
-    if (isAuthError(msg)) {
-      throw new GitAuthError(`Git clone authentication failed: ${msg}`);
-    }
-    throw new Error(`Git clone failed: ${msg}`);
+    throw classifyGitFailure("Git clone", msg, remote);
   }
 }
 

@@ -97,6 +97,18 @@ let statuses: Record<string, FullStatus>;
 beforeEach(() => {
   localStorage.setItem("pi-web-language", "en");
   sessionStorage.clear();
+  // jsdom n'implémente pas matchMedia : requis par ModalDialog (useIsMobile)
+  // dès qu'une modale (identifiants) est montée.
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
   statuses = {};
   fetchImpl = async (input: unknown) => {
     const url = String(input);
@@ -412,5 +424,144 @@ describe("GitPanel — spinner et polling", () => {
     await advanceTimers(30_000);
     expect(statusCalls("p1")).toHaveLength(2); // onglet caché : pas de sondage
     hidden.mockRestore();
+  });
+});
+
+// ── Erreurs git : message réel, borne des tentatives, relance MANUELLE ──────
+// Régression corrigée : un échec d'authentification ouvrait la modale sans
+// jamais afficher la cause, puis `onConfigured` relançait l'action à l'infini
+// (« mouline puis redemande »).
+
+// Réponse d'erreur JSON (parseJsonResponse attache le corps à err.data).
+function gitErrorResponse(status: number, body: Record<string, unknown>): Response {
+  return {
+    ok: false,
+    status,
+    headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "application/json" : null) },
+    json: async () => body,
+  } as unknown as Response;
+}
+
+function authRequiredResponse(): Response {
+  return gitErrorResponse(401, {
+    error: "Git pull authentication failed: 403 Bad credentials",
+    code: "GIT_AUTH_REQUIRED",
+  });
+}
+
+describe("GitPanel — erreurs git (message affiché, borne, relance manuelle)", () => {
+  it("affiche la cause réelle et ne relance PAS l'action après enregistrement des identifiants", async () => {
+    statuses.p1 = dirtyStatus();
+    renderPanel();
+    await screen.findByText("Pull");
+
+    const pullCalls = { n: 0 };
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/pull")) {
+        pullCalls.n += 1;
+        return authRequiredResponse();
+      }
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      if (url.endsWith("/git/credentials")) return jsonResponse({ success: true });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(screen.getByText("Pull"));
+
+    // 1. La cause réelle est visible (avant : jamais affichée). Deux
+    // occurrences : le panneau ET le bandeau de la modale.
+    const shown = await screen.findAllByText("Git pull authentication failed: 403 Bad credentials");
+    expect(shown.length).toBeGreaterThan(1);
+    // 2. La modale s'ouvre, le message y est aussi transmis.
+    expect(screen.getByText("GIT AUTHENTICATION REQUIRED")).toBeTruthy();
+    expect(screen.getAllByText(/Bad credentials/).length).toBeGreaterThan(1);
+
+    fireEvent.change(screen.getByPlaceholderText("your-github-username"), { target: { value: "octocat" } });
+    fireEvent.change(screen.getByPlaceholderText("ghp_xxxxxxxxxxxxxxxxxxxx"), { target: { value: "fake-token" } });
+    fireEvent.click(screen.getByText("SAVE"));
+
+    // 3. Plus de relance automatique : un message invite à cliquer PUSH.
+    expect(await screen.findByText("Credentials saved — click PUSH to retry")).toBeTruthy();
+    expect(pullCalls.n).toBe(1); // aucun second appel /git/pull
+    expect(screen.queryByText("GIT AUTHENTICATION REQUIRED")).toBeNull();
+  });
+
+  it("après 2 tentatives : plus de modale, erreur affichée + bouton Réessayer", async () => {
+    statuses.p1 = dirtyStatus();
+    renderPanel();
+    await screen.findByText("Pull");
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/pull")) return authRequiredResponse();
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    // Tentative 1 → modale
+    fireEvent.click(screen.getByText("Pull"));
+    expect(await screen.findByText("GIT AUTHENTICATION REQUIRED")).toBeTruthy();
+    fireEvent.click(screen.getByText("CANCEL"));
+
+    // Tentative 2 → modale encore
+    fireEvent.click(screen.getByText("Pull"));
+    expect(await screen.findByText("GIT AUTHENTICATION REQUIRED")).toBeTruthy();
+    fireEvent.click(screen.getByText("CANCEL"));
+
+    // Tentative 3 → BLOQUÉE : plus de modale, message + « Réessayer »
+    fireEvent.click(screen.getByText("Pull"));
+    expect(await screen.findByText(/asked 2 times without success/)).toBeTruthy();
+    expect(screen.queryByText("GIT AUTHENTICATION REQUIRED")).toBeNull();
+    expect(screen.getByText("Retry")).toBeTruthy();
+  });
+
+  it("origin SSH (GIT_REMOTE_SCHEME) : message actionnable, AUCUNE modale d'identifiants", async () => {
+    statuses.p1 = dirtyStatus();
+    renderPanel();
+    await screen.findByText("Pull");
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/pull")) {
+        return gitErrorResponse(409, {
+          error:
+            "This repository's origin uses SSH (git@github.com:owner/repo.git). Switch origin to HTTPS, then retry: git remote set-url origin https://github.com/owner/repo.git",
+          code: "GIT_REMOTE_SCHEME",
+        });
+      }
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(screen.getByText("Pull"));
+
+    expect(await screen.findByText(/uses SSH/)).toBeTruthy();
+    // Un token ne peut rien corriger : la modale ne doit PAS s'ouvrir.
+    expect(screen.queryByText("GIT AUTHENTICATION REQUIRED")).toBeNull();
+  });
+
+  it("« Oublier les identifiants » appelle DELETE /git/credentials", async () => {
+    statuses.p1 = cleanStatus();
+    renderPanel();
+    // Une section clean est repliée : on la déplie pour atteindre le bouton.
+    fireEvent.click(await screen.findByText("MainProj"));
+    const button = await screen.findByText("Forget credentials");
+
+    const deletes: string[] = [];
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/git/credentials") && init?.method === "DELETE") {
+        deletes.push(url);
+        return jsonResponse({ success: true });
+      }
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(button);
+
+    expect(await screen.findByText("Credentials forgotten")).toBeTruthy();
+    expect(deletes).toEqual(["/api/projects/p1/git/credentials"]);
   });
 });

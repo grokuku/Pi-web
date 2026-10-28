@@ -30,8 +30,8 @@ const KEY_LENGTH = 32; // 256 bits
  * backup files, git repo accidents, or casual file snooping.
  *
  * CHANGELOG (sécurité) : plaintext jamais résident — uniquement transitoire pendant
- * les opérations git. Le temp file GIT_ASKPASS n'existe que via withTempFile() (écrit
- * avant l'opération, unlink en finally), jamais au boot ni dans set().
+ * les opérations git. Le temp file n'existe que via withTempFile() (écrit avant
+ * l'opération, unlink en finally), jamais au boot ni dans set().
  */
 class CredentialStore {
   private entries = new Map<string, { username: string; password: string }>();
@@ -264,19 +264,17 @@ class CredentialStore {
   }
 
   /**
-   * Get the ASKPASS helper script path.
-   */
-  get askpassScript(): string {
-    return path.join(this.tmpDir, "git-askpass.sh");
-  }
-
-  /**
-   * Exécute fn() avec un temp file GIT_ASKPASS transitoire pour le hostname donné.
+   * Exécute fn() avec un temp file transitoire pour le hostname donné.
    *
-   * Le fichier est écrit juste avant l'exécution et supprimé en finally (même en cas
-   * d'erreur/timeout). Un compteur de références par hostname garantit qu'une opération
-   * git concurrente ne supprime pas le fichier d'une autre : le unlink n'a lieu que
-   * lorsque la dernière référence est libérée.
+   * TODO(hygiène, 2026-10) : ce fichier temporaire n'est lu par PERSONNE.
+   * Pi-Web n'assigne jamais GIT_ASKPASS (git >= 2.36 le refuse sans
+   * allowUnsafeAskPass) et l'authentification passe par le token injecté dans
+   * l'URL du remote (gitWithAuth). Le script git-askpass.sh et son accesseur
+   * askpassScript ont été supprimés pour cette raison. Reste à supprimer ce
+   * withTempFile et ses 3 appelants (gitPull / gitPush / gitClone) : aujourd'hui
+   * il ne fait qu'écrire le token en clair sur disque le temps d'une opération.
+   * Ne PAS rebrancher un helper ASKPASS sur ces chemins sans aligner le format
+   * (ce store écrit `user\ntoken`, l'ancien script lisait /tmp/pi-web-creds).
    */
   async withTempFile<T>(
     hostname: string,

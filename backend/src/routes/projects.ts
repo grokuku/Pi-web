@@ -11,7 +11,7 @@ import {
   removeLinkedProject,
   resolvePushRepos,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
 import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification, listSessions } from "../pi/session.js";
 import { readSessionHistoryFile, selectSessionFile } from "../pi/session-history.js";
@@ -19,6 +19,55 @@ import { getDraft, getCleanedCommit, saveCleanedCommit, clearDraft } from "../pi
 import { buildPushNotification } from "../projects/push-notification.js";
 
 const router = Router();
+
+/**
+ * Réponse d'erreur git UNIFORME : un code par CAUSE, pour que le frontend
+ * n'ouvre la modale d'identifiants que sur une vraie erreur d'authentification.
+ *
+ *   GIT_AUTH_REQUIRED  (401) token absent/refusé → modale d'identifiants
+ *   GIT_REMOTE_SCHEME  (409) origin en SSH → message actionnable, PAS de modale
+ *   GIT_UNREACHABLE    (503) distant injoignable/timeout → message, PAS de modale
+ *   GIT_PUSH_REJECTED  (409) non-fast-forward → message « pull --rebase » d'abord
+ *   GIT_IDENTITY_REQUIRED (400) nom/e-mail git non configurés
+ *   GIT_LOCKED         (409) index.lock d'une autre opération
+ */
+function sendGitErrorResponse(res: Response, error: any): void {
+  const msg = error?.message || String(error || "Unknown error");
+  if (error instanceof GitIdentityError) {
+    res.status(400).json({ error: msg, code: "GIT_IDENTITY_REQUIRED" });
+    return;
+  }
+  if (error instanceof GitAuthError) {
+    res.status(401).json({ error: msg, code: "GIT_AUTH_REQUIRED" });
+    return;
+  }
+  if (error instanceof GitRemoteSchemeError) {
+    // `remoteUrl` n'est PAS renvoyé tel quel : une URL de remote peut contenir
+    // des identifiants embarqués. Seule la conversion HTTPS est utile au client.
+    res.status(409).json({
+      error: msg,
+      code: "GIT_REMOTE_SCHEME",
+      httpsUrl: error.httpsUrl,
+    });
+    return;
+  }
+  if (error instanceof GitUnreachableError) {
+    res.status(503).json({ error: msg, code: "GIT_UNREACHABLE" });
+    return;
+  }
+  if (error instanceof GitPushRejectedError) {
+    res.status(409).json({ error: msg, code: "GIT_PUSH_REJECTED" });
+    return;
+  }
+  if (msg.includes("index.lock") || msg.includes("lock persisted")) {
+    res.status(409).json({
+      error: "Git is locked. Another operation may be in progress. Wait a moment and try again, or run: rm -f .git/index.lock",
+      code: "GIT_LOCKED",
+    });
+    return;
+  }
+  res.status(400).json({ error: msg });
+}
 
 // GET all projects
 router.get("/", (_req: Request, res: Response) => {
@@ -205,11 +254,7 @@ router.post("/:id/git/pull", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    if (error instanceof GitAuthError) {
-      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
-    } else {
-      res.status(400).json({ error: error.message });
-    }
+    sendGitErrorResponse(res, error);
   }
 });
 
@@ -224,11 +269,7 @@ router.post("/:id/git/push", async (req: Request, res: Response) => {
     injectSessionNotification(project.id, "✅ Code pushed to remote repository. All local commits are now on the remote.");
     res.json({ result });
   } catch (error: any) {
-    if (error instanceof GitAuthError) {
-      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
-    } else {
-      res.status(400).json({ error: error.message });
-    }
+    sendGitErrorResponse(res, error);
   }
 });
 
@@ -285,17 +326,11 @@ router.post("/:id/git/commit-push", async (req: Request, res: Response) => {
               console.error(`[commit-push:linked] AI generation failed for ${sub.name}:`, err?.message || err);
             }
           }
+          // gitCommitAndPush ne masque plus les échecs de push : une erreur ici
+          // signifie que le sous-repo n'a PAS été poussé (jamais de faux succès).
           const result = await gitCommitAndPush(sub.cwd, subject, body);
           await syncGitInfo(sub);
           anyCommitted = true;
-          // gitCommitAndPush absorbe les échecs de push non-auth dans
-          // result.pushResult (ex: remote absent). Pour ne pas laisser un repo
-          // "poussé" en apparence alors que rien n'est parti, on marque l'échec.
-          if (typeof result.pushResult === "string" && result.pushResult.startsWith("Push failed")) {
-            repos.push({ name: sub.name, projectId: sub.id, result, error: result.pushResult });
-            console.error(`[commit-push:linked] ${sub.name}: ${result.pushResult}`);
-            continue;
-          }
           repos.push({ name: sub.name, projectId: sub.id, result });
           console.log(`[commit-push:linked] ${sub.name}: ${result.commitHash || "(no hash)"}`);
         } catch (err: any) {
@@ -378,19 +413,7 @@ ${repoLines}${failed.length ? `\n⚠️ Failed repos: ${failed.map((r: any) => r
 
     res.json(result);
   } catch (error: any) {
-    const msg = error?.message || String(error || "Unknown error");
-    if (error instanceof GitIdentityError) {
-      res.status(400).json({ error: msg, code: "GIT_IDENTITY_REQUIRED" });
-    } else if (error instanceof GitAuthError) {
-      res.status(401).json({ error: msg, code: "GIT_AUTH_REQUIRED" });
-    } else if (msg.includes("index.lock") || msg.includes("lock persisted")) {
-      res.status(409).json({
-        error: "Git is locked. Another operation may be in progress. Wait a moment and try again, or run: rm -f .git/index.lock",
-        code: "GIT_LOCKED",
-      });
-    } else {
-      res.status(400).json({ error: msg });
-    }
+    sendGitErrorResponse(res, error);
   }
 });
 
@@ -551,11 +574,7 @@ router.post("/:id/git/clone", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    if (error instanceof GitAuthError) {
-      res.status(401).json({ error: error.message, code: "GIT_AUTH_REQUIRED" });
-    } else {
-      res.status(400).json({ error: error.message });
-    }
+    sendGitErrorResponse(res, error);
   }
 });
 

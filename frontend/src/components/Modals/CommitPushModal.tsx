@@ -3,6 +3,7 @@ import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
+import { commitPushOutcome, decideGitFailure } from "../../utils/git-errors";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
 import { GitAuthModal } from "./GitAuthModal";
@@ -91,6 +92,11 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  // Résultat RÉEL du push : plus jamais « pushed » par défaut (faux succès).
+  const [outcome, setOutcome] = useState<{ ok: boolean; pushed: boolean; message: string } | null>(null);
+  const [authAttempts, setAuthAttempts] = useState(0);
+  const [authBlocked, setAuthBlocked] = useState(false);
+  const [authError, setAuthError] = useState<string | undefined>(undefined);
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -186,6 +192,16 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         onDone();
         return;
       }
+      // Succès SEULEMENT si le backend confirme un push réel : un `pushResult`
+      // d'échec (format historique avalé) est traité comme un échec affiché.
+      const result = commitPushOutcome(data);
+      setOutcome(result);
+      if (!result.ok) {
+        setError(result.message || t("commitPush.nothingPushed"));
+        return;
+      }
+      setAuthAttempts(0);
+      setAuthBlocked(false);
       setDone(true);
       onDone();
     } catch (err: any) {
@@ -195,15 +211,20 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         setShowIdentityModal(true);
         return;
       }
-      if (code === "GIT_AUTH_REQUIRED") {
+      // Cause affichée pour TOUTES les erreurs (avant, un échec d'auth ne
+      // montrait aucun message : d'où le formulaire qui revenait sans fin).
+      const failure = decideGitFailure(err, authAttempts, {
+        authLimitReached: (max) => t("git.authLimitReached", max),
+      });
+      setError(failure.message);
+      if (failure.showAuthModal) {
+        setAuthAttempts((n) => n + 1);
+        setAuthBlocked(false);
+        setAuthError(failure.message);
         setShowAuthModal(true);
         return;
       }
-      if (code === "GIT_LOCKED") {
-        setError(err?.data?.error || err.message);
-        return;
-      }
-      setError(err.message);
+      if (failure.blocked) setAuthBlocked(true);
     } finally {
       setLoading(null);
     }
@@ -236,9 +257,22 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
 
         {/* Error */}
         {error && (
-          <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-center gap-1.5">
-            <HolafIcon name="alert-triangle" size={12} />
-            {error}
+          <div className="text-hacker-error text-xs mb-3 border border-hacker-error/30 p-2 flex items-start gap-1.5">
+            <HolafIcon name="alert-triangle" size={12} className="shrink-0 mt-0.5" />
+            <span className="flex-1 break-words">{error}</span>
+            {authBlocked && !done && (
+              <button
+                onClick={() => {
+                  setAuthBlocked(false);
+                  setAuthAttempts(0);
+                  handlePush();
+                }}
+                disabled={loading !== null}
+                className="shrink-0 border border-hacker-error/40 px-1.5 py-0.5 hover:bg-hacker-error/10 transition-colors disabled:opacity-40"
+              >
+                {t("git.retry")}
+              </button>
+            )}
           </div>
         )}
 
@@ -250,11 +284,13 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
           </div>
         )}
 
-        {/* Done state */}
+        {/* Done state — n'annonce « poussé » que si c'est vrai. */}
         {done && (
           <div className="text-hacker-accent text-xs mb-3 border border-hacker-accent/30 p-3 flex items-center gap-2 bg-hacker-accent/5">
             <HolafIcon name="check" size={14} />
-            Changes pushed successfully! Closing...
+            {outcome?.pushed === false
+              ? outcome.message || t("commitPush.nothingPushed")
+              : `${t("commitPush.pushedOk")}${outcome?.message ? ` (${outcome.message})` : ""}`}
           </div>
         )}
 
@@ -527,11 +563,13 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
       {showAuthModal && (
         <GitAuthModal
           project={project}
+          initialError={authError}
           onClose={() => setShowAuthModal(false)}
           onConfigured={() => {
+            // Plus de relance automatique : l'utilisateur relance le push.
             setShowAuthModal(false);
-            setError("");
-            handlePush();
+            setAuthError(undefined);
+            setError(t("git.credentialsSaved"));
           }}
         />
       )}

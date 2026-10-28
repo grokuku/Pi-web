@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           npm test
 
-      # backend : `tsc` (+ copie de git-askpass.sh)
+      # backend : `tsc` → dist/
       # frontend : `tsc -b && vite build` → le contrôle de types est inclus.
       - name: Build
         working-directory: ${{ matrix.package }}

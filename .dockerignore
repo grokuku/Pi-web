@@ -6,8 +6,7 @@
 #   COPY VERSION
 #   COPY backend/       → package.json, package-lock.json, tsconfig.json,
 #                         tsconfig.extensions.json (typecheck:extensions),
-#                         src/ (incl. src/projects/git-askpass.sh copié par
-#                         "npm run build"), vitest.config.ts
+#                         src/, vitest.config.ts
 #   COPY frontend/      → package.json, package-lock.json, tsconfig.json,
 #                         index.html, vite.config.ts, tailwind.config.js,
 #                         postcss.config.js, src/, vitest.config.ts

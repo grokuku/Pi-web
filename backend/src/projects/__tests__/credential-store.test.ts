@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "fs";
+import path from "path";
 import { credentialStore } from "../credential-store.js";
 
 // Hostname unique pour ne pas interférer avec d'éventuels credentials réels.
@@ -55,5 +56,22 @@ describe("CredentialStore — temp file transitoire (plaintext jamais résident)
 
     // Même en cas d'erreur, le plaintext ne reste pas sur disque.
     expect(fs.existsSync(filePath)).toBe(false);
+  });
+});
+
+// ── Hygiène : le script ASKPASS mort a été supprimé ─────────────────────────
+// Il n'était lisible par personne (aucun GIT_ASKPASS assigné : git >= 2.36 le
+// refuse sans allowUnsafeAskPass) et pointait des chemins différents du store.
+// Le laisser reviendrait à exposer un script qui ment sur son rôle.
+describe("CredentialStore — script ASKPASS supprimé (plus de code mort)", () => {
+  it("n'expose plus askpassScript", () => {
+    expect(
+      (credentialStore as unknown as Record<string, unknown>).askpassScript
+    ).toBeUndefined();
+  });
+
+  it("le fichier src/projects/git-askpass.sh n'existe plus", () => {
+    const scriptPath = path.resolve(__dirname, "..", "git-askpass.sh");
+    expect(fs.existsSync(scriptPath)).toBe(false);
   });
 });

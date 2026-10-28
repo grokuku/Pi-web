@@ -765,6 +765,8 @@ export const fr = {
     session: "session",
     registry: "registre",
     aiDisabled: "Commit IA désactivé — aucun modèle configuré",
+    pushedOk: "Modifications poussées avec succès ! Fermeture...",
+    nothingPushed: "Rien n'a été poussé vers le dépôt distant",
   },
 
   // ── Git Panel ──
@@ -801,12 +803,19 @@ export const fr = {
     timeMin: (n: number) => `il y a ${n} min`,
     timeHour: (n: number) => `il y a ${n} h`,
     timeDay: (n: number) => `il y a ${n} j`,
+    forgetCredentials: "Oublier les identifiants",
+    forgetCredentialsTitle: "Supprime le jeton enregistré pour l'hôte de ce dépôt",
+    credentialsForgotten: "Identifiants oubliés",
   },
 
   // ── Git : erreurs de fetch (blindage anti-HTML) ──
   git: {
     sessionExpired: "Session expirée — recharge la page pour te reconnecter",
     serverError: (status: number) => `Erreur serveur (HTTP ${status})`,
+    retry: "Réessayer",
+    credentialsSaved: "Identifiants enregistrés — clique sur POUSSER pour réessayer",
+    authLimitReached: (max: number) =>
+      `identifiants demandés ${max} fois sans succès : lis le message ci-dessus (jeton invalide, dépôt en SSH, réseau) avant de réessayer`,
   },
 
   // ── Panneau SKILLS (liste + éditeur de SKILL.md) ──

@@ -764,6 +764,8 @@ export const en = {
     session: "session",
     registry: "registry",
     aiDisabled: "AI commit disabled — no model configured",
+    pushedOk: "Changes pushed successfully! Closing...",
+    nothingPushed: "Nothing was pushed to the remote",
   },
 
   // ── Git Panel ──
@@ -800,12 +802,19 @@ export const en = {
     timeMin: (n: number) => `${n}m ago`,
     timeHour: (n: number) => `${n}h ago`,
     timeDay: (n: number) => `${n}d ago`,
+    forgetCredentials: "Forget credentials",
+    forgetCredentialsTitle: "Delete the token stored for this repository's host",
+    credentialsForgotten: "Credentials forgotten",
   },
 
   // ── Git: fetch errors (anti-HTML guard) ──
   git: {
     sessionExpired: "Session expired — reload the page to sign in again",
     serverError: (status: number) => `Server error (HTTP ${status})`,
+    retry: "Retry",
+    credentialsSaved: "Credentials saved — click PUSH to retry",
+    authLimitReached: (max: number) =>
+      `credentials were asked ${max} times without success: check the message above (wrong token, SSH remote, network) before trying again`,
   },
 
   // ── SKILLS panel (list + SKILL.md editor) ──
