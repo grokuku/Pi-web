@@ -3,6 +3,8 @@ import { HolafIcon } from "../icons/HolafIcon";
 import type { Project } from "../../types";
 import { CommitPushModal } from "../Modals/CommitPushModal";
 import { GitAuthModal } from "../Modals/GitAuthModal";
+import { ModalDialog } from "../common/ModalDialog";
+import { hostFromRemoteUrl } from "../../utils/git-host";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
 import { decideGitFailure } from "../../utils/git-errors";
@@ -28,11 +30,17 @@ interface GitStatusFull {
   conflict: string[];
   files: Array<{ path: string; status: string }>;
   isClean: boolean;
+  // Ajoutés par la route /git/status : hôte du remote (clé du store
+  // d'identifiants) et présence d'un jeton. Absents = backend plus ancien.
+  host?: string | null;
+  hasCredentials?: boolean;
 }
 
 interface GitStatusNotRepo {
   notRepo: true;
   isEmpty: boolean;
+  host?: string | null;
+  hasCredentials?: boolean;
 }
 
 type GitStatus = GitStatusFull | GitStatusNotRepo;
@@ -288,19 +296,34 @@ function GitProjectSection({
     }
   };
 
-  // ── Oublier les identifiants (route DELETE existante, jamais appelée avant) ──
-  // Sans ça, un token inutilisable restait chiffré sur disque et rechargé au boot.
+  // ── Oublier les identifiants ──
+  // Le store chiffré est indexé par HOSTNAME : oublier efface le jeton de TOUS
+  // les dépôts du même hôte (github.com…). Sans ça, un token inutilisable
+  // (ex. sans le scope `workflow`) restait chiffré sur disque et RÉUTILISÉ à
+  // chaque push : impossible de repartir sur un jeton neuf.
   const forgetCredentials = async () => {
     setForgettingCredentials(true);
     setError("");
     setMessage("");
     try {
       const res = await fetch(`/api/projects/${project.id}/git/credentials`, { method: "DELETE" });
-      await parseJsonResponse<{ success?: boolean }>(res, apiErrorLabels(t));
+      const data = await parseJsonResponse<{ success?: boolean; host?: string; removed?: boolean }>(
+        res,
+        apiErrorLabels(t)
+      );
       setPendingAuthAction(null);
       setBlockedAction(null);
       setAuthAttempts(0);
-      setMessage(t("gitPanel.credentialsForgotten"));
+      // Message HONNÊTE : nomme l'hôte (le jeton vaut pour tous ses dépôts) et
+      // ne prétend rien effacer s'il n'y avait rien.
+      const forgottenHost = data?.host || credentialsHost;
+      setMessage(
+        data?.removed === false
+          ? t("gitPanel.credentialsAlreadyEmpty", forgottenHost || "…")
+          : t("gitPanel.credentialsForgotten", forgottenHost || "…")
+      );
+      // Rafraîchit l'état : `hasCredentials` revient du backend (bouton grisé).
+      await fetchStatus();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -314,6 +337,39 @@ function GitProjectSection({
   const isNotRepo = !!status && "notRepo" in status;
   const dirIsEmpty = isNotRepo && !!(status as GitStatusNotRepo).isEmpty;
   const normalStatus = status && !("notRepo" in status) ? (status as GitStatusFull) : null;
+
+  // Hôte du remote = CLÉ du store d'identifiants (un jeton couvre TOUS les
+  // dépôts de cet hôte). Le backend le renvoie dans /git/status ; repli sur
+  // l'analyse locale du remote si le backend est plus ancien.
+  const credentialsHost = status?.host || hostFromRemoteUrl(project.git.remote);
+  // `false` = rien à oublier → bouton présent mais GRISÉ.
+  // `undefined` = inconnu (backend ancien) → bouton actif : ne jamais rendre
+  // l'action inatteignable par excès de prudence.
+  const hasCredentials = status?.hasCredentials;
+
+  // Bouton « Oublier les identifiants » PARTAGÉ par les deux dispositions
+  // (dépôt initialisé ET pas encore cloné) : il est donc toujours rendu dès
+  // qu'un dépôt est affiché, son état dépendant des identifiants.
+  const forgetButton = (
+    <button
+      onClick={forgetCredentials}
+      disabled={forgettingCredentials || actionLoading !== null || hasCredentials === false}
+      title={
+        hasCredentials === false
+          ? t("gitPanel.forgetCredentialsNone", credentialsHost || "…")
+          : t("gitPanel.forgetCredentialsTitle", credentialsHost || "…")
+      }
+      data-testid="forget-credentials"
+      className="w-full flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[0.6875rem] text-hacker-text-dim hover:border-hacker-error hover:text-hacker-error transition-colors disabled:opacity-40"
+    >
+      {forgettingCredentials ? (
+        <HolafIcon name="refresh" size={9} className="animate-spin" />
+      ) : (
+        <HolafIcon name="trash" size={9} />
+      )}
+      {t("gitPanel.forgetCredentials")}
+    </button>
+  );
 
   // Branche affichée dans le badge de la ligne compacte.
   const branchBadge = isNotRepo
@@ -471,6 +527,10 @@ function GitProjectSection({
               </button>
             </>
           )}
+
+          {/* Même action que pour un dépôt initialisé : un jeton enregistré
+              peut être inutilisable AVANT même le premier clone. */}
+          {forgetButton}
         </div>
       )}
 
@@ -592,20 +652,9 @@ function GitProjectSection({
             </button>
           </div>
 
-          {/* Les identifiants SONT persistés (chiffrés) : donner le moyen de les effacer. */}
-          <button
-            onClick={forgetCredentials}
-            disabled={forgettingCredentials || actionLoading !== null}
-            title={t("gitPanel.forgetCredentialsTitle")}
-            className="w-full flex items-center justify-center gap-1 px-2 py-0.5 text-[0.6875rem] text-hacker-text-dim hover:text-hacker-error transition-colors disabled:opacity-40"
-          >
-            {forgettingCredentials ? (
-              <HolafIcon name="refresh" size={9} className="animate-spin" />
-            ) : (
-              <HolafIcon name="trash" size={9} />
-            )}
-            {t("gitPanel.forgetCredentials")}
-          </button>
+          {/* Les identifiants SONT persistés (chiffrés) : moyen d'effacement
+              toujours présent (grisé s'il n'y a rien à oublier). */}
+          {forgetButton}
         </div>
       )}
 
@@ -700,6 +749,13 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
   const { t } = useTranslation();
   const [refreshKey, setRefreshKey] = useState(0);
   const [showPushAllModal, setShowPushAllModal] = useState(false);
+  // Action GLOBALE par hôte : le store d'identifiants est indexé par hostname,
+  // donc « oublier » au niveau du panneau efface le jeton de TOUS les dépôts
+  // de l'hôte. Confirmation obligatoire (avertissement explicite).
+  const [showForgetHostModal, setShowForgetHostModal] = useState(false);
+  const [forgetHostLoading, setForgetHostLoading] = useState(false);
+  const [hostMessage, setHostMessage] = useState("");
+  const [hostError, setHostError] = useState("");
 
   // ── Sections en chargement (ids projet) : le spinner ⟳ de l'en-tête reflète
   // un chargement RÉEL au lieu de rester bloqué sur « refreshKey > 0 » ──
@@ -859,6 +915,44 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
 
   const hasAnySection = mainHasRepo || linkedProjects.length > 0;
 
+  // Hôte + présence d'un jeton pour la section PRINCIPALE (son statut est
+  // remonté par la section via handleStatusChange) : conditionne l'action
+  // globale de l'en-tête, qui ne dépend donc plus d'un dépôt déplié.
+  const mainStatus = statuses[project.id];
+  const mainCredentialsHost = mainStatus?.host || hostFromRemoteUrl(project.git?.remote);
+  const mainHasCredentials = mainStatus?.hasCredentials;
+
+  // Efface le jeton de l'HÔTE (route dédiée) : vaut pour tous ses dépôts.
+  const forgetHostCredentials = async () => {
+    if (!mainCredentialsHost) return;
+    setForgetHostLoading(true);
+    setHostError("");
+    setHostMessage("");
+    try {
+      const res = await fetch(`/api/git-credentials/${encodeURIComponent(mainCredentialsHost)}`, {
+        method: "DELETE",
+      });
+      const data = await parseJsonResponse<{ success?: boolean; host?: string; removed?: boolean }>(
+        res,
+        apiErrorLabels(t)
+      );
+      const host = data?.host || mainCredentialsHost;
+      setHostMessage(
+        data?.removed === false
+          ? t("gitPanel.credentialsAlreadyEmpty", host)
+          : t("gitPanel.credentialsForgotten", host)
+      );
+      setShowForgetHostModal(false);
+      // Rafraîchit l'état À L'ÉCRAN : chaque section refait /git/status, donc
+      // `hasCredentials` revient à false et les boutons passent en grisé.
+      refreshSections();
+    } catch (err: any) {
+      setHostError(err.message);
+    } finally {
+      setForgetHostLoading(false);
+    }
+  };
+
   return (
     <div className="p-2 border-b border-hacker-border">
       {/* En-tête global du panel : GIT + refresh (rafraîchit toutes les sections) */}
@@ -866,6 +960,29 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
         <HolafIcon name="git-branch" size={12} />
         GIT {providerIcon}
         <div className="flex-1" />
+        {/* Action GLOBALE par hôte : efface le jeton de TOUS les dépôts de
+            l'hôte (le store est indexé par hostname). Visible même section
+            repliée, et grisée s'il n'y a aucun jeton enregistré. */}
+        <button
+          onClick={() => {
+            setHostError("");
+            setHostMessage("");
+            setShowForgetHostModal(true);
+          }}
+          disabled={!mainCredentialsHost || mainHasCredentials === false}
+          title={
+            mainHasCredentials === false
+              ? t("gitPanel.forgetCredentialsNone", mainCredentialsHost || "…")
+              : t("gitPanel.forgetHostTitle", mainCredentialsHost || "…")
+          }
+          data-testid="forget-host-credentials"
+          className="flex items-center gap-0.5 text-[0.625rem] text-hacker-text-dim hover:text-hacker-error transition-colors disabled:opacity-40"
+        >
+          <HolafIcon name="trash" size={10} />
+          {mainCredentialsHost
+            ? t("gitPanel.forgetHostAction", mainCredentialsHost)
+            : t("gitPanel.forgetCredentials")}
+        </button>
         <button
           onClick={refreshAll}
           className="text-hacker-text-dim hover:text-hacker-accent transition-colors"
@@ -874,6 +991,23 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
           <HolafIcon name="refresh" size={10} className={isAnySectionLoading ? "animate-spin" : ""} />
         </button>
       </div>
+
+      {/* Retour honnête de l'action globale (nomme l'hôte concerné). */}
+      {hostMessage && (
+        <div
+          className="text-hacker-accent text-[0.6875rem] mb-1 flex items-center gap-1"
+          data-testid="gitpanel-host-message"
+        >
+          <HolafIcon name="check" size={10} />
+          <span className="flex-1 break-words">{hostMessage}</span>
+        </div>
+      )}
+      {hostError && (
+        <div className="text-hacker-error text-[0.6875rem] mb-1 flex items-start gap-1">
+          <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
+          <span className="flex-1 break-words">{hostError}</span>
+        </div>
+      )}
 
       {/* ── Section du projet principal (même présentation, polling 30 s) ── */}
       {mainHasRepo && (
@@ -933,6 +1067,59 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
           <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
           <span>{t('gitPanel.emptyLinked')}</span>
         </div>
+      )}
+
+      {/* ── Confirmation de l'effacement GLOBAL par hôte ──
+          Avertissement explicite : la clé du store est le HOSTNAME, donc cela
+          concerne TOUS les dépôts de cet hôte, pas seulement le projet affiché. */}
+      {showForgetHostModal && mainCredentialsHost && (
+        <ModalDialog
+          id="git-forget-host"
+          onClose={() => setShowForgetHostModal(false)}
+          ariaLabel={t("gitPanel.forgetHostAction", mainCredentialsHost)}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-hacker-error font-bold tracking-wide text-[0.8125rem]">
+              <HolafIcon name="trash" size={14} />
+              {t("gitPanel.forgetHostAction", mainCredentialsHost)}
+            </div>
+            <button
+              onClick={() => setShowForgetHostModal(false)}
+              className="text-hacker-text-dim hover:text-hacker-error transition-colors"
+              title={t("common.close")}
+            >
+              <HolafIcon name="x" size={12} />
+            </button>
+          </div>
+
+          <div className="space-y-2 text-[0.75rem] text-hacker-text leading-relaxed">
+            <p>{t("gitPanel.forgetHostWarning", mainCredentialsHost)}</p>
+            <p className="text-hacker-text-dim">{t("gitPanel.forgetHostHint", mainCredentialsHost)}</p>
+            {hostError && (
+              <div className="text-hacker-error flex items-start gap-1">
+                <HolafIcon name="alert-triangle" size={10} className="shrink-0 mt-0.5" />
+                <span className="flex-1 break-words">{hostError}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              onClick={() => setShowForgetHostModal(false)}
+              className="px-3 py-1 border border-hacker-border text-[0.75rem] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors"
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              onClick={forgetHostCredentials}
+              disabled={forgetHostLoading}
+              data-testid="forget-host-confirm"
+              className="px-3 py-1 border border-hacker-error/60 text-[0.75rem] text-hacker-error hover:bg-hacker-error/10 transition-colors disabled:opacity-40"
+            >
+              {forgetHostLoading ? t("gitPanel.forgetting") : t("gitPanel.forgetHostConfirm")}
+            </button>
+          </div>
+        </ModalDialog>
       )}
 
       {/* ── Push ALL modal (sur le placeholder : couvre tous les sous-projets) ── */}

@@ -210,6 +210,14 @@ class CredentialStore {
   }
 
   /**
+   * Liste les hôtes qui ont un jeton enregistré (JAMAIS les valeurs).
+   * Sert à l'UI pour savoir s'il y a quelque chose à « oublier ».
+   */
+  listHosts(): string[] {
+    return [...this.entries.keys()];
+  }
+
+  /**
    * Remove credentials for a hostname from memory and disk.
    */
   delete(hostname: string): void {

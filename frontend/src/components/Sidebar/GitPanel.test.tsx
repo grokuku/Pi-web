@@ -89,10 +89,19 @@ function jsonResponse(data: unknown): Response {
   } as unknown as Response;
 }
 
+// Statut « pas encore un dépôt » : la section est dépliée et doit proposer
+// elle aussi le bouton « Oublier les identifiants ».
+interface NotRepoStatus {
+  notRepo: true;
+  isEmpty: boolean;
+  host?: string | null;
+  hasCredentials?: boolean;
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 let fetchImpl: (input: unknown) => Promise<Response>;
 // Statut renvoyé par projet ; une entrée absente fait échouer le fetch (seed KO).
-let statuses: Record<string, FullStatus>;
+let statuses: Record<string, FullStatus | NotRepoStatus>;
 
 beforeEach(() => {
   localStorage.setItem("pi-web-language", "en");
@@ -542,7 +551,7 @@ describe("GitPanel — erreurs git (message affiché, borne, relance manuelle)",
   });
 
   it("« Oublier les identifiants » appelle DELETE /git/credentials", async () => {
-    statuses.p1 = cleanStatus();
+    statuses.p1 = { ...cleanStatus(), host: "github.com", hasCredentials: true };
     renderPanel();
     // Une section clean est repliée : on la déplie pour atteindre le bouton.
     fireEvent.click(await screen.findByText("MainProj"));
@@ -553,7 +562,7 @@ describe("GitPanel — erreurs git (message affiché, borne, relance manuelle)",
       const url = String(input);
       if (url.endsWith("/git/credentials") && init?.method === "DELETE") {
         deletes.push(url);
-        return jsonResponse({ success: true });
+        return jsonResponse({ success: true, host: "github.com", removed: true });
       }
       if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
       throw new Error(`unexpected fetch: ${url}`);
@@ -561,7 +570,108 @@ describe("GitPanel — erreurs git (message affiché, borne, relance manuelle)",
 
     fireEvent.click(button);
 
-    expect(await screen.findByText("Credentials forgotten")).toBeTruthy();
+    // Message HONNÊTE : nomme l'hôte et annonce la redemande au prochain push.
+    expect(await screen.findByText(/Credentials forgotten for github\.com/)).toBeTruthy();
     expect(deletes).toEqual(["/api/projects/p1/git/credentials"]);
+  });
+});
+
+describe("GitPanel — « Oublier les identifiants » toujours atteignable", () => {
+  it("dépôt initialisé AVEC jeton : bouton rendu et actif", async () => {
+    statuses.p1 = { ...dirtyStatus(), host: "github.com", hasCredentials: true };
+    renderPanel();
+
+    const button = (await screen.findByTestId("forget-credentials")) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    // L'infobulle rappelle que la clé est l'HÔTE (tous ses dépôts).
+    expect(button.getAttribute("title")).toContain("ALL repositories hosted on github.com");
+  });
+
+  it("dépôt initialisé SANS jeton : bouton rendu mais grisé (infobulle explicative)", async () => {
+    statuses.p1 = { ...dirtyStatus(), host: "github.com", hasCredentials: false };
+    renderPanel();
+
+    const button = (await screen.findByTestId("forget-credentials")) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toContain("No credentials stored for github.com");
+    // Il EXISTE : l'action ne disparaît plus faute d'identifiants.
+    expect(screen.getByText("Forget credentials")).toBeTruthy();
+  });
+
+  it("dépôt PAS encore cloné : bouton également rendu", async () => {
+    statuses.p1 = { notRepo: true, isEmpty: false, host: "github.com", hasCredentials: false };
+    renderPanel();
+
+    const button = (await screen.findByTestId("forget-credentials")) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("après l'effacement, l'état se rafraîchit : le bouton passe en grisé", async () => {
+    statuses.p1 = { ...dirtyStatus(), host: "github.com", hasCredentials: true };
+    renderPanel();
+
+    const button = (await screen.findByTestId("forget-credentials")) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/git/credentials") && init?.method === "DELETE") {
+        // Le backend a effacé le jeton : le statut suivant le reflète.
+        statuses.p1 = { ...(statuses.p1 as FullStatus), hasCredentials: false };
+        return jsonResponse({ success: true, host: "github.com", removed: true });
+      }
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(button);
+
+    await flushMicrotasks();
+    expect(((await screen.findByTestId("forget-credentials")) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("action GLOBALE par hôte : avertissement puis DELETE /api/git-credentials/github.com", async () => {
+    statuses.p1 = { ...dirtyStatus(), host: "github.com", hasCredentials: true };
+    const { project } = renderPanel();
+
+    const globalButton = (await screen.findByTestId("forget-host-credentials")) as HTMLButtonElement;
+    // Nomme l'hôte concerné (clé du store) et reste actif quand un jeton existe.
+    expect(globalButton.textContent).toContain("github.com");
+    expect(globalButton.disabled).toBe(false);
+
+    const deletes: string[] = [];
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/git-credentials/github.com" && init?.method === "DELETE") {
+        deletes.push(url);
+        statuses[project.id] = { ...(statuses[project.id] as FullStatus), hasCredentials: false };
+        return jsonResponse({ success: true, host: "github.com", removed: true });
+      }
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(globalButton);
+
+    // Avertissement explicite : TOUS les dépôts de l'hôte.
+    expect(await screen.findByText(/ALL repositories hosted on github\.com/)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("forget-host-confirm"));
+
+    expect(await screen.findByTestId("gitpanel-host-message")).toBeTruthy();
+    expect(deletes).toEqual(["/api/git-credentials/github.com"]);
+
+    // L'état à l'écran suit : plus de jeton → action globale grisée.
+    await flushMicrotasks();
+    expect(((await screen.findByTestId("forget-host-credentials")) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("action GLOBALE grisée quand aucun jeton n'est enregistré", async () => {
+    statuses.p1 = { ...dirtyStatus(), host: "github.com", hasCredentials: false };
+    renderPanel();
+
+    const globalButton = (await screen.findByTestId("forget-host-credentials")) as HTMLButtonElement;
+    expect(globalButton.disabled).toBe(true);
+    expect(globalButton.getAttribute("title")).toContain("No credentials stored for github.com");
   });
 });

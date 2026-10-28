@@ -62,6 +62,9 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   "git-identity": { w: 800, h: 600 },
   "delete-project": { w: 800, h: 500 },
   "new-chat-confirm": { w: 480, h: 300 },
+  // Confirmation d'effacement GLOBAL des identifiants d'un hôte (bouton
+  // « Oublier les identifiants github.com » de l'en-tête du panneau Git).
+  "git-forget-host": { w: 620, h: 420 },
   "file-viewer": { w: 900, h: 700 },
   "past-conversation": { w: 1100, h: 820 },
   "past-file-viewer": { w: 900, h: 700 },

@@ -384,6 +384,7 @@ export const fr = {
     zoomIn: "Zoom avant",
     zoomOut: "Zoom arrière",
     dialog: "Dialogue",
+    close: "Fermer",
   },
 
   // ── Sélecteur de thème (ThemePicker) ──
@@ -804,8 +805,22 @@ export const fr = {
     timeHour: (n: number) => `il y a ${n} h`,
     timeDay: (n: number) => `il y a ${n} j`,
     forgetCredentials: "Oublier les identifiants",
-    forgetCredentialsTitle: "Supprime le jeton enregistré pour l'hôte de ce dépôt",
-    credentialsForgotten: "Identifiants oubliés",
+    // La clé du store est le HOSTNAME : le libellé le dit explicitement.
+    forgetCredentialsTitle: (host: string) =>
+      `Supprime le jeton de ${host} — cela concerne TOUS les dépôts hébergés sur ${host}`,
+    forgetCredentialsNone: (host: string) => `Aucun identifiant enregistré pour ${host} — rien à oublier`,
+    credentialsForgotten: (host: string) =>
+      `Identifiants oubliés pour ${host} — le prochain push vous les redemandera`,
+    credentialsAlreadyEmpty: (host: string) => `Aucun identifiant n'était enregistré pour ${host}`,
+    forgetHostAction: (host: string) => `Oublier les identifiants ${host}`,
+    forgetHostTitle: (host: string) => `Efface le jeton de ${host} pour TOUS ses dépôts`,
+    forgetHostConfirm: "Oublier pour tout l'hôte",
+    forgetting: "Effacement…",
+    forgetHostWarning: (host: string) =>
+      `Le jeton est stocké par HÔTE, pas par dépôt : cette action efface les identifiants de ${host}. ` +
+      `TOUS les dépôts hébergés sur ${host} (pas seulement celui-ci) redemanderont leurs identifiants au prochain push.`,
+    forgetHostHint:
+      "À utiliser quand le jeton doit changer (droits insuffisants, jeton révoqué…).",
   },
 
   // ── Git : erreurs de fetch (blindage anti-HTML) ──

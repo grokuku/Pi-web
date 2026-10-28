@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 
 import projectsRouter from "./routes/projects.js";
+import gitCredentialsRouter from "./routes/git-credentials.js";
 import settingsRouter from "./routes/settings.js";
 import ollamaRouter from "./routes/ollama.js";
 import modelLibraryRouter from "./routes/model-library.js";
@@ -211,6 +212,9 @@ app.all("/api/search", cbmProxy);          // recherche dans le graphe
 app.use("/api/browse", cbmProxy);
 
 app.use("/api/projects", projectsRouter);
+// Effacement des identifiants git PAR HÔTE (le store est indexé par hostname :
+// un jeton couvre tous les dépôts de l'hôte). Couvert par apiAuth comme le reste.
+app.use("/api/git-credentials", gitCredentialsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/ollama", ollamaRouter);
 app.use("/api/model-library", modelLibraryRouter);

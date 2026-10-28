@@ -11,7 +11,7 @@ import {
   removeLinkedProject,
   resolvePushRepos,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, setGitCredentials, getRemoteHost, getGitDiff } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
 import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification, listSessions } from "../pi/session.js";
 import { readSessionHistoryFile, selectSessionFile } from "../pi/session-history.js";
@@ -553,7 +553,17 @@ router.get("/:id/git/status", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Project not found" });
     }
     const status = await getGitStatus(project.cwd);
-    res.json(status);
+    // `host` + `hasCredentials` : le panneau Git peut ainsi afficher le bouton
+    // « Oublier les identifiants » pour TOUT dépôt affiché, ACTIVÉ seulement
+    // s'il y a réellement un jeton pour cet hôte. `hostFromRemoteUrl` ne lance
+    // aucune commande git (l'origin du projet est déjà connue) : pas de coût
+    // supplémentaire sur un endpoint déjà interrogé toutes les 30 s.
+    const host = hostFromRemoteUrl(project.git?.remote);
+    res.json({
+      ...status,
+      host,
+      hasCredentials: host ? credentialStore.has(host) : false,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -655,8 +665,11 @@ router.delete("/:id/git/credentials", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Project not found" });
     }
     const host = await getRemoteHost(project.cwd);
+    const removed = credentialStore.has(host);
     credentialStore.delete(host);
-    res.json({ success: true });
+    // `host` + `removed` renvoyés : le front peut annoncer honnêtement ce qui a
+    // été effacé (et rappeler que cela vaut pour TOUS les dépôts de cet hôte).
+    res.json({ success: true, host, removed });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

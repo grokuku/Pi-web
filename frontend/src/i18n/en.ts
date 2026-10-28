@@ -384,6 +384,7 @@ export const en = {
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
     dialog: "Dialog",
+    close: "Close",
   },
 
   // ── Theme picker (ThemePicker) ──
@@ -803,8 +804,21 @@ export const en = {
     timeHour: (n: number) => `${n}h ago`,
     timeDay: (n: number) => `${n}d ago`,
     forgetCredentials: "Forget credentials",
-    forgetCredentialsTitle: "Delete the token stored for this repository's host",
-    credentialsForgotten: "Credentials forgotten",
+    // The store key is the HOSTNAME: the label says so explicitly.
+    forgetCredentialsTitle: (host: string) =>
+      `Deletes the ${host} token — this affects ALL repositories hosted on ${host}`,
+    forgetCredentialsNone: (host: string) => `No credentials stored for ${host} — nothing to forget`,
+    credentialsForgotten: (host: string) =>
+      `Credentials forgotten for ${host} — your next push will ask for them again`,
+    credentialsAlreadyEmpty: (host: string) => `No credentials were stored for ${host}`,
+    forgetHostAction: (host: string) => `Forget ${host} credentials`,
+    forgetHostTitle: (host: string) => `Deletes the ${host} token for ALL its repositories`,
+    forgetHostConfirm: "Forget for the whole host",
+    forgetting: "Forgetting…",
+    forgetHostWarning: (host: string) =>
+      `The token is stored per HOST, not per repository: this clears the ${host} credentials. ` +
+      `ALL repositories hosted on ${host} (not just this one) will ask for credentials on the next push.`,
+    forgetHostHint: "Use this when the token must change (missing scopes, revoked token…).",
   },
 
   // ── Git: fetch errors (anti-HTML guard) ──

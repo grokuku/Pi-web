@@ -556,6 +556,31 @@ function isNonFastForwardMessage(msg: string): boolean {
 }
 
 /**
+ * Extrait le hostname d'une URL de remote SANS lancer de commande git.
+ *
+ * La clé du credentialStore est le HOSTNAME nu (« github.com »), partagé par
+ * TOUS les dépôts de cet hôte : c'est cette valeur que l'UI doit afficher
+ * quand elle prévient qu'« oublier » concerne tout l'hôte.
+ * Renvoie null si l'URL est vide/illisible.
+ */
+export function hostFromRemoteUrl(remote: string | null | undefined): string | null {
+  const url = (remote || "").trim();
+  if (!url) return null;
+  // HTTPS / git:// / file:// … : URL standard.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^ssh:\/\//i.test(url)) {
+    try {
+      const hostname = new URL(url).hostname;
+      return hostname ? hostname.toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+  // SSH: ssh://git@host/path ou git@host:path (sans schéma).
+  const sshMatch = url.match(/^(?:ssh:\/\/)?(?:[^@/:]+@)?([^:/]+)[:/]/);
+  return sshMatch ? sshMatch[1].toLowerCase() : null;
+}
+
+/**
  * Extract the hostname from the git remote URL.
  */
 export async function getRemoteHost(cwd: string): Promise<string> {
