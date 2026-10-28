@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  describeClassifierRejection,
   effectiveCategoryForModel,
   extractSignals,
   heuristicClassifier,
@@ -17,7 +18,7 @@ import {
   resolveRoute,
 } from "./routing.js";
 import type { ModelLibrary, RegisteredModel } from "./model-library.js";
-import { DEFAULT_ROUTING_CONFIG, type Route, type RoutingConfig, type RoutingSignals } from "./routing-types.js";
+import { DEFAULT_ROUTING_CONFIG, confidenceThresholdFor, DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD, functionForCategory, type Route, type RoutingConfig, type RoutingSignals, type TaskCategory } from "./routing-types.js";
 
 // ── Helpers ───────────────────────────────────────────
 
@@ -580,5 +581,158 @@ describe("pickRoutedThinkingLevel (catégorie effective + biais)", () => {
 
   it("fail-safe : aucun thinkingLevel configuré → undefined (niveau du mode)", () => {
     expect(pickRoutedThinkingLevel(makeRoute({ category: "complex" }), makeConfig())).toBeUndefined();
+  });
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// Seuil de confiance SÉPARÉ pour le classifieur System One (défaut 0.35).
+//
+// Mesuré sur clef (/v1/systemone, 8 messages FR) : la confiance d'un `choice` à
+// 4 options vaut 0.119 → 0.858 (PLAFOND BAS). Avec le seuil commun du chat
+// (0.6), 5 décisions justes sur 8 seraient jetées. Le seuil de RISQUE
+// (`reviewRiskThreshold`) reste indépendant et protège les cas sensibles.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("seuil de confiance séparé (chat vs system-one)", () => {
+  /** Config System One (seuil du chat laissé au défaut 0.6 pour prouver la séparation). */
+  const systemOneConfig = (overrides: Partial<RoutingConfig> = {}): RoutingConfig =>
+    makeConfig({ classifierType: "system-one", ...overrides });
+
+  /** Décision « System One » simulée (aucun réseau). */
+  const systemOne = (
+    confidence: number,
+    category: TaskCategory = "complex",
+    riskScore = 0.1,
+  ): Route => ({
+    category,
+    function: functionForCategory(category),
+    modelId: null,
+    confidence,
+    riskScore,
+    reason: "system-one",
+  });
+
+  it("défaut 0.35 quand le champ est ABSENT (migration douce)", () => {
+    // Config HISTORIQUE : le champ n'existe pas sur disque.
+    const existing = structuredClone(DEFAULT_ROUTING_CONFIG);
+    delete existing.systemOneConfidenceThreshold;
+    const config: RoutingConfig = { ...existing, classifierType: "system-one" };
+    expect(config.systemOneConfidenceThreshold).toBeUndefined();
+    expect(confidenceThresholdFor(config)).toBe(DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD);
+    expect(confidenceThresholdFor(config)).toBe(0.35);
+  });
+
+  it("le classifieur CHAT garde `confidenceThreshold` (0.6) — non-régression", () => {
+    // Même avec un seuil System One très permissif en config.
+    const config = makeConfig({ classifierType: "chat", systemOneConfidenceThreshold: 0.1 });
+    expect(confidenceThresholdFor(config)).toBe(0.6);
+    // Et sans `classifierType` (config historique) → chat, seuil inchangé.
+    expect(confidenceThresholdFor(makeConfig())).toBe(0.6);
+  });
+
+  it("le chat garde EXACTEMENT son comportement : confiance 0.49 < 0.6 → heuristique", () => {
+    const route = resolveRoute("corrige le bug dans app.ts", makeConfig(), BASE_SIGNALS, systemOne(0.49));
+    expect(route.reason).not.toBe("system-one");
+    expect(route.reason).toContain("heuristique");
+  });
+
+  it("décision System One ACCEPTÉE entre 0.35 et l'ancien seuil 0.6", () => {
+    const route = resolveRoute("corrige le bug dans app.ts", systemOneConfig(), BASE_SIGNALS, systemOne(0.49));
+    expect(route.category).toBe("complex");
+    expect(route.function).toBe("planning");
+    expect(route.reason).toBe("system-one");
+  });
+
+  it("décision System One REJETÉE sous 0.35 → repli heuristique", () => {
+    const route = resolveRoute("corrige le bug dans app.ts", systemOneConfig(), BASE_SIGNALS, systemOne(0.119));
+    expect(route.reason).not.toBe("system-one");
+    expect(route.reason).toContain("heuristique");
+    expect(route.category).toBe("standard");
+  });
+
+  it("seuil System One personnalisé pris en compte (0.15 → la même décision passe)", () => {
+    const config = systemOneConfig({ systemOneConfidenceThreshold: 0.15 });
+    const route = resolveRoute("corrige le bug dans app.ts", config, BASE_SIGNALS, systemOne(0.2));
+    expect(route.reason).toBe("system-one");
+  });
+
+  it("validation : valeur hors [0,1] ou illisible → défaut 0.35, jamais d'exception", () => {
+    const bad: unknown[] = [1.5, -0.2, Number.NaN, Number.POSITIVE_INFINITY, "0.4", null];
+    for (const value of bad) {
+      const config = systemOneConfig({ systemOneConfidenceThreshold: value as number });
+      expect(confidenceThresholdFor(config)).toBe(0.35);
+    }
+  });
+
+  it("le seuil de RISQUE reste INDÉPENDANT : noul élevé → review même sous le seuil de confiance", () => {
+    // Décision rejetée pour confiance (0.2 < 0.35), mais le message contient un
+    // mot-clé de risque → l'heuristique (toujours calculée) force review.
+    const route = resolveRoute(
+      "ajoute une migration SQL",
+      systemOneConfig(),
+      BASE_SIGNALS,
+      systemOne(0.2, "standard", 0.97),
+    );
+    expect(route.category).toBe("review");
+    expect(route.function).toBe("review");
+    expect(route.riskScore).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("riskScore du classifieur CONSERVÉ quand la décision est acceptée (Math.max)", () => {
+    const route = resolveRoute(
+      "corrige le bug dans app.ts",
+      systemOneConfig(),
+      BASE_SIGNALS,
+      systemOne(0.4, "standard", 0.97),
+    );
+    expect(route.reason).toContain("gate review");
+    expect(route.category).toBe("review");
+  });
+});
+
+describe("describeClassifierRejection (trace des décisions écartées)", () => {
+  const systemOneConfig = (overrides: Partial<RoutingConfig> = {}): RoutingConfig =>
+    makeConfig({ classifierType: "system-one", ...overrides });
+  const decision = (confidence: number): Route => ({
+    category: "complex",
+    function: "planning",
+    modelId: null,
+    confidence,
+    riskScore: 0.42,
+    reason: "system-one",
+  });
+
+  it("aucune décision (repli heuristique pur) → null", () => {
+    expect(describeClassifierRejection(systemOneConfig(), null)).toBeNull();
+    expect(describeClassifierRejection(systemOneConfig())).toBeNull();
+  });
+
+  it("décision acceptée → null (rien à signaler)", () => {
+    expect(describeClassifierRejection(systemOneConfig(), decision(0.5))).toBeNull();
+  });
+
+  it("décision écartée → confiance mesurée, seuil APPLIQUÉ et catégorie proposée", () => {
+    const rejection = describeClassifierRejection(systemOneConfig(), decision(0.119));
+    expect(rejection).toEqual({
+      classifierType: "system-one",
+      confidence: 0.119,
+      threshold: 0.35,
+      category: "complex",
+      riskScore: 0.42,
+    });
+  });
+
+  it("le seuil journalisé est celui du TYPE, pas celui du chat", () => {
+    const rejection = describeClassifierRejection(systemOneConfig(), decision(0.5));
+    expect(rejection).toBeNull();
+    const chatRejection = describeClassifierRejection(makeConfig(), decision(0.5));
+    expect(chatRejection?.threshold).toBe(0.6);
+  });
+
+  it("la trace ne contient AUCUN contenu du message utilisateur", () => {
+    const message = "corrige le bug de facturation dans app.ts";
+    const rejection = describeClassifierRejection(systemOneConfig(), decision(0.1));
+    expect(rejection).not.toBeNull();
+    expect(JSON.stringify(rejection)).not.toContain(message);
+    expect(JSON.stringify(rejection)).not.toContain("facturation");
   });
 });

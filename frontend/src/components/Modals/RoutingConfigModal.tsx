@@ -3,6 +3,7 @@ import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import {
   DEFAULT_ROUTING_CONFIG,
+  DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
   THINKING_LEVELS,
   thinkingLevelsForModel,
   clampThinkingLevel,
@@ -145,6 +146,17 @@ function ThinkingSelect({
   );
 }
 
+/**
+ * Ramène un seuil de confiance à une valeur sûre : non numérique, `NaN`,
+ * infini ou hors [0, 1] → `fallback` (jamais d'exception). Même règle que le
+ * backend (`normalizeConfidenceThreshold`).
+ */
+function normalizeThreshold(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < 0 || value > 1) return fallback;
+  return value;
+}
+
 export function RoutingConfigModal({ onClose, onSave, models, providers, config }: Props) {
   const { t } = useTranslation();
   // Conserve le thinkingLevel existant s'il est présent (rétro-compatibilité :
@@ -164,6 +176,13 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
     review: initCategory("review"),
     reviewRiskThreshold: config?.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
     confidenceThreshold: config?.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold,
+    // Seuil PROPRE au classifieur System One (défaut 0,35). Une config
+    // enregistrée avant ce champ récupère le défaut (migration douce) ; une
+    // valeur hors [0,1] est ramenée au défaut.
+    systemOneConfidenceThreshold: normalizeThreshold(
+      config?.systemOneConfidenceThreshold,
+      DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
+    ),
     classifierModelId: config?.classifierModelId ?? DEFAULT_ROUTING_CONFIG.classifierModelId,
     // Rétro-compatibilité : une config enregistrée avant l'arrivée de System One
     // n'a pas ces champs → classifieur `chat`, aucun modèle System One.
@@ -330,6 +349,9 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
             </p>
           </div>
 
+          {/* Seuil du classifieur CHAT : masqué quand System One est choisi
+              (il a le sien, juste en dessous du modèle de décision). */}
+          {routing.classifierType !== "system-one" && (
           <div>
             <label className="text-hacker-text-dim text-xs block mb-1 flex justify-between">
               <span>🎯 Confiance minimale</span>
@@ -355,6 +377,7 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
               Confiance minimale pour accepter une décision de triage (sinon repli standard).
             </p>
           </div>
+          )}
         </div>
 
         {/* Classifieur optionnel */}
@@ -394,6 +417,40 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
                 Switchy). Il ne rédige aucun texte : il rend une catégorie, une probabilité de risque et une
                 confiance en une seule passe. Laisse « aucun » pour garder le tri heuristique.
               </p>
+
+              {/* Seuil PROPRE à System One : sa confiance plafonne bas (un choix à
+                  4 options), d'où un défaut plus permissif que celui du chat. */}
+              <div className="mt-3">
+                <label className="text-hacker-text-dim text-xs block mb-1 flex justify-between">
+                  <span>🎯 Seuil de confiance (System One)</span>
+                  <span className="text-hacker-accent font-mono">
+                    {(
+                      (routing.systemOneConfidenceThreshold ?? DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD) * 100
+                    ).toFixed(0)}
+                    %
+                  </span>
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={routing.systemOneConfidenceThreshold ?? DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD}
+                  onChange={e =>
+                    setRouting(prev => ({ ...prev, systemOneConfidenceThreshold: Number(e.target.value) }))
+                  }
+                  aria-label="Seuil de confiance (System One)"
+                  className="w-full accent-hacker-accent"
+                />
+                <div className="flex justify-between text-[9px] text-hacker-text-dim">
+                  <span>0% (permissif)</span>
+                  <span>100% (strict)</span>
+                </div>
+                <p className="text-[10px] text-hacker-text-dim mt-1 leading-relaxed">
+                  Plus bas = plus de décisions prises par le modèle. Un choix à 4 options a une confiance
+                  naturellement basse ; le seuil de risque protège indépendamment.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="mt-2">

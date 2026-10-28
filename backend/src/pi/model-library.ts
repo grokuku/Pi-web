@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
-import { DEFAULT_ROUTING_CONFIG, isClassifierType, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
+import { DEFAULT_ROUTING_CONFIG, DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD, isClassifierType, isThinkingLevel, normalizeConfidenceThreshold, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
 import {
   DEFAULT_QUEUE_TIMEOUT_MS,
   LEGACY_DEFAULT_QUEUE_TIMEOUT_MS,
@@ -149,6 +149,7 @@ function createDefaultRoutingConfig(): RoutingConfig {
     review: { ...DEFAULT_ROUTING_CONFIG.review },
     reviewRiskThreshold: DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
     confidenceThreshold: DEFAULT_ROUTING_CONFIG.confidenceThreshold,
+    systemOneConfidenceThreshold: DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
     classifierModelId: DEFAULT_ROUTING_CONFIG.classifierModelId,
     classifierType: DEFAULT_ROUTING_CONFIG.classifierType,
     systemOneModelId: DEFAULT_ROUTING_CONFIG.systemOneModelId,
@@ -182,6 +183,13 @@ function normalizeRoutingConfig(routing: any): RoutingConfig {
     review: normalizeCategoryConfig(routing.review, d.review),
     reviewRiskThreshold: routing.reviewRiskThreshold ?? d.reviewRiskThreshold,
     confidenceThreshold: routing.confidenceThreshold ?? d.confidenceThreshold,
+    // Seuil PROPRE au classifieur System One (défaut 0.35). Migration douce :
+    // une config enregistrée avant ce champ récupère le défaut. Une valeur
+    // illisible (fichier édité à la main) est ramenée au défaut — jamais d'exception.
+    systemOneConfidenceThreshold: normalizeConfidenceThreshold(
+      routing.systemOneConfidenceThreshold,
+      DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
+    ),
     classifierModelId: routing.classifierModelId ?? d.classifierModelId,
     // Type de classifieur : une valeur inconnue (fichier édité à la main) est
     // RAMENÉE au défaut documenté `chat` — jamais un troisième comportement

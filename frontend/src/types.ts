@@ -604,6 +604,13 @@ export interface RoutingConfig {
   reviewRiskThreshold: number;
   /** Confiance minimale pour accepter une décision (sinon repli standard/execute). */
   confidenceThreshold: number;
+  /**
+   * Confiance minimale du classifieur `system-one` (défaut 0.35).
+   * ⚠️ Seuil SÉPARÉ de `confidenceThreshold` (chat) : la confiance d'un `choice`
+   * à 4 options plafonne bas ; le seuil de risque protège indépendamment.
+   * Absent = défaut (configs antérieures à ce champ).
+   */
+  systemOneConfidenceThreshold?: number;
   /** Modèle cheap optionnel pour le classifieur LLM de type `chat` (null = off). */
   classifierModelId: string | null;
   /**
@@ -627,6 +634,9 @@ export interface RoutingConfig {
 /** Types de classifieur de triage admis. */
 export type ClassifierType = "chat" | "system-one";
 
+/** Seuil de confiance par défaut du classifieur `system-one` (cf. backend). */
+export const DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD = 0.35;
+
 export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   enabled: true,
   trivial: { modelId: null },
@@ -635,6 +645,7 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   review: { modelId: null },
   reviewRiskThreshold: 0.5,
   confidenceThreshold: 0.6,
+  systemOneConfidenceThreshold: DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
   classifierModelId: null,
   classifierType: "chat",
   systemOneModelId: null,

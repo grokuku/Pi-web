@@ -225,3 +225,103 @@ describe("RoutingConfigModal — classifieur System One", () => {
     expect(saved.systemOneModelId).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seuil de confiance SÉPARÉ pour System One (défaut 0,35).
+// La confiance d'un `choice` à 4 options plafonne bas (0,119 → 0,858 mesurés) :
+// le seuil du chat (0,6) jetterait la majorité des décisions justes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Slider du seuil de confiance System One. */
+function systemOneThresholdSlider(): HTMLInputElement {
+  return screen.getByLabelText("Seuil de confiance (System One)") as HTMLInputElement;
+}
+
+/** Slider historique du seuil de confiance (classifieur chat). */
+function chatThresholdLabel(): HTMLElement | null {
+  return screen.queryByText("🎯 Confiance minimale");
+}
+
+describe("RoutingConfigModal — seuil de confiance System One", () => {
+  it("en Chat : le champ existant reste affiché, le champ System One est absent", () => {
+    renderModal([makeModel()]);
+    expect(chatThresholdLabel()).not.toBeNull();
+    expect(screen.queryByLabelText("Seuil de confiance (System One)")).toBeNull();
+  });
+
+  it("en System One : le champ apparaît (défaut 0,35) et le seuil du chat disparaît", () => {
+    renderModal([makeModel()]);
+    fireEvent.change(classifierTypeSelect(), { target: { value: "system-one" } });
+
+    const slider = systemOneThresholdSlider();
+    expect(slider.value).toBe("0.35");
+    expect(screen.getByText(/Seuil de confiance \(System One\)/)).toBeTruthy();
+    // Le seuil du chat n'est plus proposé : un seul seuil affiché à la fois.
+    expect(chatThresholdLabel()).toBeNull();
+  });
+
+  it("l'aide en français est affichée sous le champ", () => {
+    renderModal([makeModel()]);
+    fireEvent.change(classifierTypeSelect(), { target: { value: "system-one" } });
+    expect(
+      screen.getByText(/Plus bas = plus de décisions prises par le modèle/),
+    ).toBeTruthy();
+    expect(screen.getByText(/le seuil de risque protège indépendamment/)).toBeTruthy();
+  });
+
+  it("la valeur réglée est PERSISTÉE à l'enregistrement, seuil du chat inchangé", async () => {
+    const { onSave } = renderModalWithSave([makeModel()], {
+      enabled: true,
+      trivial: { modelId: null },
+      standard: { modelId: null },
+      complex: { modelId: null },
+      review: { modelId: null },
+      reviewRiskThreshold: 0.5,
+      confidenceThreshold: 0.6,
+      classifierModelId: null,
+      classifierType: "system-one",
+      systemOneModelId: null,
+    } as RoutingConfig);
+
+    fireEvent.change(systemOneThresholdSlider(), { target: { value: "0.15" } });
+    expect(systemOneThresholdSlider().value).toBe("0.15");
+
+    fireEvent.click(screen.getByRole("button", { name: /Enregistrer/ }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.systemOneConfidenceThreshold).toBe(0.15);
+    expect(saved.confidenceThreshold).toBe(0.6); // non régressé
+  });
+
+  it("config sans le champ → 0,35 par défaut ; valeur hors bornes → 0,35", () => {
+    renderModal([makeModel()], {
+      enabled: true,
+      trivial: { modelId: null },
+      standard: { modelId: null },
+      complex: { modelId: null },
+      review: { modelId: null },
+      reviewRiskThreshold: 0.5,
+      confidenceThreshold: 0.6,
+      classifierModelId: null,
+      classifierType: "system-one",
+      systemOneModelId: null,
+    } as RoutingConfig);
+    expect(systemOneThresholdSlider().value).toBe("0.35");
+    cleanup();
+
+    renderModal([makeModel()], {
+      enabled: true,
+      trivial: { modelId: null },
+      standard: { modelId: null },
+      complex: { modelId: null },
+      review: { modelId: null },
+      reviewRiskThreshold: 0.5,
+      confidenceThreshold: 0.6,
+      classifierModelId: null,
+      classifierType: "system-one",
+      systemOneModelId: null,
+      systemOneConfidenceThreshold: 7,
+    } as RoutingConfig);
+    expect(systemOneThresholdSlider().value).toBe("0.35");
+  });
+});

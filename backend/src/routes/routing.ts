@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { loadModelLibrary, getProjectRoutingConfig } from "../pi/model-library.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, pickCategoryThinkingLevel, llmClassifier, systemOneClassifier } from "../pi/routing.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, pickCategoryThinkingLevel, llmClassifier, systemOneClassifier, describeClassifierRejection } from "../pi/routing.js";
+import { confidenceThresholdFor, DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD } from "../pi/routing-types.js";
 import type { Route, SignalsInput } from "../pi/routing-types.js";
 
 const router = Router();
@@ -88,6 +89,7 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
         thinkingLevel: null,
         reason: "routage désactivé (kill switch global ou config projet/mode)",
         reviewRiskThreshold: config.reviewRiskThreshold,
+        confidenceThreshold: confidenceThresholdFor(config),
         routingEnabled: globalEnabled,
         configEnabled,
         llmClassifierUsed: false,
@@ -121,12 +123,26 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
     // de la route, cohérente avec `pickModel`). `undefined` → niveau du mode.
     const thinkingLevel = pickCategoryThinkingLevel(route.category, config);
 
+    // Décision du classifieur ÉCARTÉE pour confiance insuffisante (le cas
+    // échéant) : l'appelant voit la confiance mesurée, le seuil APPLIQUÉ et la
+    // catégorie proposée → il peut régler le seuil sur ses vrais messages.
+    const rejection = describeClassifierRejection(config, llmRoute);
+
     res.json({
       route,
       modelId: model?.id ?? null,
       thinkingLevel: thinkingLevel ?? null,
       reason: route.reason,
       reviewRiskThreshold: config.reviewRiskThreshold,
+      // Seuil RÉELLEMENT appliqué (dépend du type de classifieur) + les deux
+      // valeurs configurées, pour un réglage sans ambiguïté.
+      confidenceThreshold: confidenceThresholdFor(config),
+      confidenceThresholdChat: config.confidenceThreshold,
+      systemOneConfidenceThreshold:
+        config.systemOneConfidenceThreshold ?? DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
+      classifierConfidence: llmRoute?.confidence ?? null,
+      classifierDecisionDiscarded: rejection !== null,
+      classifierRejection: rejection,
       routingEnabled: globalEnabled,
       configEnabled,
       classifierType,

@@ -17,7 +17,8 @@ import {
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute, systemOneClassifier } from "./routing.js";
+import { classifierTypeOf, confidenceThresholdFor, DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD } from "./routing-types.js";
+import { describeClassifierRejection, extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute, systemOneClassifier } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
 import { getProviderDisplayName, ollamaCompatOptions, reasoningLevelMapForModel } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
@@ -1115,6 +1116,29 @@ async function applyMessageRouting(
     // gate review + biais conservateur inclus). `undefined` → thinking du mode.
     const routedThinking = pickRoutedThinkingLevel(route, config);
 
+    // Seuil RÉELLEMENT appliqué (dépend du type de classifieur).
+    const appliedConfidenceThreshold = confidenceThresholdFor(config);
+
+    // Traçabilité : une décision de classifieur ÉCARTÉE faute de confiance est
+    // journalisée pour être exploitable (réglage du seuil sur de vrais messages).
+    // ⚠️ Aucun contenu du message utilisateur ici : scores + catégorie seulement.
+    const rejection = describeClassifierRejection(config, llmRoute);
+    if (rejection) {
+      logger.warn(
+        "routing",
+        `décision ${rejection.classifierType} écartée (confiance insuffisante) — triage heuristique appliqué`,
+        {
+          projectId,
+          classifierType: rejection.classifierType,
+          confidence: rejection.confidence,
+          threshold: rejection.threshold,
+          category: rejection.category,
+          riskScore: rejection.riskScore,
+          heuristicFallback: true,
+        },
+      );
+    }
+
     // Trace de la décision (audit) — y compris catégorie/risque/confiance/modèle/thinking.
     logger.info("routing", `route message → ${route.category}`, {
       projectId,
@@ -1123,13 +1147,18 @@ async function applyMessageRouting(
       riskScore: route.riskScore,
       confidence: route.confidence,
       reviewRiskThreshold: config.reviewRiskThreshold,
-      confidenceThreshold: config.confidenceThreshold,
+      // Seuil APPLIQUÉ au type de classifieur courant (chat ou System One).
+      confidenceThreshold: appliedConfidenceThreshold,
+      confidenceThresholdChat: config.confidenceThreshold,
+      systemOneConfidenceThreshold:
+        config.systemOneConfidenceThreshold ?? DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
       modelId: model?.id ?? null,
       model: model ? `${model.providerId}/${model.modelId}` : null,
       // Thinking appliqué (catégorie) ; null = niveau du mode conservé.
       thinkingLevel: routedThinking ?? null,
-      classifierType: config.classifierType === "system-one" ? "system-one" : "chat",
+      classifierType: classifierTypeOf(config),
       llmClassifierUsed: llmRoute !== null,
+      llmClassifierConfidence: llmRoute?.confidence ?? null,
       llmClassifierError: classifierError,
       reason: route.reason,
     });

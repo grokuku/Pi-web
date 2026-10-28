@@ -8,11 +8,14 @@
  */
 
 import {
+  classifierTypeOf,
   COMPLEXITY_KEYWORDS,
+  confidenceThresholdFor,
   DEFAULT_ROUTING_CONFIG,
   functionForCategory,
   isThinkingLevel,
   RISK_KEYWORDS,
+  type ClassifierType,
   type Route,
   type RoutingConfig,
   type RoutingSignals,
@@ -461,10 +464,16 @@ function normalizeCategory(value: unknown): TaskCategory | null {
  * Fusionne classifieur LLM et heuristique.
  *
  * Règles :
- * - Si `llmRoute` a une confiance >= `config.confidenceThreshold`, on l'utilise.
+ * - Si `llmRoute` a une confiance >= au seuil du TYPE de classifieur, on l'utilise.
+ *   Le seuil est choisi par `confidenceThresholdFor` :
+ *     · `chat`       → `config.confidenceThreshold` (défaut 0.6, historique) ;
+ *     · `system-one` → `config.systemOneConfidenceThreshold` (défaut 0.35).
+ *   Un `choice` à 4 options a une confiance naturellement basse : le seuil du
+ *   chat jetterait la majorité des décisions justes du classifieur System One.
  * - Sinon on retombe sur `heuristicClassifier`.
  * - Si la confiance finale < seuil, fail-safe vers `standard`/`execute`.
- * - Le gate review est appliqué en dernier : `riskScore >= reviewRiskThreshold` force `review`.
+ * - Le gate review est appliqué en dernier : `riskScore >= reviewRiskThreshold`
+ *   force `review` — INDÉPENDAMMENT du seuil de confiance (filet de risque).
  */
 export function resolveRoute(
   request: string,
@@ -472,7 +481,7 @@ export function resolveRoute(
   signals: RoutingSignals,
   llmRoute?: Route | null,
 ): Route {
-  const confidenceThreshold = config.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold;
+  const confidenceThreshold = confidenceThresholdFor(config);
   const reviewRiskThreshold = config.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold;
 
   // On calcule toujours l'heuristique : son riskScore sert de garde-fou
@@ -520,6 +529,46 @@ export function resolveRoute(
 }
 
 /**
+ * Décision d'un classifieur ÉCARTÉE faute de confiance (trace exploitable).
+ * Aucun contenu du message utilisateur : uniquement des scores et une catégorie.
+ */
+export interface ClassifierRejection {
+  classifierType: ClassifierType;
+  /** Confiance MESURÉE du classifieur (0..1). */
+  confidence: number;
+  /** Seuil APPLIQUÉ (celui du type de classifieur), pas celui du chat. */
+  threshold: number;
+  /** Catégorie proposée par le classifieur puis abandonnée. */
+  category: TaskCategory;
+  /** Score de risque proposé par le classifieur. */
+  riskScore: number;
+}
+
+/**
+ * Retourne la trace d'une décision de classifieur ÉCARTÉE pour confiance
+ * insuffisante, sinon `null` (aucune décision, ou décision acceptée).
+ *
+ * Fonction PURE (aucun I/O) : l'appelant journalise ce qu'il faut. Sert à ce
+ * qu'un repli heuristique ne passe jamais silencieusement pour une décision du
+ * modèle — on peut alors régler le seuil sur de vrais messages.
+ */
+export function describeClassifierRejection(
+  config: RoutingConfig,
+  classifierRoute?: Route | null,
+): ClassifierRejection | null {
+  if (!classifierRoute) return null;
+  const threshold = confidenceThresholdFor(config);
+  if (classifierRoute.confidence >= threshold) return null;
+  return {
+    classifierType: classifierTypeOf(config),
+    confidence: classifierRoute.confidence,
+    threshold,
+    category: classifierRoute.category,
+    riskScore: classifierRoute.riskScore,
+  };
+}
+
+/**
  * Résout le modèle cible d'une route.
  *
  * `route.category` → `config[category].modelId` ; si l'id est absent ou
@@ -558,7 +607,8 @@ const CATEGORY_ASCENDING: TaskCategory[] = ["trivial", "standard", "complex", "r
  */
 export function effectiveCategoryForModel(route: Route, config: RoutingConfig): TaskCategory {
   const reviewRiskThreshold = config.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold;
-  const confidenceThreshold = config.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold;
+  // Même seuil que `resolveRoute`, donc même choix selon le type de classifieur.
+  const confidenceThreshold = confidenceThresholdFor(config);
 
   if (route.riskScore >= reviewRiskThreshold) return "review";
 

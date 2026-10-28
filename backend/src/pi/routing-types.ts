@@ -119,6 +119,23 @@ export interface RoutingConfig {
   reviewRiskThreshold: number;
   /** Confiance minimale pour accepter une décision (sinon repli standard/execute). */
   confidenceThreshold: number;
+  /**
+   * Confiance minimale pour accepter une décision du classifieur `system-one`
+   * (défaut `0.35`, cf. `DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD`).
+   *
+   * ⚠️ SEUIL SÉPARÉ de `confidenceThreshold` (qui reste celui du classifieur
+   * `chat`). Un `choice` à 4 options a une confiance — au sens System One, une
+   * CONCENTRATION, pas une justesse — naturellement BASSE : mesurée de 0.119 à
+   * 0.858 sur 8 messages français réels. Avec le seuil du chat (0.6), la
+   * majorité des décisions justes seraient jetées.
+   *
+   * Le garde-fou de RISQUE (`reviewRiskThreshold`) reste INDÉPENDANT : un
+   * `noul` de risque élevé force `review` quel que soit ce seuil.
+   *
+   * Absent = défaut (rétro-compatibilité : les configs existantes n'ont pas ce
+   * champ). Valeur non numérique ou hors [0, 1] → défaut, JAMAIS d'exception.
+   */
+  systemOneConfidenceThreshold?: number;
   /** Modèle cheap optionnel pour le classifieur LLM de type `chat` (null = off). */
   classifierModelId: string | null;
   /**
@@ -151,6 +168,15 @@ export function isClassifierType(value: unknown): value is ClassifierType {
   return typeof value === "string" && (CLASSIFIER_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * Seuil de confiance par défaut du classifieur `system-one`.
+ *
+ * Plus bas que celui du `chat` (0.6) parce que la confiance d'un `choice` à 4
+ * options PLAFONNE bas (mesuré : 0.119 → 0.858). Le seuil de risque protège
+ * indépendamment les cas sensibles.
+ */
+export const DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD = 0.35;
+
 export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   enabled: true,
   trivial: { modelId: null },
@@ -159,10 +185,54 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   review: { modelId: null },
   reviewRiskThreshold: 0.5,
   confidenceThreshold: 0.6,
+  systemOneConfidenceThreshold: DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
   classifierModelId: null,
   classifierType: "chat",
   systemOneModelId: null,
 };
+
+/**
+ * Type de classifieur EFFECTIF d'une config : une valeur inconnue/absente vaut
+ * `chat` (rétro-compatibilité) — jamais un troisième comportement implicite.
+ */
+export function classifierTypeOf(
+  config: Pick<RoutingConfig, "classifierType"> | null | undefined,
+): ClassifierType {
+  return isClassifierType(config?.classifierType) ? config.classifierType : "chat";
+}
+
+/**
+ * Ramène un seuil de confiance à une valeur SÛRE sans jamais lever :
+ * non numérique, `NaN`, infini ou hors [0, 1] → `fallback`.
+ */
+export function normalizeConfidenceThreshold(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < 0 || value > 1) return fallback;
+  return value;
+}
+
+/**
+ * Seuil de confiance APPLICABLE à la config, selon le TYPE de classifieur :
+ *   - `system-one` → `systemOneConfidenceThreshold` (défaut 0.35) ;
+ *   - `chat`       → `confidenceThreshold` (défaut 0.6, comportement historique).
+ *
+ * ⚠️ Le seuil du `chat` est rendu TEL QUEL (aucune normalisation) pour ne rien
+ * changer à son comportement ; seul le seuil System One est normalisé.
+ */
+export function confidenceThresholdFor(
+  config:
+    | Pick<RoutingConfig, "classifierType" | "confidenceThreshold" | "systemOneConfidenceThreshold">
+    | null
+    | undefined,
+): number {
+  if (classifierTypeOf(config) === "system-one") {
+    return normalizeConfidenceThreshold(
+      config?.systemOneConfidenceThreshold,
+      DEFAULT_SYSTEM_ONE_CONFIDENCE_THRESHOLD,
+    );
+  }
+  return config?.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold;
+}
 
 /** Mots-clés de risque : toujours déclencheurs d'un biais vers capable + gate review. */
 export const RISK_KEYWORDS: string[] = [

@@ -94,3 +94,37 @@ describe("persistance du type de classifieur", () => {
     expect(routing.classifierType).toBe("chat");
   });
 });
+
+describe("persistance du seuil de confiance System One", () => {
+  const base = {
+    enabled: true,
+    trivial: { modelId: null },
+    standard: { modelId: null },
+    complex: { modelId: null },
+    review: { modelId: null },
+    reviewRiskThreshold: 0.5,
+    confidenceThreshold: 0.6,
+    classifierModelId: null,
+    classifierType: "system-one",
+    systemOneModelId: "m-clef",
+  };
+
+  it("config historique (sans systemOneConfidenceThreshold) → défaut 0.35", () => {
+    const lib = migrateLibrary(libraryWithRouting(base));
+    const routing = lib.projectModes.projet.harness.routing!;
+    expect(routing.systemOneConfidenceThreshold).toBe(0.35);
+    expect(routing.confidenceThreshold).toBe(0.6); // seuil du chat intact
+  });
+
+  it("valeur enregistrée par l'interface conservée telle quelle", () => {
+    const lib = migrateLibrary(libraryWithRouting({ ...base, systemOneConfidenceThreshold: 0.15 }));
+    expect(lib.projectModes.projet.harness.routing!.systemOneConfidenceThreshold).toBe(0.15);
+  });
+
+  it("valeur hors bornes ou illisible → défaut 0.35, jamais d'exception", () => {
+    for (const bad of [1.4, -3, "0.2", null, Number.NaN]) {
+      const lib = migrateLibrary(libraryWithRouting({ ...base, systemOneConfidenceThreshold: bad }));
+      expect(lib.projectModes.projet.harness.routing!.systemOneConfidenceThreshold).toBe(0.35);
+    }
+  });
+});
