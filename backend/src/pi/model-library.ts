@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
-import { DEFAULT_ROUTING_CONFIG, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
+import { DEFAULT_ROUTING_CONFIG, isClassifierType, isThinkingLevel, type CategoryConfig, type RoutingConfig } from "./routing-types.js";
 import {
   DEFAULT_QUEUE_TIMEOUT_MS,
   LEGACY_DEFAULT_QUEUE_TIMEOUT_MS,
@@ -150,6 +150,8 @@ function createDefaultRoutingConfig(): RoutingConfig {
     reviewRiskThreshold: DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
     confidenceThreshold: DEFAULT_ROUTING_CONFIG.confidenceThreshold,
     classifierModelId: DEFAULT_ROUTING_CONFIG.classifierModelId,
+    classifierType: DEFAULT_ROUTING_CONFIG.classifierType,
+    systemOneModelId: DEFAULT_ROUTING_CONFIG.systemOneModelId,
   };
 }
 
@@ -181,6 +183,11 @@ function normalizeRoutingConfig(routing: any): RoutingConfig {
     reviewRiskThreshold: routing.reviewRiskThreshold ?? d.reviewRiskThreshold,
     confidenceThreshold: routing.confidenceThreshold ?? d.confidenceThreshold,
     classifierModelId: routing.classifierModelId ?? d.classifierModelId,
+    // Type de classifieur : une valeur inconnue (fichier édité à la main) est
+    // RAMENÉE au défaut documenté `chat` — jamais un troisième comportement
+    // implicite. Une config antérieure (sans le champ) reste donc `chat`.
+    classifierType: isClassifierType(routing.classifierType) ? routing.classifierType : d.classifierType,
+    systemOneModelId: routing.systemOneModelId ?? d.systemOneModelId,
   };
 }
 
@@ -678,6 +685,9 @@ export function removeModel(id: string): ModelLibrary {
         if (routing[category].modelId === id) routing[category].modelId = null;
       }
       if (routing.classifierModelId === id) routing.classifierModelId = null;
+      // Le classifieur System One a son PROPRE modèle : il doit être nettoyé
+      // comme les autres, sinon un modèle supprimé resterait référencé.
+      if (routing.systemOneModelId === id) routing.systemOneModelId = null;
     }
   }
 

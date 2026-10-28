@@ -604,9 +604,28 @@ export interface RoutingConfig {
   reviewRiskThreshold: number;
   /** Confiance minimale pour accepter une décision (sinon repli standard/execute). */
   confidenceThreshold: number;
-  /** Modèle cheap optionnel pour le classifieur LLM (null = off). */
+  /** Modèle cheap optionnel pour le classifieur LLM de type `chat` (null = off). */
   classifierModelId: string | null;
+  /**
+   * Type de classifieur de triage :
+   *   - `chat` : appel chat classique (modèle `classifierModelId`) qui doit
+   *     répondre un JSON `{category,riskScore,confidence}` ;
+   *   - `system-one` : API de DÉCISION native (`systemOneModelId`) — le modèle
+   *     renvoie une décision typée (choix + probabilité + confiance), sans
+   *     générer de texte.
+   * Absent = `chat` (rétro-compatibilité).
+   */
+  classifierType?: ClassifierType;
+  /**
+   * Modèle (id de la bibliothèque) du classifieur `system-one` (ex. `clef` chez
+   * Ollama Cloud, directement ou via Switchy). `null`/absent = désactivé.
+   * ⚠️ Champ DISTINCT de `classifierModelId`. 
+   */
+  systemOneModelId?: string | null;
 }
+
+/** Types de classifieur de triage admis. */
+export type ClassifierType = "chat" | "system-one";
 
 export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   enabled: true,
@@ -617,6 +636,8 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   reviewRiskThreshold: 0.5,
   confidenceThreshold: 0.6,
   classifierModelId: null,
+  classifierType: "chat",
+  systemOneModelId: null,
 };
 
 export interface ProjectModeConfig {

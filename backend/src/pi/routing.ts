@@ -21,6 +21,14 @@ import {
   type ThinkingLevel,
 } from "./routing-types.js";
 import { getDefaultModel, getModel, type ModelLibrary, type RegisteredModel } from "./model-library.js";
+import { getProvider } from "./providers.js";
+import {
+  askSystemOne,
+  buildClassificationQuestions,
+  mapAnswersToRoute,
+  systemOneEndpoint,
+  SystemOneError,
+} from "./system-one.js";
 import { concurrencyManager } from "./concurrency.js";
 
 // Le type `Route` est réexporté par routing-types ; ce fichier le consomme.
@@ -340,6 +348,88 @@ export async function llmClassifier(
   } catch (error: any) {
     console.warn("[routing] llmClassifier failed:", error?.message || error);
     return null;
+  }
+}
+
+/**
+ * Classifieur de triage via l'API de DÉCISION « System One » — client NATIF
+ * (aucun chat, aucune génération de texte).
+ *
+ * Le modèle (`clef` sur Ollama Cloud, directement ou via Switchy) reçoit un
+ * `state` (la demande) et un schéma de deux questions (`category` en `choice`,
+ * `risk` en `noul`) ; sa réponse NATIVE (choix + probabilités + confiance) est
+ * traduite UNE FOIS ici en `Route` par `mapAnswersToRoute`.
+ *
+ * ⚠️ Contrairement à `llmClassifier` (qui avale l'erreur), ce classifieur dit
+ * ce qui s'est passé : `error` est non nul quand AUCUNE décision n'a pu être
+ * obtenue. L'appelant DOIT le journaliser/servir — sinon un repli heuristique
+ * passerait pour un triage LLM réussi.
+ */
+export interface SystemOneClassifierResult {
+  /** Décision, ou `null` (échec / non configuré). */
+  route: Route | null;
+  /** Message d'échec HONNÊTE (jamais un faux succès), ou `null`. */
+  error: string | null;
+}
+
+export async function systemOneClassifier(
+  request: string,
+  library: ModelLibrary,
+  modelId: string,
+  options: { timeoutMs?: number } = {},
+): Promise<SystemOneClassifierResult> {
+  if (!modelId) return { route: null, error: null };
+
+  const model = getModel(library, modelId);
+  if (!model) {
+    return {
+      route: null,
+      error: `modèle de classifieur System One introuvable dans la bibliothèque : ${modelId}`,
+    };
+  }
+  const provider = getProvider(model.providerId);
+  if (!provider) {
+    return {
+      route: null,
+      error: `fournisseur introuvable pour le classifieur System One : ${model.providerId}`,
+    };
+  }
+
+  let endpoint: string;
+  try {
+    endpoint = systemOneEndpoint(provider.baseUrl);
+  } catch (error: any) {
+    return { route: null, error: String(error?.message || error) };
+  }
+
+  // Même limiteur que le classifieur chat : un appel de classement consomme un
+  // slot du fournisseur (libéré dans le finally, quoi qu'il arrive).
+  const slotKey = `${model.providerId}::routing-classifier-system-one::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`;
+  await concurrencyManager.acquireLLMSlot(slotKey, "routing-classifier", model.providerId);
+  try {
+    const response = await askSystemOne({
+      endpoint,
+      apiKey: provider.apiKey,
+      request: {
+        // `model` = identifiant RÉEL chez le fournisseur. Sur Switchy, un modèle
+        // est un SERVICE : c'est donc le nom du service qui part ici, et Switchy
+        // le remplace par le modèle de son étape — sans conversion de format.
+        model: model.modelId,
+        state: request,
+        questions: buildClassificationQuestions(),
+      },
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
+    return { route: mapAnswersToRoute(response.answers, model.name || model.modelId), error: null };
+  } catch (error: any) {
+    const message =
+      error instanceof SystemOneError
+        ? error.message
+        : `System One en échec (${error?.message || error})`;
+    console.warn("[routing] systemOneClassifier failed:", message);
+    return { route: null, error: message };
+  } finally {
+    concurrencyManager.releaseLLMSlot(slotKey);
   }
 }
 

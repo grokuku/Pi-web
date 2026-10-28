@@ -70,6 +70,7 @@ function ModelSelect({
   providers,
   noneLabel,
   disabled = false,
+  ariaLabel,
 }: {
   value: string | null;
   onChange: (modelId: string | null) => void;
@@ -77,6 +78,8 @@ function ModelSelect({
   providers: ProviderConfig[];
   noneLabel: string;
   disabled?: boolean;
+  /** Libellé accessible (le `<label>` visuel n'est pas rattaché par `htmlFor`). */
+  ariaLabel?: string;
 }) {
   const sortedModels = [...models].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -90,6 +93,7 @@ function ModelSelect({
       value={value || ""}
       onChange={e => onChange(e.target.value || null)}
       disabled={disabled}
+      aria-label={ariaLabel}
       className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[11px] px-2 py-1.5 rounded focus:border-hacker-accent outline-none disabled:opacity-50 disabled:cursor-not-allowed"
     >
       <option value="">{noneLabel}</option>
@@ -161,6 +165,10 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
     reviewRiskThreshold: config?.reviewRiskThreshold ?? DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
     confidenceThreshold: config?.confidenceThreshold ?? DEFAULT_ROUTING_CONFIG.confidenceThreshold,
     classifierModelId: config?.classifierModelId ?? DEFAULT_ROUTING_CONFIG.classifierModelId,
+    // Rétro-compatibilité : une config enregistrée avant l'arrivée de System One
+    // n'a pas ces champs → classifieur `chat`, aucun modèle System One.
+    classifierType: config?.classifierType === "system-one" ? "system-one" : "chat",
+    systemOneModelId: config?.systemOneModelId ?? null,
   }));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -354,17 +362,59 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
           <label className="text-hacker-text-dim text-xs block mb-1">
             🔎 Classifieur de triage (optionnel)
           </label>
-          <ModelSelect
-            value={routing.classifierModelId}
-            onChange={modelId => setRouting(prev => ({ ...prev, classifierModelId: modelId }))}
-            models={models}
-            providers={providers}
-            noneLabel="— Aucun (triage heuristique) —"
-            disabled={false}
-          />
+          <select
+            value={routing.classifierType === "system-one" ? "system-one" : "chat"}
+            onChange={e => {
+              const type = e.target.value === "system-one" ? "system-one" : "chat";
+              setRouting(prev => ({ ...prev, classifierType: type }));
+            }}
+            aria-label="Type de classifieur de triage"
+            className="w-full bg-hacker-bg border border-hacker-border text-hacker-text-bright text-[11px] px-2 py-1.5 rounded focus:border-hacker-accent outline-none"
+          >
+            <option value="chat">Chat — le modèle répond un JSON de triage</option>
+            <option value="system-one">System One — décision native (choix + probabilité)</option>
+          </select>
+
+          {routing.classifierType === "system-one" ? (
+            <div className="mt-2">
+              <label className="text-hacker-text-dim text-xs block mb-1">
+                🧩 Modèle de décision (System One)
+              </label>
+              <ModelSelect
+                value={routing.systemOneModelId ?? null}
+                onChange={modelId => setRouting(prev => ({ ...prev, systemOneModelId: modelId }))}
+                models={models}
+                providers={providers}
+                noneLabel="— Aucun (triage heuristique) —"
+                ariaLabel="Modèle de décision (System One)"
+                disabled={false}
+              />
+              <p className="text-[10px] text-hacker-text-dim mt-1.5">
+                Modèle de <strong>décision</strong> (par ex. <code>clef</code> chez Ollama Cloud, en direct ou via
+                Switchy). Il ne rédige aucun texte : il rend une catégorie, une probabilité de risque et une
+                confiance en une seule passe. Laisse « aucun » pour garder le tri heuristique.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-2">
+              <label className="text-hacker-text-dim text-xs block mb-1">
+                💬 Modèle du classifieur chat
+              </label>
+              <ModelSelect
+                value={routing.classifierModelId}
+                onChange={modelId => setRouting(prev => ({ ...prev, classifierModelId: modelId }))}
+                models={models}
+                providers={providers}
+                noneLabel="— Aucun (triage heuristique) —"
+                ariaLabel="Modèle du classifieur chat"
+                disabled={false}
+              />
+            </div>
+          )}
+
           <p className="text-[10px] text-hacker-text-dim mt-1.5">
-            Modèle cheap optionnel pour le triage LLM. Laisse « aucun » pour utiliser le tri
-            heuristique par signaux.
+            Modèle cheap optionnel pour le triage. Laisse « aucun » pour utiliser le tri heuristique par signaux
+            (toujours utilisé en repli si le classifieur échoue).
           </p>
         </div>
         </div>

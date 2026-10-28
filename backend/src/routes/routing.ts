@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { loadModelLibrary, getProjectRoutingConfig } from "../pi/model-library.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, pickCategoryThinkingLevel, llmClassifier } from "../pi/routing.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, resolveRoute, pickModel, pickCategoryThinkingLevel, llmClassifier, systemOneClassifier } from "../pi/routing.js";
 import type { Route, SignalsInput } from "../pi/routing-types.js";
 
 const router = Router();
@@ -98,7 +98,14 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
 
     let llmRoute: Route | null = null;
     let llmClassifierError: string | null = null;
-    if (config.classifierModelId) {
+    const classifierType = config.classifierType === "system-one" ? "system-one" : "chat";
+    if (classifierType === "system-one" && config.systemOneModelId) {
+      // API de décision NATIVE : `error` non nul quand le modèle n'a rien pu
+      // décider → l'appelant voit honnêtement que le repli heuristique s'applique.
+      const classified = await systemOneClassifier(request, library, config.systemOneModelId);
+      llmRoute = classified.route;
+      llmClassifierError = classified.error;
+    } else if (config.classifierModelId) {
       try {
         const { getModelRuntime } = await import("../pi/session.js");
         const runtime = getModelRuntime();
@@ -122,6 +129,7 @@ async function handleDecision(req: Request, res: Response): Promise<void> {
       reviewRiskThreshold: config.reviewRiskThreshold,
       routingEnabled: globalEnabled,
       configEnabled,
+      classifierType,
       llmClassifierUsed: llmRoute !== null,
       llmClassifierError,
     });

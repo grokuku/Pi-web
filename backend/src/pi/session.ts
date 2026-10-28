@@ -17,7 +17,7 @@ import {
 } from "./model-library.js";
 import type { AgentMode, RegisteredModel } from "./model-library.js";
 import type { Route, SignalsInput, ThinkingLevel } from "./routing-types.js";
-import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute } from "./routing.js";
+import { extractSignals, isRoutingActive, isRoutingEnabled, llmClassifier, pickRoutedModel, pickRoutedThinkingLevel, resolveRoute, systemOneClassifier } from "./routing.js";
 import { resolveThinkingLevel } from "./thinking.js";
 import { getProviderDisplayName, ollamaCompatOptions, reasoningLevelMapForModel } from "./providers.js";
 import { recordUsage } from "../routes/usage.js";
@@ -1087,11 +1087,26 @@ async function applyMessageRouting(
 
     const signals = extractSignals(buildRoutingSignals(state));
 
-    // Classifieur LLM optionnel (uniquement si un modèle est configuré).
-    // llmClassifier ne lève pas : échec → null → repli heuristique.
+    // Classifieur optionnel (uniquement si un modèle est configuré).
+    // Deux TYPES, jamais mélangés : `system-one` (API de décision native) ou
+    // `chat` (historique). Aucun des deux ne lève : échec → null → repli
+    // heuristique — mais l'échec du classifieur System One est JOURNALISÉ pour
+    // qu'un triage heuristique ne passe jamais pour un triage LLM réussi.
     let llmRoute: Route | null = null;
-    if (config.classifierModelId) {
+    let classifierError: string | null = null;
+    if (config.classifierType === "system-one" && config.systemOneModelId) {
+      const classified = await systemOneClassifier(message, library, config.systemOneModelId);
+      llmRoute = classified.route;
+      classifierError = classified.error;
+    } else if (config.classifierModelId) {
       llmRoute = await llmClassifier(message, getModelRuntime(), config.classifierModelId);
+    }
+    if (classifierError) {
+      logger.warn("routing", "classifieur System One en échec — triage heuristique appliqué", {
+        projectId,
+        modelId: config.systemOneModelId ?? null,
+        error: classifierError,
+      });
     }
 
     const route = resolveRoute(message, config, signals, llmRoute);
@@ -1113,7 +1128,9 @@ async function applyMessageRouting(
       model: model ? `${model.providerId}/${model.modelId}` : null,
       // Thinking appliqué (catégorie) ; null = niveau du mode conservé.
       thinkingLevel: routedThinking ?? null,
+      classifierType: config.classifierType === "system-one" ? "system-one" : "chat",
       llmClassifierUsed: llmRoute !== null,
+      llmClassifierError: classifierError,
       reason: route.reason,
     });
 

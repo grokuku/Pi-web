@@ -119,8 +119,36 @@ export interface RoutingConfig {
   reviewRiskThreshold: number;
   /** Confiance minimale pour accepter une décision (sinon repli standard/execute). */
   confidenceThreshold: number;
-  /** Modèle cheap optionnel pour le classifieur LLM (null = off). */
+  /** Modèle cheap optionnel pour le classifieur LLM de type `chat` (null = off). */
   classifierModelId: string | null;
+  /**
+   * TYPE de classifieur qui produit la décision de triage :
+   *   - `chat`       : appel chat classique (`classifierModelId`), le modèle doit
+   *                    répondre un JSON `{category,riskScore,confidence}` ;
+   *   - `system-one` : API de DÉCISION native (`systemOneModelId`) — aucune
+   *                    génération de texte, le modèle renvoie une décision typée
+   *                    (choix + probabilité + confiance).
+   * Absent = `chat` (rétro-compatibilité totale des configs existantes).
+   */
+  classifierType?: ClassifierType;
+  /**
+   * Modèle (id de la bibliothèque) utilisé par le classifieur `system-one`
+   * (ex. `clef` servis par Ollama Cloud, directement ou via Switchy).
+   * `null`/absent = classifieur System One désactivé.
+   * ⚠️ Champ DISTINCT de `classifierModelId` : les deux classifieurs ont leur
+   * propre modèle et ne se marchent jamais dessus.
+   */
+  systemOneModelId?: string | null;
+}
+
+/** Types de classifieur de triage admis. */
+export type ClassifierType = "chat" | "system-one";
+
+export const CLASSIFIER_TYPES: readonly ClassifierType[] = ["chat", "system-one"];
+
+/** Garde de type : la valeur est-elle un type de classifieur valide ? */
+export function isClassifierType(value: unknown): value is ClassifierType {
+  return typeof value === "string" && (CLASSIFIER_TYPES as readonly string[]).includes(value);
 }
 
 export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
@@ -132,6 +160,8 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   reviewRiskThreshold: 0.5,
   confidenceThreshold: 0.6,
   classifierModelId: null,
+  classifierType: "chat",
+  systemOneModelId: null,
 };
 
 /** Mots-clés de risque : toujours déclencheurs d'un biais vers capable + gate review. */
