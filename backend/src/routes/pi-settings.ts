@@ -7,6 +7,9 @@ import os from "os";
 // Logique pure du toggle des skills (nom nu → motif d'exclusion « !nom » compris
 // par le SDK, cf. docs SDK settings.md) — testée dans skills-announce.test.ts.
 import { updateSkillSettingsList } from "../pi/skills-announce.js";
+// État MCP en LECTURE SEULE (serveurs de ~/.pi/agent/mcp.json) pour l'écran
+// Réglages → Extensions. Aucune écriture : la config MCP reste un fichier SDK.
+import { readMcpConfigSummary } from "../pi/mcp-config.js";
 
 const router = Router();
 
@@ -233,13 +236,16 @@ router.get("/packages", (_req: Request, res: Response) => {
   }
 });
 
-// GET available resources (extensions, skills, themes on disk)
+// GET available resources (extensions, skills, themes on disk) + état MCP (lecture seule)
 router.get("/available", (_req: Request, res: Response) => {
   try {
     res.json({
       extensions: listAvailableExtensions(),
       skills: listAvailableSkills(),
       themes: listAvailableThemes(),
+      // Serveurs MCP que le SDK lira au prochain `session_start`. `errors`
+      // remonte un JSON invalide : pas d'échec silencieux.
+      mcp: readMcpConfigSummary(AGENT_DIR),
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

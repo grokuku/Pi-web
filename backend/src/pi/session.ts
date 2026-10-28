@@ -46,7 +46,11 @@ import {
   DELEGATE_TOOL_NAME,
 } from "./harness-stream.js";
 import { buildMemoryInjection } from "./memory-service.js";
-import { createPromptExtension, type PiWebPromptContext } from "./system-prompt.js";
+import type { PiWebPromptContext } from "./system-prompt.js";
+// Branchement des extensions du SDK : `createMcpExtension()` dans les factories +
+// `bindExtensions()` (seul émetteur de `session_start`, donc seul point de
+// connexion des serveurs MCP). Détail et garde-fous : extension-bindings.ts.
+import { createPiWebExtensionFactories, bindPiWebExtensions } from "./extension-bindings.js";
 // Contexte temporel pour le MODÈLE (date + heure de l'UTILISATEUR, compactes).
 // Injecté via un CustomMessage display:false → invisible pour l'utilisateur,
 // visible par le LLM (cf. date-context.ts). La zone vient du navigateur : le
@@ -680,7 +684,9 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
       cwd,
       agentDir: PI_AGENT_DIR,
       settingsManager,
-      extensionFactories: [createPromptExtension(promptContext)],
+      // [prompt Pi-Web, MCP du SDK] — l'extension MCP connecte ses serveurs au
+      // `session_start`, émis par `bindPiWebExtensions` juste après la création.
+      extensionFactories: createPiWebExtensionFactories(promptContext),
     });
     await resourceLoader.reload();
 
@@ -692,6 +698,13 @@ When editing, respect each sub-project's folder. Each sub-project has its OWN gi
       modelRuntime: sharedModelRuntime!,
       customTools: [...createDesignTools(projectId), ...librarianTools, ...memoryTools, createCommitDraftTool(projectId), ...previewTools],
     });
+
+    // ── Bind des extensions (émet `session_start`) ──
+    // Le SDK n'émet `session_start` QUE depuis `bindExtensions()` : sans cet
+    // appel, AUCUN handler `session_start` ne tourne et l'extension MCP du SDK
+    // ne connecte jamais les serveurs de `mcp.json`. Ne lève jamais (un handler
+    // d'extension qui lève est intercepté par le SDK et journalisé via onError).
+    await bindPiWebExtensions(session, projectId);
 
     // ── Budget images (règle anti-erreur provider 400) ──
     // Le SDK convertit l'historique AgentMessage[] → Message[] via

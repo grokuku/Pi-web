@@ -44,9 +44,72 @@ interface AvailableResources {
   skills: string[];
   prompts: string[];
   themes: string[];
+  // État MCP en LECTURE SEULE (backend/src/pi/mcp-config.ts) : serveurs que le
+  // SDK lira au prochain `session_start` (émission faite par bindExtensions).
+  mcp?: McpConfigSummary;
+}
+
+interface McpServerSummary {
+  name: string;
+  transport: "stdio" | "http";
+  enabled: boolean;
+  description?: string;
+  source: string;
+}
+
+interface McpConfigSummary {
+  files: { path: string; exists: boolean; error?: string }[];
+  servers: McpServerSummary[];
+  errors: string[];
 }
 
 type TabId = "models" | "extensions" | "analysis" | "general" | "memory" | "security" | "layout" | "api-keys" | "shortcuts";
+
+// ── MCP (LECTURE SEULE) ────────────────────────────────
+// État affiché tel quel : serveurs déclarés dans ~/.pi/agent/mcp.json (lus par
+// le SDK au `session_start`). Aucune édition ici — c'est un fichier du SDK, et
+// un serveur en échec de connexion est signalé dans les logs du backend.
+function McpSection({ summary }: { summary?: McpConfigSummary }) {
+  const servers = summary?.servers ?? [];
+  const errors = summary?.errors ?? [];
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <HolafIcon name="link" size={12} className="text-hacker-accent" />
+        <span className="text-xs text-hacker-text-bright font-bold tracking-wider">MCP</span>
+        <span className="text-[10px] text-hacker-text-dim">({servers.length}) read-only</span>
+      </div>
+
+      {servers.length === 0 && errors.length === 0 ? (
+        <div className="text-[10px] text-hacker-text-dim pl-4 py-1">
+          No MCP server configured (<code>~/.pi/agent/mcp.json</code>)
+        </div>
+      ) : (
+        <div className="space-y-1 pl-1">
+          {servers.map(server => (
+            <div key={server.name} className="flex items-center gap-2 py-1">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${server.enabled ? "bg-hacker-accent" : "bg-hacker-text-dim"}`} />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-hacker-text-bright truncate font-mono">{server.name}</div>
+                <div className="text-[10px] text-hacker-text-dim truncate">
+                  <span className="uppercase">{server.transport}</span>
+                  {!server.enabled && <span className="text-hacker-warn"> disabled</span>}
+                  {server.description ? ` — ${server.description}` : ""}
+                </div>
+              </div>
+            </div>
+          ))}
+          {errors.map(err => (
+            <div key={err} className="text-[10px] text-hacker-error font-mono break-all">{err}</div>
+          ))}
+          <div className="text-[10px] text-hacker-text-dim">
+            Tools reach the model only with <code className="text-hacker-accent">"exposure": "direct"</code>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Props ──────────────────────────────────────────────
 
@@ -927,6 +990,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   <ResourceSection type="skills" items={currentSkills} available={available.skills} onToggle={toggleResource} onAdd={s => toggleResource("skills", s, true)} disabled={loading} />
                   <ResourceSection type="prompts" items={currentPrompts} available={available.prompts || []} onToggle={toggleResource} onAdd={s => toggleResource("prompts", s, true)} disabled={loading} />
                   <ResourceSection type="themes" items={currentThemes} available={available.themes} onToggle={toggleResource} onAdd={s => toggleResource("themes", s, true)} disabled={loading} />
+
+                  <McpSection summary={available.mcp} />
 
                   <div className="pt-2 border-t border-hacker-border">
                     <div className="text-xs text-hacker-text-dim mb-2">Add a resource path manually:</div>

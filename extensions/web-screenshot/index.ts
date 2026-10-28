@@ -1,8 +1,10 @@
 /**
  * web-screenshot Extension for Pi-Web
  *
- * Tool GLOBAL « web_screenshot » : prend un screenshot headless d'une page web
- * ou d'un mockup HTML afin que le LLM puisse voir le rendu réel.
+ * Tool GLOBAL « web_screenshot » : capture un RENDU (mockup HTML inline, page locale
+ * du projet, URL) afin que le LLM puisse le vérifier ou le montrer au user.
+ * Ce n'est PAS un outil de lecture : pour lire du texte/documentation, le rôle
+ * attendu est Libry (librarian_search puis librarian_archive).
  *
  * Le SDK Pi (pi-coding-agent) accepte du contenu image dans les tool results
  * (type "image" : { data: base64, mimeType }). On retourne donc le PNG encodé
@@ -226,7 +228,7 @@ const parameters = {
     url: {
       type: "string",
       description:
-        "URL distante à capturer (ex. https://example.com). Alternative à html/htmlPath.",
+        "URL distante à capturer pour vérifier un rendu (ex. https://example.com). Alternative à html/htmlPath.",
     },
     html: {
       type: "string",
@@ -273,12 +275,17 @@ export default function (pi: ExtensionAPI) {
     name: "web_screenshot",
     label: "Web Screenshot",
     description:
-      "Prend un screenshot headless d'une page web ou d'un mockup HTML et le renvoie " +
-      "en image au LLM. Accepte une URL distante, du HTML inline, ou un chemin vers un " +
-      "fichier HTML local. Utilisez-le pour vérifier le rendu réel d'un mockup ou d'une page.",
-    promptSnippet: "Capture a headless screenshot of a web page or HTML mockup",
+      "Capture un RENDU et le renvoie en image au LLM : un mockup HTML inline, une page " +
+      "locale du projet, ou une URL — POUR VÉRIFIER CE RENDU (mise en page, CSS, élément " +
+      "visuel) ou pour MONTRER la capture au user. Ce n'est PAS un moyen de LECTURE : " +
+      "pour lire du texte ou une documentation, y compris une source distante, utilisez " +
+      "Libry (librarian_search, puis librarian_archive) — lire par capture est lent, " +
+      "coûteux et imprécis.",
+    promptSnippet:
+      "Screenshot a RENDER (HTML mockup, local page, URL) to verify or show it — never to read text (use Libry)",
     promptGuidelines: [
-      "Utilisez web_screenshot pour vérifier le rendu réel d'un mockup HTML ou d'une page web.",
+      "Utilisez web_screenshot pour VÉRIFIER un RENDU (mockup HTML, page locale du projet, URL pour constater un rendu) ou pour MONTRER une capture au user.",
+      "Pour LIRE du texte ou une documentation : utilisez Libry (librarian_search, puis librarian_archive) — jamais web_screenshot, qui est lent, coûteux et imprécis pour du texte.",
       "Passez du HTML inline via le paramètre html, un fichier via htmlPath, ou une URL via url.",
       "Ajustez width/height pour contrôler la taille du viewport (défaut 1440x900).",
     ],

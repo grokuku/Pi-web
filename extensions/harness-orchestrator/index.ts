@@ -253,6 +253,16 @@ const CBM_TOOLS: string[] = [
 // cbm_*) ; setActiveToolsByName ignore silencieusement un nom inconnu.
 const EXPLORATION_TOOLS: string[] = ["exploration_note", "exploration_notes"];
 
+// Tools Libry (bibliothèque de documentation), exposés à TOUS les rôles : lire
+// une page/un dépôt se fait par le libraire (texte), pas par une capture.
+// ATTENTION : ces tools sont des `customTools` de la session PRINCIPALE
+// (backend/src/pi/librarian-tools.ts → session.ts:699), PAS des tools
+// d'extension : une tempSession créée sans `customTools` ne les a pas dans son
+// registre, et setActiveToolsByName ignore silencieusement un nom inconnu.
+// L'orchestrateur les injecte donc explicitement dans la tempSession (cf.
+// `customTools` de createAgentSession, plus bas).
+const LIBRARY_TOOLS: string[] = ["librarian_search", "librarian_archive"];
+
 // Consigne commune d'exploration ajoutée au prompt de chaque rôle. Objectif :
 // faire basculer le réflexe « lire les fichiers un par un » vers le graphe.
 // 
@@ -294,6 +304,20 @@ un sujet déjà traité (« que sait-on déjà ? »).
 contraintes non évidentes, pièges. N'écris JAMAIS ce qui est déjà visible dans
 les fichiers du repo ni des informations temporaires.`;
 
+// Consigne de lecture/rendu, ajoutée au prompt de chaque rôle : le TEXTE se lit
+// par le libraire (indexé, citable, archivable — rapide et exact), la capture est
+// réservée à la VÉRIFICATION D'UN RENDU (mise en page, CSS, élément visuel).
+// Formulée en RÈGLE pour avoir le même effet que CBM_EXPLORATION_GUIDE sur les
+// réflexes d'outil (l'audit d'usage montre qu'une préférence molle n'est pas suivie).
+const LIBRARY_GUIDE = `
+
+## Lire du texte → Libry ; vérifier un rendu → screenshot (RÈGLE)
+Pour LIRE une page web, une documentation ou du texte : \`librarian_search\` (puis
+\`librarian_archive\` pour conserver la source) — jamais un screenshot, qui est lent,
+coûteux et imprécis pour du texte.
+Pour VÉRIFIER UN RENDU (mise en page, CSS, élément visuel, capture à montrer) :
+\`web_screenshot\` est l'outil juste.`;
+
 const FUNCTIONS: FunctionDef[] = [
   {
     name: "planning",
@@ -311,9 +335,9 @@ Tu es la fonction de planification. Tu reçois une tâche de l'orchestrator. Tu 
 - Sois précis et concis
 - Liste les fichiers à créer/modifier
 - Décris l'approche technique et les dépendances
-- N'écris pas de code — c'est le job de la fonction execute` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
-    // read-only : exploration (CBM + fichiers) + analyse de fichiers.
-    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
+- N'écris pas de code — c'est le job de la fonction execute` + LIBRARY_GUIDE + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
+    // read-only : exploration (CBM + fichiers) + analyse de fichiers + Libry (texte).
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...LIBRARY_TOOLS, ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "execute",
@@ -331,9 +355,10 @@ Règles :
 - Suis les conventions existantes du projet
 - Fais des changements atomiques, un fichier à la fois
 - Gère les erreurs et edge cases
-- Teste tes changements avec bash si applicable` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
-    // écriture/édition + bash + exploration (CBM + fichiers) + analyse + capture UI.
-    tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
+- Teste tes changements avec bash si applicable` + LIBRARY_GUIDE + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
+    // écriture/édition + bash + exploration (CBM + fichiers) + analyse + Libry + capture UI
+    // (le screenshot est LÉGITIME ici : cette fonction MONTRE des rendus).
+    tools: ["read", "edit", "write", "bash", "grep", "find", "ls", "analyze_file", "web_screenshot", ...LIBRARY_TOOLS, ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "review",
@@ -350,9 +375,10 @@ Règles :
 - Vérifie les edge cases non gérés
 - Signale les bugs avec fichier:ligne
 - Suggère des corrections concrètes
-- Ne modifie PAS le code toi-même` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
-    // read-only STRICT (pas d'edit/write/bash) : exploration, analyse, capture UI.
-    tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
+- Ne modifie PAS le code toi-même` + LIBRARY_GUIDE + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
+    // read-only STRICT (pas d'edit/write/bash) : exploration, analyse, lecture web par
+    // Libry + capture pour VÉRIFIER LE RENDU d'une page produite (mise en page, CSS).
+    tools: ["read", "grep", "find", "ls", "analyze_file", "web_screenshot", ...LIBRARY_TOOLS, ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
   {
     name: "integrate",
@@ -367,9 +393,9 @@ Règles :
 - Agrège les plans, implémentations et relectures
 - Rédige un rapport final clair et actionnable
 - Mets en évidence les décisions, les changements et les risques restants
-- Ne modifie PAS le code toi-même — c'est une synthèse` + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
-    // read-only : exploration CBM + fichiers + analyse pour vérifier la synthèse.
-    tools: ["read", "grep", "find", "ls", "analyze_file", ...CBM_TOOLS, ...EXPLORATION_TOOLS],
+- Ne modifie PAS le code toi-même — c'est une synthèse` + LIBRARY_GUIDE + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES,
+    // read-only : exploration CBM + fichiers + analyse + Libry pour vérifier la synthèse.
+    tools: ["read", "grep", "find", "ls", "analyze_file", ...LIBRARY_TOOLS, ...CBM_TOOLS, ...EXPLORATION_TOOLS],
   },
 ];
 
@@ -1588,10 +1614,38 @@ export default function (pi: ExtensionAPI) {
 
         // SDK 0.80+: modelRuntime remplace authStorage + modelRegistry.
         // Si on ne passe rien, le SDK crée un ModelRuntime par défaut (~/.pi/agent/auth.json).
+        //
+        // ── Tools Libry dans la tempSession (librarian_search/librarian_archive) ──
+        // Ces deux tools sont des `customTools` de la session PRINCIPALE
+        // (backend/src/pi/librarian-tools.ts, passés par session.ts) : une
+        // tempSession créée SANS `customTools` ne les a PAS dans son registre, et
+        // setActiveToolsByName ignore silencieusement un nom inconnu — les rôles
+        // déclareraient Libry sans jamais l'avoir. On les injecte donc ici.
+        // Import DYNAMIQUE + try/catch : un module indisponible ne doit jamais
+        // empêcher un sous-agent de démarrer (dégradation = Libry absent, loggé).
+        let tempCustomTools: unknown[] = [];
+        try {
+          const { librarianTools } = await import("../../backend/src/pi/librarian-tools.js");
+          if (Array.isArray(librarianTools) && librarianTools.length > 0) {
+            tempCustomTools = librarianTools;
+            console.log(
+              `[harness-orchestrator] Tools Libry injectés dans la tempSession (${librarianTools
+                .map((t: any) => t?.name)
+                .filter(Boolean)
+                .join(", ")})`,
+            );
+          }
+        } catch (e: any) {
+          console.warn(
+            `[harness-orchestrator] Tools Libry indisponibles dans la tempSession : ${e?.message || e}`,
+          );
+        }
+
         const result = await createAgentSession({
           cwd,
           sessionManager: tempSessionManager,
           resourceLoader: tempResourceLoader,
+          ...(tempCustomTools.length > 0 ? { customTools: tempCustomTools as any[] } : {}),
         });
         const tempSession = result.session;
         // LOT 1 : le registre peut désormais aborter/diriger la session réelle.
@@ -1712,11 +1766,12 @@ export default function (pi: ExtensionAPI) {
             (tempSession as any).setActiveToolsByName(effectiveFunc.tools);
           }
 
-          // ── Vérification d'allowlist (point B) : les tools cbm_* demandés par
-          // le rôle sont-ils RÉELLEMENT actifs dans la tempSession ? Le SDK
-          // ignore silencieusement un nom inconnu de setActiveToolsByName ; si
-          // l'extension codebase-memory n'était pas chargée ici, le sous-agent
-          // n'aurait AUCUN tool de graphe et ne pourrait pas respecter la
+          // ── Vérification d'allowlist (point B) : les tools demandés par le rôle
+          // sont-ils RÉELLEMENT actifs dans la tempSession ? Le SDK ignore
+          // silencieusement un nom inconnu de setActiveToolsByName ; si l'extension
+          // codebase-memory n'était pas chargée (tools cbm_*) ou si l'injection
+          // `customTools` avait échoué (tools Libry), le sous-agent n'aurait AUCUN
+          // outil de graphe / de lecture web et ne pourrait pas respecter la
           // consigne. On le loggue au lieu de le supposer.
           try {
             const activeNames: string[] =
@@ -1732,6 +1787,19 @@ export default function (pi: ExtensionAPI) {
               console.log(
                 `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : ${requestedCbm.length} tools CBM actifs ` +
                 `(${requestedCbm.join(", ")})`,
+              );
+            }
+            const requestedLibrary = LIBRARY_TOOLS.filter((t) => effectiveFunc.tools.includes(t));
+            const missingLibrary = requestedLibrary.filter((t) => !activeNames.includes(t));
+            if (missingLibrary.length > 0) {
+              console.warn(
+                `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : tools Libry absents du registre ` +
+                `(${missingLibrary.join(", ")}) — la lecture web texte est indisponible dans la tempSession`,
+              );
+            } else if (requestedLibrary.length > 0) {
+              console.log(
+                `[harness-orchestrator] Sous-agent ${effectiveFunc.label} : ${requestedLibrary.length} tools Libry actifs ` +
+                `(${requestedLibrary.join(", ")})`,
               );
             }
           } catch {}
