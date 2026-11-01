@@ -443,6 +443,44 @@ export const fr = {
       xhigh: "très élevée",
       max: "maximale",
     },
+    // ── « Appliquer ce routage à d'autres projets » ──
+    // Action LARGE qui ÉCRASE des configurations : libellé explicite, portée
+    // choisie, prévisualisation chiffrée et confirmation obligatoire.
+    apply: {
+      open: "🌐 Appliquer à d'autres projet(s)…",
+      title: "APPLIQUER CE ROUTAGE À D'AUTRES PROJETS",
+      intro:
+        "Le routage est propre à chaque projet. Cette action recopie les réglages ci-dessus et ÉCRASE le routage des projets choisis. Seul le routage est copié : le mode, le modèle de mode et les agents de chaque projet ne sont pas touchés.",
+      scopeLabel: "Appliquer à",
+      scopeAll: "Tous les projets",
+      scopeAllExceptCurrent: "Tous les projets, sauf le projet courant",
+      scopeLinked: "Le projet courant et ses sous-projets liés",
+      scopeSelected: "Seulement les projets cochés ci-dessous",
+      previewLoading: "Calcul des projets concernés…",
+      targetsTitle: (n: number) => `${n} projet(s) vont recevoir ces réglages :`,
+      unchangedCount: (n: number) => `${n} projet(s) resteront inchangés.`,
+      skippedLine: (name: string) => `${name} — non modifié`,
+      noTargets: "Aucun projet ne serait modifié avec cette portée.",
+      notLinked: "Le projet courant n'est pas un projet lié : il n'a pas de sous-projets.",
+      warningsTitle: "Modèles introuvables dans la bibliothèque",
+      warningLine: (model: string, field: string) =>
+        `« ${model} » (${field}) → repli sur le modèle par défaut, la configuration n'est pas cassée`,
+      confirmLabel: (n: number) => `Je comprends que le routage de ${n} projet(s) sera écrasé`,
+      applyButton: (n: number) => `Écraser ${n} projet(s)`,
+      applying: "Application…",
+      cancel: "Annuler",
+      close: "Fermer",
+      error: "Échec de l'application du routage",
+      success: (n: number) => `${n} projet(s) mis à jour`,
+      fields: {
+        trivial: "Trivial",
+        standard: "Standard",
+        complex: "Complexe",
+        review: "Relecture",
+        classifierModelId: "classifieur chat",
+        systemOneModelId: "modèle System One",
+      },
+    },
   },
 
   // ── Sidebar ──

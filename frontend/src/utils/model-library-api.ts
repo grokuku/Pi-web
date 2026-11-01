@@ -9,7 +9,7 @@
 // hook useTranslation) : voir apiErrorLabels() ci-dessous.
 
 import { parseJsonResponse, type ApiErrorLabels } from "./api";
-import type { ModelLibrary, RegisteredModel } from "../types";
+import type { ModelLibrary, RegisteredModel, RoutingConfig } from "../types";
 import type { TFunction } from "../i18n";
 
 /**
@@ -82,4 +82,104 @@ export async function setDefaultModel(
     method: "PUT",
   });
   return parseJsonResponse<ModelLibrary>(res, labels);
+}
+
+// ── « Appliquer ce routage à d'autres projets » ───────────────────────────
+// Le routage est stocké PAR PROJET (projectModes[<id>].harness.routing) : rien
+// n'est partagé ni hérité, pas même entre un projet lié et ses sous-projets.
+// La copie passe donc par UNE route dédiée, en deux temps : `dryRun` pour la
+// prévisualisation (aucune écriture), puis l'application réelle.
+
+export type RoutingCopyScope = "all" | "all-except-current" | "linked-subprojects" | "selected";
+
+/** Champs de routage porteurs d'un id de modèle (pour les avertissements). */
+export type RoutingModelField =
+  | "trivial"
+  | "standard"
+  | "complex"
+  | "review"
+  | "classifierModelId"
+  | "systemOneModelId";
+
+export interface RoutingCopyCandidate {
+  id: string;
+  name: string;
+  storage: string;
+  isSource: boolean;
+  isLinkedSubproject: boolean;
+}
+
+export interface RoutingCopySkipped {
+  id: string;
+  name: string;
+  reason: "source" | "unknown-project";
+}
+
+export interface RoutingCopyWarning {
+  field: RoutingModelField;
+  /** Id de modèle configuré qui n'existe PAS dans la bibliothèque. */
+  modelId: string;
+  projectIds: string[];
+  projectNames: string[];
+}
+
+/** Réponse de POST /api/model-library/routing/apply (prévisualisation ou application). */
+export interface RoutingCopyPlan {
+  dryRun: boolean;
+  sourceProjectId: string;
+  scope: string;
+  targets: { id: string; name: string; storage: string }[];
+  skipped: RoutingCopySkipped[];
+  warnings: RoutingCopyWarning[];
+  totalProjects: number;
+  otherProjects: number;
+  sourceIsLinked: boolean;
+  candidates: RoutingCopyCandidate[];
+  linkedSubprojectIds: string[];
+  /** Ids réellement écrits (vide en prévisualisation). */
+  applied: string[];
+  /** Bibliothèque à jour (absente en prévisualisation). */
+  library?: ModelLibrary;
+}
+
+export interface RoutingCopyRequest {
+  sourceProjectId: string;
+  scope: RoutingCopyScope;
+  /** Config à recopier (celle de la modale, pas forcément enregistrée). */
+  routing: RoutingConfig;
+  /** Portée `selected` uniquement. */
+  selectedProjectIds?: string[];
+}
+
+async function postRoutingCopy(
+  body: RoutingCopyRequest,
+  dryRun: boolean,
+  labels: ApiErrorLabels
+): Promise<RoutingCopyPlan> {
+  const res = await fetch("/api/model-library/routing/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, dryRun }),
+  });
+  return parseJsonResponse<RoutingCopyPlan>(res, labels);
+}
+
+/**
+ * Prévisualisation (aucune écriture) : cibles, projets inchangés et
+ * avertissements « modèle absent de la bibliothèque ». Même calcul que
+ * l'application réelle → ce qui est affiché est exactement ce qui sera fait.
+ */
+export function previewRoutingCopy(
+  body: RoutingCopyRequest,
+  labels: ApiErrorLabels
+): Promise<RoutingCopyPlan> {
+  return postRoutingCopy(body, true, labels);
+}
+
+/** Application réelle (écrase le routage des projets ciblés). */
+export function applyRoutingCopy(
+  body: RoutingCopyRequest,
+  labels: ApiErrorLabels
+): Promise<RoutingCopyPlan> {
+  return postRoutingCopy(body, false, labels);
 }

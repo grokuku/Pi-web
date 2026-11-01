@@ -325,3 +325,66 @@ describe("RoutingConfigModal — seuil de confiance System One", () => {
     expect(systemOneThresholdSlider().value).toBe("0.35");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// « Appliquer à d'autres routings » : le point d'entrée du panneau.
+// La mécanique complète (portée, prévisualisation, confirmation, modèles
+// absents) est testée dans RoutingApplyPanel.test.tsx.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("RoutingConfigModal — entrée « appliquer à d'autres projets »", () => {
+  it("sans projet source (projectId absent) → aucune action large n'est proposée", () => {
+    renderModal([makeModel()]);
+    expect(screen.queryByRole("button", { name: /Apply to other project/ })).toBeNull();
+  });
+
+  it("avec un projet source → bouton présent, qui OUVRE un panneau (aucune écriture directe)", async () => {
+    const calls: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        calls.push(JSON.parse(String(init?.body ?? "{}")));
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          json: async () => ({
+            dryRun: true,
+            sourceProjectId: "p1",
+            scope: "all-except-current",
+            targets: [{ id: "p2", name: "Other", storage: "local" }],
+            skipped: [{ id: "p1", name: "Current", reason: "source" }],
+            warnings: [],
+            totalProjects: 2,
+            otherProjects: 1,
+            sourceIsLinked: false,
+            candidates: [],
+            linkedSubprojectIds: [],
+            applied: [],
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    render(
+      <I18nProvider>
+        <RoutingConfigModal
+          onClose={vi.fn()}
+          onSave={vi.fn(async () => {})}
+          models={[makeModel()]}
+          providers={[]}
+          config={null}
+          projectId="p1"
+        />
+      </I18nProvider>,
+    );
+
+    const open = screen.getByRole("button", { name: /Apply to other project/ });
+    // Un simple clic sur ce bouton ne doit RIEN écrire : il ouvre le panneau.
+    expect(calls).toHaveLength(0);
+    fireEvent.click(open);
+    expect(await screen.findByText("1 project(s) will receive these settings:")).toBeTruthy();
+    // Seule une PRÉVISUALISATION a été demandée à ce stade.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].dryRun).toBe(true);
+  });
+});

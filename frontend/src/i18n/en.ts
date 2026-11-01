@@ -443,6 +443,44 @@ export const en = {
       xhigh: "very high",
       max: "max",
     },
+    // ── “Apply this routing to other projects” ──
+    // Broad action that OVERWRITES configurations: explicit label, chosen
+    // scope, numbered preview and mandatory confirmation.
+    apply: {
+      open: "🌐 Apply to other project(s)…",
+      title: "APPLY THIS ROUTING TO OTHER PROJECTS",
+      intro:
+        "Routing is stored per project. This action copies the settings above and OVERWRITES the routing of the selected projects. Only routing is copied: each project's mode, mode model and agents are left untouched.",
+      scopeLabel: "Apply to",
+      scopeAll: "All projects",
+      scopeAllExceptCurrent: "All projects except the current one",
+      scopeLinked: "The current project and its linked sub-projects",
+      scopeSelected: "Only the projects checked below",
+      previewLoading: "Computing affected projects…",
+      targetsTitle: (n: number) => `${n} project(s) will receive these settings:`,
+      unchangedCount: (n: number) => `${n} project(s) will remain unchanged.`,
+      skippedLine: (name: string) => `${name} — unchanged`,
+      noTargets: "No project would be changed with this scope.",
+      notLinked: "The current project is not a linked project: it has no sub-projects.",
+      warningsTitle: "Models not found in the library",
+      warningLine: (model: string, field: string) =>
+        `“${model}” (${field}) → falls back to the default model, the configuration is not broken`,
+      confirmLabel: (n: number) => `I understand the routing of ${n} project(s) will be overwritten`,
+      applyButton: (n: number) => `Overwrite ${n} project(s)`,
+      applying: "Applying…",
+      cancel: "Cancel",
+      close: "Close",
+      error: "Failed to apply routing",
+      success: (n: number) => `${n} project(s) updated`,
+      fields: {
+        trivial: "Trivial",
+        standard: "Standard",
+        complex: "Complex",
+        review: "Review",
+        classifierModelId: "chat classifier",
+        systemOneModelId: "System One model",
+      },
+    },
   },
   // ── Sidebar ──
   sidebar: {

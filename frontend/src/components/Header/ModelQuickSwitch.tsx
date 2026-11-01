@@ -390,6 +390,13 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
           models={library?.models || []}
           providers={providers}
           config={(pm as any)?.harness?.routing || null}
+          projectId={activeProjectId || null}
+          onApplied={async () => {
+            // Les routages des AUTRES projets ont changé sur disque : on relit
+            // la bibliothèque pour que l'écran reflète l'état réel.
+            await loadLibrary();
+            onModelApplied?.();
+          }}
         />
       )}
 

@@ -599,6 +599,82 @@ export function setProjectRoutingConfig(projectId: string, routing: RoutingConfi
   return library;
 }
 
+/**
+ * Copie PROFONDE d'une config de routage (aucun objet partagé entre projets).
+ * Les 4 catégories sont des objets à part : les partager rendrait toute
+ * modification d'un projet visible sur les autres.
+ */
+export function cloneRoutingConfig(routing: RoutingConfig): RoutingConfig {
+  return {
+    ...routing,
+    trivial: { ...routing.trivial },
+    standard: { ...routing.standard },
+    complex: { ...routing.complex },
+    review: { ...routing.review },
+  };
+}
+
+/**
+ * Écrit la MÊME config de routage sur PLUSIEURS projets, **en mémoire**.
+ *
+ * « Appliquer à d'autres routings » : la config du projet courant est recopiée
+ * sur N projets. Sémantique volontairement limitée à `harness.routing` :
+ * `code`, `harness.modelId`, `harness.enabled`, `harness.config` (agents) et
+ * `activeMode` de chaque projet restent INTACTS — un routage n'a pas à écraser
+ * le choix de mode ou l'équipe d'un autre projet.
+ *
+ * ⚠️ Aucune écriture disque ici, volontairement : l'appelant enchaîne
+ * `loadModelLibrary()` → `applyRoutingToLibrary()` → `saveModelLibrary()`, soit
+ * UNE seule écriture du fichier → écriture ATOMIQUE du point de vue applicatif
+ * (soit tous les projets reçoivent la config, soit aucun : une exception avant
+ * la sauvegarde laisse le fichier inchangé).
+ *
+ * Validation : le payload est normalisé comme au chargement
+ * (`normalizeRoutingConfig` : `thinkingLevel`/`classifierType` invalides omis
+ * ou ramenés au défaut) puis les trois seuils sont bornés à [0, 1] — valeur
+ * non numérique ou hors bornes → défaut. La config écrite est donc TOUJOURS
+ * valide, même si l'appelant envoie un corps malformé.
+ *
+ * Un `modelId` inconnu de la bibliothèque est CONSERVÉ tel quel : la résolution
+ * retombe alors sur le modèle par défaut (`pickModel`, routing.ts:583-590), il
+ * n'y a donc pas de config cassée — cf. `routingCopyWarnings` pour
+ * l'avertissement affiché à l'utilisateur AVANT l'écriture.
+ *
+ * @param projectIds  projets cibles (ids inconnus/vides/doublons ignorés).
+ * @param routing     config source (typiquement celle du projet courant).
+ * @returns `applied` = ids réellement modifiés en mémoire.
+ */
+export function applyRoutingToLibrary(
+  library: ModelLibrary,
+  projectIds: readonly string[],
+  routing: unknown,
+): { applied: string[] } {
+  const normalized = normalizeRoutingConfig(routing);
+  // Les deux seuils historiques ne sont PAS bornés par normalizeRoutingConfig
+  // (il ne fait que remplacer les valeurs absentes) : on les borne ici.
+  normalized.reviewRiskThreshold = normalizeConfidenceThreshold(
+    normalized.reviewRiskThreshold,
+    DEFAULT_ROUTING_CONFIG.reviewRiskThreshold,
+  );
+  normalized.confidenceThreshold = normalizeConfidenceThreshold(
+    normalized.confidenceThreshold,
+    DEFAULT_ROUTING_CONFIG.confidenceThreshold,
+  );
+
+  const applied: string[] = [];
+  const seen = new Set<string>();
+  for (const id of projectIds) {
+    if (typeof id !== "string" || !id || seen.has(id)) continue;
+    seen.add(id);
+    if (!library.projectModes[id]) library.projectModes[id] = createDefaultProjectMode();
+    const pm = library.projectModes[id];
+    if (!pm.harness) pm.harness = createDefaultProjectMode().harness;
+    pm.harness.routing = cloneRoutingConfig(normalized);
+    applied.push(id);
+  }
+  return { applied };
+}
+
 // ── CRUD ──────────────────────────────────────────────
 
 export function addModel(entry: Omit<RegisteredModel, "id">): ModelLibrary {

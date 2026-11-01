@@ -16,6 +16,15 @@ import {
 } from "../../types";
 import { useTranslation, type TFunction } from "../../i18n";
 import { toast } from "../../utils/holaf-toast";
+import { RoutingApplyPanel } from "./RoutingApplyPanel";
+import {
+  apiErrorLabels,
+  applyRoutingCopy,
+  previewRoutingCopy,
+  type RoutingCopyPlan,
+  type RoutingCopyScope,
+  type RoutingCopyWarning,
+} from "../../utils/model-library-api";
 
 interface Props {
   onClose: () => void;
@@ -23,6 +32,13 @@ interface Props {
   models: RegisteredModel[];
   providers: ProviderConfig[];
   config: RoutingConfig | null;
+  /**
+   * Projet dont le routage est édité. Requis pour « appliquer à d'autres
+   * routings » : sans lui, l'action n'a pas de source → le bouton est masqué.
+   */
+  projectId?: string | null;
+  /** Appelé après une application réussie (rafraîchissement de l'état à l'écran). */
+  onApplied?: () => void | Promise<void>;
 }
 
 // ── Métadonnées d'affichage des 4 catégories de routage ──
@@ -157,7 +173,7 @@ function normalizeThreshold(value: unknown, fallback: number): number {
   return value;
 }
 
-export function RoutingConfigModal({ onClose, onSave, models, providers, config }: Props) {
+export function RoutingConfigModal({ onClose, onSave, models, providers, config, projectId, onApplied }: Props) {
   const { t } = useTranslation();
   // Conserve le thinkingLevel existant s'il est présent (rétro-compatibilité :
   // une config historique sans thinkingLevel reste valide = défaut du mode).
@@ -191,6 +207,9 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
   }));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Panneau « appliquer à d'autres projets » : replié par défaut. Sa présence
+  // est conditionnée à un projet source connu (sans lui, pas de source).
+  const [showApply, setShowApply] = useState(false);
 
   const updateCategoryModel = (category: TaskCategory, modelId: string | null) => {
     setRouting(prev => {
@@ -481,6 +500,31 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config 
           <div className="px-3 py-2 bg-hacker-error/10 text-hacker-error text-xs border border-hacker-error/30 rounded">
             {error}
           </div>
+        )}
+
+        {/* Appliquer ce routage à d'autres projets (portée + prévisualisation +
+            confirmation dans le panneau). Fermé par défaut : aucune action
+            large ne part d'un simple clic. */}
+        {projectId && (
+          showApply ? (
+            <RoutingApplyPanel
+              projectId={projectId}
+              routing={routing}
+              onClose={() => setShowApply(false)}
+              onApplied={onApplied}
+            />
+          ) : (
+            <div className="border-t border-hacker-border/30 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowApply(true)}
+                disabled={loading}
+                className="btn-hacker text-[11px] px-3 py-1 text-hacker-text-dim hover:text-hacker-warn disabled:opacity-50"
+              >
+                {t("routingModal.apply.open")}
+              </button>
+            </div>
+          )
         )}
 
         {/* Actions */}

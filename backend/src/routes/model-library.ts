@@ -12,6 +12,7 @@ import {
   setProjectModeEnabled,
   setProjectModeHarnessConfig,
   setProjectRoutingConfig,
+  applyRoutingToLibrary,
   getProjectModeConfig,
   getModel,
   getDefaultModel,
@@ -23,6 +24,8 @@ import {
   type RegisteredModel,
 } from "../pi/model-library.js";
 import { loadProviders, inferVision, inferContextWindow } from "../pi/providers.js";
+import { planRoutingCopy } from "../pi/routing-copy.js";
+import { getAllProjects } from "../projects/manager.js";
 import { setModel, setThinkingLevel, reloadModelRegistry, getModelRegistry, getActiveMode, reapplyAllSessions, getSession, compactSession } from "../pi/session.js";
 
 const router = Router();
@@ -339,6 +342,86 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     res.json(library);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// ── POST apply a routing config to other projects ────
+//
+// « Appliquer ce routage à d'autres projets » (bouton de la modale de routage).
+// Le routage est stocké PAR PROJET (projectModes[<id>].harness.routing) : rien
+// n'est partagé ni hérité, pas même entre un projet lié et ses sous-projets.
+// Cette route est donc la SEULE manière de propager une config.
+//
+// Corps : { sourceProjectId, scope, selectedProjectIds?, routing, dryRun? }
+//  - scope ∈ « all » | « all-except-current » | « linked-subprojects » | « selected »
+//    (portée EXPLICITE obligatoire : aucune valeur par défaut, une action qui
+//    écrase N configurations ne doit pas partir d'un choix implicite) ;
+//  - routing = config à recopier (celle de la modale, pas nécessairement
+//    encore enregistrée sur le projet courant) ;
+//  - dryRun = true → PRÉVISUALISATION (aucune écriture) : mêmes cibles, mêmes
+//    avertissements, donc ce que l'utilisateur voit est exactement ce qui sera
+//    fait.
+//
+// ⚠️ Écriture ATOMIQUE : tous les projets sont modifiés EN MÉMOIRE puis le
+// fichier est écrit UNE seule fois (saveModelLibrary). Une erreur avant la
+// sauvegarde laisse donc le fichier intact — jamais de moitié appliquée.
+// ⚠️ Seul `harness.routing` est touché (voir applyRoutingToLibrary).
+router.post("/routing/apply", (req: Request, res: Response) => {
+  try {
+    const { sourceProjectId, scope, selectedProjectIds, routing, dryRun } = req.body || {};
+    if (typeof sourceProjectId !== "string" || !sourceProjectId) {
+      return res.status(400).json({ error: "sourceProjectId is required" });
+    }
+    // La config est normalisée/bornée par applyRoutingToLibrary ; on refuse
+    // seulement un corps manifestement vide (rien à recopier).
+    if (!routing || typeof routing !== "object") {
+      return res.status(400).json({ error: "routing is required" });
+    }
+
+    const projects = getAllProjects();
+    const library = loadModelLibrary();
+
+    const plan = planRoutingCopy({
+      scope,
+      sourceProjectId,
+      projects,
+      selectedProjectIds,
+      routing,
+      library,
+    });
+
+    if (dryRun === true) {
+      return res.json({ dryRun: true, sourceProjectId, scope, ...plan, applied: [] });
+    }
+
+    // Garde-fou : ne JAMAIS écrire sur une portée vide sans le dire.
+    if (plan.targets.length === 0) {
+      return res.status(400).json({
+        error: "Aucun projet cible pour cette portée",
+        ...plan,
+        applied: [],
+      });
+    }
+
+    // Tout ou rien : une seule écriture disque après application en mémoire.
+    const { applied } = applyRoutingToLibrary(
+      library,
+      plan.targets.map((p) => p.id),
+      routing,
+    );
+    saveModelLibrary(library);
+
+    const updatedLibrary = loadModelLibrary();
+    res.json({
+      dryRun: false,
+      sourceProjectId,
+      scope,
+      ...plan,
+      applied,
+      library: updatedLibrary,
+    });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Échec de l'application du routage" });
   }
 });
 
