@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
+import { useAutoClose } from "../../hooks/useAutoClose";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
 import { commitPushOutcome, decideGitFailure } from "../../utils/git-errors";
@@ -79,8 +80,21 @@ interface Props {
   // résumé apparaisse dans le chat affiché (et non dans la session du sous-projet).
   notifyProjectId?: string;
   onClose: () => void;
+  /**
+   * Appelé UNE SEULE FOIS quand le push est TERMINÉ AVEC SUCCÈS.
+   * ⚠️ Ne doit PAS fermer la modale : la fermeture est désormais gérée par la
+   * modale elle-même (`useAutoClose`, annulable au survol). L'appelant s'en
+   * sert uniquement pour rafraîchir l'état git affiché.
+   */
   onDone: () => void;
 }
+
+// Délai de fermeture après un succès : assez long pour LIRE la confirmation,
+// assez court pour ne pas imposer un clic inutile.
+export const COMMIT_PUSH_CLOSE_DELAY_MS = 2000;
+
+// Durée du fondu de sortie (alignée sur l'animation `.modal-closing` du thème).
+export const COMMIT_PUSH_CLOSE_FADE_MS = 160;
 
 export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: Props) {
   const { t } = useTranslation();
@@ -100,6 +114,60 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
 
   const [showIdentityModal, setShowIdentityModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+
+  const [closing, setClosing] = useState(false);
+  const doneRef = useRef(false);
+
+  /** Début du fondu de sortie (160 ms), puis fermeture réelle par l'effet ci-dessous. */
+  const beginClose = useCallback(() => {
+    setClosing(true);
+  }, []);
+
+  // ── Fermeture naturelle après succès ──
+  // Le message de confirmation reste affiché ~2 s, puis la modale se ferme en
+  // fondu. Survol/déplacement de souris sur la fenêtre → fermeture ANNULÉE (la
+  // modale reste ouverte avec un bouton « Fermer »). Échap/clic → immédiat.
+  const {
+    // `beginClose` : au terme du délai, on Joue le fondu (pas de disparition sèche).
+    schedule: scheduleClose,
+    cancel: cancelAutoClose,
+    closeNow,
+    isCancelled: isAutoCloseCancelled,
+  } = useAutoClose(onClose, COMMIT_PUSH_CLOSE_DELAY_MS, { beginClose });
+
+  /** Vrai si le compte à rebours de fermeture est encore en cours. */
+  const autoClosePending = done && !closing && !isAutoCloseCancelled();
+
+  /** Succès confirmé (ou vue liée terminée) : message + report du rafraîchissement. */
+  const reportSuccess = useCallback(() => {
+    doneRef.current = true;
+    onDone();
+    scheduleClose();
+  }, [onDone, scheduleClose]);
+
+  // Tout geste de l'utilisateur dans la fenêtre pendant le compte à rebours
+  // annule la fermeture : on ne referme pas sous les yeux de qui interagit.
+  const handleUserIntent = useCallback(() => {
+    if (doneRef.current) cancelAutoClose();
+  }, [cancelAutoClose]);
+
+  /** Fermeture demandée explicitement (Échap, clic, bouton) : immédiate, sans fondu. */
+  const requestClose = useCallback(() => {
+    cancelAutoClose();
+    closeNow();
+  }, [cancelAutoClose, closeNow]);
+
+  // Fondu de sortie : on estompe la modale ~160 ms, puis on ferme vraiment.
+  // Sous `prefers-reduced-motion`, le CSS n'anime pas mais le délai reste
+  // négligeable.
+  useEffect(() => {
+    if (!closing) return;
+    const id = setTimeout(() => {
+      cancelAutoClose();
+      closeNow();
+    }, COMMIT_PUSH_CLOSE_FADE_MS);
+    return () => clearTimeout(id);
+  }, [closing, cancelAutoClose, closeNow]);
 
   // ── Fetch preview (no AI by default) ──
   const fetchPreview = useCallback(async () => {
@@ -189,6 +257,8 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         setLinkedData(data);
         // Rester affiché pour montrer le résultat PAR dépôt (hash / erreurs).
         setDone(true);
+        // Vue liée : plusieurs dépôts peuvent avoir échoué → AUCUNE fermeture
+        // automatique (le message de succès global serait mensonger).
         onDone();
         return;
       }
@@ -203,7 +273,9 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
       setAuthAttempts(0);
       setAuthBlocked(false);
       setDone(true);
-      onDone();
+      // Le push est CONFIRMÉ (pushResult) : on affiche le succès puis on
+      // programme une fermeture douce, annulable au survol.
+      reportSuccess();
     } catch (err: any) {
       // Erreurs structurées du backend (corps JSON attaché par parseJsonResponse)
       const code = err?.data?.code;
@@ -241,7 +313,18 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
 
   return (
     <>
-    <ModalDialog id="commit-push" onClose={onClose}>
+    {/**
+     * Enveloppe de capture du GESTE UTILISATEUR : un survol ou un déplacement
+     * de souris dans la fenêtre pendant le compte à rebours annule la
+     * fermeture automatique. Rien n'est intercepté autrement (pas de
+     * preventDefault/stopPropagation), les clics gardent leur effet normal.
+     */}
+    <div onMouseMove={handleUserIntent} onPointerDown={handleUserIntent}>
+    <ModalDialog
+      id="commit-push"
+      onClose={requestClose}
+      className={closing ? "modal-closing" : ""}
+    >
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -250,7 +333,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
               PUSH TO REMOTE
             </span>
           </div>
-          <button onClick={onClose} className="text-hacker-text-dim hover:text-hacker-text">
+          <button onClick={requestClose} className="text-hacker-text-dim hover:text-hacker-text">
             <HolafIcon name="x" size={16} />
           </button>
         </div>
@@ -288,9 +371,29 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {done && (
           <div className="text-hacker-accent text-xs mb-3 border border-hacker-accent/30 p-3 flex items-center gap-2 bg-hacker-accent/5">
             <HolafIcon name="check" size={14} />
-            {outcome?.pushed === false
-              ? outcome.message || t("commitPush.nothingPushed")
-              : `${t("commitPush.pushedOk")}${outcome?.message ? ` (${outcome.message})` : ""}`}
+            <span className="flex-1 min-w-0 break-words">
+              {outcome?.pushed === false
+                ? outcome.message || t("commitPush.nothingPushed")
+                : `${t("commitPush.pushedOk")}${outcome?.message ? ` (${outcome.message})` : ""}`}
+            </span>
+            {/* Fermeture : immédiate si le compte à rebours a été annulé,
+                sinon elle est la réponse visible au « Fermer » (le compte à
+                rebours s'arrête alors aussi). */}
+            <button
+              onClick={() => setClosing(true)}
+              className="shrink-0 border border-hacker-accent/40 px-1.5 py-0.5 hover:bg-hacker-accent/10 transition-colors"
+            >
+              {t("common.close")}
+            </button>
+          </div>
+        )}
+
+        {/* Compte à rebours : l'utilisateur sait que la fenêtre va se fermer
+            et peut l'empêcher en la survolant. */}
+        {autoClosePending && !linkedData && (
+          <div className="text-hacker-text-dim text-[10px] mb-3 flex items-center gap-1.5">
+            <HolafIcon name="refresh" size={10} className="animate-spin" />
+            {t("commitPush.closingSoon")}
           </div>
         )}
 
@@ -527,7 +630,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {/* Action buttons */}
         {!done && (
           <div className="flex gap-2 justify-end pt-4">
-            <button onClick={onClose} className="btn-hacker text-xs" disabled={loading === "push"}>
+            <button onClick={requestClose} className="btn-hacker text-xs" disabled={loading === "push"}>
               CANCEL
             </button>
             <button
@@ -545,6 +648,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
           </div>
         )}
     </ModalDialog>
+    </div>
 
       {/* Identity modal -- rendered as separate overlay */}
       {showIdentityModal && (

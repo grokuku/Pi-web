@@ -664,10 +664,9 @@ function GitProjectSection({
           project={project}
           notifyProjectId={activeProjectId}
           onClose={() => setShowPushModal(false)}
-          onDone={() => {
-            fetchStatus();
-            setTimeout(() => setShowPushModal(false), 1200);
-          }}
+          // Ne ferme PLUS la modale : la fermeture est gérée par elle-même
+          // (délai doux + fondu, annulable au survol). Ici on rafraîchit seulement.
+          onDone={fetchStatus}
         />
       )}
 
@@ -1127,10 +1126,8 @@ export function GitPanel({ project, linkedProjects = [], onRefresh, on }: Props)
         <CommitPushModal
           project={project}
           onClose={() => setShowPushAllModal(false)}
-          onDone={() => {
-            refreshAll();
-            setTimeout(() => setShowPushAllModal(false), 1200);
-          }}
+          // Idem : fermeture laissée à la modale (douce / annulable).
+          onDone={refreshAll}
         />
       )}
     </div>

@@ -766,8 +766,9 @@ export const fr = {
     session: "session",
     registry: "registre",
     aiDisabled: "Commit IA désactivé — aucun modèle configuré",
-    pushedOk: "Modifications poussées avec succès ! Fermeture...",
+    pushedOk: "Modifications poussées avec succès !",
     nothingPushed: "Rien n'a été poussé vers le dépôt distant",
+    closingSoon: "Fermeture dans un instant — survolez la fenêtre pour la garder ouverte",
   },
 
   // ── Git Panel ──

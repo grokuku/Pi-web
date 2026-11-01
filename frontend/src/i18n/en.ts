@@ -765,8 +765,9 @@ export const en = {
     session: "session",
     registry: "registry",
     aiDisabled: "AI commit disabled — no model configured",
-    pushedOk: "Changes pushed successfully! Closing...",
+    pushedOk: "Changes pushed successfully!",
     nothingPushed: "Nothing was pushed to the remote",
+    closingSoon: "Window closes in a moment — hover over it to keep it open",
   },
 
   // ── Git Panel ──
