@@ -132,11 +132,17 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
     schedule: scheduleClose,
     cancel: cancelAutoClose,
     closeNow,
-    isCancelled: isAutoCloseCancelled,
+    // ⚠️ ÉTATS RÉACTIFS (et non plus `isCancelled()`, qui lisait une ref sans
+    // provoquer de rendu : le message « fermeture imminente » restait affiché
+    // après un survol annulant la fermeture).
+    isScheduled: autoCloseScheduled,
+    cancelled: autoCloseCancelled,
   } = useAutoClose(onClose, COMMIT_PUSH_CLOSE_DELAY_MS, { beginClose });
 
-  /** Vrai si le compte à rebours de fermeture est encore en cours. */
-  const autoClosePending = done && !closing && !isAutoCloseCancelled();
+  /** Vrai si le compte à rebours de fermeture est EN COURS (le message doit l'annoncer). */
+  const autoClosePending = done && !closing && autoCloseScheduled;
+  /** Vrai si l'utilisateur a annulé la fermeture (la fenêtre reste ouverte). */
+  const autoCloseAborted = done && !closing && autoCloseCancelled;
 
   /** Succès confirmé (ou vue liée terminée) : message + report du rafraîchissement. */
   const reportSuccess = useCallback(() => {
@@ -376,9 +382,10 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                 ? outcome.message || t("commitPush.nothingPushed")
                 : `${t("commitPush.pushedOk")}${outcome?.message ? ` (${outcome.message})` : ""}`}
             </span>
-            {/* Fermeture : immédiate si le compte à rebours a été annulé,
-                sinon elle est la réponse visible au « Fermer » (le compte à
-                rebours s'arrête alors aussi). */}
+            {/* Fermeture : la réponse visible au bouton « Fermer » (fondu de
+                160 ms, puis fermeture). L'ancien commentaire prétendait une
+                fermeture immédiate : c'était faux, le fondu s'applique ici
+                comme pour la fermeture naturelle. */}
             <button
               onClick={() => setClosing(true)}
               className="shrink-0 border border-hacker-accent/40 px-1.5 py-0.5 hover:bg-hacker-accent/10 transition-colors"
@@ -389,11 +396,21 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         )}
 
         {/* Compte à rebours : l'utilisateur sait que la fenêtre va se fermer
-            et peut l'empêcher en la survolant. */}
+            et peut l'empêcher en la survolant. ⚠️ Affiché UNIQUEMENT si la
+            fermeture est réellement programmée (état réactif du hook). */}
         {autoClosePending && !linkedData && (
           <div className="text-hacker-text-dim text-[10px] mb-3 flex items-center gap-1.5">
             <HolafIcon name="refresh" size={10} className="animate-spin" />
             {t("commitPush.closingSoon")}
+          </div>
+        )}
+
+        {/* Fermeture ANNULÉE : la fenêtre reste ouverte, on le dit (l'ancien
+            message continuait de prétendre le contraire). */}
+        {autoCloseAborted && !linkedData && (
+          <div className="text-hacker-text-dim text-[10px] mb-3 flex items-center gap-1.5">
+            <HolafIcon name="x" size={10} />
+            {t("commitPush.closeCancelled")}
           </div>
         )}
 

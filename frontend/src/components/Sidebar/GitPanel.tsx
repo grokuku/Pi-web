@@ -248,6 +248,21 @@ function GitProjectSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMain]);
 
+  // ── Aucune modale ne SURVIT au repli de la section ──
+  // Le contenu (dont les modales) n'est rendu que déplié (`if (!isOpen) return
+  // <>{header}</>` plus bas). Un état d'ouverture resté à `true` pendant que la
+  // section est repliée n'était jamais remis à `false` : au prochain
+  // AUTO-DÉPLIAGE (statut dirty reçu par le polling 30 s, un pi_event de fin
+  // d'activité ou un retour au premier plan — AUCUNE action de l'utilisateur),
+  // la fenêtre RÉAPPARAISSAIT seule. On ferme donc explicitement en passant
+  // replié : une modale ne peut plus être rendue sans que l'utilisateur l'ait
+  // ouverte dans l'état déplié courant.
+  useEffect(() => {
+    if (isOpen) return;
+    setShowPushModal(false);
+    setShowAuthModal(false);
+  }, [isOpen]);
+
   const doAction = async (action: ActionType, url: string) => {
     setActionLoading(action);
     setError("");

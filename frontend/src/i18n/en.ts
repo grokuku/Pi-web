@@ -806,6 +806,7 @@ export const en = {
     pushedOk: "Changes pushed successfully!",
     nothingPushed: "Nothing was pushed to the remote",
     closingSoon: "Window closes in a moment — hover over it to keep it open",
+    closeCancelled: "Auto-close cancelled — the window stays open",
   },
 
   // ── Git Panel ──

@@ -229,3 +229,98 @@ describe("CommitPushModal — fermeture naturelle après succès", () => {
     expect(screen.queryByText(/Changes pushed successfully/)).toBeNull();
   });
 });
+
+/**
+ * DÉFAUT CORRIGÉ : après annulation de la fermeture (survol / souris), le texte
+ * « fermeture imminente » restait affiché — la modale prétendait donc se fermer
+ * alors qu'elle restait ouverte (`useAutoClose.cancel()` ne touchait qu'une ref,
+ * sans re-render). L'affichage suit désormais l'état RÉEL (`isScheduled`).
+ */
+describe("CommitPushModal — message de fermeture honnête", () => {
+  const CLOSING_SOON = /closes in a moment/i;
+  const CANCELLED = /Auto-close cancelled/i;
+
+  it("annulation au survol → le message de fermeture DISPARAÎT et la modale reste ouverte", async () => {
+    useControllableTimers();
+    const { onClose } = renderModal();
+    await clickPush();
+
+    // Fermeture programmée : le message est affiché.
+    expect(screen.getByText(CLOSING_SOON)).toBeTruthy();
+
+    act(() => {
+      fireEvent.mouseMove(screen.getByRole("dialog"), { clientX: 12, clientY: 12 });
+    });
+
+    // Annulée : le message menteur a disparu, l'état réel est annoncé.
+    expect(screen.queryByText(CLOSING_SOON)).toBeNull();
+    expect(screen.getByText(CANCELLED)).toBeTruthy();
+
+    // L'utilisateur ne touche plus à rien : la modale reste OUVERTE.
+    act(() => {
+      vi.advanceTimersByTime(COMMIT_PUSH_CLOSE_DELAY_MS * 3);
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Changes pushed successfully/)).toBeTruthy();
+    expect(screen.queryByText(CLOSING_SOON)).toBeNull();
+  });
+
+  it("plusieurs mouvements de souris ne font pas clignoter ni doubler le message (état stable)", async () => {
+    useControllableTimers();
+    const { onClose } = renderModal();
+    await clickPush();
+
+    act(() => {
+      for (let i = 0; i < 15; i += 1) {
+        fireEvent.mouseMove(screen.getByRole("dialog"), { clientX: i, clientY: i });
+      }
+    });
+
+    expect(screen.queryByText(CLOSING_SOON)).toBeNull();
+    expect(screen.getAllByText(CANCELLED)).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("pendant le fondu, aucun message ne prétend qu'une fermeture est PROGRAMMÉE", async () => {
+    useControllableTimers();
+    const { onClose } = renderModal();
+    await clickPush();
+
+    act(() => {
+      vi.advanceTimersByTime(COMMIT_PUSH_CLOSE_DELAY_MS + 40);
+    });
+    // Fondu en cours : plus de compte à rebours, donc plus de message.
+    expect(document.querySelector(".modal-closing")).not.toBeNull();
+    expect(screen.queryByText(CLOSING_SOON)).toBeNull();
+    expect(screen.queryByText(CANCELLED)).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(COMMIT_PUSH_CLOSE_FADE_MS + 100);
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("ÉCHEC du push : aucune annonce de fermeture (message absent) et la modale reste ouverte", async () => {
+    useControllableTimers();
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/commit-push/preview")) return jsonResponse(PREVIEW);
+      if (url.endsWith("/git/commit-push")) {
+        return jsonResponse({ error: "Push rejected: non-fast-forward", code: "GIT_PUSH_REJECTED" }, false, 409);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const { onClose } = renderModal();
+    fireEvent.click(await screen.findByText("PUSH"));
+    expect(await screen.findByText(/Push rejected/)).toBeTruthy();
+
+    expect(screen.queryByText(CLOSING_SOON)).toBeNull();
+    expect(screen.queryByText(CANCELLED)).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(COMMIT_PUSH_CLOSE_DELAY_MS * 3);
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

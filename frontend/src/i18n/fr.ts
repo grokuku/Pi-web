@@ -807,6 +807,7 @@ export const fr = {
     pushedOk: "Modifications poussées avec succès !",
     nothingPushed: "Rien n'a été poussé vers le dépôt distant",
     closingSoon: "Fermeture dans un instant — survolez la fenêtre pour la garder ouverte",
+    closeCancelled: "Fermeture annulée — la fenêtre reste ouverte",
   },
 
   // ── Git Panel ──

@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+/**
+ * Phase VISIBLE de l'auto-fermeture :
+ *  - `idle`      : rien n'est programmé (au départ, après échéance ou fermeture) ;
+ *  - `scheduled` : le compte à rebours tourne, la fenêtre va se fermer ;
+ *  - `cancelled` : l'utilisateur a annulé, la fenêtre reste ouverte.
+ * L'interface peut ainsi dire la VÉRITÉ (avant, `cancel()` ne touchait qu'une
+ * ref : le message « fermeture imminente » restait affiché alors que la
+ * fermeture était annulée).
+ */
+export type AutoClosePhase = "idle" | "scheduled" | "cancelled";
 
 /**
  * Fermeture « naturelle » d'une modale après un succès.
@@ -16,6 +27,11 @@ import { useCallback, useEffect, useRef } from "react";
  *  - il est aussi annulé si l'onglet est masqué (l'utilisateur ne voit plus la
  *    fenêtre : mieux vaut attendre son retour que fermer dans son dos) ;
  *  - `closeNow()` ferme immédiatement (Échap, clic, bouton « Fermer »).
+ *
+ * L'état est OBSERVABLE (`isScheduled`, `cancelled`) pour que l'affichage ne
+ * mente jamais : il ne change qu'aux TRANSITIONS (`schedule` / `cancel` /
+ * échéance / `closeNow`), jamais à chaque mouvement de souris (les appels
+ * répétés à `cancel()` sortent immédiatement, sans `setState`).
  *
  * Aucune fermeture n'a lieu tant que `cancel()` n'a pas été appelé et que le
  * délai n'est pas écoulé : rien n'est déclenché avant `delayMs`.
@@ -42,6 +58,12 @@ export function useAutoClose(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** true dès que l'utilisateur (ou un changement d'état) a annulé l'auto-fermeture. */
   const cancelledRef = useRef(false);
+  /**
+   * État RÉACTIF de l'auto-fermeture (miroir de `cancelledRef` + minuterie).
+   * Ne change qu'aux transitions : `setPhase` avec la même valeur est ignoré
+   * par React (aucun rendu supplémentaire), donc `cancel()` × N ne boucle pas.
+   */
+  const [phase, setPhase] = useState<AutoClosePhase>("idle");
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -53,6 +75,8 @@ export function useAutoClose(
   /** Ferme tout de suite (Échap, clic explicite, bouton « Fermer »). */
   const closeNow = useCallback(() => {
     clearTimer();
+    // Plus rien n'est programmé : l'affichage ne doit plus parler de fermeture.
+    setPhase("idle");
     onCloseRef.current();
   }, [clearTimer]);
 
@@ -61,9 +85,12 @@ export function useAutoClose(
    * la modale reste ouverte et l'utilisateur la ferme lui-même.
    */
   const cancel = useCallback(() => {
+    // Sortie IMMÉDIATE si déjà annulé : pas de `setState` en boucle à chaque
+    // `mousemove` (l'état n'a pas de raison de changer).
     if (cancelledRef.current) return;
     cancelledRef.current = true;
     clearTimer();
+    setPhase("cancelled");
   }, [clearTimer]);
 
   /**
@@ -73,8 +100,12 @@ export function useAutoClose(
   const schedule = useCallback(() => {
     if (cancelledRef.current) return;
     clearTimer();
+    setPhase("scheduled");
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
+      // Échéance : le compte à rebours est terminé (l'affichage cesse alors
+      // d'annoncer une fermeture à venir).
+      setPhase("idle");
       // Fermeture douce si l'appelant en a fourni une (fondu), sinon directe.
       const begin = beginCloseRef.current;
       if (begin) begin();
@@ -82,11 +113,24 @@ export function useAutoClose(
     }, delayMs);
   }, [clearTimer, delayMs]);
 
+  /** Version NON réactive (compatibilité) : à n'utiliser que dans un gestionnaire. */
   const isCancelled = useCallback(() => cancelledRef.current, []);
 
   // Nettoyage : jamais de fermeture après démontage (la modale a pu être
-  // fermée par un autre chemin entre-temps).
+  // fermée par un autre chemin entre-temps). Aucun `setState` ici : pas de
+  // mise à jour d'état après démontage.
   useEffect(() => clearTimer, [clearTimer]);
 
-  return { schedule, cancel, closeNow, isCancelled };
+  return {
+    schedule,
+    cancel,
+    closeNow,
+    isCancelled,
+    /** Vrai tant que le compte à rebours tourne (RÉACTIF). */
+    isScheduled: phase === "scheduled",
+    /** Vrai si l'utilisateur a annulé la fermeture (RÉACTIF). */
+    cancelled: phase === "cancelled",
+    /** Phase brute, si l'appelant a besoin de distinguer « rien » de « annulé ». */
+    phase,
+  };
 }
