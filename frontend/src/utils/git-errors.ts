@@ -47,8 +47,13 @@ function errorCode(err: unknown): string | undefined {
  * Traduit un échec d'action git en décision d'UI.
  *
  * Seul `GIT_AUTH_REQUIRED` ouvre la modale (et seulement tant que la borne n'est
- * pas atteinte). `GIT_REMOTE_SCHEME`, `GIT_UNREACHABLE`, `GIT_PUSH_REJECTED` et
- * les erreurs génériques affichent leur message et n'ouvrent JAMAIS la modale.
+ * pas atteinte). `GIT_REMOTE_SCHEME`, `GIT_UNREACHABLE`, `GIT_TIMEOUT`,
+ * `GIT_PUSH_REJECTED` et les erreurs génériques affichent leur message et
+ * n'ouvrent JAMAIS la modale.
+ *
+ * Note backend : `GIT_TIMEOUT` (504) remplace l'ancien faux « réseau
+ * injoignable » d'un push qui attendait en réalité des identifiants — son
+ * message dit la vérité, il n'y a donc rien de plus à faire ici.
  */
 export function decideGitFailure(
   err: unknown,

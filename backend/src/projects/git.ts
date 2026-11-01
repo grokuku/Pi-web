@@ -10,9 +10,11 @@ import { sanitizeRemoteUrl } from "./remote-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Prevent git from prompting for credentials on stdin (which would hang indefinitely
-// since simple-git has no interactive terminal). With this env var, git fails immediately
-// with an error instead of prompting.
+// Empêche git de demander des identifiants sur stdin (sinon il attend indéfiniment).
+// ⚠️ INSUFFISANT À LUI SEUL : cette variable posée sur `process.env` n'atteint PAS
+// l'enfant git, car simple-git retire les variables `GIT_*` ambiantes (sauf si elles
+// sont nommées dans `allowEnvironment`). Ce n'est qu'un filet pour les processus
+// lancés hors simple-git ; la garantie réelle est `gitInstance()` ci-dessous.
 process.env.GIT_TERMINAL_PROMPT = "0";
 
 // ── Lock file cleanup ──────────────────────────
@@ -120,47 +122,92 @@ function isLockError(msg: string): boolean {
 // Default timeout for git operations that may hang (push, pull, clone, etc.)
 const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
+// Délai maximal d'attente du MUTEX par dépôt. Strictement supérieur au timeout
+// d'une opération git : une opération coincée libère la place avec un message
+// au lieu de bloquer le dépôt indéfiniment.
+const GIT_MUTEX_ACQUIRE_TIMEOUT_MS = GIT_NETWORK_TIMEOUT_MS + 30_000;
+
+/**
+ * Variables d'environnement `GIT_*` que simple-git doit laisser passer.
+ *
+ * ⚠️ CAUSE RACINE du faux « timeout réseau » de 30 s au push : simple-git 4
+ * SUPPRIME les variables `GIT_*` de l'environnement ambiant, sauf si elles sont
+ * nommées dans `allowEnvironment` — et il REFUSE un `.env()` qui les contient
+ * sans autorisation (« Use of "GIT_TERMINAL_PROMPT" is blocked by the
+ * environment guard »). Le `process.env.GIT_TERMINAL_PROMPT = "0"` posé en tête
+ * de ce module n'atteignait donc JAMAIS l'enfant : dans le conteneur (docker
+ * compose `tty: true` / `stdin_open: true`), git ouvrait /dev/tty et attendait
+ * un mot de passe → 30 s de blocage, puis un message qui accusait le réseau.
+ */
+const GIT_ENV_GUARD_ALLOW: readonly string[] = ["GIT_TERMINAL_PROMPT"];
+
+/**
+ * Crée une instance simple-git correctement configurée — TOUTE instance de ce
+ * module passe par ici (aucun `simpleGit(` nu).
+ *
+ * - `allowEnvironment: ["GIT_TERMINAL_PROMPT"]` : autorise la variable à
+ *   traverser le garde-fou de simple-git ;
+ * - `.env({ ...process.env, GIT_TERMINAL_PROMPT: "0" })` : la fixe explicitement
+ *   à "0" pour l'enfant → git échoue IMMÉDIATEMENT (« could not read
+ *   Username »), message classé GIT_AUTH_REQUIRED → modale d'identifiants,
+ *   au lieu d'un faux timeout de 30 s ;
+ * - `timeout: { block }` : timeout OFFICIEL de simple-git, qui TUE réellement le
+ *   process enfant après N ms sans aucune sortie (l'ancien
+ *   `_executor.childProcess.kill()` ne tuait RIEN : ce champ n'existe pas dans
+ *   simple-git 4).
+ */
+export function gitInstance(cwdOrBase: string, blockTimeoutMs: number = GIT_NETWORK_TIMEOUT_MS): SimpleGit {
+  return simpleGit({
+    baseDir: cwdOrBase,
+    allowEnvironment: [...GIT_ENV_GUARD_ALLOW],
+    timeout: { block: blockTimeoutMs },
+  }).env({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
+}
+
+/** Levée quand git n'a produit AUCUNE sortie pendant le délai maximal. */
+export class GitTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitTimeoutError";
+  }
+}
+
+/**
+ * Message HONNÊTE d'un timeout : git n'a pas répondu, et la cause la plus
+ * probable — de très loin — est qu'il attend des identifiants. L'ancien texte
+ * (« network unreachable or port blocked ») envoyait l'utilisateur sur une
+ * fausse piste : le réseau n'y était pour rien.
+ */
+function gitTimeoutMessage(label: string, ms: number): string {
+  return (
+    `${label} did not answer within ${Math.round(ms / 1000)}s — git is probably waiting for ` +
+    `credentials (interactive prompts are disabled). Check the token stored for this host, ` +
+    `then retry.`
+  );
+}
+
+/** Timeout du plugin `timeout.block` de simple-git (« block timeout reached »). */
+function isBlockTimeoutError(error: any): boolean {
+  const msg = String(error?.message || "").toLowerCase();
+  return error?.plugin === "timeout" || msg.includes("block timeout");
+}
+
 /**
  * Per-project mutex to prevent concurrent git operations
  * from racing on credential injection/restoration.
+ *
+ * ⚠️ Délai maximal d'attente : sans lui, une opération coincée (git qui attend
+ * un mot de passe) bloquait TOUTES les opérations suivantes du dépôt, sans
+ * message.
  */
 const gitMutexByCwd = new Map<string, Mutex>();
 function getGitMutex(cwd: string): Mutex {
   let m = gitMutexByCwd.get(cwd);
   if (!m) {
-    m = new Mutex();
+    m = new Mutex({ acquireTimeoutMs: GIT_MUTEX_ACQUIRE_TIMEOUT_MS });
     gitMutexByCwd.set(cwd, m);
   }
   return m;
-}
-
-/**
- * Wrap a promise with a timeout that rejects with a clear error message.
- * Also attempts to abort the underlying simple-git process on timeout.
- */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string, git?: SimpleGit): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      // Attempt to kill the underlying git process
-      if (git) {
-        try {
-          const childProc = (git as any)._executor?.childProcess;
-          if (childProc && typeof childProc.kill === "function") {
-            childProc.kill("SIGTERM");
-          }
-        } catch {}
-      }
-      // Message SANS ambiguïté : un timeout est un problème réseau, pas un
-      // problème d'identifiants (ne pas renvoyer l'utilisateur vers le token).
-      reject(new Error(`${label} timed out after ${ms / 1000}s — the remote did not answer (network unreachable or port blocked)`));
-    }, ms);
-    promise
-      .then((v) => { if (!settled) { clearTimeout(timer); settled = true; resolve(v); } })
-      .catch((e) => { if (!settled) { clearTimeout(timer); settled = true; reject(e); } });
-  });
 }
 
 // ── Types ──────────────────────────────────────────────
@@ -209,7 +256,7 @@ export async function detectGit(project: Project): Promise<{
   }
 
   try {
-    const git: SimpleGit = simpleGit(project.cwd);
+    const git: SimpleGit = gitInstance(project.cwd);
     const remotes = await git.getRemotes(true);
     const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
     const origin = remotes.find((r) => r.name === "origin");
@@ -235,7 +282,7 @@ export async function getGitHistory(
     author: string;
   }>
 > {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = gitInstance(cwd);
   try {
     const log: LogResult = await git.log({ maxCount });
     return log.all.map((entry) => ({
@@ -258,7 +305,7 @@ export async function getGitHistory(
  * Returns an array of file paths. Empty if no changes or not a git repo.
  */
 export async function getChangedFiles(cwd: string): Promise<string[]> {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = gitInstance(cwd);
   try {
     const status = await git.status();
     const files: string[] = [];
@@ -273,7 +320,7 @@ export async function getChangedFiles(cwd: string): Promise<string[]> {
 }
 
 export async function getGitDiff(cwd: string): Promise<string> {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = gitInstance(cwd);
   try {
     // Get staged and unstaged diffs. Use HEAD for staged if there are commits.
     let staged = "";
@@ -321,13 +368,15 @@ export async function gitPull(cwd: string): Promise<string> {
     return withAskpassTempFile(cwd, async () => {
       const git: SimpleGit = await gitWithAuth(cwd);
       try {
-        const result = await withTimeout(git.pull(), GIT_NETWORK_TIMEOUT_MS, "git pull", git);
+        // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
+        // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
+        const result = await git.pull();
         return result.summary.changes
           ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
           : "Already up to date";
       } catch (error: any) {
         const msg = error.message || "";
-        throw classifyGitFailure("Git pull", msg, await readRemoteUrl(cwd));
+        throw classifyGitFailure("Git pull", msg, await readRemoteUrl(cwd), error);
       } finally {
         try {
           await restoreRemoteUrl(cwd);
@@ -345,7 +394,9 @@ export async function gitPush(cwd: string): Promise<string> {
     return withAskpassTempFile(cwd, async () => {
       const git: SimpleGit = await gitWithAuth(cwd);
       try {
-        const result = await withTimeout(git.push(), GIT_NETWORK_TIMEOUT_MS, "git push", git);
+        // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
+        // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
+        const result = await git.push();
         return result.pushed
           ? `Pushed ${result.pushed.length} ref(s)`
           : "Nothing to push";
@@ -359,7 +410,7 @@ export async function gitPush(cwd: string): Promise<string> {
             `Pull first (git pull --rebase origin ${branch}), then push again.`
           );
         }
-        throw classifyGitFailure("Git push", msg, await readRemoteUrl(cwd));
+        throw classifyGitFailure("Git push", msg, await readRemoteUrl(cwd), error);
       } finally {
         try {
           await restoreRemoteUrl(cwd);
@@ -440,7 +491,7 @@ export async function gitAddAll(cwd: string): Promise<number> {
   // Appelé par gitCommitAndPush SANS détenir le mutex → pas de deadlock.
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     await git.add("-A");
     const status = await git.status();
     return status.staged.length || status.files.length;
@@ -582,32 +633,30 @@ export function hostFromRemoteUrl(remote: string | null | undefined): string | n
 
 /**
  * Extract the hostname from the git remote URL.
+ *
+ * ⚠️ SOURCE UNIQUE de la clé d'hôte : délègue à `hostFromRemoteUrl` (la même
+ * fonction que celle utilisée par l'injection d'identifiants dans
+ * `gitWithAuth`). Avant, l'écriture (ici) et la lecture (extractHost) étaient
+ * deux implémentations distinctes : une URL encore porteuse d'un jeton donnait
+ * `user:token@github.com` à la lecture (≠ clé du store `github.com`) et le push
+ * partait SANS jeton, en silence.
  */
 export async function getRemoteHost(cwd: string): Promise<string> {
   try {
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     const remotes = await git.getRemotes(true);
     const origin = remotes.find((r) => r.name === "origin");
     if (!origin?.refs?.fetch) {
       console.log(`[git] getRemoteHost: no origin remote, defaulting to github.com`);
       return "github.com";
     }
-    const url = origin.refs.fetch;
-    // SSH: git@host:path or ssh://git@host/path
-    const sshMatch = url.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
-    if (sshMatch) {
-      console.log(`[git] getRemoteHost: SSH host=${sshMatch[1]}`);
-      return sshMatch[1];
-    }
-    // HTTPS: https://host/path
-    try {
-      const hostname = new URL(url).hostname;
-      console.log(`[git] getRemoteHost: HTTPS host=${hostname}`);
-      return hostname;
-    } catch {
+    const host = hostFromRemoteUrl(origin.refs.fetch);
+    if (!host) {
       console.log(`[git] getRemoteHost: could not parse URL, defaulting to github.com`);
       return "github.com";
     }
+    console.log(`[git] getRemoteHost: host=${host}`);
+    return host;
   } catch {
     console.log(`[git] getRemoteHost: not a git repo (no .git), defaulting to github.com`);
     return "github.com";
@@ -671,7 +720,7 @@ export function buildRemoteSchemeMessage(remoteUrl: string): string {
 /** Lit l'URL de l'origin sans lever d'erreur (null si non disponible). */
 async function readRemoteUrl(cwd: string): Promise<string | null> {
   try {
-    const url = (await simpleGit(cwd).raw(["remote", "get-url", "origin"])).trim();
+    const url = (await gitInstance(cwd).raw(["remote", "get-url", "origin"])).trim();
     return url || null;
   } catch {
     return null;
@@ -682,7 +731,7 @@ async function readRemoteUrl(cwd: string): Promise<string | null> {
 async function currentBranchSafe(cwd: string): Promise<string> {
   try {
     const branch = (
-      await simpleGit(cwd).raw(["rev-parse", "--abbrev-ref", "HEAD"])
+      await gitInstance(cwd).raw(["rev-parse", "--abbrev-ref", "HEAD"])
     ).trim();
     if (branch && branch !== "HEAD") return branch;
   } catch {
@@ -692,10 +741,19 @@ async function currentBranchSafe(cwd: string): Promise<string> {
 }
 
 /**
- * Transforme un message d'échec git en erreur typée, pour que la route réponde
+ * Transforme un échec git en erreur typée, pour que la route réponde
  * un code DISTINCT par cause (plus de « tout est un problème de token »).
+ *
+ * @param error erreur brute (facultative) : elle seule porte le marqueur
+ *   `plugin: "timeout"` du timeout `block` de simple-git, qu'un message
+ *   "block timeout reached" ne suffit pas à identifier de façon fiable.
  */
-function classifyGitFailure(label: string, msg: string, remoteUrl?: string | null): Error {
+function classifyGitFailure(label: string, msg: string, remoteUrl?: string | null, error?: any): Error {
+  // Timeout RÉEL (process tué par le plugin `timeout.block` de simple-git) :
+  // message honnête, sans jamais accuser le réseau.
+  if (isBlockTimeoutError(error) || isBlockTimeoutError({ message: msg })) {
+    return new GitTimeoutError(gitTimeoutMessage(label, GIT_NETWORK_TIMEOUT_MS));
+  }
   // Ordre important : « unable to access … 403 » est une erreur d'IDENTIFIANTS
   // (le serveur a répondu), donc l'auth est testée avant l'injoignabilité.
   if (isSshFailureMessage(msg)) {
@@ -729,7 +787,7 @@ function classifyGitFailure(label: string, msg: string, remoteUrl?: string | nul
  * change pas dans le dos de l'utilisateur).
  */
 async function gitWithAuth(cwd: string): Promise<SimpleGit> {
-  const git = simpleGit(cwd);
+  const git = gitInstance(cwd);
 
   let remoteUrl: string;
   try {
@@ -739,13 +797,20 @@ async function gitWithAuth(cwd: string): Promise<SimpleGit> {
     return git;
   }
 
-  const host = extractHost(remoteUrl);
+  // ⚠️ MÊME fonction que celle utilisée pour écrire dans le store
+  // (`getRemoteHost`) : la clé lue et la clé écrite sont forcément identiques.
+  // L'ancien `extractHost` renvoyait `user:token@github.com` sur une URL encore
+  // porteuse d'un jeton → `hasCreds` faux → push SANS jeton, sans un mot.
+  const host = hostFromRemoteUrl(remoteUrl);
   const hasCreds = !!host && credentialStore.has(host);
   console.log(`[git] gitWithAuth: remoteUrl=${redactUrl(remoteUrl)}, host=${host}, hasCreds=${hasCreds}`);
 
   if (!host || !hasCreds) {
     // Pas d'identifiants pour cet hôte : on tente sans auth (l'échec éventuel
     // sera classé par classifyGitFailure → GIT_AUTH_REQUIRED / GIT_REMOTE_SCHEME).
+    // ⚠️ On ne part plus en silence : si des identifiants existent pour d'AUTRES
+    // hôtes, c'est très probablement la cause de l'échec à venir → avertissement.
+    warnIfCredentialsForOtherHost(remoteUrl, host);
     return git;
   }
 
@@ -778,20 +843,26 @@ async function gitWithAuth(cwd: string): Promise<SimpleGit> {
 function redactUrl(url: string): string {
   return url.replace(/:[^@]*@(?=[^@]*$)/, ":****@");
 }
-function extractHost(url: string): string | null {
-  // HTTPS: https://github.com/user/repo.git
-  const httpsMatch = url.match(/^https?:\/\/([^/]+)/);
-  if (httpsMatch) return httpsMatch[1];
 
-  // SSH: git@github.com:user/repo.git
-  const sshMatch = url.match(/^git@([^:]+):/);
-  if (sshMatch) return sshMatch[1];
-
-  // ssh://git@github.com/user/repo.git
-  const sshUrlMatch = url.match(/^ssh:\/\/git@([^/]+)/);
-  if (sshUrlMatch) return sshUrlMatch[1];
-
-  return null;
+/**
+ * Avertit quand des identifiants existent — mais pour un AUTRE hôte que celui du
+ * remote. C'est le symptôme exact du bug « push sans jeton en silence » : rien
+ * n'était journalisé, donc invisible. Aucune valeur secrète n'est loggée
+ * (uniquement des noms d'hôtes).
+ */
+function warnIfCredentialsForOtherHost(remoteUrl: string, host: string | null): void {
+  try {
+    const stored = credentialStore.listHosts();
+    if (stored.length === 0) return;
+    if (host && stored.includes(host)) return;
+    console.warn(
+      `[git] WARNING: credentials are stored for [${stored.join(", ")}] but the origin host is ` +
+      `'${host ?? "unparsable"}' (remote=${redactUrl(remoteUrl)}) — this operation runs WITHOUT a token. ` +
+      `Re-save the credentials for this host.`
+    );
+  } catch (e: any) {
+    console.warn(`[git] warnIfCredentialsForOtherHost failed: ${e?.message || e}`);
+  }
 }
 
 /**
@@ -802,25 +873,18 @@ function extractHost(url: string): string | null {
  *
  * Examples:
  *   https://github.com/user/repo.git → https://x-access-token:TOKEN@github.com/user/repo.git
- *   https://user@github.com/user/repo.git → https://user:TOKEN@github.com/user/repo.git
+ *   https://user@github.com/user/repo.git → https://x-access-token:TOKEN@github.com/user/repo.git
+ *
+ * ⚠️ Les identifiants DÉJÀ présents sont retirés avant l'injection. L'ancienne
+ * implémentation laissait passer le cas « URL déjà porteuse des MÊMES
+ * identifiants » : le remplacement renvoyait l'URL inchangée, le code croyait
+ * qu'il n'y en avait aucun et préfixait → `user:token@user:token@host` (userinfo
+ * malformé).
  */
 function injectCredentialsInUrl(url: string, username: string, password: string): string {
-  // Already has credentials — replace them
-  const withCredsReplaced = url.replace(
-    /^(https?:\/\/)([^@]+@)?(.+)/,
-    (_, protocol, _oldCreds, rest) => {
-      const encodedPassword = encodeURIComponent(password);
-      return `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`;
-    }
-  );
-  if (withCredsReplaced !== url) return withCredsReplaced;
-
-  // No existing credentials — inject them
-  const encodedPassword = encodeURIComponent(password);
-  return url.replace(
-    /^(https?:\/\/)(.+)/,
-    (_, protocol, rest) => `${protocol}${encodeURIComponent(username)}:${encodedPassword}@${rest}`
-  );
+  const userInfo = `${encodeURIComponent(username)}:${encodeURIComponent(password)}@`;
+  // Le userinfo est tout ce qui précède le DERNIER @ de l'autorité, sans « / ».
+  return url.replace(/^(https?:\/\/)(?:[^/@]+@)?/i, (_m, protocol: string) => `${protocol}${userInfo}`);
 }
 
 /**
@@ -828,7 +892,7 @@ function injectCredentialsInUrl(url: string, username: string, password: string)
  * Call this after any authenticated git operation.
  */
 export async function restoreRemoteUrl(cwd: string): Promise<void> {
-  const git = simpleGit(cwd);
+  const git = gitInstance(cwd);
   try {
     const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
     // Strip credentials: https://user:pass@host → https://host
@@ -863,7 +927,7 @@ export async function setGitCredentials(
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = gitInstance(cwd);
   // Check repo-local config first, then global
   for (const scope of ["local", "global"] as const) {
     try {
@@ -880,7 +944,7 @@ export async function setGitIdentity(cwd: string, name: string, email: string): 
   // BUG-13 fix: ne configurer QUE le repo local, pas le global.
   // L'ancien code écrivait aussi dans --global, ce qui causait des conflits
   // quand plusieurs projets avaient des identités git différentes.
-  const git: SimpleGit = simpleGit(cwd);
+  const git: SimpleGit = gitInstance(cwd);
   await git.raw(["config", "user.name", name]);
   await git.raw(["config", "user.email", email]);
 }
@@ -893,7 +957,7 @@ export async function gitCommit(
   // Audit mutex (Lot A/BUG-04) : gitCommit écrit l'index → même mutex par projet.
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     const message = body ? `${subject}\n\n${body}` : subject;
     try {
       const result = await git.commit(message);
@@ -1075,7 +1139,7 @@ export async function gitCommitAndPush(
 
   // 6b. Get commit hash and remote URL
   try {
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     const hashResult = await git.raw(["rev-parse", "--short", "HEAD"]);
     result.commitHash = hashResult.trim();
     const remotes = await git.getRemotes(true);
@@ -1102,7 +1166,7 @@ export async function gitCheckout(
 ): Promise<string> {
   // Audit mutex (Lot A/BUG-04) : checkout écrit l'index → même mutex par projet.
   return getGitMutex(cwd).run(async () => {
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     try {
       await git.checkout(ref);
       return `Checked out ${ref}`;
@@ -1123,19 +1187,13 @@ export async function gitClone(
   console.log(`[git-clone] cwd=${cwd}, parentDir=${parentDir}, repoName=${repoName}`);
   console.log(`[git-clone] remote=${remote}, branch=${branch}`);
 
-  // Extract host from remote URL to check for stored credentials
-  let host = "github.com";
-  try {
-    const sshMatch = remote.match(/^(?:ssh:\/\/)?git@([^:/]+)/);
-    if (sshMatch) host = sshMatch[1];
-    else host = new URL(remote).hostname;
-  } catch (e) {
-    console.log(`[git-clone] Could not parse remote URL: ${e}`);
-  }
+  // ⚠️ Même extraction d'hôte que `getRemoteHost` / `gitWithAuth` : la clé lue
+  // ici doit être identique à celle écrite dans le store après la saisie du token.
+  const host = hostFromRemoteUrl(remote) || "github.com";
 
   console.log(`[git-clone] Extracted host: ${host}, hasCredentials: ${credentialStore.has(host)}`);
 
-  const git: SimpleGit = simpleGit(parentDir);
+  const git: SimpleGit = gitInstance(parentDir);
 
   // Inject credentials into remote URL if available
   if (host && credentialStore.has(host)) {
@@ -1148,17 +1206,13 @@ export async function gitClone(
       console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
       try {
         // Git 2.38+ may reject credentials in URLs — explicitly allow it
-        await withTimeout(
-          git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]),
-          GIT_NETWORK_TIMEOUT_MS,
-          "git clone"
-        );
+        await git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]);
         console.log(`[git-clone] Clone succeeded!`);
         // Sécurité : git clone persiste l'URL fournie (avec token) dans le
         // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
         // nettoyée pour ne jamais laisser le token sur disque.
         try {
-          const clonedGit = simpleGit(cwd);
+          const clonedGit = gitInstance(cwd);
           await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
         } catch (e: any) {
           console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
@@ -1167,7 +1221,7 @@ export async function gitClone(
       } catch (error: any) {
         const msg = error.message || "";
         console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
-        throw classifyGitFailure("Git clone", msg, remote);
+        throw classifyGitFailure("Git clone", msg, remote, error);
       }
     });
   }
@@ -1176,15 +1230,12 @@ export async function gitClone(
   console.log(`[git-clone] No credentials for ${host}, trying without auth...`);
   try {
     // BUG-37 fix: utiliser git.raw() comme la branche avec auth pour cohérence
-    await withTimeout(
-      git.raw(["clone", remote, repoName, "--branch", branch]),
-      GIT_NETWORK_TIMEOUT_MS, "git clone"
-    );
+    await git.raw(["clone", remote, repoName, "--branch", branch]);
     console.log(`[git-clone] Clone succeeded (no auth)!`);
     // Sécurité : même sans auth, l'URL fournie peut contenir un token collé par
     // l'utilisateur. On nettoie le remote persisté dans le .git/config.
     try {
-      const clonedGit = simpleGit(cwd);
+      const clonedGit = gitInstance(cwd);
       await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
     } catch (e: any) {
       console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
@@ -1193,7 +1244,7 @@ export async function gitClone(
   } catch (error: any) {
     const msg = error.message || "";
     console.error(`[git-clone] Clone WITHOUT auth FAILED: ${msg}`);
-    throw classifyGitFailure("Git clone", msg, remote);
+    throw classifyGitFailure("Git clone", msg, remote, error);
   }
 }
 
@@ -1214,7 +1265,7 @@ export async function gitInit(cwd: string, remote: string, branch: string = "mai
   // Audit mutex (Lot A/BUG-04) : init + checkoutLocalBranch écrivent l'index
   // → même mutex par projet que les autres opérations sensibles.
   return getGitMutex(cwd).run(async () => {
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     try {
       await git.init();
       // Sécurité : ne jamais persister de credentials dans le remote.
@@ -1244,7 +1295,7 @@ export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
   }
 
   try {
-    const git: SimpleGit = simpleGit(cwd);
+    const git: SimpleGit = gitInstance(cwd);
     const status = await git.status();
 
     const staged: string[] = [];
@@ -1314,7 +1365,7 @@ export async function purgeEmbeddedCredentialsFromRemotes(): Promise<void> {
 
   const cleanOnDisk = async (cwd: string, label: string): Promise<void> => {
     try {
-      const git = simpleGit(cwd);
+      const git = gitInstance(cwd);
       const current = (await git.raw(["remote", "get-url", "origin"])).trim();
       const clean = sanitizeRemoteUrl(current);
       if (clean !== current) {

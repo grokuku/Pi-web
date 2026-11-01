@@ -16,46 +16,57 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import os from "os";
 import path from "path";
-import { mkdtempSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "fs";
+import { fileURLToPath } from "url";
 
 // ── État partagé avec les mocks (hoisted : lisible dans vi.mock) ────────────
 const state = vi.hoisted(() => ({
   remoteUrl: "https://github.com/owner/repo.git",
   calls: [] as string[][],
-  pushError: null as Error | null,
+  pushError: null as unknown,
   status: null as any,
   creds: new Map<string, { username: string; password: string }>(),
+  // Chaque instance simple-git créée par le module : options + env reçus.
+  instances: [] as Array<{ options: any; env: Record<string, string> | undefined }>,
 }));
 
 vi.mock("simple-git", () => {
-  const fakeGit = () => ({
-    raw: async (args: string[]) => {
-      state.calls.push(args);
-      if (args[0] === "remote" && args[1] === "get-url") return `${state.remoteUrl}\n`;
-      if (args[0] === "remote" && args[1] === "set-url") {
-        state.remoteUrl = args[3];
+  const fakeGit = (options: any) => {
+    const api: any = {
+      raw: async (args: string[]) => {
+        state.calls.push(args);
+        if (args[0] === "remote" && args[1] === "get-url") return `${state.remoteUrl}\n`;
+        if (args[0] === "remote" && args[1] === "set-url") {
+          state.remoteUrl = args[3];
+          return "";
+        }
+        if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "main\n";
+        if (args[0] === "rev-parse" && args[1] === "--short") return "abc1234\n";
         return "";
-      }
-      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "main\n";
-      if (args[0] === "rev-parse" && args[1] === "--short") return "abc1234\n";
-      return "";
-    },
-    push: async () => {
-      state.calls.push(["push"]);
-      if (state.pushError) throw state.pushError;
-      return { pushed: [{ local: "main", remote: "main" }] };
-    },
-    pull: async () => {
-      state.calls.push(["pull"]);
-      return { summary: { changes: 0, insertions: 0, deletions: 0 } };
-    },
-    getRemotes: async () => [
-      { name: "origin", refs: { fetch: state.remoteUrl, push: state.remoteUrl } },
-    ],
-    status: async () => state.status,
-    add: async () => {},
-    commit: async () => ({ commit: "abc1234def", summary: { changes: 1 } }),
-  });
+      },
+      push: async () => {
+        state.calls.push(["push"]);
+        if (state.pushError) throw state.pushError;
+        return { pushed: [{ local: "main", remote: "main" }] };
+      },
+      pull: async () => {
+        state.calls.push(["pull"]);
+        return { summary: { changes: 0, insertions: 0, deletions: 0 } };
+      },
+      getRemotes: async () => [
+        { name: "origin", refs: { fetch: state.remoteUrl, push: state.remoteUrl } },
+      ],
+      status: async () => state.status,
+      add: async () => {},
+      commit: async () => ({ commit: "abc1234def", summary: { changes: 1 } }),
+    };
+    // `.env()` est l'API utilisée par le module pour propager GIT_TERMINAL_PROMPT.
+    api.env = (env: Record<string, string>) => {
+      state.instances.push({ options, env });
+      return api;
+    };
+    return api;
+  };
   return { simpleGit: fakeGit, default: fakeGit };
 });
 
@@ -68,6 +79,7 @@ vi.mock("./credential-store.js", () => ({
     set: (host: string, username: string, password: string) =>
       state.creds.set(host, { username, password }),
     delete: (host: string) => state.creds.delete(host),
+    listHosts: () => [...state.creds.keys()],
     withTempFile: (_h: string, _u: string, _p: string, fn: () => Promise<unknown>) => fn(),
   },
 }));
@@ -80,6 +92,7 @@ const {
   GitRemoteSchemeError,
   GitUnreachableError,
   GitPushRejectedError,
+  GitTimeoutError,
   isHttpsRemoteUrl,
   sshRemoteToHttps,
 } = await import("./git.js");
@@ -94,6 +107,7 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   state.calls.length = 0;
+  state.instances.length = 0;
   state.pushError = null;
   state.remoteUrl = "https://github.com/owner/repo.git";
   state.creds.clear();
@@ -226,5 +240,130 @@ describe("E — hygiène : aucun log ne divulgue le token (ni sa longueur)", () 
     expect(joined).not.toContain(String(FAKE_TOKEN.length));
     expect(joined).not.toContain(FAKE_TOKEN);
     expect(joined).toContain("github.com");
+  });
+});
+
+// ── F — cause racine du faux timeout : l'instance simple-git doit interdire
+//      tout prompt interactif. simple-git retire les variables GIT_* ambiantes,
+//      SAUF si elles sont nommées dans `allowEnvironment` : sans cette option,
+//      `process.env.GIT_TERMINAL_PROMPT = "0"` n'atteignait jamais git.
+describe("F — instance simple-git : allowEnvironment + GIT_TERMINAL_PROMPT=0", () => {
+  it("toute instance créée autorise la variable ET la fixe à \"0\", avec le timeout officiel", async () => {
+    await gitPush(repoDir);
+
+    expect(state.instances.length).toBeGreaterThan(0);
+    for (const { options, env } of state.instances) {
+      expect(options.allowEnvironment).toContain("GIT_TERMINAL_PROMPT");
+      expect(env?.GIT_TERMINAL_PROMPT).toBe("0");
+      // L'environnement complet est conservé (PATH, HOME…) : pas de spawn cassé.
+      expect(Object.keys(env ?? {})).toEqual(expect.arrayContaining(["PATH"]));
+      // Timeout OFFICIEL simple-git : c'est lui qui tue réellement le process.
+      expect(options.timeout?.block).toBe(30_000);
+      expect(typeof options.baseDir).toBe("string");
+    }
+  });
+
+  it("aucune création de simple-git ne contourne la fabrique (source)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./git.ts", import.meta.url)), "utf-8");
+    // Commentaires retirés : on ne compte que le CODE.
+    const code = src
+      .split("\n")
+      .filter((line) => !/^\s*(\*|\/\/|\/?\*)/.test(line))
+      .join("\n");
+    // Une seule création brute : celle de `gitInstance()`.
+    expect(code.match(/\bsimpleGit\(/g) ?? []).toHaveLength(1);
+    // …et elle porte bien l'autorisation de la variable (sinon le garde-fou de
+    // simple-git la retire de l'enfant).
+    expect(code).toContain("allowEnvironment");
+  });
+});
+
+// ── G — échec d'authentification IMMÉDIAT → modale (GIT_AUTH_REQUIRED), pas un
+//      faux « réseau injoignable ».
+describe("G — « could not read Username » : authentification, pas réseau", () => {
+  it("échec immédiat des prompts désactivés → GitAuthError", async () => {
+    state.pushError = new Error(
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+    );
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GitAuthError);
+    expect(err).not.toBeInstanceOf(GitUnreachableError);
+    expect(err).not.toBeInstanceOf(GitTimeoutError);
+  });
+});
+
+// ── H — un vrai timeout (process tué) doit être typé et dire la VÉRITÉ.
+describe("H — timeout réel : erreur typée, message sans « réseau »", () => {
+  it("marqueur `plugin: timeout` → GitTimeoutError", async () => {
+    state.pushError = Object.assign(new Error("block timeout reached"), { plugin: "timeout" });
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GitTimeoutError);
+    expect(err).not.toBeInstanceOf(GitUnreachableError);
+    expect(err).not.toBeInstanceOf(GitAuthError);
+    expect(err.name).toBe("GitTimeoutError");
+  });
+
+  it("le message parle d'identifiants, plus jamais de réseau ni de port bloqué", async () => {
+    state.pushError = Object.assign(new Error("block timeout reached"), { plugin: "timeout" });
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toMatch(/network|unreachable|port blocked/i);
+    expect(err.message).toMatch(/credentials/i);
+    expect(err.message).toMatch(/30s/);
+  });
+
+  it("même détection sans le marqueur (message seul)", async () => {
+    state.pushError = new Error("block timeout reached");
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GitTimeoutError);
+  });
+});
+
+// ── I — cohérence de la clé d'hôte (fuite silencieuse corrigée)
+describe("I — clé d'hôte : même fonction pour écrire et lire, sinon avertissement", () => {
+  const warnLog = () =>
+    (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .map((c) => c.map(String).join(" "))
+      .join("\n");
+
+  it("identifiants pour un AUTRE hôte → avertissement journalisé (jamais le token)", async () => {
+    state.creds.set("gitlab.com", { username: FAKE_USER, password: FAKE_TOKEN });
+
+    await gitPush(repoDir).catch(() => {});
+
+    const logged = warnLog();
+    expect(logged).toContain("WARNING");
+    expect(logged).toContain("gitlab.com");
+    expect(logged).toContain("github.com");
+    expect(logged).toContain("WITHOUT a token");
+    expect(logged).not.toContain(FAKE_TOKEN);
+  });
+
+  it("aucun avertissement quand l'hôte correspond", async () => {
+    state.creds.set("github.com", { username: FAKE_USER, password: FAKE_TOKEN });
+
+    await gitPush(repoDir);
+
+    expect(warnLog()).not.toContain("WARNING");
+  });
+
+  it("remote portant déjà un jeton → les identifiants sont quand même injectés", async () => {
+    // Avant : extractHost renvoyait `${user}:${token}@github.com` → hasCreds=false
+    // → push SANS jeton, en silence. La clé est désormais le hostname nu.
+    state.remoteUrl = `https://${FAKE_USER}:${FAKE_TOKEN}@github.com/owner/repo.git`;
+    state.creds.set("github.com", { username: FAKE_USER, password: FAKE_TOKEN });
+
+    await gitPush(repoDir);
+
+    const injected = setUrlCalls().map((c) => c[3]);
+    // 1) injection (avec identifiants) puis 2) restauration (URL nettoyée).
+    expect(injected).toHaveLength(2);
+    expect(injected[0]).toContain("@github.com/owner/repo.git");
+    expect(injected[1]).not.toContain(FAKE_TOKEN);
+    // Remote restauré sans identifiants après l'opération.
+    expect(state.remoteUrl).toBe("https://github.com/owner/repo.git");
   });
 });

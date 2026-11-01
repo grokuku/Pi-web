@@ -11,7 +11,7 @@ import {
   removeLinkedProject,
   resolvePushRepos,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, GitTimeoutError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
 import { credentialStore } from "../projects/credential-store.js";
 import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification, listSessions } from "../pi/session.js";
 import { readSessionHistoryFile, selectSessionFile } from "../pi/session-history.js";
@@ -26,7 +26,8 @@ const router = Router();
  *
  *   GIT_AUTH_REQUIRED  (401) token absent/refusé → modale d'identifiants
  *   GIT_REMOTE_SCHEME  (409) origin en SSH → message actionnable, PAS de modale
- *   GIT_UNREACHABLE    (503) distant injoignable/timeout → message, PAS de modale
+ *   GIT_UNREACHABLE    (503) distant injoignable → message, PAS de modale
+ *   GIT_TIMEOUT        (504) git n'a rien répondu (attente d'identifiants) → message, PAS de modale
  *   GIT_PUSH_REJECTED  (409) non-fast-forward → message « pull --rebase » d'abord
  *   GIT_IDENTITY_REQUIRED (400) nom/e-mail git non configurés
  *   GIT_LOCKED         (409) index.lock d'une autre opération
@@ -49,6 +50,12 @@ function sendGitErrorResponse(res: Response, error: any): void {
       code: "GIT_REMOTE_SCHEME",
       httpsUrl: error.httpsUrl,
     });
+    return;
+  }
+  if (error instanceof GitTimeoutError) {
+    // Timeout RÉEL du process git : le message explique qu'il attendait
+    // probablement des identifiants (ne jamais accuser le réseau).
+    res.status(504).json({ error: msg, code: "GIT_TIMEOUT" });
     return;
   }
   if (error instanceof GitUnreachableError) {
