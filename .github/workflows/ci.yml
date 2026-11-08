@@ -53,10 +53,10 @@ jobs:
         package: [backend, frontend]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -124,7 +124,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Le registre GHCR exige un nom de dépôt en minuscules : `grokuku/Pi-web`
       # → `ghcr.io/grokuku/pi-web`. Jamais écrit en dur.
@@ -202,11 +202,11 @@ jobs:
           done
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -216,7 +216,7 @@ jobs:
       # test. Un seul build — le push se fait ensuite par re-tag, pas par un
       # second build.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
