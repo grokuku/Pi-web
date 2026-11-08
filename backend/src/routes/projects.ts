@@ -11,8 +11,17 @@ import {
   removeLinkedProject,
   resolvePushRepos,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, GitTimeoutError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, GitTimeoutError, GitRemoteHostUnknownError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
+
+/**
+ * Longueur maximale d'un identifiant git (username ou token). Un PAT GitHub
+ * fait ~40–90 caractères, un token d'accès générique < 200 : 512 laisse de la
+ * marge tout en refusant les corps de requête démesurés (DoS mémoire, corps
+ * d'erreur illisible).
+ */
+const MAX_GIT_CREDENTIAL_LENGTH = 512;
 import { credentialStore } from "../projects/credential-store.js";
+import { StorageCorruptError } from "../utils/atomic-store.js";
 import { generateAiCommitMessage, generateCleanCommitMessage, getCommitModelInfo, injectSessionNotification, listSessions } from "../pi/session.js";
 import { readSessionHistoryFile, selectSessionFile } from "../pi/session-history.js";
 import { getDraft, getCleanedCommit, saveCleanedCommit, clearDraft } from "../pi/commit-draft.js";
@@ -76,6 +85,20 @@ function sendGitErrorResponse(res: Response, error: any): void {
   res.status(400).json({ error: msg });
 }
 
+/**
+ * Erreur d'une route projet : mappe l'état stocké illisible sur un 503
+ * `STORAGE_CORRUPT` (et non un 500 anonyme). Sans ce code, le front ne peut pas
+ * distinguer « fichier d'état corrompu, n'écris surtout rien » d'une panne
+ * quelconque — et le prochain enregistrement écraserait les données.
+ */
+function sendApiError(res: Response, error: any): void {
+  if (error instanceof StorageCorruptError) {
+    res.status(503).json({ error: error.message, code: "STORAGE_CORRUPT" });
+    return;
+  }
+  res.status(500).json({ error: error?.message || String(error) });
+}
+
 // GET all projects
 router.get("/", (_req: Request, res: Response) => {
   try {
@@ -86,7 +109,7 @@ router.get("/", (_req: Request, res: Response) => {
       return p;
     }));
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -101,7 +124,7 @@ router.get("/:id", (req: Request, res: Response) => {
     const safe = project.smb ? { ...project, smb: { ...project.smb, password: undefined } } : project;
     res.json(safe);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -218,7 +241,7 @@ router.get("/:id/git", async (req: Request, res: Response) => {
     const gitInfo = await detectGit(project);
     res.json(gitInfo);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -232,7 +255,7 @@ router.get("/:id/git/history", async (req: Request, res: Response) => {
     const history = await getGitHistory(project.cwd);
     res.json(history);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -572,7 +595,7 @@ router.get("/:id/git/status", async (req: Request, res: Response) => {
       hasCredentials: host ? credentialStore.has(host) : false,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -624,7 +647,7 @@ router.get("/:id/git/identity", async (req: Request, res: Response) => {
     const identity = await getGitIdentity(project.cwd);
     res.json(identity || { name: "", email: "" });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -642,7 +665,7 @@ router.post("/:id/git/identity", async (req: Request, res: Response) => {
     await setGitIdentity(project.cwd, name, email);
     res.json({ name, email });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -653,14 +676,33 @@ router.post("/:id/git/credentials", async (req: Request, res: Response) => {
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ error: "username and password/token are required" });
+    const { username, password } = (req.body ?? {}) as Record<string, unknown>;
+    // Validation RÉELLE : sans elle, `{username: {…}, password: […]}» finissait
+    // dans le store chiffré, et la route répondait `{success:true}` quoi qu'il
+    // arrive (y compris quand rien n'avait été enregistré).
+    const invalid =
+      typeof username !== "string" ||
+      typeof password !== "string" ||
+      !username.trim() ||
+      !password ||
+      username.length > MAX_GIT_CREDENTIAL_LENGTH ||
+      password.length > MAX_GIT_CREDENTIAL_LENGTH;
+    if (invalid) {
+      return res.status(400).json({
+        error: `username and password/token are required (non-empty strings, at most ${MAX_GIT_CREDENTIAL_LENGTH} characters)`,
+        code: "GIT_CREDENTIALS_INVALID",
+      });
     }
-    await setGitCredentials(project.cwd, username, password);
-    res.json({ success: true });
+    // `setGitCredentials` refuse (GitRemoteHostUnknownError) quand l'hôte du
+    // remote est indéterminable : les identifiants seraient sinon écrits sous
+    // une clé inventée, écrasant le jeton d'un AUTRE dépôt de cet hôte.
+    const host = await setGitCredentials(project.cwd, username, password);
+    res.json({ success: true, host });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    if (error instanceof GitRemoteHostUnknownError) {
+      return res.status(409).json({ error: error.message, code: "GIT_REMOTE_HOST_UNKNOWN" });
+    }
+    sendApiError(res, error);
   }
 });
 
@@ -672,13 +714,24 @@ router.delete("/:id/git/credentials", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Project not found" });
     }
     const host = await getRemoteHost(project.cwd);
+    // ⚠️ Sans hôte identifié, `credentialStore.delete()` s'appliquerait à une
+    // clé fabriquée (autrefois "github.com") : la route effacerait le jeton d'un
+    // AUTRE dépôt. On refuse explicitement.
+    if (!host) {
+      return res.status(409).json({
+        error:
+          "Cannot determine the remote host of this repository (no 'origin' remote, unreadable URL). " +
+          "Nothing was deleted — erase the token by host from the git credentials list instead.",
+        code: "GIT_REMOTE_HOST_UNKNOWN",
+      });
+    }
     const removed = credentialStore.has(host);
     credentialStore.delete(host);
     // `host` + `removed` renvoyés : le front peut annoncer honnêtement ce qui a
     // été effacé (et rappeler que cela vaut pour TOUS les dépôts de cet hôte).
     res.json({ success: true, host, removed });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -705,7 +758,7 @@ router.post("/:id/smb/mount", async (req: Request, res: Response) => {
       res.status(500).json({ error: result.error });
     }
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -725,7 +778,7 @@ router.post("/:id/smb/unmount", async (req: Request, res: Response) => {
       res.status(500).json({ error: result.error });
     }
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -746,7 +799,7 @@ router.get("/:id/smb/status", async (req: Request, res: Response) => {
       mounted,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 
@@ -784,7 +837,7 @@ router.get("/:id/sessions/:sessionId/history", async (req: Request, res: Respons
       end: win.end,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    sendApiError(res, error);
   }
 });
 

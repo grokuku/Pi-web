@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { buildPiWebSystemPrompt, createPromptExtension, type PiWebPromptContext } from "./system-prompt.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentMode } from "./model-library.js";
+import { GIT_SAFETY_RULES } from "./bash-guard.js";
 
 const DEFAULT_BASE = `You are an expert coding assistant working in a terminal.
 
@@ -52,6 +53,13 @@ describe("buildPiWebSystemPrompt", () => {
     expect(out).toContain("Vos outils : read, bash");
     // Pas d'identité harness en mode code.
     expect(out).not.toContain("chef de projet");
+  });
+
+  it("code : ne contredit pas le garde-fou git avec une clause permissive", () => {
+    const out = buildPiWebSystemPrompt(DEFAULT_BASE, "code", ["read", "bash"], ctxFor("code"));
+
+    expect(out).not.toContain("unless the user explicitly asks you to");
+    expect(out).toContain(GIT_SAFETY_RULES);
   });
 
   it("harness : remplace l'identité par défaut et signale le mode ROUTING", () => {

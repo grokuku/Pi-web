@@ -1,6 +1,6 @@
 // Tests P4 : re-qualification de isStreaming depuis la vérité backend.
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { clientTimeZone, mergeServerSessionState, promptMessageType } from "./session-sync.js";
+import { clientTimeZone, fetchProjectSession, mergeServerSessionState, promptMessageType } from "./session-sync.js";
 
 describe("promptMessageType", () => {
   it("session idle (backend isStreaming=false) ⇒ pi_prompt", () => {
@@ -51,5 +51,41 @@ describe("clientTimeZone", () => {
       throw new Error("Intl indisponible");
     });
     expect(clientTimeZone()).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F21 — une réponse d'ERREUR ne doit jamais être stockée comme « session ».
+// `handleModelApplied` faisait `.then(r => r.json())` SANS vérifier `r.ok` :
+// `{ error: … }` devenait la session du projet (en-tête vide/incohérent).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("fetchProjectSession — garde r.ok (F21)", () => {
+  const jsonRes = (ok: boolean, body: unknown, status = ok ? 200 : 500) =>
+    ({ ok, status, json: async () => body }) as unknown as Response;
+
+  it("réponse 2xx → la session est renvoyée", async () => {
+    const f = vi.fn(async () => jsonRes(true, { isStreaming: false, activeMode: "code" }));
+    await expect(fetchProjectSession("p1", f as unknown as typeof fetch)).resolves.toEqual({
+      isStreaming: false,
+      activeMode: "code",
+    });
+    expect(f).toHaveBeenCalledWith("/api/settings/session?projectId=p1");
+  });
+
+  it("réponse 500 portant { error } → null (rien n'est stocké)", async () => {
+    const f = vi.fn(async () => jsonRes(false, { error: "boom" }));
+    await expect(fetchProjectSession("p1", f as unknown as typeof fetch)).resolves.toBeNull();
+  });
+
+  it("réponse 2xx mais charge { error } ou non-objet → null", async () => {
+    const fErr = vi.fn(async () => jsonRes(true, { error: "boom" }));
+    await expect(fetchProjectSession("p1", fErr as unknown as typeof fetch)).resolves.toBeNull();
+    const fStr = vi.fn(async () => jsonRes(true, "nope"));
+    await expect(fetchProjectSession("p1", fStr as unknown as typeof fetch)).resolves.toBeNull();
+  });
+
+  it("réseau en échec → null (aucun throw)", async () => {
+    const f = vi.fn(async () => { throw new Error("NetworkError"); });
+    await expect(fetchProjectSession("p1", f as unknown as typeof fetch)).resolves.toBeNull();
   });
 });

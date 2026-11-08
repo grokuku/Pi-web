@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
 import { useAutoClose } from "../../hooks/useAutoClose";
-import { useTranslation, type TFunction } from "../../i18n";
+import { useTranslation } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
+import { apiErrorLabels } from "../../utils/model-library-api";
 import { commitPushOutcome, decideGitFailure } from "../../utils/git-errors";
 import type { Project } from "../../types";
 import { GitIdentityModal } from "./GitIdentityModal";
@@ -16,15 +17,8 @@ interface CommitModelInfo {
   thinkingLevel?: string;
 }
 
-// ── Libellés i18n pré-traduits pour parseJsonResponse ──
-// (le helper utils n'a pas accès au hook useTranslation : on lui passe des
-// libellés déjà résolus, cf. git.sessionExpired / git.serverError)
-function apiErrorLabels(t: TFunction) {
-  return {
-    sessionExpired: t("git.sessionExpired"),
-    serverError: (status: number) => t("git.serverError", status),
-  };
-}
+// ── Libellés i18n de parseJsonResponse : apiErrorLabels() est partagé par
+// utils/model-library-api.ts (une seule définition pour tout le frontend).
 
 interface Preview {
   status: {
@@ -336,7 +330,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
           <div className="flex items-center gap-2">
             <HolafIcon name="arrow-up" size={16} className="text-hacker-accent" />
             <span className="text-hacker-accent font-bold text-sm tracking-wider">
-              PUSH TO REMOTE
+              {t('commitPush.header')}
             </span>
           </div>
           <button onClick={requestClose} className="text-hacker-text-dim hover:text-hacker-text">
@@ -369,7 +363,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {loading === "preview" && (
           <div className="text-hacker-text-dim text-xs flex items-center gap-2 py-4 border border-hacker-border p-3 mb-3">
             <HolafIcon name="refresh" size={12} className="animate-spin" />
-            Analyzing changes...
+            {t('commitPush.analyzing')}
           </div>
         )}
 
@@ -496,23 +490,23 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
             <div className="text-[10px] space-y-0.5 bg-hacker-bg/30 border border-hacker-border p-2">
               <div className="text-hacker-text-dim flex items-center gap-1.5 mb-1">
                 <HolafIcon name="git-commit" size={12} />
-                CHANGES DETECTED
+                {t('commitPush.changesDetected')}
               </div>
               {(stats?.staged.length ?? 0) > 0 && (
-                <div className="text-hacker-accent">✓ {stats?.staged.length} staged</div>
+                <div className="text-hacker-accent">✓ {t('commitPush.stagedCount', stats?.staged.length ?? 0)}</div>
               )}
               {(stats?.modified.length ?? 0) > 0 && (
-                <div className="text-hacker-warn">~ {stats?.modified.length} modified</div>
+                <div className="text-hacker-warn">~ {t('commitPush.modifiedCount', stats?.modified.length ?? 0)}</div>
               )}
               {(stats?.created.length ?? 0) > 0 && (
-                <div className="text-hacker-info">+ {stats?.created.length} new</div>
+                <div className="text-hacker-info">+ {t('commitPush.createdCount', stats?.created.length ?? 0)}</div>
               )}
               {(stats?.deleted.length ?? 0) > 0 && (
-                <div className="text-hacker-error">- {stats?.deleted.length} deleted</div>
+                <div className="text-hacker-error">- {t('commitPush.deletedCount', stats?.deleted.length ?? 0)}</div>
               )}
               {totalChanges === 0 && stats && (
                 <div className="text-hacker-text-dim">
-                  Nothing to commit locally. Will push any existing commits.
+                  {t('commitPush.nothingToCommit')}
                 </div>
               )}
               <div className="mt-1 max-h-[80px] overflow-y-auto">
@@ -524,7 +518,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                 ))}
                 {stats && stats.files.length > 8 && (
                   <div className="text-hacker-text-dim/50">
-                    +{stats.files.length - 8} more files
+                    {t('commitPush.moreFiles', stats.files.length - 8)}
                   </div>
                 )}
               </div>
@@ -552,7 +546,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
                     ) : (
                       <HolafIcon name="sparkles" size={10} />
                     )}
-                    {hasAiResult ? "✓ AI generated" : "Generate with AI"}
+                    {hasAiResult ? t('commitPush.aiGenerated') : t('commitPush.aiGenerate')}
                   </button>
 
                   {/* Model info badges */}
@@ -605,14 +599,14 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
                   <HolafIcon name="file-text" size={10} />
-                  SUBJECT
+                  {t('commitPush.subjectLabel')}
                 </label>
                 <input
                   type="text"
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
                   className="input-hacker w-full text-xs"
-                  placeholder="Update: changes"
+                  placeholder={t('commitPush.subjectPlaceholder')}
                   maxLength={72}
                   autoFocus
                 />
@@ -621,13 +615,13 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
               <div>
                 <label className="text-hacker-text-dim text-[10px] block mb-1 flex items-center gap-1.5">
                   <HolafIcon name="file-text" size={10} />
-                  BODY (optional)
+                  {t('commitPush.bodyLabel')}
                 </label>
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   className="input-hacker w-full text-xs min-h-[100px] resize-y"
-                  placeholder="Detailed description of changes..."
+                  placeholder={t('commitPush.bodyPlaceholder')}
                   rows={5}
                 />
               </div>
@@ -636,7 +630,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
             {/* Info */}
             <div className="text-hacker-text-dim text-[9px] border border-hacker-border p-2 flex items-center gap-1.5">
               <span className="text-hacker-accent">→</span>
-              This will stage all changes, commit, and push to{" "}
+              {t('commitPush.willStage')}{" "}
               <span className="text-hacker-info truncate max-w-[160px]">
                 {project.git?.remote?.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
               </span>
@@ -648,7 +642,7 @@ export function CommitPushModal({ project, notifyProjectId, onClose, onDone }: P
         {!done && (
           <div className="flex gap-2 justify-end pt-4">
             <button onClick={requestClose} className="btn-hacker text-xs" disabled={loading === "push"}>
-              CANCEL
+              {t('commitPush.cancel')}
             </button>
             <button
               onClick={handlePush}

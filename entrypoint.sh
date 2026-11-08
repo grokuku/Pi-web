@@ -10,7 +10,27 @@ echo "╚═══════════════════════�
 # ── Sync version from VERSION file into package.jsons ──
 if [ -f "/app/VERSION" ]; then
   echo "[PI-WEB] Syncing version ${PI_WEB_VERSION} into package.json files..."
-  node -e "const v='${PI_WEB_VERSION}';['/app/backend/package.json','/app/frontend/package.json'].forEach(f=>{try{const p=JSON.parse(require('fs').readFileSync(f,'utf8'));p.version=v;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n');}catch(e){}})"
+  # I19 : l'ancien `catch(e){}` AVALAIT l'échec (package.json absent, JSON
+  # corrompu, écriture refusée) — la version affichée divergeait alors
+  # silencieusement. On trace désormais chaque échec et on le signale.
+  if ! node -e "
+    const fs = require('fs');
+    const v = process.argv[1];
+    let failed = false;
+    for (const f of ['/app/backend/package.json', '/app/frontend/package.json']) {
+      try {
+        const p = JSON.parse(fs.readFileSync(f, 'utf8'));
+        p.version = v;
+        fs.writeFileSync(f, JSON.stringify(p, null, 2) + '\n');
+      } catch (e) {
+        failed = true;
+        console.error('[PI-WEB] ERROR: synchro de version impossible pour ' + f + ' : ' + (e && e.message ? e.message : String(e)));
+      }
+    }
+    process.exit(failed ? 1 : 0);
+  " "${PI_WEB_VERSION}"; then
+    echo "[PI-WEB] WARNING: synchro de version vers les package.json INCOMPLÈTE (voir les erreurs ci-dessus) — la version de référence reste ${PI_WEB_VERSION}" >&2
+  fi
 fi
 
 # ─── Dépendances & compilation : PRÉ-INSTALLÉES DANS L'IMAGE ──────────
@@ -34,8 +54,19 @@ if [ ! -f "dist/index.js" ]; then
   echo "[PI-WEB] ERROR: /app/backend/dist/index.js absent — le build backend n'a pas été embarqué dans l'image" >&2
   exit 1
 fi
+# I18 : sans `frontend/dist/index.html`, le backend sert quand même /api/health
+# → le conteneur paraissait « sain » alors que l'INTERFACE était absente.
+# On échoue donc explicitement (comme les deux contrôles ci-dessus).
+# Échappatoire volontaire (mode API seule, ex. usage headless) :
+# PI_WEB_ALLOW_MISSING_FRONTEND=1.
 if [ ! -f "/app/frontend/dist/index.html" ]; then
-  echo "[PI-WEB] WARNING: /app/frontend/dist/index.html absent — l'interface ne sera pas servie sur /" >&2
+  if [ "${PI_WEB_ALLOW_MISSING_FRONTEND:-0}" = "1" ]; then
+    echo "[PI-WEB] WARNING: /app/frontend/dist/index.html absent — /api/health répondra ok et / ne servira AUCUNE interface (démarrage poursuivi : PI_WEB_ALLOW_MISSING_FRONTEND=1)" >&2
+  else
+    echo "[PI-WEB] ERROR: /app/frontend/dist/index.html absent — l'interface ne serait pas servie sur / alors que /api/health répondrait « ok » (conteneur faussement sain)." >&2
+    echo "[PI-WEB] ERROR: démarrage interrompu. Reconstruire l'image (build frontend) ou relancer avec PI_WEB_ALLOW_MISSING_FRONTEND=1 pour un usage API seule." >&2
+    exit 1
+  fi
 fi
 echo "[PI-WEB] Image autoportante : node_modules + dist présents (aucune installation au démarrage)"
 
@@ -131,10 +162,38 @@ if [ -n "$PACKAGES" ]; then
 
   # Install globally — the Pi SDK resolves packages via npm root -g
   # Global install compiles native modules (better-sqlite3, sqlite-vec, etc.)
+  #
+  # ⚠️ Un échec n'est JAMAIS silencieux : une extension déclarée dans
+  # settings.packages serait absente du runtime sans que rien ne le dise.
+  # On arrête donc le démarrage en LISTANT les paquets manquants (manifeste
+  # introuvable dans npm root -g). Cas normal (settings.packages vide) : le
+  # bloc entier est sauté, aucun blocage.
+  # Échappatoire volontaire : PI_WEB_EXT_ALLOW_DEGRADED=1 → on journalise
+  # l'erreur et on continue (démarrage dégradé, extensions absentes).
   if npm install -g $PACKAGES --no-audit --no-fund 2>&1; then
     echo "[PI-WEB] Extensions installed globally successfully"
   else
-    echo "[PI-WEB] WARNING: Some extensions failed to install globally (see errors above)"
+    MISSING=$(NPM_GLOBAL_ROOT="$NPM_GLOBAL_ROOT" PACKAGES="$PACKAGES" node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const root = process.env.NPM_GLOBAL_ROOT;
+      const declared = process.env.PACKAGES.split(/\s+/).filter(Boolean);
+      const missing = declared.filter((src) => {
+        try {
+          JSON.parse(fs.readFileSync(path.join(root, src, "package.json"), "utf8"));
+          return false;
+        } catch (e) { return true; }
+      });
+      console.log((missing.length ? missing : declared).join(", "));
+    ' 2>/dev/null || echo "$PACKAGES")
+    if [ "${PI_WEB_EXT_ALLOW_DEGRADED:-0}" = "1" ]; then
+      echo "[PI-WEB] WARNING: installation des extensions Pi échouée — extensions MANQUANTES : ${MISSING} (démarrage poursuivi : PI_WEB_EXT_ALLOW_DEGRADED=1)" >&2
+    else
+      echo "[PI-WEB] ERROR: installation globale des extensions Pi échouée — extensions MANQUANTES : ${MISSING}" >&2
+      echo "[PI-WEB] ERROR: démarrage interrompu. Corriger settings.packages ou l'accès au registre npm," >&2
+      echo "[PI-WEB]        ou relancer avec PI_WEB_EXT_ALLOW_DEGRADED=1 pour démarrer sans ces extensions." >&2
+      exit 1
+    fi
   fi
 else
   echo "[PI-WEB] No npm/git packages declared — local extensions only"

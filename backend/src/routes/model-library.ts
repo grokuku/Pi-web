@@ -300,6 +300,9 @@ router.put("/projects/:projectId/mode", async (req: Request, res: Response) => {
     const { projectId } = req.params;
     const { mode, modelId, enabled, config, routing, compactToFit } = req.body;
 
+    if ((enabled !== undefined || config !== undefined || routing !== undefined) && mode !== "harness") {
+      return res.status(400).json({ error: "mode requis pour enabled/config/routing" });
+    }
     if (mode) validateMode(mode);
 
     let library = loadModelLibrary();

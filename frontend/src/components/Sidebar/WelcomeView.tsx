@@ -86,11 +86,15 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
   const issues = status?.extensions.filter(e => !e.installed) ?? [];
 
   return (
-    <div className="h-full flex flex-col items-center justify-center p-4 md:p-6 overflow-auto">
-      <div className="w-full max-w-2xl space-y-4 px-3 md:px-0">
+    // ⚠ Règle projet « toute la largeur » : plus de colonne étroite centrée.
+    // Le conteneur racine est PLEINE LARGEUR ; le contenu est réparti en
+    // grille responsive (1 → 2 → 3 colonnes). Les textes restent bornés À
+    // L'INTÉRIEUR des cartes (jamais étirés sur 1920 px).
+    <div className="h-full overflow-auto p-4 md:p-6">
+      <div className="w-full max-w-none grid gap-4 grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 items-start content-start">
 
         {/* Logo + Title */}
-        <div className="text-center space-y-1.5">
+        <div className="lg:col-span-2 2xl:col-span-3 text-center space-y-1.5">
           <PiLogo className="w-14 h-14 mx-auto text-hacker-accent" />
           <h1 className="text-hacker-accent text-lg font-bold tracking-widest">{t('welcome.title')}</h1>
           <p className="text-hacker-text-dim text-[11px]">
@@ -207,8 +211,8 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
           </div>
         )}
 
-        {/* Project grid */}
-        <div className="border border-hacker-border bg-hacker-surface/30 rounded p-2.5">
+        {/* Project grid — prend toute la largeur disponible */}
+        <div className="lg:col-span-2 2xl:col-span-3 border border-hacker-border bg-hacker-surface/30 rounded p-2.5">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] text-hacker-text-bright font-bold tracking-wider">{t('welcome.projects')}</span>
             <button
@@ -247,7 +251,7 @@ export function WelcomeView({ projects, loadError, onSelectProject, onAddProject
         </div>
 
         {/* Shortcuts */}
-        <div className="text-center text-[10px] text-hacker-text-dim flex items-center justify-center gap-2">
+        <div className="lg:col-span-2 2xl:col-span-3 text-center text-[10px] text-hacker-text-dim flex flex-wrap items-center justify-center gap-2">
           <span>{t('welcome.selectProject')}</span>
           <span className="text-hacker-border">|</span>
           <kbd className="px-1 border border-hacker-border text-hacker-accent">Ctrl+L</kbd>

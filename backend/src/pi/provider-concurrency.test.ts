@@ -21,6 +21,16 @@ vi.mock("fs", () => ({
   writeFileSync: vi.fn((p: string, data: string) => {
     fsState.files[p] = data;
   }),
+  // `saveModelLibrary()`/`saveProviders()` écrivent en tmp + rename (atomique) :
+  // sans ces deux fonctions, le mock ferait échouer l'écriture.
+  renameSync: vi.fn((from: string, to: string) => {
+    if (!(from in fsState.files)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    fsState.files[to] = fsState.files[from];
+    delete fsState.files[from];
+  }),
+  rmSync: vi.fn((p: string) => {
+    delete fsState.files[p];
+  }),
 }));
 
 import {

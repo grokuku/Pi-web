@@ -20,24 +20,6 @@
  * Module PUR (aucune I/O, aucun état global) → testable sans SDK ni réseau.
  */
 
-// ── Texte de consigne partagé (prompts de rôle + mode code) ───────────────────
-// Volontairement dans ce module : il est importé À LA FOIS par le backend
-// (system-prompt.ts) et par l'extension harness-orchestrator — une seule source,
-// aucun couplage backend → extensions (qui casserait le rootDir de tsc).
-export const GIT_SAFETY_RULES = `
-
-## Historique git : INTERDICTION FORMELLE (garde-fou)
-Tu n'exécutes JAMAIS : \`git commit\`, \`git push\`, \`git reset\`, \`git checkout\`,
-\`git restore\`, \`git stash\`, \`git rebase\`, \`git clean\`, \`git revert\`,
-\`git cherry-pick\`, \`git merge\`, ni aucune option \`--force\` —
-même « pour nettoyer », « pour repartir d'un état propre » ou « pour annuler un commit
-que tu crois extérieur ». Un commit que tu ne reconnais pas est TOUJOURS un travail de
-l'utilisateur : ne le défais pas, signale-le.
-Seules les lectures sont autorisées : \`git status\`, \`diff\`, \`log\`, \`show\`,
-\`branch -vv\`, \`reflog\`.
-L'utilisateur gère seul son historique. Un garde-fou technique bloque déjà ces
-commandes : les tenter ne produit qu'un refus, jamais un effet.`;
-
 /** Verdict du garde-fou. `reason` est renvoyé à l'agent (message actionnable). */
 export interface GitSafetyVerdict {
   block: boolean;
@@ -73,6 +55,45 @@ const ALLOWED_SUBCOMMANDS = new Set([
   "version",
   "help",
 ]);
+
+// ── Texte de consigne partagé (prompts de rôle + mode code) ───────────────────
+// Volontairement dans ce module : il est importé À LA FOIS par le backend
+// (system-prompt.ts) et par l'extension harness-orchestrator — une seule source,
+// aucun couplage backend → extensions (qui casserait le rootDir de tsc).
+// Les deux textes sont dérivés de la liste blanche : impossible d'annoncer au
+// modèle un ensemble de lectures différent de celui réellement accepté.
+const CONDITIONAL_READS = [
+  "branch -vv",
+  "reflog",
+  "stash list",
+  "stash show",
+  "remote -v",
+  "remote show",
+  "remote get-url",
+  "config --get/--list",
+];
+const ALLOWED_SUBCOMMANDS_TEXT = Array.from(ALLOWED_SUBCOMMANDS).join(", ");
+const ALLOWED_READS_MARKDOWN = [
+  ...Array.from(ALLOWED_SUBCOMMANDS).map((command, index) => `\`${index === 0 ? "git " : ""}${command}\``),
+  ...CONDITIONAL_READS.map((command) => `\`${command}\``),
+].join(", ");
+
+export const GIT_SAFETY_RULES = `
+
+## Historique git : INTERDICTION FORMELLE (garde-fou)
+Tu n'exécutes JAMAIS : \`git commit\`, \`git push\`, \`git reset\`, \`git checkout\`,
+\`git restore\`, \`git stash\`, \`git rebase\`, \`git clean\`, \`git revert\`,
+\`git cherry-pick\`, \`git merge\`, ni aucune option \`--force\` —
+même « pour nettoyer », « pour repartir d'un état propre » ou « pour annuler un commit
+que tu crois extérieur ». Un commit que tu ne reconnais pas est TOUJOURS un travail de
+l'utilisateur : ne le défais pas, signale-le.
+Seules les lectures sont autorisées : ${ALLOWED_READS_MARKDOWN}.
+L'utilisateur gère seul son historique. Un garde-fou technique bloque déjà ces
+commandes : les tenter ne produit qu'un refus, jamais un effet.
+Limite de conception : l'analyse est statique. Les scripts et lanceurs arbitraires
+(node, python, make, npm, scripts .sh) ne sont pas tous interprétables ; seuls des
+motifs d'écriture git explicites dans node -e / python -c sont refusés. Ne présente
+jamais cette protection comme absolue et ne cherche pas à la contourner.`;
 
 /**
  * Sous-commandes explicitement DANGEREUSES. Redondant avec le défaut-refus
@@ -155,12 +176,29 @@ const SHELL_KEYWORDS = new Set(["if", "then", "elif", "else", "fi", "do", "done"
 /** Options globales de git qui consomment l'argument suivant. */
 const GIT_GLOBAL_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--super-prefix", "--attr-source"]);
 
+/** Options de lecture de `git branch` dont la valeur suit dans un mot séparé. */
+const GIT_BRANCH_VALUE_OPTS = new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
+
+/** Profondeur maximale d'analyse des charges et substitutions imbriquées. */
+const MAX_ANALYSIS_DEPTH = 4;
+
+/**
+ * Motifs grossiers pour les interpréteurs non analysables statiquement. Le mot
+ * `git` est exigé : un programme Node/Python qui évoque « reset » sans git ne
+ * doit pas être bloqué.
+ */
+const GIT_WRITE_IN_SCRIPT_RE = /\b(?:commit|push|pull|fetch|reset|checkout|switch|restore|rebase|clean|revert|cherry-pick|merge|am|apply|filter-branch|filter-repo|update-ref|update-index|gc|prune|add|rm|mv|tag|init|clone|submodule|worktree|notes|replace|symbolic-ref|format-patch|repack|pack-refs)\b|--force(?:\b|=)/;
+
+function containsGitWritePattern(value: string): boolean {
+  return /\bgit(?:\.exe)?\b/i.test(value) && GIT_WRITE_IN_SCRIPT_RE.test(value);
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const SHORT_FLAG_RE = /^-[A-Za-z]+$/;
 
 const REFUSAL_HINT =
   "L'utilisateur gère seul son historique git. Un commit que tu ne reconnais pas est TOUJOURS un travail de l'utilisateur : ne le défais pas, signale-le dans ton rapport. " +
-  "Seules les lectures sont autorisées : git status, diff, log, show, branch -vv, reflog, stash list, rev-parse, ls-files, blame, remote -v, show-ref, describe, cat-file, shortlog, grep.";
+  `Seules les lectures sont autorisées : git ${ALLOWED_SUBCOMMANDS_TEXT}, ${CONDITIONAL_READS.join(", ")}.`;
 
 function refusal(detail: string): GitSafetyVerdict {
   return { block: true, reason: `Commande git refusée (garde-fou Pi-Web) : ${detail}. ${REFUSAL_HINT}` };
@@ -383,6 +421,7 @@ function resolveCommand(segment: Word[]): { base: string; index: number } | null
     while (i < segment.length && ASSIGNMENT_RE.test(segment[i]!.value)) i++;
     if (i >= segment.length) return null;
     const raw = segment[i]!.value;
+    const commandIndex = i;
     if (SHELL_KEYWORDS.has(raw)) {
       i++;
       continue;
@@ -399,6 +438,11 @@ function resolveCommand(segment: Word[]): { base: string; index: number } | null
       }
       if (t.startsWith("-")) {
         const optName = t.includes("=") ? t.slice(0, t.indexOf("=")) : t;
+        // `env -S` n'est pas une simple option à valeur : son argument est une
+        // ligne de commande qu'il faut analyser, jamais sauter aveuglément.
+        if (base === "env" && (optName === "-S" || optName === "--split-string")) {
+          return { base, index: commandIndex };
+        }
         i++;
         if (valueOpts.has(optName) && !t.includes("=")) i++;
         continue;
@@ -438,7 +482,78 @@ function shellPayload(segment: Word[]): string | null {
   return null;
 }
 
-/** Toute option de forçage git (`--force*`, `-f`, `-fd`, …). */
+/**
+ * Charge de `env -S 'commande …'`. `resolveCommand` s'arrête volontairement sur
+ * `env` pour cette option afin que l'appelant analyse la charge récursivement.
+ */
+function envSplitPayload(segment: Word[]): string | null {
+  const resolved = resolveCommand(segment);
+  if (!resolved || resolved.base !== "env") return null;
+  for (let j = resolved.index + 1; j < segment.length; j++) {
+    const value = segment[j]!.value;
+    if (value === "-S" || value === "--split-string") return segment[j + 1]?.value ?? null;
+    if (value.startsWith("--split-string=")) return value.slice("--split-string=".length);
+    if (value.startsWith("-S") && value.length > 2) return value.slice(2);
+  }
+  return null;
+}
+
+/** Charges `find … -exec commande {} \\;` et `find … -exec commande {} +`. */
+function findExecPayloads(segment: Word[]): Word[][] {
+  const resolved = resolveCommand(segment);
+  if (!resolved || resolved.base !== "find") return [];
+  const payloads: Word[][] = [];
+  for (let j = resolved.index + 1; j < segment.length; j++) {
+    if (segment[j]!.value !== "-exec" && segment[j]!.value !== "-execdir") continue;
+    const start = j + 1;
+    let end = start;
+    while (end < segment.length && segment[end]!.value !== ";" && segment[end]!.value !== "+") end++;
+    if (end > start) payloads.push(segment.slice(start, end));
+    j = end;
+  }
+  return payloads;
+}
+
+/** Charge évaluée par Node ou Python, dont le contenu n'est pas du shell. */
+function evalPayload(segment: Word[]): { base: string; payload: string } | null {
+  const resolved = resolveCommand(segment);
+  if (!resolved) return null;
+  const isNode = resolved.base === "node" || resolved.base === "nodejs";
+  const isPython = /^(?:python\d*(?:\.\d+)*|pypy\d*)$/.test(resolved.base);
+  if (!isNode && !isPython) return null;
+
+  for (let j = resolved.index + 1; j < segment.length; j++) {
+    const value = segment[j]!.value;
+    if (isNode && (value === "-e" || value === "--eval")) {
+      const payload = segment[j + 1]?.value;
+      return payload === undefined ? null : { base: resolved.base, payload };
+    }
+    if (isNode && value.startsWith("--eval=")) return { base: resolved.base, payload: value.slice(7) };
+    if (isPython && value === "-c") {
+      const payload = segment[j + 1]?.value;
+      return payload === undefined ? null : { base: resolved.base, payload };
+    }
+    if (isPython && value.startsWith("-c") && value.length > 2) {
+      return { base: resolved.base, payload: value.slice(2) };
+    }
+    if (!value.startsWith("-")) return null;
+  }
+  return null;
+}
+
+function hasUnresolvedExpansion(payload: string): boolean {
+  return payload.includes("$") || payload.includes("`");
+}
+
+function excessiveDepthVerdict(command: string): GitSafetyVerdict {
+  // À cette profondeur on ne prétend plus comprendre la commande. On refuse les
+  // formes dynamiques ou portant un motif d'écriture, tout en laissant passer
+  // les imbrications bénignes (aucun faux positif sur `echo $(echo …)`).
+  if (containsGitWritePattern(command) || hasUnresolvedExpansion(command)) {
+    return refusal("profondeur maximale d'analyse atteinte sur une commande dynamique ou dangereuse");
+  }
+  return { block: false };
+}
 function isForceToken(value: string): boolean {
   if (value === "--force" || value.startsWith("--force")) return true;
   if (/^-[A-Za-z]*f[A-Za-z]*$/.test(value)) return true;
@@ -477,7 +592,11 @@ function checkGitArgs(args: Word[]): GitSafetyVerdict | null {
 
   if (!sub || sub.startsWith("-")) return null; // `git`, `git --version`, `git -C /p` seul : inoffensif
 
-  // 3. Cas conditionnels.
+  // 3. Même une sous-commande de lecture ne doit pas écrire dans un fichier.
+  const output = subArgs.find((a) => a === "-o" || a === "--output" || a.startsWith("--output="));
+  if (output) return refusal(`option ${output} (git ${sub}) — l'écriture d'un fichier est interdite`);
+
+  // 4. Cas conditionnels.
   if (sub === "reflog") {
     if (subArgs.some((a) => a === "expire" || a === "delete" || a === "drop")) {
       return refusal("git reflog expire/delete réécrit l'historique");
@@ -493,6 +612,19 @@ function checkGitArgs(args: Word[]): GitSafetyVerdict | null {
   if (sub === "branch") {
     const mutation = subArgs.find(isBranchMutationToken);
     if (mutation) return refusal(`git branch ${mutation} supprime/déplace une branche`);
+    for (let j = 0; j < subArgs.length; j++) {
+      const arg = subArgs[j]!;
+      if (arg === "--") {
+        if (j + 1 < subArgs.length) return refusal("git branch avec un argument positionnel crée ou modifie une ref");
+        break;
+      }
+      if (arg.startsWith("-")) {
+        const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+        if (GIT_BRANCH_VALUE_OPTS.has(name) && !arg.includes("=")) j++;
+        continue;
+      }
+      return refusal(`git branch ${arg} crée ou modifie une ref`);
+    }
     return null;
   }
   if (sub === "remote") {
@@ -506,26 +638,66 @@ function checkGitArgs(args: Word[]): GitSafetyVerdict | null {
     return refusal("git config hors lecture (--get/--list) écrit la configuration");
   }
 
-  // 4. Liste blanche.
+  // 5. Liste blanche.
   if (ALLOWED_SUBCOMMANDS.has(sub)) return null;
 
   if (BLOCKED_SUBCOMMANDS.has(sub)) {
     return refusal(`git ${sub} modifie le dépôt ou son historique`);
   }
 
-  // 5. Défaut-refus : une sous-commande hors liste blanche n'est jamais exécutée.
+  // 6. Défaut-refus : une sous-commande hors liste blanche n'est jamais exécutée.
   return refusal(`git ${sub} n'est pas dans la liste blanche des lectures autorisées`);
+}
+
+/** Analyse un segment déjà tokenisé, y compris ses lanceurs et charges. */
+function checkSegment(segment: Word[], depth: number): GitSafetyVerdict | null {
+  if (depth > MAX_ANALYSIS_DEPTH) {
+    const verdict = excessiveDepthVerdict(segment.map((word) => word.value).join(" "));
+    return verdict.block ? verdict : null;
+  }
+
+  const payloads = [shellPayload(segment), envSplitPayload(segment)].filter((payload): payload is string => payload !== null);
+  for (const payload of payloads) {
+    if (hasUnresolvedExpansion(payload)) {
+      return refusal("charge de shell/env contenant une expansion ($ ou backtick) impossible à résoudre statiquement");
+    }
+    const verdict = assertGitSafe(payload, depth + 1);
+    if (verdict.block) return verdict;
+  }
+
+  for (const payload of findExecPayloads(segment)) {
+    const verdict = checkSegment(payload, depth + 1);
+    if (verdict) return verdict;
+  }
+
+  const evaluated = evalPayload(segment);
+  if (evaluated && containsGitWritePattern(evaluated.payload)) {
+    return refusal(`${evaluated.base} évalue une charge contenant un motif d'écriture git`);
+  }
+
+  const gitArgs = gitArgsOfSegment(segment);
+  return gitArgs ? checkGitArgs(gitArgs) : null;
 }
 
 /**
  * Verdict pour la commande shell complète.
  *
  * PUR : mêmes entrées → même sortie, aucune I/O. Analyse récursive des
- * substitutions (`$(…)`, backticks) et des scripts passés à `bash -c`.
+ * substitutions (`$(…)`, backticks) et des scripts passés à `bash -c` / `env -S`.
  */
 export function assertGitSafe(command: string, depth = 0): GitSafetyVerdict {
   if (typeof command !== "string" || command.trim() === "") return { block: false };
-  if (depth > 4) return { block: false }; // garde-fou anti-récursion : on laisse passer
+  if (depth > MAX_ANALYSIS_DEPTH) return excessiveDepthVerdict(command);
+
+  // Contrôle sur la forme BRUTE : splitSubstitutions retire ensuite $(…) et
+  // les backticks pour les analyser, mais une charge -c dynamique doit être
+  // refusée même si son expansion masque ensuite le script à examiner.
+  for (const segment of splitSegments(command)) {
+    const payloads = [shellPayload(segment), envSplitPayload(segment)];
+    if (payloads.some((payload) => payload !== null && hasUnresolvedExpansion(payload))) {
+      return refusal("charge de shell/env contenant une expansion ($ ou backtick) impossible à résoudre statiquement");
+    }
+  }
 
   const { outer, subs } = splitSubstitutions(command);
   for (const sub of subs) {
@@ -534,14 +706,7 @@ export function assertGitSafe(command: string, depth = 0): GitSafetyVerdict {
   }
 
   for (const segment of splitSegments(outer)) {
-    const payload = shellPayload(segment);
-    if (payload) {
-      const verdict = assertGitSafe(payload, depth + 1);
-      if (verdict.block) return verdict;
-    }
-    const gitArgs = gitArgsOfSegment(segment);
-    if (!gitArgs) continue;
-    const verdict = checkGitArgs(gitArgs);
+    const verdict = checkSegment(segment, depth);
     if (verdict) return verdict;
   }
   return { block: false };

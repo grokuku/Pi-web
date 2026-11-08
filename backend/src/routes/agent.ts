@@ -1,6 +1,7 @@
 import { Router, type Response } from "express";
 import type { Request } from "../utils/http-types.js";
-import { execSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { readdirSync, statSync, existsSync, readFileSync } from "fs";
 import path from "path";
 import { agentAuth } from "../middleware/agent-auth.js";
@@ -42,54 +43,63 @@ router.use(agentAuth);
 
 import { isPathAllowed } from "../utils/path-security.js";
 
+// ⚠️ AUCUN `execSync("git …")` dans ce module : ces helpers sont appelés
+// depuis des handlers HTTP (snapshots avant/après prompt, /files/changed). En
+// synchrone, un `git diff` lent gelait la boucle d'événements et faisait
+// saccader TOUTES les sessions ouvertes.
+const execFileAsync = promisify(execFile);
+
+/** Timeout par commande git (inchangé : 5 s). */
+const GIT_TIMEOUT_MS = 5_000;
+
+/** Plafond de fichiers retenus par snapshot (gros dépôt = réponse bornée). */
+const MAX_SNAPSHOT_FILES = 5_000;
+
+/** Exécute git de façon ASYNCHRONE ; `null` si cela échoue (pas un dépôt, git
+ *  absent, timeout). Ne lève jamais : les appelants ont un repli. */
+async function runGit(args: string[], cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      encoding: "utf-8",
+      timeout: GIT_TIMEOUT_MS,
+    });
+    return String(stdout);
+  } catch {
+    return null;
+  }
+}
+
 /** Vérifie si le cwd est un dépôt git utilisable.
  *  On exige un `.git` dans le cwd (comme `detectGit`) pour ne pas considérer
  *  un sous-dossier d'un dépôt parent comme un projet git à part entière. */
-function isGitRepo(cwd: string): boolean {
+async function isGitRepo(cwd: string): Promise<boolean> {
   if (!existsSync(path.join(cwd, ".git"))) return false;
-  try {
-    const output = execSync("git rev-parse --is-inside-work-tree", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    return output.trim() === "true";
-  } catch {
-    return false;
-  }
+  const output = await runGit(["rev-parse", "--is-inside-work-tree"], cwd);
+  return !!output && output.trim() === "true";
 }
 
 /** Prend un instantané git des fichiers modifiés dans le cwd.
  *  Combine `git diff` (fichiers suivis) et `git ls-files --others` (fichiers
  *  non suivis), car `git diff` ne voit pas les nouveaux fichiers créés par l'agent.
  *  Retourne un set de chemins relatifs. */
-function gitSnapshot(cwd: string): Set<string> {
+async function gitSnapshot(cwd: string): Promise<Set<string>> {
   const files = new Set<string>();
 
-  try {
-    const diff = execSync("git diff --name-only", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    for (const f of diff.trim().split("\n")) {
-      if (f) files.add(f);
-    }
-  } catch {
-    // Pas un dépôt git — on laisse le set vide, le fallback fs prendra le relais.
-  }
+  // Les deux commandes sont indépendantes : lancées de front, en asynchrone.
+  // Échec (pas un dépôt git) → sortie vide, le fallback fs prendra le relais.
+  const [diff, untracked] = await Promise.all([
+    runGit(["diff", "--name-only"], cwd),
+    runGit(["ls-files", "--others", "--exclude-standard"], cwd),
+  ]);
 
-  try {
-    const untracked = execSync("git ls-files --others --exclude-standard", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    for (const f of untracked.trim().split("\n")) {
-      if (f) files.add(f);
+  for (const output of [diff, untracked]) {
+    if (!output) continue;
+    for (const f of output.trim().split("\n")) {
+      if (!f) continue;
+      if (files.size >= MAX_SNAPSHOT_FILES) return files; // borne gros dépôt
+      files.add(f);
     }
-  } catch {
-    // Ignoré : pas de dépôt git ou aucun fichier non suivi.
   }
 
   return files;
@@ -169,36 +179,29 @@ function diffFsSnapshots(before: Map<string, number>, after: Map<string, number>
 }
 
 /** Fichiers modifiés en mode git (diff + untracked) pour /files/changed. */
-function getGitChangedFiles(cwd: string): Array<{ path: string; status: string }> {
+async function getGitChangedFiles(cwd: string): Promise<Array<{ path: string; status: string }>> {
   const files: Array<{ path: string; status: string }> = [];
 
-  try {
-    const output = execSync("git diff --name-status", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    const tracked = output.trim().split("\n").filter(Boolean).map(line => {
+  const [statusOut, untrackedOut] = await Promise.all([
+    runGit(["diff", "--name-status"], cwd),
+    runGit(["ls-files", "--others", "--exclude-standard"], cwd),
+  ]);
+
+  if (statusOut) {
+    const tracked = statusOut.trim().split("\n").filter(Boolean).map(line => {
       const [status, ...rest] = line.split("\t");
       return { path: rest.join("\t"), status: status || "M" };
     });
-    files.push(...tracked);
-  } catch {
-    // Pas de dépôt git — le fallback fs prendra le relais.
+    files.push(...tracked.slice(0, MAX_SNAPSHOT_FILES));
   }
 
-  try {
-    const untracked = execSync("git ls-files --others --exclude-standard", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    for (const f of untracked.trim().split("\n")) {
+  if (untrackedOut) {
+    for (const f of untrackedOut.trim().split("\n")) {
       // Un fichier non suivi est un ajout du point de vue de l'agent.
-      if (f) files.push({ path: f, status: "A" });
+      if (!f) continue;
+      if (files.length >= MAX_SNAPSHOT_FILES) break; // borne gros dépôt
+      files.push({ path: f, status: "A" });
     }
-  } catch {
-    // Ignoré.
   }
 
   return files;
@@ -223,8 +226,8 @@ function getFsChangedFiles(cwd: string, since?: string): Array<{ path: string; s
 }
 
 /** Get changed files for the /files/changed endpoint (git puis fallback fs). */
-function getChangedFiles(cwd: string, since?: string): Array<{ path: string; status: string }> {
-  if (isGitRepo(cwd)) return getGitChangedFiles(cwd);
+async function getChangedFiles(cwd: string, since?: string): Promise<Array<{ path: string; status: string }>> {
+  if (await isGitRepo(cwd)) return getGitChangedFiles(cwd);
   return getFsChangedFiles(cwd, since);
 }
 
@@ -233,19 +236,21 @@ function getChangedFiles(cwd: string, since?: string): Array<{ path: string; sta
  * sous-projet (git quand c'est un repo, sinon fs), préfixés du nom du
  * sous-projet pour que l'appelant sache où vit chaque fichier.
  */
-export function getLinkedChangedFiles(
+export async function getLinkedChangedFiles(
   project: Project,
   since?: string
-): Array<{ path: string; status: string }> {
+): Promise<Array<{ path: string; status: string }>> {
   const out: Array<{ path: string; status: string }> = [];
-  for (const id of project.linkedProjectIds || []) {
-    const sub = getProject(id);
-    if (!sub || sub.storage !== "local") continue;
-    const files = getChangedFiles(sub.cwd, since);
-    for (const f of files) {
+  const subs = (project.linkedProjectIds || [])
+    .map((id) => getProject(id))
+    .filter((sub): sub is Project => !!sub && sub.storage === "local");
+  // Sous-projets interrogés en parallèle (ordre du tableau préservé).
+  const perSub = await Promise.all(subs.map((sub) => getChangedFiles(sub.cwd, since)));
+  subs.forEach((sub, i) => {
+    for (const f of perSub[i]) {
       out.push({ path: `${sub.name}/${f.path}`, status: f.status });
     }
-  }
+  });
   return out;
 }
 
@@ -517,9 +522,9 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
     }
 
     // 3. Snapshot files before prompt (git si possible, sinon timestamps fs)
-    const hasGit = isGitRepo(project.cwd);
+    const hasGit = await isGitRepo(project.cwd);
     const beforeSnapshot: Set<string> | Map<string, number> = hasGit
-      ? gitSnapshot(project.cwd)
+      ? await gitSnapshot(project.cwd)
       : fsSnapshot(project.cwd);
 
     // 4. Send prompt and wait for completion
@@ -549,7 +554,7 @@ router.post("/projects/:id/chat", async (req: Request, res: Response) => {
 
     // 5. Snapshot files after prompt
     const afterSnapshot: Set<string> | Map<string, number> = hasGit
-      ? gitSnapshot(project.cwd)
+      ? await gitSnapshot(project.cwd)
       : fsSnapshot(project.cwd);
     const filesChanged = hasGit
       ? diffSnapshots(beforeSnapshot as Set<string>, afterSnapshot as Set<string>)
@@ -660,7 +665,7 @@ router.get("/projects/:id/context", (req: Request, res: Response) => {
 
 // ── 6. Files ─────────────────────────────────────────
 
-router.get("/projects/:id/files/changed", (req: Request, res: Response) => {
+router.get("/projects/:id/files/changed", async (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found" });
@@ -674,8 +679,8 @@ router.get("/projects/:id/files/changed", (req: Request, res: Response) => {
     }
 
     const files = project.storage === "linked"
-      ? getLinkedChangedFiles(project, sinceParam)
-      : getChangedFiles(project.cwd, sinceParam);
+      ? await getLinkedChangedFiles(project, sinceParam)
+      : await getChangedFiles(project.cwd, sinceParam);
     res.json({ files });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -365,60 +365,68 @@ export async function getGitDiff(cwd: string): Promise<string> {
 export async function gitPull(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    return withAskpassTempFile(cwd, async () => {
-      const git: SimpleGit = await gitWithAuth(cwd);
+    const git: SimpleGit = await gitWithAuth(cwd);
+    try {
+      // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
+      // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
+      const result = await git.pull();
+      return result.summary.changes
+        ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
+        : "Already up to date";
+    } catch (error: any) {
+      const msg = error.message || "";
+      throw classifyGitFailure("Git pull", msg, await readRemoteUrl(cwd), error);
+    } finally {
+      // `restoreRemoteUrl` ne peut plus échouer en silence (cf. B3) : ce log est
+      // atteignable, et il est le SEUL signal qu'un jeton est resté dans
+      // `.git/config`.
       try {
-        // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
-        // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
-        const result = await git.pull();
-        return result.summary.changes
-          ? `${result.summary.changes} change(s), ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`
-          : "Already up to date";
-      } catch (error: any) {
-        const msg = error.message || "";
-        throw classifyGitFailure("Git pull", msg, await readRemoteUrl(cwd), error);
-      } finally {
-        try {
-          await restoreRemoteUrl(cwd);
-        } catch (e: any) {
-          console.error(`[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! cwd=${cwd}`, e.message);
-        }
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(
+          `[git] CRITICAL: Failed to restore remote URL after pull. Credentials may be leaked! ` +
+          `cwd=${cwd} remote=origin: ${e?.message || e}`
+        );
       }
-    });
+    }
   });
 }
 
 export async function gitPush(cwd: string): Promise<string> {
   return getGitMutex(cwd).run(async () => {
     cleanupGitLock(cwd);
-    return withAskpassTempFile(cwd, async () => {
-      const git: SimpleGit = await gitWithAuth(cwd);
-      try {
-        // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
-        // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
-        const result = await git.push();
-        return result.pushed
-          ? `Pushed ${result.pushed.length} ref(s)`
-          : "Nothing to push";
-      } catch (error: any) {
-        const msg = error.message || "";
-        // Non-fast-forward : le distant a avancé → action utilisateur explicite.
-        if (isNonFastForwardMessage(msg)) {
-          const branch = await currentBranchSafe(cwd);
-          throw new GitPushRejectedError(
-            `Push rejected: the remote repository has commits you do not have, and it will not accept this push. ` +
-            `Pull first (git pull --rebase origin ${branch}), then push again.`
-          );
-        }
-        throw classifyGitFailure("Git push", msg, await readRemoteUrl(cwd), error);
-      } finally {
-        try {
-          await restoreRemoteUrl(cwd);
-        } catch (e: any) {
-          console.error(`[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! cwd=${cwd}`, e.message);
-        }
+    const git: SimpleGit = await gitWithAuth(cwd);
+    try {
+      // Timeout RÉEL : l'instance porte `timeout: { block }` (cf. gitInstance),
+      // qui tue le process enfant. Plus de `withTimeout` (il ne tuait rien).
+      const result = await git.push();
+      return result.pushed
+        ? `Pushed ${result.pushed.length} ref(s)`
+        : "Nothing to push";
+    } catch (error: any) {
+      const msg = error.message || "";
+      // Non-fast-forward : le distant a avancé → action utilisateur explicite.
+      if (isNonFastForwardMessage(msg)) {
+        const branch = await currentBranchSafe(cwd);
+        throw new GitPushRejectedError(
+          `Push rejected: the remote repository has commits you do not have, and it will not accept this push. ` +
+          `Pull first (git pull --rebase origin ${branch}), then push again.`
+        );
       }
-    });
+      throw classifyGitFailure("Git push", msg, await readRemoteUrl(cwd), error);
+    } finally {
+      // `restoreRemoteUrl` ne peut plus échouer en silence (cf. B3) : ce log est
+      // atteignable, et il est le SEUL signal qu'un jeton est resté dans
+      // `.git/config`.
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(
+          `[git] CRITICAL: Failed to restore remote URL after push. Credentials may be leaked! ` +
+          `cwd=${cwd} remote=origin: ${e?.message || e}`
+        );
+      }
+    }
   });
 }
 
@@ -552,6 +560,19 @@ export class GitPushRejectedError extends Error {
 }
 
 /**
+ * L'hôte du remote est indéterminable (pas d'origin, URL illisible, pas un
+ * dépôt). Distinct d'une erreur d'authentification : aucun jeton ne peut
+ * corriger un remote absent, et en enregistrer un maintenant l'écrirait sous
+ * une clé inventée (le store est indexé par hôte, partagé entre dépôts).
+ */
+export class GitRemoteHostUnknownError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitRemoteHostUnknownError";
+  }
+}
+
+/**
  * Vrai uniquement pour une VRAIE erreur d'authentification (le token est
  * refusé ou absent). `Permission denied` (SSH) et `timed out` (réseau) en sont
  * volontairement EXCLUS : ils sont désormais routés vers
@@ -640,41 +661,34 @@ export function hostFromRemoteUrl(remote: string | null | undefined): string | n
  * deux implémentations distinctes : une URL encore porteuse d'un jeton donnait
  * `user:token@github.com` à la lecture (≠ clé du store `github.com`) et le push
  * partait SANS jeton, en silence.
+ *
+ * ⚠️ Renvoie `null` quand l'hôte n'est pas déterminable — JAMAIS un hôte par
+ * défaut. L'ancien repli `"github.com"` était la clé d'écriture du
+ * `credentialStore` (indexé par hostname, partagé entre TOUS les dépôts) : un
+ * jeton GitLab saisi sur un projet au remote cassé était donc enregistré sous
+ * `github.com` et ÉCRASAIT le vrai jeton GitHub. Idem à la suppression :
+ * `DELETE …/git/credentials` effaçait le jeton d'un autre hôte.
  */
-export async function getRemoteHost(cwd: string): Promise<string> {
+export async function getRemoteHost(cwd: string): Promise<string | null> {
   try {
     const git: SimpleGit = gitInstance(cwd);
     const remotes = await git.getRemotes(true);
     const origin = remotes.find((r) => r.name === "origin");
     if (!origin?.refs?.fetch) {
-      console.log(`[git] getRemoteHost: no origin remote, defaulting to github.com`);
-      return "github.com";
+      console.log(`[git] getRemoteHost: no origin remote — host unknown (null)`);
+      return null;
     }
     const host = hostFromRemoteUrl(origin.refs.fetch);
     if (!host) {
-      console.log(`[git] getRemoteHost: could not parse URL, defaulting to github.com`);
-      return "github.com";
+      console.log(`[git] getRemoteHost: unparsable origin URL — host unknown (null)`);
+      return null;
     }
     console.log(`[git] getRemoteHost: host=${host}`);
     return host;
   } catch {
-    console.log(`[git] getRemoteHost: not a git repo (no .git), defaulting to github.com`);
-    return "github.com";
+    console.log(`[git] getRemoteHost: not a git repo (no .git) — host unknown (null)`);
+    return null;
   }
-}
-
-/**
- * Exécute fn() avec un temp file GIT_ASKPASS transitoire si des credentials
- * existent pour le host du dépôt. Le fichier est écrit avant l'opération et
- * supprimé en finally (via credentialStore.withTempFile).
- */
-async function withAskpassTempFile<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
-  const host = await getRemoteHost(cwd);
-  if (host && credentialStore.has(host)) {
-    const creds = credentialStore.get(host)!;
-    return credentialStore.withTempFile(host, creds.username, creds.password, fn);
-  }
-  return fn();
 }
 
 /**
@@ -890,40 +904,66 @@ function injectCredentialsInUrl(url: string, username: string, password: string)
 /**
  * Remove credentials from a git remote URL (restore original).
  * Call this after any authenticated git operation.
+ *
+ * ⚠️ Ne JAMAIS avaler l'échec de la réécriture : c'est le seul signal qu'un
+ * jeton vient de rester dans `.git/config`. L'ancienne version enveloppait tout
+ * dans un `catch {}` muet, si bien que le log « CREDENTIALS MAY BE LEAKED » des
+ * appelants (gitPull/gitPush) ne pouvait JAMAIS s'exécuter.
+ *
+ * @returns `true` si une URL porteuse d'identifiants a été nettoyée,
+ *          `false` s'il n'y avait rien à nettoyer (pas de dépôt, pas d'origin,
+ *          ou URL déjà propre). Les erreurs d'ÉCRITURE remontent à l'appelant.
  */
-export async function restoreRemoteUrl(cwd: string): Promise<void> {
+export async function restoreRemoteUrl(cwd: string): Promise<boolean> {
   const git = gitInstance(cwd);
+  let remoteUrl: string;
   try {
-    const remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
-    // Strip credentials: https://user:pass@host → https://host
-    const cleanUrl = sanitizeRemoteUrl(remoteUrl);
-    if (cleanUrl !== remoteUrl) {
-      await git.raw(["remote", "set-url", "origin", cleanUrl]);
-    }
+    remoteUrl = (await git.raw(["remote", "get-url", "origin"])).trim();
   } catch {
-    // Not a git repo — ignore
+    // Pas de dépôt / pas d'origin : il n'y a rien à restaurer.
+    return false;
   }
+  // Strip credentials: https://user:pass@host → https://host
+  const cleanUrl = sanitizeRemoteUrl(remoteUrl);
+  if (cleanUrl === remoteUrl) return false;
+  // Volontairement NON protégé : l'appelant doit savoir que le jeton est resté
+  // sur disque (cf. commentaire ci-dessus).
+  await git.raw(["remote", "set-url", "origin", cleanUrl]);
+  return true;
 }
 
 /**
  * Store git credentials for HTTPS auth in memory (not on disk).
- * Credentials are written to a per-host temp file (0600) that the
- * GIT_ASKPASS helper reads during git operations. These temp files
- * are cleaned up when credentials are removed or on process exit.
  *
- * No credential.helper store or ~/.git-credentials is used — this avoids
- * the allowUnsafeCredentialHelper restriction entirely.
+ * ⚠️ La clé de stockage est l'HÔTE du remote, partagée par tous les dépôts de
+ * cet hôte : on refuse donc d'écrire quand l'hôte est indéterminable, plutôt
+ * que d'inventer une clé par défaut (qui écraserait le jeton d'un autre dépôt).
+ *
+ * @returns l'hôte sous lequel les identifiants ont été réellement enregistrés.
+ * @throws GitRemoteHostUnknownError si l'hôte du remote est illisible.
  */
 export async function setGitCredentials(
   cwd: string,
   username: string,
   password: string
-): Promise<void> {
+): Promise<string> {
   const host = await getRemoteHost(cwd);
-  console.log(`[git] setGitCredentials: host=${host}, username=${username}`);
+  if (!host) {
+    throw new GitRemoteHostUnknownError(
+      "Cannot determine the remote host: the 'origin' remote is missing, is not an " +
+      "HTTPS/SSH URL, or this directory is not a git repository. Credentials are " +
+      "stored per host and shared by every repository of that host — saving them " +
+      "now would silently overwrite another repository's token. Fix the remote " +
+      "first (git remote add origin <url>), then save the credentials again."
+    );
+  }
+  // Pas de log du username : il est saisi par l'utilisateur et peut être un
+  // identifiant personnel. Seul l'hôte (déjà public dans l'URL du remote) sort.
+  console.log(`[git] setGitCredentials: host=${host}`);
   credentialStore.set(host, username, password);
   // Credentials are now injected into remote URLs at operation time
   // (no ASKPASS script needed with git >= 2.36)
+  return host;
 }
 
 export async function getGitIdentity(cwd: string): Promise<{ name: string; email: string } | null> {
@@ -1189,45 +1229,47 @@ export async function gitClone(
 
   // ⚠️ Même extraction d'hôte que `getRemoteHost` / `gitWithAuth` : la clé lue
   // ici doit être identique à celle écrite dans le store après la saisie du token.
-  const host = hostFromRemoteUrl(remote) || "github.com";
+  // Pas de repli `"github.com"` : sur une URL illisible, ce repli faisait
+  // chercher les identifiants de github.com pour un clone qui ne peut de toute
+  // façon pas aboutir (`host` reste null → aucune injection).
+  const host = hostFromRemoteUrl(remote);
 
-  console.log(`[git-clone] Extracted host: ${host}, hasCredentials: ${credentialStore.has(host)}`);
+  console.log(`[git-clone] Extracted host: ${host ?? "unknown"}, hasCredentials: ${!!host && credentialStore.has(host)}`);
 
   const git: SimpleGit = gitInstance(parentDir);
 
   // Inject credentials into remote URL if available
   if (host && credentialStore.has(host)) {
     const creds = credentialStore.get(host)!;
-    console.log(`[git-clone] Found credentials for ${host}, username=${creds.username}`);
-    // Temp file GIT_ASKPASS transitoire : vit pendant TOUTE la commande clone,
-    // supprimé en finally (même en cas d'erreur/timeout).
-    return credentialStore.withTempFile(host, creds.username, creds.password, async () => {
-      const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
-      console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
+    console.log(`[git-clone] Found credentials for ${host}`);
+    // ⚠️ Plus de temp file d'identifiants : il n'était lu par personne (aucun
+    // GIT_ASKPASS assigné) et écrivait le token en clair sur disque. Git
+    // l'obtient via l'URL d'authentification ci-dessous.
+    const authUrl = injectCredentialsInUrl(remote, creds.username, creds.password);
+    console.log(`[git-clone] Auth URL (redacted): ${redactUrl(authUrl)}`);
+    try {
+      // Git 2.38+ may reject credentials in URLs — explicitly allow it
+      await git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]);
+      console.log(`[git-clone] Clone succeeded!`);
+      // Sécurité : git clone persiste l'URL fournie (avec token) dans le
+      // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
+      // nettoyée pour ne jamais laisser le token sur disque.
       try {
-        // Git 2.38+ may reject credentials in URLs — explicitly allow it
-        await git.raw(["-c", "transfer.credentialsInUrl=allow", "clone", authUrl, repoName, "--branch", branch]);
-        console.log(`[git-clone] Clone succeeded!`);
-        // Sécurité : git clone persiste l'URL fournie (avec token) dans le
-        // .git/config du nouveau dépôt. On la remplace immédiatement par l'URL
-        // nettoyée pour ne jamais laisser le token sur disque.
-        try {
-          const clonedGit = gitInstance(cwd);
-          await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
-        } catch (e: any) {
-          console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
-        }
-        return `Cloned ${remote} (${branch})`;
-      } catch (error: any) {
-        const msg = error.message || "";
-        console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
-        throw classifyGitFailure("Git clone", msg, remote, error);
+        const clonedGit = gitInstance(cwd);
+        await clonedGit.raw(["remote", "set-url", "origin", sanitizeRemoteUrl(remote)]);
+      } catch (e: any) {
+        console.error(`[git-clone] Failed to sanitize cloned remote URL: ${e?.message || e}`);
       }
-    });
+      return `Cloned ${remote} (${branch})`;
+    } catch (error: any) {
+      const msg = error.message || "";
+      console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
+      throw classifyGitFailure("Git clone", msg, remote, error);
+    }
   }
 
   // No credentials — try without auth
-  console.log(`[git-clone] No credentials for ${host}, trying without auth...`);
+  console.log(`[git-clone] No credentials for ${host ?? "unknown host"}, trying without auth...`);
   try {
     // BUG-37 fix: utiliser git.raw() comme la branche avec auth pour cohérence
     await git.raw(["clone", remote, repoName, "--branch", branch]);

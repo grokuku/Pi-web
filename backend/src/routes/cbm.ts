@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { existsSync, readdirSync, statSync, readFileSync, realpathSync } from "fs";
-import { execSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { join, extname, basename, relative, resolve } from "path";
 import { isPathAllowed } from "../utils/path-security.js";
 
@@ -10,6 +11,12 @@ import { isPathAllowed } from "../utils/path-security.js";
 import { CBM_BIN_PATH as BIN_PATH } from "../pi/cbm-bin.js";
 
 const router = Router();
+
+// ⚠️ JAMAIS d'`execSync` dans ce module : tous les handlers sont sur le chemin
+// d'une requête HTTP, et un `execSync` bloquerait la boucle d'événements du
+// serveur entier (streaming WebSocket des sessions LLM compris) pendant toute
+// la durée de la commande (jusqu'à 13 s ici).
+const execFileAsync = promisify(execFile);
 
 /**
  * Extrait « 0.11.0 » de la sortie de `--version` (« codebase-memory-mcp 0.11.0 »).
@@ -30,10 +37,16 @@ function parseVersion(output: string): string | null {
  * serveur actif sur 9749 (le modal « Graphe 3D » affichait « Serveur non
  * démarré » pour tous les projets).
  */
-function getCbmVersion(): string | null {
+async function getCbmVersion(): Promise<string | null> {
   if (!existsSync(BIN_PATH)) return null;
   try {
-    return parseVersion(execSync(`"${BIN_PATH}" --version`, { timeout: 10_000, encoding: "utf-8" }));
+    // `execFile` (sans shell) : même timeout, sans bloquer la boucle
+    // d'événements. Le chemin n'a plus besoin d'être quoté (aucun shell).
+    const { stdout } = await execFileAsync(BIN_PATH, ["--version"], {
+      timeout: 10_000,
+      encoding: "utf-8",
+    });
+    return parseVersion(String(stdout));
   } catch {
     return null;
   }
@@ -41,14 +54,18 @@ function getCbmVersion(): string | null {
 
 /**
  * Check if the CBM HTTP server is running on port 9749.
+ *
+ * Ping asynchrone (fetch local) plutôt que `curl` via `execSync` : l'ancien
+ * code bloquait le serveur jusqu'à 3 s. Les sémantiques sont conservées :
+ * 200 (racine servie) et 404 (serveur vivant sans route racine) = vivant,
+ * 1 s de plafond comme l'ancien `curl --max-time 1`.
  */
-function isServerRunning(): boolean {
+async function isServerRunning(): Promise<boolean> {
   try {
-    const result = execSync(
-      `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9749/ --max-time 1`,
-      { timeout: 3000, encoding: "utf-8" }
-    ).trim();
-    return result === "200" || result === "404"; // 404 is fine, means server is up but no root route
+    const res = await fetch("http://127.0.0.1:9749/", { signal: AbortSignal.timeout(1_000) });
+    // Libère la socket (on ne consomme pas le corps).
+    await res.body?.cancel().catch(() => undefined);
+    return res.status === 200 || res.status === 404; // 404 = serveur vivant, pas de route racine
   } catch {
     return false;
   }
@@ -62,8 +79,10 @@ router.get("/status", async (_req: Request, res: Response) => {
     // absent (l'UI en déduisait « Serveur non démarré » alors que 9749
     // répondait). `running` est évalué indépendamment.
     const installed = existsSync(BIN_PATH);
-    const version = installed ? getCbmVersion() : null;
-    const running = installed && isServerRunning();
+    // Les deux sondes sont indépendantes : on les lance de front (asynchrone).
+    const [version, running] = installed
+      ? await Promise.all([getCbmVersion(), isServerRunning()])
+      : [null, false];
 
     // IndexedProjects (jauge) : rafraîchir le registre CBM du process AVANT de
     // lire les stats. Best-effort et no-op si déjà rafraîchi récemment : sans

@@ -9,8 +9,9 @@
  * Le SDK Pi (pi-coding-agent) accepte du contenu image dans les tool results
  * (type "image" : { data: base64, mimeType }). On retourne donc le PNG encodé
  * en base64 directement dans le résultat — le LLM le voit sans étape
- * supplémentaire. Le PNG est aussi conservé dans /tmp et son chemin est
- * retourné (utile pour un éventuel fallback attachment).
+ * supplémentaire. Le PNG de /tmp n'est qu'un intermédiaire (encodage + upload
+ * d'attachment) : il est SUPPRIMÉ après usage pour ne pas faire croître /tmp
+ * sans limite sur une app en production.
  *
  * Détection du binaire Chromium :
  *   1. variable d'environnement CHROMIUM_PATH
@@ -37,6 +38,21 @@ const DEFAULT_HEIGHT = 900;
 const DEFAULT_TIMEOUT_MS = 15000;
 const VIRTUAL_TIME_BUDGET_MS = 5000;
 
+// ─── Bornes des paramètres venant du LLM ────────────────
+// Sans bornes, un `timeoutMs` à 10^9 immobilisait deux Chromium quasi
+// indéfiniment et un `width` à 100 000 saturait la mémoire du conteneur.
+const MAX_TIMEOUT_MS = 60_000;
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_DIMENSION = 4096;
+const MIN_DIMENSION = 1;
+
+/** Entier borné ; toute valeur non numérique (undefined, NaN, chaîne) → défaut. */
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 // ─── Pi-Web attachments ─────────────────────────────────
 // Même répertoire que backend/src/routes/attachments.ts (ATTACHMENTS_DIR).
 // On le hardcode ici (identique) car l'extension ne peut pas importer le module
@@ -44,6 +60,32 @@ const VIRTUAL_TIME_BUDGET_MS = 5000;
 // via GET /api/attachments/:id/file avec Content-Type image/png (inline).
 const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR || "/data/attachments";
 const PI_WEB_URL = process.env.PI_WEB_URL || "http://localhost:3000";
+
+/**
+ * Résout l'UUID du projet Pi-Web à partir du cwd, via le pont GLOBAL
+ * `__piWebResolveProjectIdByCwd__` publié par le backend (session.ts).
+ *
+ * POURQUOI CE PONT (BUG12) : l'extension tourne dans le MÊME process que le
+ * backend (chargée par jiti), et le ctx d'un tool n'expose pas l'UUID du projet.
+ * Dériver l'id du BASENAME du cwd (ancien comportement) rangeait les
+ * screenshots sous un projet INEXISTANT (invisibles dans la galerie) ou sous le
+ * mauvais projet en cas d'homonymie de dossiers.
+ *
+ * Retourne `null` si le pont est absent ou ne reconnaît pas le cwd — JAMAIS un
+ * id inventé : l'appelant n'enregistre alors AUCUN attachement (un attachement
+ * non enregistré vaut mieux qu'un attachement mal rangé).
+ */
+function resolveProjectIdFromCwd(cwd: string): string | null {
+  if (!cwd) return null;
+  try {
+    const bridge = (globalThis as any).__piWebResolveProjectIdByCwd__;
+    if (typeof bridge !== "function") return null;
+    const pid = bridge(cwd);
+    return typeof pid === "string" && pid ? pid : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Uploade un PNG comme attachment Pi-Web (même mécanique que /api/attachments/upload).
@@ -54,6 +96,11 @@ function uploadScreenshotAsAttachment(
   pngPath: string,
   projectId: string
 ): { id: string; url: string } | null {
+  // Garde (BUG12) : jamais d'attachement rattaché à un projectId vide/inconnu.
+  if (!projectId) {
+    console.warn("[web-screenshot] Upload annulé : projectId vide (pont de résolution indisponible)");
+    return null;
+  }
   try {
     const id = randomUUID();
     const ts = Date.now();
@@ -92,9 +139,10 @@ function uploadScreenshotAsAttachment(
  * [{ id, name, category: "image", size }]`. Le frontend (ChatView/UserBubble)
  * rend cette ref comme une miniature cliquable → viewer plein écran.
  *
- * - `cwd` (chemin exact du projet) est la clé de résolution fiable : le ctx
- *   de l'extension n'expose pas l'UUID du projet, et le basename du cwd n'en
- *   est PAS un (le backend retrouve le projet par son cwd).
+ * - `cwd` (chemin exact du projet) est la clé de résolution fiable côté backend :
+ *   le ctx de l'extension n'expose pas l'UUID du projet. `projectId` provient du
+ *   pont `__piWebResolveProjectIdByCwd__` (BUG12) — c'est le VRAI UUID, jamais
+ *   le basename du cwd (qui n'en est pas un).
  * - Échec silencieux : le tool retourne de toute façon l'image base64 au LLM.
  */
 async function injectScreenshotToChat(
@@ -304,9 +352,9 @@ export default function (pi: ExtensionAPI) {
       _onUpdate: unknown,
       ctx: any
     ) {
-      const width = params.width ?? DEFAULT_WIDTH;
-      const height = params.height ?? DEFAULT_HEIGHT;
-      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const width = clampInt(params.width, DEFAULT_WIDTH, MIN_DIMENSION, MAX_DIMENSION);
+      const height = clampInt(params.height, DEFAULT_HEIGHT, MIN_DIMENSION, MAX_DIMENSION);
+      const timeoutMs = clampInt(params.timeoutMs, DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
 
       // 1) Détection du binaire — message d'erreur ACTIONNABLE si absent.
       const bin = detectChromium();
@@ -325,7 +373,9 @@ export default function (pi: ExtensionAPI) {
 
       // 2) Déterminer la cible (url / html / htmlPath).
       let target: string;
+      // Déclarés hors du `try` pour que le `finally` puisse TOUJOURS nettoyer.
       let tempHtmlPath: string | null = null;
+      let outPath = ""; // chemin du PNG temporaire (nettoyé dans le `finally`)
       try {
         if (params.html) {
           tempHtmlPath = `/tmp/web-screenshot-${Date.now()}.html`;
@@ -349,7 +399,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         // 3) Capture du screenshot.
-        const outPath = `/tmp/web-screenshot-${Date.now()}.png`;
+        outPath = `/tmp/web-screenshot-${Date.now()}-${randomUUID()}.png`;
         const ok = await captureScreenshot(bin, target, outPath, width, height, timeoutMs);
         if (!ok || !existsSync(outPath)) {
           return {
@@ -370,13 +420,20 @@ export default function (pi: ExtensionAPI) {
 
         // 4bis) Uploader le PNG comme attachment Pi-Web pour que l'UTILISATEUR
         // puisse le voir dans son browser (URL cliquable) sans commande docker.
+        // BUG12 : le projectId est l'UUID résolu par le pont backend — si la
+        // résolution échoue, on n'enregistre RIEN (pas d'id inventé) et on le dit.
         const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : "";
-        const projectId = cwd ? cwd.split("/").pop() || "" : "";
-        const attachment = uploadScreenshotAsAttachment(outPath, projectId);
+        const projectId = resolveProjectIdFromCwd(cwd);
+        if (!projectId) {
+          console.warn(
+            `[web-screenshot] Attachment NON enregistré : projectId introuvable pour cwd="${cwd}" (pont __piWebResolveProjectIdByCwd__ absent ou sans correspondance)`
+          );
+        }
+        const attachment = projectId ? uploadScreenshotAsAttachment(outPath, projectId) : null;
 
         // 4ter) Injecter la miniature dans le fil du chat (route interne,
         // échec silencieux — le LLM a déjà l'image base64 dans le tool result).
-        if (attachment) {
+        if (attachment && projectId) {
           const targetDesc = params.url || tempHtmlPath || params.htmlPath || "inline html";
           await injectScreenshotToChat(
             attachment.id,
@@ -387,10 +444,10 @@ export default function (pi: ExtensionAPI) {
         }
 
         const text = attachment
-          ? `Screenshot ${width}x${height} (${size} bytes) — chemin: ${outPath}\n` +
+          ? `Screenshot ${width}x${height} (${size} bytes) — fichier temporaire: ${outPath} (supprimé après envoi)\n` +
             `Attachment: ${attachment.id}\n` +
             `Ouvrir dans le navigateur: ${attachment.url}`
-          : `Screenshot ${width}x${height} (${size} bytes) — chemin: ${outPath} (upload attachment échoué)`;
+          : `Screenshot ${width}x${height} (${size} bytes) — fichier temporaire: ${outPath} (supprimé après envoi) (attachment non enregistré : projectId du projet introuvable pour ce cwd — l'image reste dans le tool result)`;
 
         return {
           content: [
@@ -410,12 +467,20 @@ export default function (pi: ExtensionAPI) {
           details: {},
         };
       } finally {
-        // 5) Nettoyage du fichier HTML temporaire (le PNG de /tmp est conservé).
+        // 5) Nettoyage : HTML temporaire ET PNG de /tmp (déjà encodé en base64
+        // et uploadé ci-dessus). Sans cela, /tmp croissait à chaque capture.
         if (tempHtmlPath) {
           try {
             unlinkSync(tempHtmlPath);
           } catch {
             /* déjà supprimé */
+          }
+        }
+        if (outPath) {
+          try {
+            unlinkSync(outPath);
+          } catch {
+            /* déjà supprimé (échec de capture) */
           }
         }
       }

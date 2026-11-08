@@ -267,9 +267,9 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config,
     setError("");
     try {
       await onSave(routing);
-      toast("Routage enregistré", "success");
+      toast(t("routingModal.saved"), "success");
     } catch (e: any) {
-      setError(e?.message || "Échec de l'enregistrement du routage");
+      setError(e?.message || t("routingModal.saveError"));
     } finally {
       setLoading(false);
     }
@@ -296,6 +296,48 @@ export function RoutingConfigModal({ onClose, onSave, models, providers, config,
           propre ; laisse « défaut » pour utiliser le modèle ou le niveau de réflexion du
           mode.
         </p>
+
+        {/* Interrupteur GÉNÉRAL du routage. `routing.enabled` était renvoyé au
+            serveur sans AUCUN contrôle : impossible de couper proprement un
+            routage bancal depuis l'interface (règle projet : tout réglage
+            doit être atteignable dans l'UI). */}
+        <div className="flex items-start gap-3 border border-hacker-border bg-hacker-surface/30 rounded p-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={routing.enabled}
+            aria-label={t("routingModal.enabledLabel")}
+            onClick={() => setRouting(prev => ({ ...prev, enabled: !prev.enabled }))}
+            className={`shrink-0 mt-0.5 w-9 h-5 rounded-full border transition-colors relative ${
+              routing.enabled
+                ? "bg-hacker-accent/20 border-hacker-accent"
+                : "bg-hacker-bg border-hacker-border"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all ${
+                routing.enabled
+                  ? "left-[calc(100%-1rem)] bg-hacker-accent"
+                  : "left-0.5 bg-hacker-text-dim"
+              }`}
+            />
+          </button>
+          <div className="min-w-0">
+            <div className="text-xs font-bold text-hacker-text-bright">
+              {t("routingModal.enabledLabel")}
+            </div>
+            <p className="text-[10px] text-hacker-text-dim mt-0.5 leading-relaxed">
+              {t("routingModal.enabledHint")}
+            </p>
+          </div>
+          <span
+            className={`ml-auto shrink-0 text-[10px] font-mono ${
+              routing.enabled ? "text-hacker-accent" : "text-hacker-text-dim"
+            }`}
+          >
+            {routing.enabled ? t("routingModal.enabledOn") : t("routingModal.enabledOff")}
+          </span>
+        </div>
 
         <div>
         {/* Catégories */}

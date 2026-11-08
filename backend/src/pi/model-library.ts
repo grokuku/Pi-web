@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, statSync } from "fs";
+import { readStateJson, writeFileAtomicSync, StorageCorruptError } from "../utils/atomic-store.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { inferReasoning, inferVision, inferContextWindow } from "./providers.js";
@@ -300,22 +301,69 @@ function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 }
 
-export function loadModelLibrary(): ModelLibrary {
+// ── Cache de lecture ─────────────────────────────────
+//
+// `loadModelLibrary()` est appelé ~40 fois par tour de chat (session.ts,
+// routes/agent.ts…). Sans cache, chaque appel relisait ET re-parsait le fichier
+// puis rejouait `migrateLibrary()`.
+//
+// Patron (identique à `catalog-store.ts` de Switchy) : cache invalidé par
+// `mtime` + `taille`. ⚠️ Intégrité PRÉSERVÉE : le cache n'est consulté qu'après
+// une empreinte qui a CHANGÉ si le fichier a changé ; sur toute autre situation
+// (empreinte indisponible, fichier absent) on repasse par `readStateJson`, qui
+// lève `StorageCorruptError` sur un fichier illisible. Un fichier corrompu ne
+// peut donc jamais être « masqué » par une valeur périmée.
+let libraryCache: { mtimeMs: number; size: number; data: ModelLibrary } | null = null;
+
+/**
+ * Empreinte du fichier de bibliothèque, ou `null` si elle n'est pas
+ * disponible (fichier absent, `fs` simulé sans `statSync`…). Dans ce cas
+ * AUCUN cache n'est servi : la lecture reste stricte.
+ */
+function libraryFileSignature(): { mtimeMs: number; size: number } | null {
   try {
-    ensureDataDir();
-    if (existsSync(LIBRARY_FILE)) {
-      const data = JSON.parse(readFileSync(LIBRARY_FILE, "utf-8"));
-      return migrateLibrary(data);
-    }
-  } catch (e) {
-    console.error("[model-library] Failed to load:", e);
+    const st = statSync(LIBRARY_FILE);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
   }
-  return getDefaultLibrary();
+}
+
+/** Réinitialise le cache de lecture (outil de test). */
+export function resetModelLibraryCache(): void {
+  libraryCache = null;
+}
+
+export function loadModelLibrary(): ModelLibrary {
+  ensureDataDir();
+  const signature = libraryFileSignature();
+  if (signature && libraryCache &&
+      libraryCache.mtimeMs === signature.mtimeMs &&
+      libraryCache.size === signature.size) {
+    return libraryCache.data;
+  }
+  // ⚠️ `readStateJson` lève `StorageCorruptError` quand `model-library.json`
+  // EXISTE mais est illisible. L'ancien « console.error + getDefaultLibrary() »
+  // rendait une bibliothèque VIDE : le premier enregistrement suivant (ajout
+  // d'un modèle, changement de modèle par défaut…) écrasait définitivement les
+  // providers et les modèles de l'utilisateur. Fichier absent = premier
+  // démarrage : là, et seulement là, le défaut est légitime.
+  const data = readStateJson(LIBRARY_FILE);
+  if (data === null) return getDefaultLibrary();
+  const library = migrateLibrary(data);
+  // Cache seulement si l'empreinte correspond AU fichier qu'on vient de lire.
+  libraryCache = signature ? { ...signature, data: library } : null;
+  return library;
 }
 
 export function saveModelLibrary(library: ModelLibrary): void {
   ensureDataDir();
-  writeFileSync(LIBRARY_FILE, JSON.stringify(library, null, 2));
+  // Écriture atomique (tmp + rename) : un crash pendant l'écriture ne peut plus
+  // laisser un fichier tronqué (= bibliothèque vide au démarrage suivant).
+  writeFileAtomicSync(LIBRARY_FILE, JSON.stringify(library, null, 2));
+  // Invalidation EXPLICITE : le `rename` a pu conserver une `mtime` à la
+  // granularité de la milliseconde, identique à celle du cache.
+  libraryCache = null;
 }
 
 // ── Concurrency config ─────────────────────────────

@@ -51,3 +51,26 @@ export function clientTimeZone(): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * Lit le snapshot de session d'un projet (`GET /api/settings/session`).
+ * F21 : une réponse d'ERREUR (`{ error: "…" }`) ne doit JAMAIS être stockée comme
+ * « session » (l'en-tête affichait alors des valeurs vides/incohérentes).
+ * Renvoie `null` si la réponse n'est pas 2xx ou si le corps n'est pas un objet.
+ */
+export async function fetchProjectSession(
+  projectId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<unknown | null> {
+  try {
+    const res = await fetchImpl(`/api/settings/session?projectId=${encodeURIComponent(projectId)}`);
+    if (!res.ok) return null;
+    const data: unknown = await res.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    // Une charge d'erreur explicite n'est pas une session.
+    if ("error" in (data as Record<string, unknown>)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}

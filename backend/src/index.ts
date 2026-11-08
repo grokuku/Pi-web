@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 
 import projectsRouter from "./routes/projects.js";
+import { StorageCorruptError } from "./utils/atomic-store.js";
 import gitCredentialsRouter from "./routes/git-credentials.js";
 import settingsRouter from "./routes/settings.js";
 import ollamaRouter from "./routes/ollama.js";
@@ -1368,6 +1369,13 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     stack: err?.stack,
   });
   const message = err?.message || (typeof err === "string" ? err : "Internal server error");
+  // Fichier d'état existant mais illisible (projects.json, model-library.json,
+  // credentials.enc…) : 503 + code stable, pour que l'UI dise « ne rien écrire »
+  // plutôt que d'afficher une panne anonyme. Cf. utils/atomic-store.ts.
+  if (err instanceof StorageCorruptError) {
+    res.status(503).json({ error: message, code: "STORAGE_CORRUPT" });
+    return;
+  }
   res.status(500).json({ error: message });
 });
 

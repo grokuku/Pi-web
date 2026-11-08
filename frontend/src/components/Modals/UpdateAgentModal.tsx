@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
-import { useTranslation, type TFunction } from "../../i18n";
+import { useTranslation } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
+import { apiErrorLabels } from "../../utils/model-library-api";
 import {
   buildUpdateBody,
   updateBlockedWithoutAck,
@@ -20,15 +21,8 @@ interface Props {
   requiresAck?: boolean;
 }
 
-// ── Libellés i18n pré-traduits pour parseJsonResponse ──
-// (le helper utils n'a pas accès au hook useTranslation : on lui passe des
-// libellés déjà résolus, cf. git.sessionExpired / git.serverError)
-function apiErrorLabels(t: TFunction) {
-  return {
-    sessionExpired: t("git.sessionExpired"),
-    serverError: (status: number) => t("git.serverError", status),
-  };
-}
+// ── Libellés i18n de parseJsonResponse : apiErrorLabels() est partagé par
+// utils/model-library-api.ts (une seule définition pour tout le frontend).
 
 // ── Modale de confirmation avant une mise à jour à chaud du SDK pi-agent ──
 // Affiche les ruptures connues AVANT l'action ; un saut mineur/majeur exige une

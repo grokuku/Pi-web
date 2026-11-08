@@ -28,7 +28,8 @@ import { hasOpenOverlay } from "./hooks/useOverlayStack";
 import { initToastTheme, toast } from "./utils/holaf-toast";
 import { applyPiWebTheme, persistThemeName, readSavedThemeName, THEME_STORAGE_KEY, type PiWebThemeId } from "./theme/pi-web-theme";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
-import { mergeServerSessionState, clientTimeZone } from "./utils/session-sync";
+import { mergeServerSessionState, clientTimeZone, fetchProjectSession } from "./utils/session-sync";
+import { readPersistedSidebarWidth, readPersistedZoom } from "./utils/persisted-layout";
 import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
 
 // ── Error boundary to prevent white/dark screen of death ──
@@ -114,15 +115,25 @@ function App() {
     return { ...DEFAULT_PANELS };
   });
 
-  const savePanels = (p: Record<PanelId, PanelState>) => {
-    try { localStorage.setItem("pi-web-panels", JSON.stringify(p)); } catch {}
-    setPanels(p);
-  };
+  // F15 : `savePanels`/`togglePanel`… étaient RECRÉÉES à chaque rendu et
+  // lisaient `panels` en fermeture — l'effet du BroadcastChannel (plus bas)
+  // les avait donc en dépendances et fermait/rouvrait le canal à chaque
+  // changement de panneau (fenêtre de perte de message inter-onglets).
+  // Toutes ces fonctions sont désormais stables (`useCallback` sans
+  // dépendance) et n'utilisent que des mises à jour fonctionnelles.
+  const persistPanels = useCallback((next: Record<PanelId, PanelState>): Record<PanelId, PanelState> => {
+    try { localStorage.setItem("pi-web-panels", JSON.stringify(next)); } catch {}
+    return next;
+  }, []);
 
-  const togglePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: !(panels[id]?.visible ?? false), floating: false } });
-  const undockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: true, floating: true } });
-  const dockPanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: true, floating: false } });
-  const hidePanel = (id: PanelId) => savePanels({ ...panels, [id]: { ...(panels[id] ?? { visible: false, floating: false }), visible: false, floating: false } });
+  const updatePanel = useCallback((id: PanelId, patch: (cur: PanelState) => PanelState) => {
+    setPanels((prev) => persistPanels({ ...prev, [id]: patch(prev[id] ?? { visible: false, floating: false }) }));
+  }, [persistPanels]);
+
+  const togglePanel = useCallback((id: PanelId) => updatePanel(id, (c) => ({ ...c, visible: !c.visible, floating: false })), [updatePanel]);
+  const undockPanel = useCallback((id: PanelId) => updatePanel(id, (c) => ({ ...c, visible: true, floating: true })), [updatePanel]);
+  const dockPanel = useCallback((id: PanelId) => updatePanel(id, () => ({ visible: true, floating: false })), [updatePanel]);
+  const hidePanel = useCallback((id: PanelId) => updatePanel(id, () => ({ visible: false, floating: false })), [updatePanel]);
 
   // Open panel in new browser window (tab)
   const openInNewWindow = (id: PanelId) => {
@@ -166,12 +177,12 @@ function App() {
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [zoomLevel, setZoomLevel] = useState(() => {
-    const saved = localStorage.getItem("pi-web-zoom");
-    return saved ? parseFloat(saved) : 1.2;
+    // F20 : une valeur corrompue/hors bornes retombe sur le défaut (1.2) au lieu
+    // de produire `NaN` en CSS — panne non réparable depuis l'interface.
+    return readPersistedZoom(localStorage.getItem("pi-web-zoom"));
   });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem("pi-web-sidebar-width");
-    return saved ? parseInt(saved) : 192;
+    return readPersistedSidebarWidth(localStorage.getItem("pi-web-sidebar-width"));
   });
   const isResizingSidebar = useRef(false);
   const sidebarWidthRef = useRef(sidebarWidth);
@@ -378,9 +389,12 @@ function App() {
   const handleModelApplied = useCallback(() => {
     setModelChangeVersion(v => v + 1);
     if (activeProject) {
-      fetch(`/api/settings/session?projectId=${activeProject.id}`).then(r => r.json()).then((s) => {
+      // F21 : ne stocker QUE la réponse d'une requête réussie (avant : `.then(r =>
+      // r.json())` sans `r.ok` → une charge `{ error }` devenait « session »).
+      void fetchProjectSession(activeProject.id).then((s) => {
+        if (s === null) return;
         updateProjectSession(activeProject.id, { session: s });
-      }).catch(() => {});
+      });
     }
   }, [activeProject?.id, updateProjectSession]);
 
@@ -688,7 +702,6 @@ function App() {
       }
     });
 
-    const unsubTerm = on("terminal_data", (_msg: any) => {});
     const unsubError = on("error", (msg: any) => {
       console.error("[WS Error]", msg.error);
     });
@@ -735,7 +748,6 @@ function App() {
 
     return () => {
       unsubPiEvent();
-      unsubTerm();
       unsubError();
       unsubHistory();
       unsubStarted();
@@ -920,28 +932,38 @@ function App() {
   }, [on, activeProject, send, getProjectSession]);
 
   // ── BroadcastChannel for cross-tab/window communication ──
+  // F15 : le canal est créé UNE SEULE FOIS sur la durée de vie de l'app
+  // (dépendances vides). Les valeurs courantes (`activeProject`,
+  // `handleReferenceFile`) sont lues via une ref tenue à jour à chaque rendu :
+  // les mettre en dépendances fermait/rouvrait le canal à chaque changement de
+  // panneau ou de projet.
+  const broadcastHandlerRef = useRef<(data: any) => void>(() => {});
+
   useEffect(() => {
     const channel = new BroadcastChannel('pi-web-file-ref');
-    channel.onmessage = (event) => {
-      if (event.data.type === 'file-reference') {
-        const { filePath, projectId } = event.data;
+    channel.onmessage = (event) => broadcastHandlerRef.current(event.data);
+    return () => channel.close();
+  }, []);
+
+  useEffect(() => {
+    broadcastHandlerRef.current = (data: any) => {
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'file-reference') {
+        const { filePath, projectId } = data;
         if (projectId === activeProject?.id) {
           handleReferenceFile(filePath);
         }
       }
-      if (event.data.type === 'restore-panel') {
-        const panelId = event.data.panelId as PanelId;
+      if (data.type === 'restore-panel') {
+        const panelId = data.panelId as PanelId;
         // Restore the panel in the main interface
         if (panelId && (panelId === "pi" || panelId === "terminal" || panelId === "files" || panelId === "skills")) {
-          // BUG-16 fix: utiliser savePanels au lieu de setPanels pour persister dans localStorage
-          const p = { ...panels };
-          p[panelId] = { ...(p[panelId] ?? { visible: false, floating: false }), visible: true, floating: false };
-          savePanels(p);
+          // BUG-16 fix: utiliser updatePanel (persiste dans localStorage)
+          updatePanel(panelId, () => ({ visible: true, floating: false }));
         }
       }
     };
-    return () => channel.close();
-  }, [activeProject, handleReferenceFile, panels, savePanels]);
+  });
 
   // ── RENDER ──
   // If standalone mode, only show the requested panel (no header, no sidebar)

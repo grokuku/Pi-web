@@ -2353,9 +2353,78 @@ const PLATFORM_BLOCKED_TOOLS: string[] =
 function filterPlatformTools(names: string[]): string[] {
   return names.filter((name) => !PLATFORM_BLOCKED_TOOLS.includes(name));
 }
-// Harness orchestrator : aucun tool de base — uniquement delegate (via extension)
-// L'orchestrator ne lit pas le code, il délègue. Les cbm_* restent accessibles via les extensions.
-const HARNESS_TOOLS: string[] = [];
+// ── Liste blanche des tools du mode HARNESS (BUG10) ──
+// L'orchestrateur ne lit pas le code : il délègue. Il n'a donc AUCUN tool de
+// base (read/bash/edit/write/grep/find/ls).
+//
+// AVANT (BUG10) : `toolsForMode(session, [])` renvoyait TOUS les tools
+// d'extension — `memory_*`, `render_design`/`get_design`, `log_commit_note`,
+// `open_preview`/`preview_html`, `web_screenshot`… ~20 outils dont l'orchestrateur
+// n'a rien à faire, injectés dans le prompt À CHAQUE TOUR (tokens gaspillés),
+// en contradiction permanente avec sa bannière (« ne faites jamais… »), et
+// élargissant sa surface d'action réelle. Le contrôle runtime ne vérifiait que
+// les BASE_TOOLS, donc rien de tout cela n'était détecté.
+//
+// DÉSORMAIS : liste blanche EXPLICITE. Un tool absent d'ici ne parvient plus à
+// l'orchestrateur. Toute addition doit être justifiée par son prompt.
+//  - delegate* : la raison d'être du mode (déléguer, lister/relayer/arrêter un run).
+//  - cbm_* : exploration structurelle du dépôt (cf. harness-stream.ts : en mode
+//    harness l'orchestrateur garde `delegate` + les cbm_* — lecture seule).
+//  - librarian_* : lire de la doc/un page (texte) plutôt qu'une capture.
+//  - exploration_* : carnet de découvertes (lecture/écriture passive, 0 action).
+//  - analyze_file : pièce jointe de l'utilisateur (PDF/texte/image) qu'il peut
+//    demander d'identifier SANS délégation — conservé par prudence.
+//  - web_screenshot : montrer/vérifier un rendu à la demande explicite de
+//    l'utilisateur — conservé par prudence (légitime pour 2 des 4 rôles).
+// ÉCARTÉS (aucun n'est cité par le prompt de l'orchestrateur) :
+// memory_store/memory_search/memory_delete, render_design/get_design,
+// log_commit_note, open_preview/preview_html.
+export const HARNESS_TOOL_WHITELIST: readonly string[] = Object.freeze([
+  DELEGATE_TOOL_NAME,
+  "delegate_list",
+  "delegate_steer",
+  "delegate_stop",
+  "cbm_search",
+  "cbm_trace",
+  "cbm_code",
+  "cbm_search_code",
+  "cbm_diff",
+  "cbm_arch",
+  "cbm_cypher",
+  "cbm_schema",
+  "librarian_search",
+  "librarian_archive",
+  "exploration_note",
+  "exploration_notes",
+  "analyze_file",
+  "web_screenshot",
+]);
+
+// Préfixes de tools dont le nom est DYNAMIQUE : les serveurs MCP de
+// l'utilisateur (`mcp__<serveur>__<outil>`, cf. ~/.pi/agent/mcp.json). On ne
+// peut pas les lister à l'avance ; les retirer priverait l'orchestrateur des
+// serveurs MCP configurés sur la machine (régression silencieuse). Conservés
+// par prudence (cf. rapport LOT 4b).
+export const HARNESS_TOOL_PREFIXES: readonly string[] = Object.freeze(["mcp__"]);
+
+/** Vrai si `name` a le droit d'être actif en mode harness. */
+export function isHarnessToolAllowed(name: string): boolean {
+  if (typeof name !== "string" || !name) return false;
+  if (HARNESS_TOOL_WHITELIST.includes(name)) return true;
+  return HARNESS_TOOL_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** Noms des tools MCP (`mcp__…`) enregistrés dans la session, s'il y en a. */
+function getMcpToolNames(session: any): string[] {
+  try {
+    const allTools = session?.getAllTools?.() ?? [];
+    return allTools
+      .map((t: any) => t?.name)
+      .filter((name: unknown): name is string =>
+        typeof name === "string" && HARNESS_TOOL_PREFIXES.some((p) => name.startsWith(p)),
+      ); // déjà filtrés plateforme : les mcp_* ne sont pas bloqués
+  } catch { return []; }
+}
 // Tools d'orchestration à EXCLURE des modes non-harness (BUG-71).
 // En mode CODE/REVIEW, le LLM doit travailler directement,
 // pas déléguer via delegate ; idem pour les tools de CONTRÔLE des runs
@@ -2379,6 +2448,21 @@ function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
 /** Merge base tools + extension tools for a given mode */
 function toolsForMode(session: any, baseTools: string[], exclude: string[] = []): string[] {
   return [...baseTools, ...getExtensionToolNames(session, exclude)];
+}
+
+/**
+ * Tools ACTIFS d'un mode — point unique de vérité (BUG10).
+ *  - `harness` : liste blanche explicite + tools MCP dynamiques de l'utilisateur.
+ *    Jamais `toolsForMode` (qui ajouterait inconditionnellement TOUS les tools
+ *    d'extension, donc ~20 outils inutiles à l'orchestrateur).
+ *  - `code` : tools de base + tools d'extension, hors tools d'orchestration
+ *    (BUG-71) — comportement historique inchangé.
+ */
+export function activeToolsForMode(session: any, mode: AgentMode): string[] {
+  if (mode === "harness") {
+    return filterPlatformTools([...HARNESS_TOOL_WHITELIST, ...getMcpToolNames(session)]);
+  }
+  return filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
 }
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
@@ -2569,9 +2653,10 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
   // ── Apply tool filtering ──
   // Include extension tools alongside base mode tools.
   if (mode === "harness") {
-    // Harness orchestrator: read-only + delegate (l'extension l'enregistre)
-    // Pas d'exclusion : l'orchestrator DOIT garder delegate (BUG-71).
-    (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, HARNESS_TOOLS)));
+    // Harness orchestrator: LISTE BLANCHE seule (BUG10) — jamais toolsForMode,
+    // qui réinjecterait tous les tools d'extension. L'orchestrateur DOIT garder
+    // delegate (BUG-71) : la liste blanche le contient explicitement.
+    (session as any).setActiveToolsByName(activeToolsForMode(session, "harness"));
     // ── Vérification runtime (audit usage outils, point 3) ──
     // En mode harness, `delegate` DOIT être actif (sinon l'orchestrateur ne peut
     // rien déléguer) et AUCUN tool d'exécution ne doit l'être (sinon le modèle
@@ -2582,14 +2667,17 @@ export async function applyModeToSession(mode: AgentMode, projectId: string): Pr
       if (!active.includes(DELEGATE_TOOL_NAME)) {
         console.warn(`[mode] harness: le tool '${DELEGATE_TOOL_NAME}' n'est PAS actif pour ${projectId} — délégation impossible. Outils: ${active.join(", ")}`);
       }
-      const leaked = active.filter((t) => BASE_TOOLS.includes(t));
+      // Contrôle étendu à la LISTE BLANCHE (BUG10) : ne se limite plus aux
+      // BASE_TOOLS. Tout tool actif hors liste blanche est un écart de périmètre
+      // (tokens gaspillés + contradiction avec la bannière).
+      const leaked = active.filter((t) => !isHarnessToolAllowed(t));
       if (leaked.length > 0) {
-        console.warn(`[mode] harness: tools d'exécution encore actifs pour ${projectId}: ${leaked.join(", ")} (devraient être retirés)`);
+        console.warn(`[mode] harness: tools hors liste blanche encore actifs pour ${projectId}: ${leaked.join(", ")} (devraient être retirés)`);
       }
     } catch {}
   } else {
     // Code mode: all base tools + extension tools (hors tools d'orchestration BUG-71)
-    (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
+    (session as any).setActiveToolsByName(activeToolsForMode(session, "code"));
   }
 
   // ── Update state ──
@@ -2654,7 +2742,7 @@ export async function restoreCodeMode(projectId: string): Promise<void> {
   }
 
   // Restore all tools (base + extension), hors tools d'orchestration (BUG-71)
-  (session as any).setActiveToolsByName(filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE)));
+  (session as any).setActiveToolsByName(activeToolsForMode(session, "code"));
 
   // Le prompt (instructions + bannière CODE) est réassemblé automatiquement par
   // l'extension inline au prochain run (l'état ci-dessous suffit).

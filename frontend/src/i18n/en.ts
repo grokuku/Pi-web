@@ -153,6 +153,7 @@ export const en = {
     historyResynced: (n: number) => `History resynced: ${n} message${n !== 1 ? "s" : ""}`,
     // ── Safety net 6210d1c: displayed content from local cache ──
     localCache: "Displaying from local cache — waiting for sync…",
+    localCacheWriteFailed: "Local chat cache is disabled: browser storage quota exceeded. Recent messages may not survive a reload.",
     // ── LOT 3: history timeline blocks ──
     toolResultLabel: "Tool result",
     bashExecutionLabel: "Command",
@@ -222,9 +223,12 @@ export const en = {
       memory: "Memory",
       security: "Security",
       layout: "Layout",
+      shortcuts: "Shortcuts",
+      apiKeys: "API Keys",
     },
     general: {
       title: "General",
+      saveError: "Failed to save settings",
       language: "Language",
       systemDefault: "System default",
       // ── Renamed setting (LOT 1): ex-thinkExpand → displayDetail — controls
@@ -429,11 +433,19 @@ export const en = {
   },
   // ── Routing configuration (RoutingConfigModal) ──
   routingModal: {
+    // Master switch: routing can be turned OFF from the UI.
+    enabledLabel: "Routing enabled",
+    enabledHint:
+      "When off, messages use the mode model with no classification or triage. The settings below are kept.",
+    enabledOn: "ON",
+    enabledOff: "OFF",
     thinkingLabel: "Thinking level",
     thinkingDefaultOption: "— Default (mode thinking) —",
     summaryModelDefault: "default model",
     summaryWithThinking: (model: string, thinking: string) => `${model} · ${thinking} thinking`,
     summaryDefaultThinking: (model: string) => `${model} · mode thinking`,
+    saved: "Routing saved",
+    saveError: "Failed to save routing",
     thinkingLevels: {
       off: "off",
       minimal: "minimal",
@@ -807,6 +819,23 @@ export const en = {
     nothingPushed: "Nothing was pushed to the remote",
     closingSoon: "Window closes in a moment — hover over it to keep it open",
     closeCancelled: "Auto-close cancelled — the window stays open",
+    header: "PUSH TO REMOTE",
+    analyzing: "Analyzing changes...",
+    changesDetected: "CHANGES DETECTED",
+    nothingToCommit: "Nothing to commit locally. Will push any existing commits.",
+    moreFiles: (n: number) => `+${n} more files`,
+    subjectLabel: "SUBJECT",
+    subjectPlaceholder: "Update: changes",
+    bodyLabel: "BODY (optional)",
+    bodyPlaceholder: "Detailed description of changes...",
+    willStage: "This will stage all changes, commit, and push to",
+    stagedCount: (n: number) => `${n} staged`,
+    modifiedCount: (n: number) => `${n} modified`,
+    createdCount: (n: number) => `${n} new`,
+    deletedCount: (n: number) => `${n} deleted`,
+    aiGenerated: "✓ AI generated",
+    aiGenerate: "Generate with AI",
+    cancel: "CANCEL",
   },
 
   // ── Git Panel ──
@@ -866,6 +895,7 @@ export const en = {
     sessionExpired: "Session expired — reload the page to sign in again",
     serverError: (status: number) => `Server error (HTTP ${status})`,
     retry: "Retry",
+    completedWithoutDetails: "Completed — no details returned by the server",
     credentialsSaved: "Credentials saved — click PUSH to retry",
     authLimitReached: (max: number) =>
       `credentials were asked ${max} times without success: check the message above (wrong token, SSH remote, network) before trying again`,

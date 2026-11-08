@@ -1,4 +1,5 @@
-import { writeFileSync, readFileSync, unlinkSync, chmodSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, unlinkSync, chmodSync, existsSync, mkdirSync } from "fs";
+import { writeFileAtomicSync } from "../utils/atomic-store.js";
 import os from "os";
 import path from "path";
 import crypto from "crypto";
@@ -29,17 +30,19 @@ const KEY_LENGTH = 32; // 256 bits
  * access anyway, so the threat model is: protect against credential leaks via
  * backup files, git repo accidents, or casual file snooping.
  *
- * CHANGELOG (sécurité) : plaintext jamais résident — uniquement transitoire pendant
- * les opérations git. Le temp file n'existe que via withTempFile() (écrit avant
- * l'opération, unlink en finally), jamais au boot ni dans set().
+ * CHANGELOG (sécurité) : le plaintext ne touche PLUS le disque du tout. Le
+ * « temp file GIT_ASKPASS » (user\ntoken en clair dans /tmp) a été supprimé :
+ * il n'était lu par personne, l'authentification passant par le token injecté
+ * dans l'URL du remote. Le seul artefact sur disque est `credentials.enc`
+ * (AES-256-GCM).
  */
 class CredentialStore {
   private entries = new Map<string, { username: string; password: string }>();
   private tmpDir: string;
   private masterKey: Buffer | null = null;
-  // Compteur de références par hostname pour les temp files transitoires :
-  // évite qu'une opération git concurrente supprime le fichier d'une autre.
-  private tempFileRefs = new Map<string, number>();
+  // Raison de l'échec de chargement de `credentials.enc` (null = chargement OK).
+  // Bloque toute écriture : voir persistToDisk().
+  private loadFailure: string | null = null;
 
   constructor() {
     this.tmpDir = path.join(os.tmpdir(), "pi-web-creds");
@@ -82,7 +85,9 @@ class CredentialStore {
 
   private generateAndSaveMasterKey(): Buffer {
     const key = crypto.randomBytes(KEY_LENGTH);
-    writeFileSync(SECRET_KEY_PATH, key.toString("hex"), { mode: 0o600 });
+    // Écriture atomique : une clé tronquée rendrait `credentials.enc` DÉFINITIVEMENT
+    // indéchiffrable (donc tous les jetons perdus).
+    writeFileAtomicSync(SECRET_KEY_PATH, key.toString("hex"), { mode: 0o600 });
     chmodSync(SECRET_KEY_PATH, 0o600);
     return key;
   }
@@ -141,20 +146,35 @@ class CredentialStore {
       const decrypted = this.decrypt(encrypted);
       const data = JSON.parse(decrypted) as Record<string, { username: string; password: string }>;
 
-      // Load into memory (skip writeTempFile here — it will be created on demand)
+      // Load into memory (le plaintext n'est jamais réécrit sur disque)
       for (const [hostname, creds] of Object.entries(data)) {
         this.entries.set(hostname, creds);
       }
 
       console.log(`[CredentialStore] Loaded ${this.entries.size} persisted credential(s)`);
     } catch (e) {
-      console.warn("[CredentialStore] Failed to load persisted credentials:", e instanceof Error ? e.message : e);
-      // Don't crash — just start with empty store
+      const reason = e instanceof Error ? e.message : String(e);
+      console.warn("[CredentialStore] Failed to load persisted credentials:", reason);
+      // Ne PAS crasher le démarrage (le serveur doit rester debout), mais ne
+      // JAMAIS repartir comme si le fichier n'existait pas : toute écriture qui
+      // suivrait écraserait des jetons encore récupérables (cf. persistToDisk).
+      this.loadFailure = reason;
     }
   }
 
   private persistToDisk(): void {
     if (!this.masterKey) return;
+
+    // ⚠️ Garde-fou : le fichier existe mais on n'a pas su le déchiffrer/le
+    // parser au démarrage. Réécrire maintenant détruirait DÉFINITIVEMENT tous
+    // les jetons qu'il contient encore (clé maître remplacée, fichier tronqué).
+    // On refuse tant que l'utilisateur n'a pas tranché.
+    if (this.loadFailure !== null) {
+      throw new Error(
+        `Refusing to overwrite "${ENCRYPTED_CREDENTIALS_PATH}": it could not be read at startup ` +
+          `(${this.loadFailure}). Move it away (or restore it) before saving new credentials.`
+      );
+    }
 
     this.ensureDataDir();
 
@@ -177,7 +197,10 @@ class CredentialStore {
     const json = JSON.stringify(data);
     const encrypted = this.encrypt(json);
 
-    writeFileSync(ENCRYPTED_CREDENTIALS_PATH, encrypted, { mode: 0o600 });
+    // Écriture ATOMIQUE (tmp + rename) : un crash en cours d'écriture laissait
+    // sinon un `credentials.enc` tronqué → tous les jetons perdus au démarrage
+    // suivant. Le fichier final garde 0600.
+    writeFileAtomicSync(ENCRYPTED_CREDENTIALS_PATH, encrypted, { mode: 0o600 });
     chmodSync(ENCRYPTED_CREDENTIALS_PATH, 0o600);
   }
 
@@ -189,8 +212,8 @@ class CredentialStore {
    */
   set(hostname: string, username: string, password: string): void {
     this.entries.set(hostname, { username, password });
-    // NOTE sécurité : on n'écrit PAS de temp file ici. Le plaintext ne doit
-    // exister que de façon transitoire pendant les opérations git (withTempFile).
+    // NOTE sécurité : le plaintext n'est JAMAIS écrit ailleurs que dans le
+    // fichier chiffré. Plus de temp file d'identifiants (cf. cleanUp).
     this.persistToDisk();
     console.log(`[CredentialStore] Stored credentials for ${hostname} (persisted=${!!this.masterKey})`);
   }
@@ -237,21 +260,21 @@ class CredentialStore {
     this.persistToDisk();
   }
 
-  // ─── Temp File Management (for GIT_ASKPASS) ────────
+  // ─── Nettoyage des fichiers résiduels d'anciennes versions ────────
 
   /**
-   * Write credentials to a per-host temp file for the ASKPASS helper.
-   * Format: two lines — username on line 1, password on line 2.
-   * File permissions: 0600 (owner read/write only).
-   */
-  private writeTempFile(hostname: string, username: string, password: string): void {
-    const filePath = this.tmpPath(hostname);
-    writeFileSync(filePath, `${username}\n${password}\n`, { mode: 0o600 });
-    chmodSync(filePath, 0o600);
-  }
-
-  /**
-   * Remove the temp file for a hostname.
+   * Supprime le fichier transitoire d'un hostname.
+   *
+   * ⚠️ Plus AUCUN chemin n'écrit ce fichier : il n'était lu par personne
+   * (Pi-Web n'assigne jamais GIT_ASKPASS, refusé par git >= 2.36 sans
+   * allowUnsafeAskPass ; l'authentification passe par le token injecté dans
+   * l'URL du remote). `writeTempFile()`/`withTempFile()` et leurs 3 appelants
+   * (gitPull / gitPush / gitClone) ont donc été supprimés : ils ne faisaient
+   * qu'écrire le token EN CLAIR sur disque le temps d'une opération.
+   *
+   * Cette méthode reste indispensable pour EFFACER les fichiers laissés par
+   * une version antérieure (ou un conteneur arrêté brutalement). Ne PAS
+   * rebrancher un helper ASKPASS sur ce chemin sans aligner le format.
    */
   cleanUp(hostname: string): void {
     const filePath = this.tmpPath(hostname);
@@ -263,46 +286,12 @@ class CredentialStore {
   }
 
   /**
-   * Get the temp file path for a hostname.
+   * Get the temp file path for a hostname (legacy leftovers).
    * Uses a truncated SHA-256 hash of the hostname to avoid collisions.
    */
   tmpPath(hostname: string): string {
     const hash = crypto.createHash("sha256").update(hostname).digest("hex").slice(0, 16);
     return path.join(this.tmpDir, hash);
-  }
-
-  /**
-   * Exécute fn() avec un temp file transitoire pour le hostname donné.
-   *
-   * TODO(hygiène, 2026-10) : ce fichier temporaire n'est lu par PERSONNE.
-   * Pi-Web n'assigne jamais GIT_ASKPASS (git >= 2.36 le refuse sans
-   * allowUnsafeAskPass) et l'authentification passe par le token injecté dans
-   * l'URL du remote (gitWithAuth). Le script git-askpass.sh et son accesseur
-   * askpassScript ont été supprimés pour cette raison. Reste à supprimer ce
-   * withTempFile et ses 3 appelants (gitPull / gitPush / gitClone) : aujourd'hui
-   * il ne fait qu'écrire le token en clair sur disque le temps d'une opération.
-   * Ne PAS rebrancher un helper ASKPASS sur ces chemins sans aligner le format
-   * (ce store écrit `user\ntoken`, l'ancien script lisait /tmp/pi-web-creds).
-   */
-  async withTempFile<T>(
-    hostname: string,
-    username: string,
-    password: string,
-    fn: () => Promise<T>
-  ): Promise<T> {
-    this.writeTempFile(hostname, username, password);
-    this.tempFileRefs.set(hostname, (this.tempFileRefs.get(hostname) || 0) + 1);
-    try {
-      return await fn();
-    } finally {
-      const remaining = (this.tempFileRefs.get(hostname) || 1) - 1;
-      if (remaining <= 0) {
-        this.tempFileRefs.delete(hostname);
-        this.cleanUp(hostname);
-      } else {
-        this.tempFileRefs.set(hostname, remaining);
-      }
-    }
   }
 }
 

@@ -77,7 +77,7 @@ describe("branchement du garde-fou technique (hook tool_call)", () => {
     expect(source).toContain("guardBashToolCall");
   });
 
-  it("les deux branchements bloquent réellement une écriture git", () => {
+  it("le handler guardBashToolCall bloque une écriture git (test unitaire, sans dispatch SDK)", () => {
     const decision = guardBashToolCall({ toolName: "bash", input: { command: "git reset --mixed HEAD~1" } });
     expect(decision?.block).toBe(true);
     expect(guardBashToolCall({ toolName: "bash", input: { command: "git status" } })).toBeUndefined();

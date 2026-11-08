@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { PiLogo } from "../common/PiLogo";
 import { HolafIcon } from "../icons/HolafIcon";
 import { ModalDialog } from "../common/ModalDialog";
@@ -194,6 +194,12 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
   const [newSource, setNewSource] = useState("");
   const [extError, setExtError] = useState<string | null>(null);
   const [reloadStatus, setReloadStatus] = useState<string | null>(null);
+  // F19 : le passage à null après succès est différé de 3 s ; l'id est nettoyé
+  // au démontage (sinon setState sur composant démonté).
+  const reloadResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (reloadResetTimer.current !== null) clearTimeout(reloadResetTimer.current);
+  }, []);
   const [adding, setAdding] = useState(false);
 
   const loadExtData = useCallback(async () => {
@@ -249,12 +255,17 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     setExtError(null);
     try {
       const res = await fetch(`/api/pi/packages/${encodeURIComponent(source)}`, { method: "DELETE" });
-      if (res.ok) {
-        const data = await res.json();
-        setPkgList(data.packages || []);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = data?.error || t("settings.general.saveError");
+        setExtError(message);
+        toast(message, "error");
+        return;
       }
+      setPkgList(data?.packages || []);
     } catch (e: any) {
       setExtError(e.message);
+      toast(e.message || t("settings.general.saveError"), "error");
     } finally {
       setLoading(false);
     }
@@ -269,12 +280,17 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type, source, enabled }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setPiSettings((prev: any) => ({ ...prev, [type]: data[type] }));
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = data?.error || t("settings.general.saveError");
+        setExtError(message);
+        toast(message, "error");
+        return;
       }
+      setPiSettings((prev: any) => ({ ...prev, [type]: data?.[type] }));
     } catch (e: any) {
       setExtError(e.message);
+      toast(e.message || t("settings.general.saveError"), "error");
     } finally {
       setLoading(false);
     }
@@ -297,7 +313,8 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       });
       if (res.ok) {
         setReloadStatus("done");
-        setTimeout(() => setReloadStatus(null), 3000);
+        if (reloadResetTimer.current !== null) clearTimeout(reloadResetTimer.current);
+        reloadResetTimer.current = setTimeout(() => setReloadStatus(null), 3000);
       } else {
         const data = await res.json();
         setReloadStatus(null);
@@ -372,17 +389,20 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         // apiKey omis si le champ est vide → le backend garde la clé existante
         body: JSON.stringify({ url: webclawUrl, ...(webclawApiKey ? { apiKey: webclawApiKey } : {}) }),
       });
-      if (res.ok) {
-        setWebclawApiKey("");
-        const data = await res.json().catch(() => null);
-        if (data) {
-          setWebclawHasApiKey(!!data.hasApiKey);
-          setWebclawKeyPreview(data.apiKeyPreview || "");
-        }
-        toast(t('common.saved'), "success");
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast(data?.error || t("settings.general.saveError"), "error");
+        return;
       }
+      setWebclawApiKey("");
+      if (data) {
+        setWebclawHasApiKey(!!data.hasApiKey);
+        setWebclawKeyPreview(data.apiKeyPreview || "");
+      }
+      toast(t('common.saved'), "success");
     } catch (e: any) {
       console.error("[webclaw] Failed to save:", e);
+      toast(t("settings.general.saveError"), "error");
     }
   };
 
@@ -406,14 +426,18 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
         // apiKey omis si le champ est vide → la clé existante est conservée
         ...(tavilyApiKey ? { body: JSON.stringify({ apiKey: tavilyApiKey }) } : { body: JSON.stringify({}) }),
       });
-      if (res.ok) {
-        setTavilyApiKey("");
-        setTavilyHasApiKey((prev) => prev || !!tavilyApiKey);
-        if (tavilyApiKey) setTavilyKeyPreview(`••••${tavilyApiKey.slice(-4)}`);
-        toast(t('common.saved'), "success");
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast(data?.error || t("settings.general.saveError"), "error");
+        return;
       }
+      setTavilyApiKey("");
+      setTavilyHasApiKey((prev) => prev || !!tavilyApiKey);
+      if (tavilyApiKey) setTavilyKeyPreview(`••••${tavilyApiKey.slice(-4)}`);
+      toast(t('common.saved'), "success");
     } catch (e: any) {
       console.error("[tavily] Failed to save:", e);
+      toast(t("settings.general.saveError"), "error");
     }
   };
 
@@ -504,9 +528,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
     { id: "general", icon: "⚙", label: t('settings.tabs.general') },
     { id: "memory", icon: <HolafIcon name="brain" size={14} />, label: t('settings.tabs.memory') },
     { id: "security", icon: <HolafIcon name="shield" size={14} />, label: t('settings.tabs.security') },
-    { id: "shortcuts", icon: <HolafIcon name="keyboard" size={14} />, label: "Raccourcis" },
+    { id: "shortcuts", icon: <HolafIcon name="keyboard" size={14} />, label: t('settings.tabs.shortcuts') },
     { id: "layout", icon: "⊞", label: t('settings.tabs.layout') },
-    { id: "api-keys", icon: "🔑", label: "API Keys" },
+    { id: "api-keys", icon: "🔑", label: t('settings.tabs.apiKeys') },
   ];
 
   // Sub-tab state for Model Library (persists across main tab switches)

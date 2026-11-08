@@ -3,6 +3,10 @@ services:
     build: .
     container_name: pi-web
     ports:
+      # ⚠ SEC-I04 : publié sur TOUTES les interfaces. Pour n'exposer qu'en local
+      # (reverse-proxy / accès SSH tunnel), utiliser "127.0.0.1:3005:3000".
+      # NON APPLIQUÉ : un accès LAN direct (http://<ip-lan>:3005) cesserait de
+      # fonctionner.
       - "3005:3000"
     volumes:
       - /mnt/user/appdata-ssd/Pi-web/data/pi-data:/root/.pi
@@ -17,16 +21,50 @@ services:
       # `*` = autoriser toutes les origines (comportement allow-all historique).
       # Pour restreindre, remplacer par une liste explicite, ex.
       # http://localhost:5173,http://localhost:3005 (et/ou PUBLIC_BASE_URL).
+      # ⚠ SEC-I04 : avec `*`, `isBrowserRequest()` renvoie TOUJOURS true
+      # (backend/src/middleware/api-auth.ts:80-83) → le middleware apiAuth
+      # n'exige plus aucun jeton sur /api, et le CORS reflète toute origine
+      # (backend/src/index.ts:119-121). À restreindre ici OU via le réglage UI
+      # « Sécurité » (backend/src/utils/origins.ts — appliqué à chaud, union
+      # env + UI), avec les valeurs EXACTES d'accès, ex. :
+      #   - ALLOWED_ORIGINS=http://<ip-ou-nom>:3005
+      #   - WS_ALLOWED_ORIGINS=http://<ip-ou-nom>:3005
+      # NON APPLIQUÉ : la valeur réelle de l'URL d'accès n'est pas connue ici.
       - ALLOWED_ORIGINS=*
       - WS_ALLOWED_ORIGINS=*
       # P3 (prompt caching) : rétention longue du cache de prompt provider
       # (Anthropic 1h / OpenAI 24h là où supporté ; repli "short" sinon).
       # Aucun marqueur de cache forcé — piloté par le SDK, pas de risque 400.
       - PI_CACHE_RETENTION=long
+    # ⚠ SEC-I02 : `privileged: true` donne TOUTES les capacités, tous les
+    # périphériques et désactive AppArmor pour un conteneur dont l'agent exécute
+    # des commandes arbitraires et qui monte l'hôte en écriture ci-dessus.
+    # Seul besoin réel identifié : monter/démonter des partages CIFS via
+    # `mount -t cifs` / `umount` (backend/src/projects/smb.ts:177,258,280 —
+    # aucun /dev/fuse, aucun loop, aucun docker.sock, aucun iptables/modprobe).
+    # Ces appels exigent `CAP_SYS_ADMIN`, pas `privileged`.
+    # Remplacement CANDIDAT (équivalent fonctionnel attendu) :
+    #   cap_add:
+    #     - SYS_ADMIN
+    #   security_opt:
+    #     - no-new-privileges:true
+    # NON APPLIQUÉ : le comportement du montage CIFS sous AppArmor/`cap_add`
+    # ne peut pas être vérifié ici sans risquer de casser un montage réseau en
+    # service. À tester en recette (monter puis démonter un partage) avant bascule.
     privileged: true
     stdin_open: true
     tty: true
     restart: unless-stopped
+    # ── Rotation des logs ──────────────────────────────────────────────
+    # Le pilote `json-file` par défaut n'a NI taille max NI rotation : sur un
+    # hôte dont les données vivent sur /mnt/user/appdata-ssd, l'agent (qui
+    # journalise beaucoup) peut saturer le disque. 10 Mo × 5 fichiers ≈ 50 Mo
+    # par conteneur, bornés.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - dockercustom
 networks:

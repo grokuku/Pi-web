@@ -15,7 +15,7 @@
 // « Déplier le détail d'affichage par défaut » — le réglage s'applique donc ici
 // comme dans le chat (subscribeDisplayDetail → application live).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CollapseProvider, CollapsibleBlock } from "../Chat/CollapsibleBlock";
 import { HolafIcon } from "../icons/HolafIcon";
 import { useTranslation } from "../../i18n";
@@ -106,6 +106,12 @@ export function SkillsPanel({ activeProjectId }: SkillsPanelProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [needsReload, setNeedsReload] = useState(false);
   const [reloadStatus, setReloadStatus] = useState<"idle" | "reloading" | "done">("idle");
+  // F19 : le retour à « idle » est différé de 3 s. L'id est mémorisé dans un ref
+  // et nettoyé au démontage (sinon setState après unmount).
+  const reloadResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (reloadResetTimer.current !== null) clearTimeout(reloadResetTimer.current);
+  }, []);
 
   // ── État éditeur ──
   const [editing, setEditing] = useState<string | null>(null);
@@ -283,7 +289,8 @@ export function SkillsPanel({ activeProjectId }: SkillsPanelProps) {
       await parseJsonResponse<{ success?: boolean }>(res, labels);
       setReloadStatus("done");
       setNeedsReload(false);
-      setTimeout(() => setReloadStatus("idle"), 3000);
+      if (reloadResetTimer.current !== null) clearTimeout(reloadResetTimer.current);
+      reloadResetTimer.current = setTimeout(() => setReloadStatus("idle"), 3000);
     } catch (e: any) {
       setError(e.message);
       setReloadStatus("idle");

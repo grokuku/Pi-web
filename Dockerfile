@@ -100,7 +100,10 @@ RUN test -f /app/backend/dist/index.js \
 FROM ${BASE_IMAGE} AS runtime
 
 # ─── System packages (light) ─────────────────────────────────────────────
-RUN apt-get update && apt-get install -y \
+# --no-install-recommends : cohérent avec le bloc Chromium ci-dessous (aucune
+# dépendance « Recommends » n'est utilisée par l'image ; on ne mesure pas le
+# gain ici). Versions non épinglées : la base est déjà figée par BASE_IMAGE.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl openssh-client \
     nano mc procps \
     build-essential python3 \

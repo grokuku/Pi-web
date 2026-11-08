@@ -37,8 +37,8 @@ const MODE_IDENTITIES: Record<string, string> = {
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
   code: `General coding rules:
-- Do NOT run git push or git push-like commands unless the user explicitly asks you to
-- Do NOT commit changes unless the user explicitly asks you to
+- Do NOT run git push or git push-like commands (see the git safety rules below)
+- Do NOT commit, amend, revert or otherwise rewrite git history (see the git safety rules below)
 - When working on files, make minimal targeted changes — avoid rewriting entire files
 - Before editing, always read the current file content to understand the existing code
 - Prefer using the edit tool for small changes, write tool only for new files or complete rewrites

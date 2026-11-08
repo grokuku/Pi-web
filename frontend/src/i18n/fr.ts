@@ -153,6 +153,7 @@ export const fr = {
     historyResynced: (n: number) => `Historique resynchronisé : ${n} message${n > 1 ? "s" : ""}`,
     // ── Filet de secours 6210d1c : contenu affiché issu du cache local ──
     localCache: "Affichage depuis un cache local — en attente de synchronisation…",
+    localCacheWriteFailed: "Cache local du fil désactivé : quota de stockage du navigateur dépassé. Les messages récents peuvent être perdus au rechargement.",
     // ── LOT 3 : blocs de timeline de l'historique ──
     toolResultLabel: "Résultat d'outil",
     bashExecutionLabel: "Commande",
@@ -222,9 +223,12 @@ export const fr = {
       memory: "Mémoire",
       security: "Sécurité",
       layout: "Disposition",
+      shortcuts: "Raccourcis",
+      apiKeys: "Clés API",
     },
     general: {
       title: "Général",
+      saveError: "Échec de l'enregistrement des réglages",
       language: "Langue",
       systemDefault: "Langue du système",
       // ── Réglage renommé (LOT 1) : ex-thinkExpand → displayDetail — pilote le
@@ -429,11 +433,19 @@ export const fr = {
   },
   // ── Configuration du routage (RoutingConfigModal) ──
   routingModal: {
+    // Interrupteur général : le routage peut être COUPÉ depuis l'interface.
+    enabledLabel: "Routage activé",
+    enabledHint:
+      "Coupé, les messages passent par le modèle du mode, sans classification ni triage. Les réglages ci-dessous sont conservés.",
+    enabledOn: "ACTIF",
+    enabledOff: "INACTIF",
     thinkingLabel: "Niveau de réflexion",
     thinkingDefaultOption: "— Défaut (réflexion du mode) —",
     summaryModelDefault: "modèle par défaut",
     summaryWithThinking: (model: string, thinking: string) => `${model} · réflexion ${thinking}`,
     summaryDefaultThinking: (model: string) => `${model} · réflexion du mode`,
+    saved: "Routage enregistré",
+    saveError: "Échec de l'enregistrement du routage",
     thinkingLevels: {
       off: "désactivée",
       minimal: "minimale",
@@ -808,6 +820,23 @@ export const fr = {
     nothingPushed: "Rien n'a été poussé vers le dépôt distant",
     closingSoon: "Fermeture dans un instant — survolez la fenêtre pour la garder ouverte",
     closeCancelled: "Fermeture annulée — la fenêtre reste ouverte",
+    header: "POUSSER VERS LE DÉPÔT",
+    analyzing: "Analyse des modifications…",
+    changesDetected: "MODIFICATIONS DÉTECTÉES",
+    nothingToCommit: "Rien à committer localement. Les commits existants seront poussés.",
+    moreFiles: (n: number) => `+${n} fichiers de plus`,
+    subjectLabel: "SUJET",
+    subjectPlaceholder: "Mise à jour : modifications",
+    bodyLabel: "CORPS (optionnel)",
+    bodyPlaceholder: "Description détaillée des modifications…",
+    willStage: "Toutes les modifications seront indexées, commitées puis poussées vers",
+    stagedCount: (n: number) => `${n} indexé(s)`,
+    modifiedCount: (n: number) => `${n} modifié(s)`,
+    createdCount: (n: number) => `${n} nouveau(x)`,
+    deletedCount: (n: number) => `${n} supprimé(s)`,
+    aiGenerated: "✓ IA générée",
+    aiGenerate: "Générer avec l'IA",
+    cancel: "ANNULER",
   },
 
   // ── Git Panel ──
@@ -868,6 +897,7 @@ export const fr = {
     sessionExpired: "Session expirée — recharge la page pour te reconnecter",
     serverError: (status: number) => `Erreur serveur (HTTP ${status})`,
     retry: "Réessayer",
+    completedWithoutDetails: "Terminé — aucun détail renvoyé par le serveur",
     credentialsSaved: "Identifiants enregistrés — clique sur POUSSER pour réessayer",
     authLimitReached: (max: number) =>
       `identifiants demandés ${max} fois sans succès : lis le message ci-dessus (jeton invalide, dépôt en SSH, réseau) avant de réessayer`,

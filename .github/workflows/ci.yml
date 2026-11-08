@@ -44,6 +44,9 @@ jobs:
   quality:
     name: quality (${{ matrix.package }})
     runs-on: ubuntu-latest
+    # Garde-fou temporel : sans lui, une étape figée (npm ci bloqué sur le
+    # registre) immobilise le runner jusqu'au défaut GitHub de 6 h.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +77,15 @@ jobs:
           set -euo pipefail
           npm run typecheck:extensions
 
+      # Les `*.test.ts` sont EXCLUS du build (tsconfig.json) : sans cette étape,
+      # plus aucun contrôle de types ne porterait sur eux.
+      - name: Typecheck (backend + tests)
+        if: matrix.package == 'backend'
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run typecheck
+
       - name: Tests
         working-directory: ${{ matrix.package }}
         run: |
@@ -96,6 +108,17 @@ jobs:
     name: image (build + smoke test + :test)
     runs-on: ubuntu-latest
     needs: [quality]
+    # I12 : le job complet (Go ~80 Mo + binaire CBM ~286 Mo + Chromium ~300 Mo
+    # + smoke test) ne servait à RIEN sur une PR : ni l'image ni les tags ne
+    # sont publiés ni consommés (les deux seules conditions de publication
+    # étaient déjà `!= 'pull_request'`). Les PR sont validées par le job
+    # `quality` (tests + build backend/frontend) ; l'image est construite sur
+    # `push` vers main et sur `workflow_dispatch`.
+    if: github.event_name != 'pull_request'
+    # 30 min : build Docker (cache GHA) + smoke test (budget interne 25 min).
+    # Un `docker build` figé (téléchargement pendant, QEMU bloqué) ne doit pas
+    # occuper un runner pendant 6 h.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write

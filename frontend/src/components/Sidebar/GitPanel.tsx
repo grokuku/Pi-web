@@ -7,17 +7,11 @@ import { ModalDialog } from "../common/ModalDialog";
 import { hostFromRemoteUrl } from "../../utils/git-host";
 import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
+import { apiErrorLabels } from "../../utils/model-library-api";
 import { decideGitFailure } from "../../utils/git-errors";
 
-// ── Libellés i18n pré-traduits pour parseJsonResponse ──
-// (le helper utils n'a pas accès au hook useTranslation : on lui passe des
-// libellés déjà résolus, cf. git.sessionExpired / git.serverError)
-function apiErrorLabels(t: TFunction) {
-  return {
-    sessionExpired: t("git.sessionExpired"),
-    serverError: (status: number) => t("git.serverError", status),
-  };
-}
+// ── Libellés i18n de parseJsonResponse : apiErrorLabels() est partagé par
+// utils/model-library-api.ts (une seule définition pour tout le frontend).
 
 interface GitStatusFull {
   branch: string;
@@ -280,9 +274,9 @@ function GitProjectSection({
         if (data.staged) parts.push(`${data.staged} staged`);
         if (data.commitResult) parts.push(data.commitResult);
         if (data.pushResult) parts.push(data.pushResult);
-        setMessage(parts.join(" → ") || "Done");
+        setMessage(parts.join(" → ") || t("git.completedWithoutDetails"));
       } else {
-        setMessage(data.result || `${action} successful`);
+        setMessage(data.result || t("git.completedWithoutDetails"));
       }
 
       // Succès : la boucle d'identifiants repart de zéro.
@@ -406,17 +400,20 @@ function GitProjectSection({
   ) : null;
 
   // ── Ligne compacte : chevron + nom + badge branche (cyan) + badges d'état ──
+  // F18 : VRAI <button> — l'ancien <div role="button"> sans tabIndex n'était ni
+  // focalisable, ni actionnable au clavier (section Git inatteignable au clavier).
   const header = (
-    <div
+    <button
+      type="button"
       onClick={() => {
         // Marque l'ouverture comme pilotée par l'utilisateur (refetch au
         // dépliage) — à l'inverse de l'auto-dépliage consécutif à un statut.
         userToggledRef.current = true;
         onToggle();
       }}
-      role="button"
+      aria-expanded={isOpen}
       title={isOpen ? t("gitPanel.collapseSection") : t("gitPanel.expandSection")}
-      className="flex items-center gap-1.5 group cursor-pointer hover:bg-hacker-border/40 mt-1 py-1 px-1 rounded transition-colors select-none"
+      className="w-full flex items-center gap-1.5 group cursor-pointer hover:bg-hacker-border/40 mt-1 py-1 px-1 rounded transition-colors select-none text-left"
     >
       {isOpen ? (
         <HolafIcon name="chevron-down" size={12} className="shrink-0 text-hacker-accent" />
@@ -444,7 +441,7 @@ function GitProjectSection({
           <HolafIcon name="alert-triangle" size={10} />
         </span>
       )}
-    </div>
+    </button>
   );
 
   if (!isOpen) {

@@ -136,7 +136,11 @@ async function buildCredentialsFile(username: string, password: string, domain?:
 function cleanupCredentialsFile(credFile: string) {
   try {
     unlinkSync(credFile);
-    rmSync(path.dirname(credFile), { force: true });
+  } catch {}
+  // `recursive: true` : sans lui, `rmSync` refuse de retirer un dossier
+  // (`ERR_FS_EISDIR`) et le dossier mkdtemp restait dans /tmp.
+  try {
+    rmSync(path.dirname(credFile), { recursive: true, force: true });
   } catch {}
 }
 
@@ -172,57 +176,86 @@ export async function mountSmb(
   // Build mount args
   const mountArgs = ["-t", "cifs", normalizedShare, mountPoint];
 
-  if (username && decryptedPassword) {
-    // Use credentials file to avoid escaping issues with $, spaces, etc.
-    let credFile = "";
-    try {
-      credFile = await buildCredentialsFile(username, decryptedPassword, domain);
-      mountArgs.push("-o", `credentials=${credFile},iocharset=utf8,file_mode=0666,dir_mode=0777,vers=3.0,actimeo=30`);
-    } catch (e: any) {
-      // Fallback to inline options if cred file fails
-      console.warn("[SMB] Credentials file failed, using inline options:", e.message);
-      const parts = [`username=${username}`, `password=${decryptedPassword}`];
-      if (domain) parts.push(`domain=${domain}`);
-      parts.push("iocharset=utf8", "file_mode=0666", "dir_mode=0777", "vers=3.0", "actimeo=30");
-      mountArgs.push("-o", parts.join(","));
-    }
-
-    const result = await doMount(mountArgs, credFile);
-    if (!result.ok && credFile) {
-      // Try SMBv2 (some Windows servers don't support v3)
-      console.warn("[SMB] SMBv3 failed, trying v2...");
-      const v2Args = [...mountArgs];
-      // Replace vers=3.0 with vers=2.0
-      const lastIdx = v2Args.length - 1;
-      v2Args[lastIdx] = v2Args[lastIdx].replace("vers=3.0", "vers=2.0");
-      const v2Result = await doMount(v2Args, credFile);
-      if (!v2Result.ok) {
-        // Try SMBv1
-        console.warn("[SMB] SMBv2 failed, trying v1...");
-        const v1Args = [...mountArgs];
-        v1Args[lastIdx] = v1Args[lastIdx].replace("vers=3.0", "vers=1.0");
-        return doMount(v1Args, credFile);
-      }
-      return v2Result;
-    }
-    return result;
-  } else {
+  if (!(username && decryptedPassword)) {
     // Guest/anonymous access
     mountArgs.push("-o", "guest,iocharset=utf8,file_mode=0666,dir_mode=0777,vers=3.0,actimeo=30");
-    const result = await doMount(mountArgs, "");
+    const result = await doMount(mountArgs);
     if (!result.ok) {
       const v2Args = [...mountArgs];
       v2Args[v2Args.length - 1] = v2Args[v2Args.length - 1].replace("vers=3.0", "vers=2.0");
-      return doMount(v2Args, "");
+      return doMount(v2Args);
     }
     return result;
   }
+
+  // Use credentials file to avoid escaping issues with $, spaces, etc.
+  // ⚠️ Plus de repli « inline » : il plaçait `password=…` dans les ARGUMENTS de
+  // `mount`, donc en clair dans `/proc/<pid>/cmdline` (lisible par tout le
+  // monde dans le conteneur). Sans fichier d'identifiants, on refuse le montage.
+  let credFile: string;
+  try {
+    credFile = await buildCredentialsFile(username, decryptedPassword, domain);
+  } catch (e: any) {
+    console.error("[SMB] Credentials file could not be created:", e?.message || e);
+    return {
+      ok: false,
+      error:
+        "Cannot create the SMB credentials file: " +
+        (e?.message || String(e)) +
+        ". Refusing to mount with the password on the command line (visible in /proc).",
+    };
+  }
+
+  mountArgs.push(
+    "-o",
+    `credentials=${credFile},iocharset=utf8,file_mode=0666,dir_mode=0777,vers=3.0,actimeo=30`
+  );
+
+  // ⚠️ Le fichier d'identifiants doit vivre pendant TOUTES les tentatives
+  // (v3 → v2 → v1) et n'être supprimé qu'après la DERNIÈRE. Avant, `doMount` le
+  // supprimait dans son callback : les replis v2/v1 réutilisaient un chemin
+  // déjà effacé, donc tout serveur exigeant `vers=2.0`/`vers=1.0` échouait
+  // TOUJOURS, avec un message trompeur.
+  try {
+    return await doMountWithVersions(mountArgs);
+  } finally {
+    cleanupCredentialsFile(credFile);
+  }
 }
 
-function doMount(args: string[], credFile: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Monte avec `vers=3.0`, puis replie sur 2.0 puis 1.0 (certains serveurs Windows
+ * n'exposent qu'un dialecte ancien). Le fichier d'identifiants n'est PAS touché
+ * ici : il appartient à l'appelant (voir mountSmb).
+ */
+async function doMountWithVersions(
+  mountArgs: string[]
+): Promise<{ ok: boolean; error?: string }> {
+  const withVersion = (v: string): string[] => {
+    const args = [...mountArgs];
+    const lastIdx = args.length - 1;
+    args[lastIdx] = args[lastIdx].replace("vers=3.0", `vers=${v}`);
+    return args;
+  };
+
+  const v3 = await doMount(mountArgs);
+  if (v3.ok) return v3;
+
+  console.warn("[SMB] SMBv3 failed, trying v2...");
+  const v2 = await doMount(withVersion("2.0"));
+  if (v2.ok) return v2;
+
+  console.warn("[SMB] SMBv2 failed, trying v1...");
+  return doMount(withVersion("1.0"));
+}
+
+/**
+ * Lance `mount` une seule fois. Ne nettoie PLUS le fichier d'identifiants :
+ * il doit survivre aux replis de dialecte (cf. mountSmb).
+ */
+function doMount(args: string[]): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     execFile("mount", args, { timeout: 15000 }, (err, _stdout, stderr) => {
-      if (credFile) cleanupCredentialsFile(credFile);
       if (err) {
         console.error(`[SMB] Mount failed: ${err.message}`);
         if (stderr) console.error(`[SMB] stderr: ${stderr.trim()}`);

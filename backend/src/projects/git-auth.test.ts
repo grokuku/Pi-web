@@ -26,6 +26,10 @@ const state = vi.hoisted(() => ({
   pushError: null as unknown,
   status: null as any,
   creds: new Map<string, { username: string; password: string }>(),
+  // Simulation d'un remote absent / d'une écriture .git/config impossible.
+  noRemotes: false,
+  setUrlCount: 0,
+  setUrlMax: Number.POSITIVE_INFINITY,
   // Chaque instance simple-git créée par le module : options + env reçus.
   instances: [] as Array<{ options: any; env: Record<string, string> | undefined }>,
 }));
@@ -35,8 +39,16 @@ vi.mock("simple-git", () => {
     const api: any = {
       raw: async (args: string[]) => {
         state.calls.push(args);
-        if (args[0] === "remote" && args[1] === "get-url") return `${state.remoteUrl}\n`;
+        if (args[0] === "remote" && args[1] === "get-url") {
+          if (state.noRemotes) throw new Error("error: No such remote 'origin'");
+          return `${state.remoteUrl}\n`;
+        }
         if (args[0] === "remote" && args[1] === "set-url") {
+          state.setUrlCount += 1;
+          if (state.setUrlCount > state.setUrlMax) {
+            // .git/config verrouillé / disque plein : la restauration échoue.
+            throw new Error("fatal: could not lock config file .git/config: Permission denied");
+          }
           state.remoteUrl = args[3];
           return "";
         }
@@ -53,9 +65,10 @@ vi.mock("simple-git", () => {
         state.calls.push(["pull"]);
         return { summary: { changes: 0, insertions: 0, deletions: 0 } };
       },
-      getRemotes: async () => [
-        { name: "origin", refs: { fetch: state.remoteUrl, push: state.remoteUrl } },
-      ],
+      getRemotes: async () =>
+        state.noRemotes
+          ? []
+          : [{ name: "origin", refs: { fetch: state.remoteUrl, push: state.remoteUrl } }],
       status: async () => state.status,
       add: async () => {},
       commit: async () => ({ commit: "abc1234def", summary: { changes: 1 } }),
@@ -80,7 +93,6 @@ vi.mock("./credential-store.js", () => ({
       state.creds.set(host, { username, password }),
     delete: (host: string) => state.creds.delete(host),
     listHosts: () => [...state.creds.keys()],
-    withTempFile: (_h: string, _u: string, _p: string, fn: () => Promise<unknown>) => fn(),
   },
 }));
 
@@ -88,6 +100,9 @@ const {
   gitPush,
   gitCommitAndPush,
   setGitCredentials,
+  getRemoteHost,
+  restoreRemoteUrl,
+  GitRemoteHostUnknownError,
   GitAuthError,
   GitRemoteSchemeError,
   GitUnreachableError,
@@ -111,6 +126,9 @@ beforeEach(() => {
   state.pushError = null;
   state.remoteUrl = "https://github.com/owner/repo.git";
   state.creds.clear();
+  state.noRemotes = false;
+  state.setUrlCount = 0;
+  state.setUrlMax = Number.POSITIVE_INFINITY;
   // Un vrai répertoire avec .git : getGitStatus/cleanupGitLock le lisent sur disque.
   repoDir = mkdtempSync(path.join(os.tmpdir(), "git-auth-test-"));
   mkdirSync(path.join(repoDir, ".git"), { recursive: true });
@@ -365,5 +383,85 @@ describe("I — clé d'hôte : même fonction pour écrire et lire, sinon averti
     expect(injected[1]).not.toContain(FAKE_TOKEN);
     // Remote restauré sans identifiants après l'opération.
     expect(state.remoteUrl).toBe("https://github.com/owner/repo.git");
+  });
+});
+
+// ── B1 (intégrité) — l'hôte du remote n'est JAMAIS inventé ──────────────────
+// Le `credentialStore` est indexé par HOSTNAME et partagé par tous les dépôts :
+// l'ancien repli `getRemoteHost() → "github.com"` faisait enregistrer un jeton
+// GitLab sous « github.com » (écrasement du vrai jeton GitHub) et faisait
+// effacer le jeton d'un autre hôte par DELETE …/git/credentials.
+describe("B1 — getRemoteHost : null, jamais un hôte par défaut", () => {
+  it("remote illisible → null", async () => {
+    state.remoteUrl = "pas une url de remote";
+    await expect(getRemoteHost(repoDir)).resolves.toBeNull();
+  });
+
+  it("pas d'origin → null", async () => {
+    state.noRemotes = true;
+    await expect(getRemoteHost(repoDir)).resolves.toBeNull();
+  });
+
+  it("setGitCredentials refuse et n'écrase PAS le jeton de github.com", async () => {
+    state.remoteUrl = "pas une url de remote";
+    state.creds.set("github.com", { username: "existing", password: "github-token" });
+
+    await expect(setGitCredentials(repoDir, "gitlab-user", "gitlab-token")).rejects.toBeInstanceOf(
+      GitRemoteHostUnknownError,
+    );
+
+    // Le jeton de github.com est intact et AUCUNE clé « github.com » n'a été réécrite.
+    expect(state.creds.size).toBe(1);
+    expect(state.creds.get("github.com")!.password).toBe("github-token");
+  });
+
+  it("remote lisible → l'hôte réel est renvoyé et utilisé comme clé", async () => {
+    state.remoteUrl = "https://gitlab.example.com/owner/repo.git";
+
+    await expect(setGitCredentials(repoDir, "u", "tok")).resolves.toBe("gitlab.example.com");
+    expect(state.creds.has("gitlab.example.com")).toBe(true);
+    expect(state.creds.has("github.com")).toBe(false);
+  });
+});
+
+// ── B3 (intégrité) — la restauration du remote ne peut plus échouer en silence
+// L'ancienne `restoreRemoteUrl` avalait TOUTES ses erreurs (`catch {}`) : le log
+// « CREDENTIALS MAY BE LEAKED » des appelants ne pouvait jamais s'exécuter, et
+// un jeton resté dans `.git/config` n'était signalé par RIEN.
+describe("B3 — restoreRemoteUrl : l'échec remonte et se voit", () => {
+  it("écriture .git/config impossible → la promesse est REJETÉE", async () => {
+    state.remoteUrl = "https://user:tok@github.com/owner/repo.git";
+    state.setUrlMax = 0; // toute écriture échoue
+
+    await expect(restoreRemoteUrl(repoDir)).rejects.toThrow(/could not lock config file/);
+  });
+
+  it("URL porteuse d'identifiants nettoyée → true, remote restauré", async () => {
+    state.remoteUrl = "https://user:tok@github.com/owner/repo.git";
+
+    await expect(restoreRemoteUrl(repoDir)).resolves.toBe(true);
+    expect(state.remoteUrl).toBe("https://github.com/owner/repo.git");
+  });
+
+  it("rien à restaurer (pas d'origin) → false, sans throw", async () => {
+    state.noRemotes = true;
+    await expect(restoreRemoteUrl(repoDir)).resolves.toBe(false);
+  });
+
+  it("push réussi mais restauration impossible → log CRITICAL réellement émis", async () => {
+    state.creds.set("github.com", { username: FAKE_USER, password: FAKE_TOKEN });
+    const errors: string[] = [];
+    (console.error as any).mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    state.setUrlMax = 1; // 1re écriture = injection ; 2e = restauration → échoue
+
+    await expect(gitPush(repoDir)).resolves.toContain("Pushed");
+
+    const joined = errors.join("\n");
+    expect(joined).toContain("CRITICAL");
+    expect(joined).toContain("Credentials may be leaked");
+    // Aucune valeur secrète dans le log d'incident.
+    expect(joined).not.toContain(FAKE_TOKEN);
   });
 });

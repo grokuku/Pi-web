@@ -29,6 +29,25 @@ function loadGeometry(id: string): ModalGeometry | null {
   } catch { return null; }
 }
 
+/**
+ * Ramène une géométrie DANS la fenêtre courante : une modale déplacée/redimensionnée
+ * sur un grand écran ne doit pas se rouvrir hors écran sur un écran plus petit
+ * (invisible, récupérable seulement par Échap). Appliqué au montage ET sur resize.
+ */
+function clampGeometry(g: ModalGeometry): ModalGeometry {
+  const vw = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 0;
+  const vh = typeof window !== "undefined" && window.innerHeight ? window.innerHeight : 0;
+  if (!vw || !vh) return g;
+  const w = Math.min(g.w, vw);
+  const h = Math.min(g.h, vh);
+  return {
+    w,
+    h,
+    x: Math.max(0, Math.min(g.x, vw - w)),
+    y: Math.max(0, Math.min(g.y, vh - h)),
+  };
+}
+
 function saveGeometry(id: string, g: ModalGeometry) {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -49,6 +68,23 @@ function saveGeometry(id: string, g: ModalGeometry) {
   } catch (e) {
     console.warn("[ModalDialog] Failed to save geometry:", e);
   }
+}
+
+// ── Focus : éléments réellement focalisables du contenu d'une modale ──
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+/** Liste ordonnée des éléments focalisables d'un conteneur (hors aria-hidden). */
+function focusableIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.hasAttribute("aria-hidden") && !(el as HTMLInputElement).hidden,
+  );
 }
 
 // ── Default sizes per modal ──
@@ -124,12 +160,13 @@ export function ModalDialog({ id, onClose, children, className = "", ariaLabel, 
   const def = DEFAULTS[id] || { w: 1320, h: 800 };
 
   // Enforce minimum size: if saved geometry is smaller than defaults, use defaults
-  const saved = savedRaw ? {
+  // PUIS bornage à la fenêtre courante (F09 : jamais de modale hors écran).
+  const saved = savedRaw ? clampGeometry({
     x: savedRaw.x,
     y: savedRaw.y,
     w: Math.max(savedRaw.w, def.w),
     h: Math.max(savedRaw.h, def.h),
-  } : null;
+  }) : null;
 
   // Calculate centered position if no saved position
   const defaultX = saved?.x ?? Math.max(40, (window.innerWidth - (saved?.w ?? def.w)) / 2);
@@ -162,6 +199,83 @@ export function ModalDialog({ id, onClose, children, className = "", ariaLabel, 
       saveGeometry(id, { x: posRef.current.x, y: posRef.current.y, w: sizeRef.current.w, h: sizeRef.current.h });
     };
   }, [id]);
+
+  // ── F09 : re-bornage sur resize ──
+  // Réduire la fenêtre (grand écran → portable) laissait la modale hors champ.
+  const applyViewportClamp = () => {
+    const clamped = clampGeometry({ ...posRef.current, ...sizeRef.current });
+    if (clamped.x !== posRef.current.x || clamped.y !== posRef.current.y) {
+      posRef.current = { x: clamped.x, y: clamped.y };
+      setPos({ x: clamped.x, y: clamped.y });
+    }
+    if (clamped.w !== sizeRef.current.w || clamped.h !== sizeRef.current.h) {
+      sizeRef.current = { w: clamped.w, h: clamped.h };
+      setSize({ w: clamped.w, h: clamped.h });
+    }
+  };
+  useEffect(() => {
+    window.addEventListener("resize", applyViewportClamp);
+    return () => window.removeEventListener("resize", applyViewportClamp);
+  }, []);
+
+  // ── F02 : gestion du focus (centrale, pour TOUTES les modales) ──
+  // 1. mémorise l'élément déclencheur ;
+  // 2. pose le focus sur le premier élément focusable du contenu ;
+  // 3. piège Tab / Shift+Tab dans .modal-box ;
+  // 4. rend le focus au déclencheur à la fermeture.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const previous = document.activeElement as HTMLElement | null;
+    // Ne pas voler le focus à un enfant déjà focalisé (modale imbriquée).
+    if (!previous || !box.contains(previous)) restoreFocusRef.current = previous;
+
+    const first = focusableIn(box)[0];
+    // Focus initial SYNCHRONE : le portail est déjà monté au moment où l'effet
+    // s'exécute. Repli sur la boîte elle-même (tabIndex=-1) si rien de focusable.
+    (first ?? box).focus();
+  }, []);
+
+  // Restitution du focus au démontage : rendu au déclencheur s'il est encore là.
+  useEffect(() => {
+    return () => {
+      const target = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      if (target && target !== document.body && typeof target.focus === "function" && document.contains(target)) {
+        target.focus();
+      }
+    };
+  }, []);
+
+  /** Piège à Tab : Tab depuis le dernier élément revient au premier (et inversement). */
+  const handleTrapTab = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const box = boxRef.current;
+    if (!box) return;
+    const items = focusableIn(box);
+    if (items.length === 0) {
+      e.preventDefault();
+      box.focus();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || !box.contains(active)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+      return;
+    }
+    if (e.shiftKey && (active === first || active === box)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   // Helper to force save (used in drag/resize end)
   const forceSaveGeometry = () => {
@@ -297,8 +411,10 @@ export function ModalDialog({ id, onClose, children, className = "", ariaLabel, 
         ref={boxRef}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-label={ariaLabel ?? t('common.dialog')}
         aria-labelledby={ariaLabelledById || undefined}
+        onKeyDown={handleTrapTab}
         className={`modal-box ${isDragging ? "dragging" : ""} ${isResizing ? "resizing" : ""} ${className}`}
         style={{
           position: "absolute",

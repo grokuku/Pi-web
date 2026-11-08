@@ -1,0 +1,75 @@
+# ══════════════════════════════════════════════════════════════════════
+# Veille de dépendances (I14) — Pi-Web
+#
+# Cadence MENSUELLE assumée : le but est la veille (avis de sécurité +
+# dérive de version), pas le bruit quotidien. Chaque écosystème produit UNE
+# pull request groupée par mois, que la CI `quality` valide (tests +
+# typecheck backend/frontend) — une PR Dependabot est donc validée comme
+# n'importe quelle PR.
+#
+# Lots surveillés : backend (express, multer, node-pty, simple-git et le SDK
+# @earendil-works/pi-coding-agent), frontend (react, vite…), l'image de base
+# Docker et les actions GitHub.
+# ══════════════════════════════════════════════════════════════════════
+version: 2
+
+updates:
+  # ── backend ──────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(backend)"
+    groups:
+      backend-deps:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - backend
+
+  # ── frontend ─────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(frontend)"
+    groups:
+      frontend-deps:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - frontend
+
+  # ── image de base (FROM du Dockerfile) ───────────────────────────────
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - dependencies
+      - docker
+
+  # ── actions GitHub ───────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - ci

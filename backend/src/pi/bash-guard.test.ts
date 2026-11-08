@@ -269,6 +269,44 @@ describe("guardBashToolCall — handler tool_call", () => {
   });
 });
 
+describe("LOT 3 — contournements du garde-fou", () => {
+  it.each([
+    ["BUG03 — env -S", "env -S 'git reset --hard HEAD~1'"],
+    ["BUG03 — env -S après une autre option", "env -i -S 'git reset --hard'"],
+    ["BUG03 — env --split-string sous sudo", "sudo env --split-string 'git reset --hard'"],
+    ["BUG04 — expansion dans bash -c", "CMD='git reset --hard'; bash -c \"$CMD\""],
+    ["BUG04 — expansion dans un backtick de bash -c", "CMD='git reset --hard'; bash -c \"`$CMD`\""],
+    ["BUG05 — git log --output", "git log --output=backend/package.json -1"],
+    ["BUG05 — git diff --output", "git diff --output=/data/.data/settings.json"],
+    ["BUG05 — création de branche", "git branch sauvegarde HEAD"],
+    ["BUG06 — find -exec avec +", "find . -name '*.orig' -exec git reset --hard {} +"],
+    ["BUG06 — find -exec avec point-virgule", "find . -name '*.orig' -exec git reset --hard {} \\;"],
+    ["BUG06 — profondeur maximale", "echo $(echo $(echo $(echo $(echo $(git reset --hard)))))"],
+    ["BUG07 — exécution indirecte node", "node -e \"require('child_process').execSync('git reset --hard HEAD~1')\""],
+    ["BUG07 — exécution indirecte python", "python3 -c \"import subprocess; subprocess.run(['git', 'push', '--force'])\""],
+  ])("bloque %s", (_label, command) => {
+    const verdict = assertGitSafe(command);
+    expect(verdict.block, `${command} → verdict « autorisé »`).toBe(true);
+    expect(verdict.reason).toBeTruthy();
+  });
+
+  it.each([
+    "env -S 'git status'",
+    "env -i -S 'git status'",
+    "sudo env --split-string 'git log -1'",
+    "bash -c \"git status\"",
+    "git branch --contains HEAD",
+    "git branch --sort committerdate",
+    "find . -name '*.ts' -exec git diff -- {} +",
+    "node -e \"console.log('ok')\"",
+    "node -e \"console.log('git status')\"",
+    "node -e \"console.log('reset sans commande')\"",
+    "python3 -c \"print('git diff')\"",
+  ])("laisse passer la forme légitime : %s", (command) => {
+    expect(assertGitSafe(command).block).toBe(false);
+  });
+});
+
 describe("GIT_SAFETY_RULES — texte de consigne partagé", () => {
   it("interdit nommément les commandes de l'incident", () => {
     for (const word of ["commit", "push", "reset", "checkout", "restore", "stash", "rebase", "clean", "revert", "cherry-pick", "merge"]) {
@@ -287,6 +325,22 @@ describe("GIT_SAFETY_RULES — texte de consigne partagé", () => {
     for (const cmd of ["`git status`", "`diff`", "`log`", "`show`", "`branch -vv`", "`reflog`"]) {
       expect(GIT_SAFETY_RULES, cmd).toContain(cmd);
     }
+  });
+
+  it("génère la liste complète des lectures depuis la liste blanche", () => {
+    const allowed = [
+      "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "rev-list",
+      "blame", "show-ref", "describe", "cat-file", "shortlog", "grep", "merge-base",
+      "for-each-ref", "whatchanged", "name-rev", "count-objects", "check-ignore",
+      "check-attr", "diff-tree", "diff-files", "diff-index", "version", "help",
+    ];
+    const refusalHint = assertGitSafe("git reset --hard").reason ?? "";
+    for (const command of allowed) {
+      expect(GIT_SAFETY_RULES, command).toContain(`\`${command === "status" ? "git status" : command}\``);
+      expect(refusalHint, command).toContain(command);
+    }
+    expect(GIT_SAFETY_RULES).toContain("Limite de conception : l'analyse est statique");
+    expect(GIT_SAFETY_RULES).toContain("Ne présente\njamais cette protection comme absolue");
   });
 
   it("garde le format des guides existants (bloc Markdown séparé)", () => {

@@ -388,3 +388,40 @@ describe("RoutingConfigModal — entrée « appliquer à d'autres projets »", (
     expect(calls[0].dryRun).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F07 — RÈGLE PROJET (« tout réglage atteignable depuis l'interface ») :
+// `routing.enabled` était initialisé (`config?.enabled ?? true`) et renvoyé au
+// serveur, mais AUCUN contrôle ne permettait de le changer.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("RoutingConfigModal — interrupteur « Routage activé » (F07)", () => {
+  it("expose un interrupteur dont l'état par défaut reflète la config", () => {
+    renderModal([makeModel()], null);
+    const sw = screen.getByRole("switch", { name: "Routing enabled" });
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("un clic sur l'interrupteur DÉSACTIVE le routage et l'enregistrement envoie enabled:false", async () => {
+    const onSave = vi.fn(async () => {});
+    render(
+      <I18nProvider>
+        <RoutingConfigModal
+          onClose={vi.fn()}
+          onSave={onSave}
+          models={[makeModel()]}
+          providers={[]}
+          config={null}
+        />
+      </I18nProvider>,
+    );
+
+    const sw = screen.getByRole("switch", { name: "Routing enabled" });
+    fireEvent.click(sw);
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await screen.findByRole("switch", { name: "Routing enabled" });
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect((onSave.mock.calls[0] as any)[0].enabled).toBe(false);
+  });
+});

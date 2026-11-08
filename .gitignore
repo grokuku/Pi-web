@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Build output
 dist/
@@ -21,8 +20,12 @@ backend/.pi-agent/
 Thumbs.db
 
 # Environment
+# I08 : `.dockerignore` couvre déjà `**/.env.*` — un `frontend/.env.production`
+# (VITE_* poussés dans le bundle public) serait sinon versionné, fuite
+# IRRÉVERSIBLE dans l'historique. Le seul fichier d'exemple est autorisé.
 .env
-.env.local
+.env.*
+!.env.example
 
 # Encrypted credentials (persisted in Docker volume, not in git)
 .data/credentials.enc

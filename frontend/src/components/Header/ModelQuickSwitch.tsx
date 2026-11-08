@@ -32,7 +32,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
   const [showRoutingConfig, setShowRoutingConfig] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   // Réf. des boutons par mode (pour calculer la position du dropdown porté)
-  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Ancre du menu déroulant : conteneur du chip (et non plus un <button> qui
+  // enveloppait une zone cliquable imbriquée — HTML invalide, focus clavier
+  // peu fiable). Voir F18 : chaque zone interactive est un VRAI <button>.
+  const buttonRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Position « fixed » du dropdown porté — recalculée au clic, au scroll et au
   // resize tant que le menu est ouvert (pattern useAnchorPosition).
@@ -216,8 +219,10 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
 
         return (
           <div key={mode} className="relative">
-            {/* Main button — integrated ON/OFF */}
-            <button
+            {/* Chip : conteneur neutre + DEUX boutons réels (toggle ON/OFF et
+                sélecteur de modèle). Avant : un <div role="button"> imbriqué
+                dans un <button> — HTML invalide et zone inaccessible au clavier. */}
+            <div
               ref={(el) => { buttonRefs.current[mode] = el; }}
               className={`flex items-center border rounded transition-all ${
                 isVisuallyActive
@@ -228,15 +233,14 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   ? "bg-hacker-bg border-hacker-border text-hacker-text-dim"
                   : "bg-hacker-bg border-hacker-border/40 text-hacker-text-dim/50"
               }`}
-              onClick={() => handleChipClick(mode)}
             >
-              {/* ON/OFF toggle zone (left part of button) */}
+              {/* ON/OFF toggle zone (left part of chip) */}
               {!isCode && (
-                <div
+                <button
+                  type="button"
                   onClick={(e) => handleToggleMode(e, mode as "harness")}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); handleToggleMode(e as any, mode as "harness"); } }}
+                  aria-pressed={isEnabled}
+                  aria-label={isEnabled ? t('modelSwitch.disable', t('modelSwitch.' + mode)) : t('modelSwitch.enable', t('modelSwitch.' + mode))}
                   className={`px-2 py-1 border-r transition-colors cursor-pointer ${
                     isEnabled
                       ? `border-hacker-border/60 ${cfg.color}`
@@ -245,12 +249,18 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   title={isEnabled ? t('modelSwitch.disable', t('modelSwitch.' + mode)) : t('modelSwitch.enable', t('modelSwitch.' + mode))}
                 >
                   <HolafIcon name="power" size={10} />
-                </div>
+                </button>
               )}
 
-              <div className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer ${
-                isVisuallyActive ? "" : isOverridden ? "opacity-40" : ""
-              }`}>
+              <button
+                type="button"
+                onClick={() => handleChipClick(mode)}
+                aria-expanded={isDropdownOpen}
+                aria-haspopup="menu"
+                className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer ${
+                  isVisuallyActive ? "" : isOverridden ? "opacity-40" : ""
+                }`}
+              >
                 <span className={`text-xs ${isVisuallyActive ? cfg.color : ""}`}>{cfg.icon}</span>
                 <span className={`text-xs font-bold tracking-wide ${
                   isVisuallyActive ? cfg.color : "text-hacker-text-dim"
@@ -261,8 +271,8 @@ export function ModelQuickSwitch({ activeMode, activeProjectId, modelChangeVersi
                   <span className="text-xs text-hacker-text-dim max-w-[9rem] truncate">{getShortModelName(model)}</span>
                 )}
                 <HolafIcon name="chevron-down" size={10} className={`text-hacker-text-dim transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
-              </div>
-            </button>
+              </button>
+            </div>
 
             {/* Dropdown — porté dans <body> en position FIXED (calculée depuis
                 le bouton) pour éviter le clipping par le header (h-10 +

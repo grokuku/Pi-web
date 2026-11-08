@@ -19,43 +19,36 @@ afterEach(() => {
   credentialStore.delete(HOST);
 });
 
-describe("CredentialStore — temp file transitoire (plaintext jamais résident)", () => {
-  it("set() ne crée PAS de temp file résident", () => {
+// ── B2 (intégrité) : plus AUCUN temp file d'identifiants ────────────────────
+// `withTempFile()` écrivait `user\ntoken` EN CLAIR dans /tmp/pi-web-creds/<hash>
+// avant chaque pull/push/clone. Personne ne le lisait (Pi-Web n'assigne jamais
+// GIT_ASKPASS, refusé par git >= 2.36 sans allowUnsafeAskPass) : c'était de la
+// persistance de jeton en clair sur disque pour rien. Le test échoue si
+// l'API revient (le plaintext redeviendrait résident).
+describe("CredentialStore — plus de temp file d'identifiants (B2)", () => {
+  it("n'expose plus withTempFile", () => {
+    expect(
+      (credentialStore as unknown as Record<string, unknown>).withTempFile,
+    ).toBeUndefined();
+  });
+
+  it("set() n'écrit AUCUN fichier dans le dossier temporaire des identifiants", () => {
+    const before = fs.existsSync(credentialStore.tmpPath(HOST));
     credentialStore.set(HOST, "user", "pass");
+    expect(before).toBe(false);
     // Le plaintext ne doit pas être écrit sur disque à l'enregistrement.
     expect(fs.existsSync(credentialStore.tmpPath(HOST))).toBe(false);
   });
 
-  it("le temp file existe PENDANT withTempFile et disparaît après", async () => {
-    credentialStore.set(HOST, "user", "pass");
-    const filePath = credentialStore.tmpPath(HOST);
-    expect(fs.existsSync(filePath)).toBe(false);
+  it("cleanUp() efface un fichier résiduel laissé par une version antérieure", () => {
+    const legacy = credentialStore.tmpPath(HOST);
+    fs.mkdirSync(path.dirname(legacy), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(legacy, "user\nlegacy-plaintext\n", { mode: 0o600 });
+    expect(fs.existsSync(legacy)).toBe(true);
 
-    await credentialStore.withTempFile(HOST, "user", "pass", async () => {
-      // Pendant l'opération git, le fichier transitoire existe (ligne 1 = user, ligne 2 = pass).
-      expect(fs.existsSync(filePath)).toBe(true);
-      const lines = fs.readFileSync(filePath, "utf-8").split("\n");
-      expect(lines[0]).toBe("user");
-      expect(lines[1]).toBe("pass");
-    });
+    credentialStore.cleanUp(HOST);
 
-    // Après l'opération, le fichier a été supprimé.
-    expect(fs.existsSync(filePath)).toBe(false);
-  });
-
-  it("le temp file est supprimé même si fn throw (finally)", async () => {
-    credentialStore.set(HOST, "user", "pass");
-    const filePath = credentialStore.tmpPath(HOST);
-
-    await expect(
-      credentialStore.withTempFile(HOST, "user", "pass", async () => {
-        expect(fs.existsSync(filePath)).toBe(true);
-        throw new Error("boom");
-      })
-    ).rejects.toThrow("boom");
-
-    // Même en cas d'erreur, le plaintext ne reste pas sur disque.
-    expect(fs.existsSync(filePath)).toBe(false);
+    expect(fs.existsSync(legacy)).toBe(false);
   });
 });
 

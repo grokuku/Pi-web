@@ -5,6 +5,7 @@ import { v4 as uuid } from "uuid";
 import { fileURLToPath } from "url";
 import { Mutex } from "../utils/mutex.js";
 import { isCwdAllowed } from "../utils/path-security.js";
+import { readStateJson, writeFileAtomicSync, StorageCorruptError } from "../utils/atomic-store.js";
 import { encryptSmbPassword } from "./smb.js";
 import { deleteAttachmentsForProject } from "../routes/attachments.js";
 import { purgeProjectNotes } from "../pi/exploration-notes.js";
@@ -94,38 +95,41 @@ function migrateProject(p: any): Project {
 
 function loadProjects(): Project[] {
   ensureDataDir();
-  try {
-    if (existsSync(PROJECTS_FILE)) {
-      const raw = JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
-      if (Array.isArray(raw)) {
-        return raw
-          .map(migrateProject)
-          .filter((p) => {
-            // Sécurité : un projet dont le cwd est invalide (ex: /etc ou un
-            // symlink sortant) ne doit jamais être utilisé par les routes.
-            if (!p.cwd || !isCwdAllowed(p.cwd)) {
-              console.error(
-                `[Projects] Projet ignoré (cwd non autorisé) : ${p.name || p.id} -> ${p.cwd}`
-              );
-              return false;
-            }
-            return true;
-          });
-      }
-    }
-  } catch {
-    console.error("Failed to load projects file, starting fresh");
+  // ⚠️ `readStateJson` lève `StorageCorruptError` si le fichier EXISTE sans
+  // être lisible (au lieu de l'ancien « return [] » silencieux) : repartir
+  // d'une liste vide faisait écraser l'original par le premier enregistrement
+  // suivant. Un fichier ABSENT (premier démarrage) reste légitime.
+  const raw = readStateJson(PROJECTS_FILE);
+  if (raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new StorageCorruptError(PROJECTS_FILE, "expected a JSON array of projects");
   }
-  return [];
+  return raw
+    .map(migrateProject)
+    .filter((p) => {
+      // Sécurité : un projet dont le cwd est invalide (ex: /etc ou un
+      // symlink sortant) ne doit jamais être utilisé par les routes.
+      if (!p.cwd || !isCwdAllowed(p.cwd)) {
+        console.error(
+          `[Projects] Projet ignoré (cwd non autorisé) : ${p.name || p.id} -> ${p.cwd}`
+        );
+        return false;
+      }
+      return true;
+    });
 }
 
 function saveProjects(projects: Project[]): void {
   ensureDataDir();
-  writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), "utf-8");
+  // Écriture atomique (tmp + rename) : un crash en cours d'écriture ne peut
+  // plus laisser un projects.json tronqué (= « aucun projet » au démarrage
+  // suivant, puis écrasement définitif par le premier enregistrement).
+  writeFileAtomicSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
 }
 
 export function getAllProjects(): Project[] {
-  // BUG-36: lectures non protégées par le mutex — risque faible car writeFileSync est atomique.
+  // BUG-36: lectures non protégées par le mutex — risque faible car saveProjects
+  // écrit de façon atomique (tmp + rename) : un lecteur voit toujours un fichier complet.
   // Rendre ces fonctions async casserait trop d'appelants. Accepté tel quel.
   return loadProjects();
 }

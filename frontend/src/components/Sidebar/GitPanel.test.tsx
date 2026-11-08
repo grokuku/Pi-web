@@ -436,6 +436,44 @@ describe("GitPanel — spinner et polling", () => {
   });
 });
 
+describe("GitPanel — messages de succès vérifiables", () => {
+  it("sans résultat confirmé par le backend, affiche un message neutre et n'invente pas un succès", async () => {
+    statuses.p1 = dirtyStatus();
+    renderPanel();
+    await screen.findByText("Pull");
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/pull")) return jsonResponse({});
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(screen.getByText("Pull"));
+
+    expect(await screen.findByText("Completed — no details returned by the server")).toBeTruthy();
+    expect(screen.queryByText("pull successful")).toBeNull();
+    expect(screen.queryByText("Done")).toBeNull();
+  });
+
+  it("conserve le résultat explicite renvoyé par le backend", async () => {
+    statuses.p1 = dirtyStatus();
+    renderPanel();
+    await screen.findByText("Pull");
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/git/pull")) return jsonResponse({ result: "Already up to date." });
+      if (url.endsWith("/git/status")) return jsonResponse(statuses.p1);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    fireEvent.click(screen.getByText("Pull"));
+
+    expect(await screen.findByText("Already up to date.")).toBeTruthy();
+  });
+});
+
 // ── Erreurs git : message réel, borne des tentatives, relance MANUELLE ──────
 // Régression corrigée : un échec d'authentification ouvrait la modale sans
 // jamais afficher la cause, puis `onConfigured` relançait l'action à l'infini

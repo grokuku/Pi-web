@@ -55,22 +55,31 @@ export type TFunction = {
 function createT(lang: Language): TFunction {
   const translations = TRANSLATIONS[lang] || TRANSLATIONS.en;
 
+  const readableFallback = (key: string): string => {
+    const segment = key.split(".").filter(Boolean).pop() || "translation";
+    const label = segment
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[_-]+/g, " ")
+      .trim();
+    return label ? label.charAt(0).toUpperCase() + label.slice(1) : "Translation unavailable";
+  };
+
   const t = (key: string, ...args: any[]): string => {
     const value = resolvePath(translations, key);
     if (value === undefined) {
       // Try fallback
       const fallback = resolvePath(TRANSLATIONS.en, key);
       if (fallback === undefined) {
-      if (typeof window !== 'undefined' && (window as any).__DEV__) {
+        if (import.meta.env.DEV) {
           console.warn(`[i18n] Missing translation key: "${key}" for lang "${lang}"`);
         }
-        return key;
+        return readableFallback(key);
       }
       return typeof fallback === "function" ? fallback(...args) : fallback;
     }
     if (typeof value === "function") return value(...args);
     if (typeof value === "string") return value;
-    return key;
+    return readableFallback(key);
   };
 
   return t;

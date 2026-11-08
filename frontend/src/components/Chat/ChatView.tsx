@@ -183,6 +183,18 @@ const LocalCacheBanner = memo(function LocalCacheBanner() {
   );
 });
 
+// Quota localStorage atteint : les écritures suivantes sont désactivées pour
+// éviter des exceptions répétées. Le bandeau reste visible une seule fois et
+// aucune donnée (y compris celle des autres projets) n'est purgée.
+const LocalCacheWriteFailedBanner = memo(function LocalCacheWriteFailedBanner() {
+  const { t } = useTranslation();
+  return (
+    <div role="status" className="shrink-0 mx-4 mb-2 px-3 py-1.5 text-xs text-hacker-warn bg-hacker-bg/95 border border-hacker-warn/30 rounded-sm">
+      {t('chat.localCacheWriteFailed')}
+    </div>
+  );
+});
+
 // ── Ajustement 2 : feedback « Historique resynchronisé » ──────────────────
 // Après une coupure WS (ou un changement d'état backend), la resync renvoie
 // l'historique COMPLET (buildFullUiHistory — cas réel : 2228 messages bruts /
@@ -302,6 +314,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   // Bandeau « affichage depuis un cache local » : vrai tant que l'affichage
   // courant vient du fallback localStorage sans confirmation backend.
   const [localCacheOnly, setLocalCacheOnly] = useState(false);
+  const [localCacheWriteFailed, setLocalCacheWriteFailed] = useState(false);
+  const localCacheDisabledRef = useRef(false);
 
   const hasContent = messages.length > 0;
   const prevProjectIdRef = useRef(projectId);
@@ -388,7 +402,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
       const toSave = messagesRef.current.length > maxMessages
         ? messagesRef.current.slice(-maxMessages)
         : messagesRef.current;
-      try { localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(toSave)); } catch {}
+      try {
+        if (!localCacheDisabledRef.current) {
+          localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(toSave));
+        }
+      } catch (error) {
+        if ((error as { name?: string })?.name === "QuotaExceededError") {
+          localCacheDisabledRef.current = true;
+          setLocalCacheWriteFailed(true);
+        }
+      }
       saveTimerRef.current = null;
     }, 500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -1018,19 +1041,14 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     return () => unsub();
   }, [on, projectId, onQuit]);
 
-  // ── BUG-68 : afficher les erreurs WS comme messages visibles ──
-  // Sans ce handler, une erreur backend ({ type: "error" }) n'était que console.error
-  // → l'utilisateur ne voyait rien alors que le process s'était arrêté.
+  // ── Erreurs WS : une SEULE représentation, le bandeau d'erreur ──
+  // Ne pas injecter l'erreur dans le fil : un évènement technique n'est pas un
+  // message utilisateur et ne doit ni fausser l'historique ni être affiché deux fois.
   useEffect(() => {
     const unsub = on("error", (msg: any) => {
       if (msg.projectId && msg.projectId !== projectId) return;
       const text = typeof msg.error === "string" ? msg.error : t('chat.serverError');
       setError(text);
-      // (dédup) append avec déduplication par id (cf. appendMessageDedup)
-      setMessages(prev => appendMessageDedup(prev, {
-        id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: "user", content: `❌ ${text}`,
-        thinking: "", toolCalls: [], timestamp: Date.now(), customType: "pi_command", display: true,
-      }));
     });
     return () => unsub();
   }, [on, projectId, t]);
@@ -1311,6 +1329,8 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
           </button>
         </div>
       )}
+
+      {localCacheWriteFailed && <LocalCacheWriteFailedBanner />}
 
       <ChatInputArea
         onSend={handleSend}

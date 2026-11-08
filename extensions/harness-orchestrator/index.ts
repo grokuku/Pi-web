@@ -60,6 +60,7 @@ import {
   ensureHarnessRunRegistry,
   type SubagentRunHandle,
 } from "../../backend/src/pi/harness-run-registry.js";
+import { runDetachedDelegation } from "../../backend/src/pi/harness-detached.js";
 
 // ── LOT 3/4 (orchestrateur interactif) : résolution de cible + messages ──────
 // Module backend PUR (backend/src/pi/harness-run-targeting.ts), résolu par jiti
@@ -401,21 +402,12 @@ Règles :
 
 const FUNCTION_BY_NAME = new Map<string, FunctionDef>(FUNCTIONS.map(f => [f.name, f]));
 
-/**
- * Rétro-compatibilité temporaire : mappe un ancien rôle d'expert vers une
- * fonction de routage. Les anciens appelants utilisaient `role`.
- */
-function mapRoleToFunction(role: string): string {
-  switch (role) {
-    case "architect":
-      return "planning";
-    case "code-reviewer":
-    case "security-reviewer":
-      return "review";
-    default:
-      return "execute";
-  }
-}
+// ── LOT 4 / BUG09 : rôles hérités → fonction de routage ──
+// Module backend PUR (backend/src/pi/harness-role-map.ts), résolu par jiti.
+// La table vivait ici avec un `default: execute` : TOUT rôle inconnu (faute de
+// frappe `code_reviewer`, rôle exotique) recevait les droits d'ÉCRITURE de
+// `execute`. Désormais un rôle non reconnu est REFUSÉ (mapRoleToFunction → null).
+import { mapRoleToFunction, roleRefusalMessage } from "../../backend/src/pi/harness-role-map.js";
 
 /**
  * BUG-68 (porté aux délégués — P0 observabilité volet 1/2) : le SDK transforme
@@ -1063,7 +1055,18 @@ export default function (pi: ExtensionAPI) {
         }
         functionName = params.function;
       } else if (params.role) {
-        functionName = mapRoleToFunction(params.role);
+        const mapped = mapRoleToFunction(params.role);
+        if (!mapped) {
+          // Refus explicite : jamais de repli sur `execute` (droits d'écriture).
+          return {
+            content: [{ type: "text" as const, text: roleRefusalMessage(params.role) }],
+            details: buildDetails(
+              "error",
+              typeof params.role === "string" ? params.role : "",
+            ),
+          };
+        }
+        functionName = mapped;
       }
 
       if (!functionName) {
@@ -1650,6 +1653,33 @@ export default function (pi: ExtensionAPI) {
         const tempSession = result.session;
         // LOT 1 : le registre peut désormais aborter/diriger la session réelle.
         activeTempSession = tempSession;
+
+        // ── LOT 4 / BUG02 : lier les extensions de la tempSession ──
+        // Le SDK n'émet `session_start` QUE depuis `bindExtensions()` (cf.
+        // backend/src/pi/extension-bindings.ts). Pi-Web ne le faisait que pour la
+        // session PRINCIPALE : les handlers `session_start` du loader de la
+        // tempSession ne tournaient jamais, et faute de `onError` une extension
+        // qui levait échouait EN SILENCE (`emitError` n'écrit rien sans listener).
+        // On réutilise le branchement commun (mode "print", uiContext « log
+        // only », onError journalisé, ne lève jamais) — le branchement est fait
+        // AVANT setModel/setActiveToolsByName, comme le font les modes du SDK.
+        // Une seule liaison par session : c'est le SEUL appel à bindExtensions
+        // sur la tempSession (garde anti-double-bind ci-dessous).
+        // Limite assumée : le loader de la tempSession ne charge PAS
+        // `createMcpExtension` — les serveurs MCP ne sont donc pas connectés aux
+        // sous-agents (leurs tools seraient de toute façon désactivés par
+        // setActiveToolsByName, qui ne garde que le périmètre du rôle).
+        try {
+          const { bindPiWebExtensions } = await import("../../backend/src/pi/extension-bindings.js");
+          if (!(tempSession as any).__piWebExtensionsBound) {
+            (tempSession as any).__piWebExtensionsBound = true;
+            await bindPiWebExtensions(tempSession, `delegate:${functionName}`);
+          }
+        } catch (e: any) {
+          console.warn(
+            `[harness-orchestrator] bind des extensions du délégué impossible (dégradé, on continue) : ${e?.message || e}`,
+          );
+        }
 
         // ── LOT 2a : début du streaming (projectId déjà résolu avant le try
         // externe — cf. bloc d'état LOT 2a) ──
@@ -2587,24 +2617,19 @@ export default function (pi: ExtensionAPI) {
       // main IMMÉDIATEMENT (ticket court). Le résultat complet sera réinjecté
       // par le backend (route /api/harness/result → customType subagent_result),
       // ce qui déclenchera un NOUVEAU tour de l'orchestrateur.
-      void runDelegation()
-        .then((res) => {
-          const d = (res?.details || {}) as any;
+      runDetachedDelegation({
+        run: runDelegation,
+        postResult: (outcome) => {
           postSubagentResult({
             delegateRunId,
             projectId: runProjectId,
             cwd: ctx?.cwd || process.cwd(),
-            delegateFunction: d.delegateFunction || String(params?.function || ""),
+            delegateFunction: String(params?.function || ""),
             label: runLabel,
-            status: (d.status as SubagentEndStatus) || "error",
-            cause: d.cause ?? null,
-            errorMessage: null,
-            response: res?.content?.[0]?.text || "",
-            durationMs: typeof d.durationMs === "number" ? d.durationMs : 0,
-            actionCount: typeof d.actionCount === "number" ? d.actionCount : 0,
+            ...outcome,
           });
-        })
-        .catch(() => {});
+        },
+      });
 
       return {
         content: [{

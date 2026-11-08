@@ -15,5 +15,9 @@
     "allowSyntheticDefaultImports": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  // Les fichiers de test NE SONT PAS compilés dans dist/ (ils finiraient dans
+  // l'image de production). Leur contrôle de types est assuré séparément par
+  // tsconfig.test.json (`npm run typecheck`) — `tsc --noEmit` avec CE fichier
+  // n'inclut donc plus les tests.
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.test-util.ts"]
 }
