@@ -134,6 +134,20 @@ import {
   type SubagentEndStatus,
 } from "../../backend/src/pi/harness-stream.js";
 
+// ── Filet « réflexion seule ⇒ réponse » (incident Beam) ─────────────────────
+// Un modèle à RAISONNEMENT peut renvoyer tout son contenu dans des blocs
+// `thinking` et aucun bloc `text` : les deux points de lecture de la réponse
+// (`fullResponse` et `collectExpertResponse`) ne lisaient que `.text` → tokens
+// comptés, réponse VIDE. Logique reprise À L'IDENTIQUE de
+// `promoteThinkingOnlyAnswer` (frontend/src/utils/pi-events.ts, source de
+// vérité de la session principale) + marqueur visible + message actionnable.
+// Module backend PUR, résolu par jiti comme harness-archive.
+import {
+  emptyResponseMessage,
+  markThinkingFallback,
+  promoteThinkingOnlyAnswerFromMessages,
+} from "../../backend/src/pi/harness-thinking-fallback.js";
+
 // ── Carte du Repo (P1, étude tokens sous-agents) : marqueurs du bloc --------
 // Le texte de la carte est produit par le pont globalThis `__cbmRepoMap`
 // (publié par l'extension codebase-memory) et enveloppé par ces marqueurs dans
@@ -580,11 +594,20 @@ function collectExpertResponse(tempSession: any): string {
       .map((m: any) => m.content?.map((c: any) => c.text || "").join("") || "")
       .filter((t: string) => t.length > 0)
       .join("\n\n");
+    // Le TEXTE est prioritaire : jamais de mélange réflexion + texte.
     if (text.length > 0) return text;
+    // L'ERREUR modèle reste visible AVANT le filet : promouvoir la réflexion
+    // d'un tour en échec masquerait l'échec (même critère que le frontend, qui
+    // exclut `stopReason === "error"`).
     const modelError = detectModelErrorMessage(messages);
     if (modelError) {
       return `⚠️ Erreur modèle (aucun texte produit) : ${modelError} — modèle ${getSessionModelLabel(tempSession)}`;
     }
+    // Filet « réflexion seule ⇒ réponse » : le travail partiel d'un délégué qui
+    // n'a produit que du raisonnement n'est plus perdu. Marquée visiblement :
+    // ce n'est PAS le texte final du modèle.
+    const fallback = promoteThinkingOnlyAnswerFromMessages(messages);
+    if (fallback) return markThinkingFallback(fallback.text);
     return "";
   } catch {
     return "";
@@ -1013,6 +1036,10 @@ export default function (pi: ExtensionAPI) {
       let success = false;
       let archiveCause: string | null = null;
       let archiveErrorMessage: string | undefined = undefined;
+      // Filet « réflexion seule ⇒ réponse » : vrai quand la réponse rendue est
+      // RECONSTRUITE depuis les blocs `thinking` (aucun texte final produit).
+      // Exposé dans les détails du tool pour que l'UI puisse le signaler.
+      let thinkingFallbackUsed = false;
 
       /** Détails structurés du RETOUR du tool `delegate` (portés par le toolCall). */
       const buildDetails = (
@@ -1026,6 +1053,9 @@ export default function (pi: ExtensionAPI) {
         // Cause court (abort/cancel/timeout…) — nécessaire à la réinjection du
         // résultat d'un run DÉTACHÉ (customType subagent_result).
         cause: archiveCause,
+        // Réponse reconstruite depuis la RÉFLEXION du modèle (aucun texte final) :
+        // l'UI peut le signaler — le texte porte déjà le marqueur visible.
+        thinkingFallback: thinkingFallbackUsed,
         durationMs: Date.now() - delegateStartedAt,
         actionCount: actions,
       });
@@ -2421,6 +2451,16 @@ export default function (pi: ExtensionAPI) {
             .filter((t: string) => t.length > 0);
           const fullResponse = assistantTexts.join("\n\n");
 
+          // ── Filet « réflexion seule ⇒ réponse » (incident Beam) — le texte
+          // reste PRIORITAIRE : réflexion et texte ne sont JAMAIS mélangés.
+          // Un modèle à raisonnement peut renvoyer tout son contenu en blocs
+          // `thinking` (aucun `text`) : sans ce filet, tokens comptés et zéro
+          // caractère. La réponse reconstruite est MARQUÉE (visible).
+          const thinkingFallback = fullResponse.trim()
+            ? null
+            : promoteThinkingOnlyAnswerFromMessages(messages);
+          const responseText = thinkingFallback ? markThinkingFallback(thinkingFallback.text) : fullResponse;
+
           // ── BUG-68 (porté aux délégués — P0 observabilité volet 1/2) : le SDK
           // transforme une erreur modèle en message assistant VIDE
           // (stopReason:"error" + errorMessage) et prompt() ne reject JAMAIS.
@@ -2447,28 +2487,37 @@ export default function (pi: ExtensionAPI) {
           // Réponse vide SANS erreur modèle explicite : échec aussi — c'était le
           // seul cas qui passait inaperçu (message générique sans cause). La
           // boîte noire est archivée pour permettre le diagnostic post-mortem.
-          if (!fullResponse.trim()) {
+          // Message ACTIONNABLE : le modèle n'a peut-être émis que du
+          // raisonnement (ou rien) — indiquer les deux leviers réels.
+          if (!responseText.trim()) {
             archiveCause = "reponse-vide";
-            archiveErrorMessage = "Aucun message assistant produit (sans stopReason error)";
-            console.error(`[harness-orchestrator] ${effectiveFunc.label} : réponse vide (modèle ${usedModelLabel})`);
+            archiveErrorMessage = "Aucun message assistant produit (ni texte ni réflexion)";
+            console.error(`[harness-orchestrator] ${effectiveFunc.label} : réponse vide (modèle ${usedModelLabel}, ${thinkingChars} chars de réflexion)`);
             return {
               content: [{
                 type: "text" as const,
-                text: `❌ ${effectiveFunc.label} n'a produit aucune réponse. ` +
-                  `Session archivée dans .data/logs/harness/ (cause : réponse vide).`,
+                text: emptyResponseMessage({
+                  funcLabel: effectiveFunc.label,
+                  modelLabel: usedModelLabel,
+                  thinkingChars,
+                }),
               }],
               details: buildDetails("error", subagentFuncName, actionCount),
             };
           }
 
-          console.log(`[harness-orchestrator] ${effectiveFunc.label} terminé: ${fullResponse.length} chars`);
+          if (thinkingFallback) {
+            thinkingFallbackUsed = true;
+            console.warn(`[harness-orchestrator] ${effectiveFunc.label} : aucun texte final — réponse reconstruite depuis la RÉFLEXION (${thinkingFallback.chars} chars, modèle ${usedModelLabel})`);
+          }
+          console.log(`[harness-orchestrator] ${effectiveFunc.label} terminé: ${responseText.length} chars`);
 
           // SUCCÈS : le finally supprimera le fichier de session (pas de pollution).
           success = true;
           return {
             content: [{
               type: "text" as const,
-              text: fullResponse,
+              text: responseText,
             }],
             details: buildDetails("success", subagentFuncName, actionCount),
           };
