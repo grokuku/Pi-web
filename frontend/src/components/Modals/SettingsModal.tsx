@@ -5,6 +5,7 @@ import { ModalDialog } from "../common/ModalDialog";
 import { ProvidersTab, ModelsTab } from "./ModelLibraryModal";
 import { MemorySettingsTab } from "./MemorySettingsTab";
 import type { ModelLibrary, RegisteredModel, ProviderConfig } from "../../types";
+import { resolveModelCapability } from "../../types";
 import { useTranslation } from "../../i18n";
 import { addModels, updateModel, removeModel, setDefaultModel, apiErrorLabels } from "../../utils/model-library-api";
 import { toast } from "../../utils/holaf-toast";
@@ -186,6 +187,11 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
       onModelApplied?.();
     } catch (e: any) { setError(e.message); }
   };
+
+  // Modèles réellement capables de vision (capacité RÉSOLUE : override manuel >
+  // détection autoritaire du provider > heuristique de nom). Source unique du
+  // sélecteur « Vision Model » ET de son compteur.
+  const visionCapableCount = (library?.models || []).filter(m => resolveModelCapability(m, "vision")).length;
 
   // ── Extensions state ──
   const [pkgList, setPkgList] = useState<PackageInfo[]>([]);
@@ -661,6 +667,7 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                   )}
                 </div>
                 <select
+                  aria-label="Vision model"
                   value={library.visionModelId || ""}
                   onChange={async (e) => {
                     const id = e.target.value;
@@ -675,7 +682,12 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                 >
                   <option value="">— None (use main model) —</option>
                   {(library.models || [])
-                    .filter(m => m.vision)
+                    // Capacité RÉSOLUE (override manuel > détection autoritaire du
+                    // provider > heuristique de nom) : un modèle dont la vision est
+                    // confirmée par le provider mais dont le nom n'est pas reconnu par
+                    // `inferVision` (ex. « Clef », « Deepseek-Fast »), ou coché
+                    // « Vision : Oui » à la main, DOIT apparaître ici.
+                    .filter(m => resolveModelCapability(m, "vision"))
                     .map(m => (
                       <option key={m.id} value={m.id}>
                         {m.name}
@@ -683,9 +695,9 @@ export function SettingsModal({ onClose, session, onModelApplied, onLayoutChange
                     ))}
                 </select>
                 <div className="text-[10px] text-hacker-text-dim mt-1">
-                  {(library.models || []).filter(m => m.vision).length === 0 
-                    ? "No vision-capable models found. Add a model with vision support in Model Library." 
-                    : `${(library.models || []).filter(m => m.vision).length} vision model(s) available`}
+                  {visionCapableCount === 0
+                    ? "No vision-capable models found. Add a model with vision support in Model Library."
+                    : `${visionCapableCount} vision model(s) available`}
                 </div>
               </div>
 

@@ -43,6 +43,7 @@ import {
   applyOpenAiCapabilities,
   backfillAllOllamaProvidersReasoningLevels,
   backfillRegisteredModelReasoningLevels,
+  backfillRegisteredModelVision,
   buildOpenAiThinkingLevelMap,
   deleteProvider,
   enrichWithOpenAiCapabilities,
@@ -60,6 +61,7 @@ import {
   ollamaCompatOptions,
   ollamaReasoningModelOptions,
   parseEffortLevels,
+  parseDeclaredVision,
   parseOllamaThinking,
   parseSupportedParameters,
   reasoningLevelMapForModel,
@@ -70,7 +72,7 @@ import {
   type DiscoveredModel,
   type ProviderConfig,
 } from "./providers.js";
-import { loadModelLibrary, saveModelLibrary } from "./model-library.js";
+import { loadModelLibrary, resolveModelCapability, saveModelLibrary } from "./model-library.js";
 
 function makeProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
@@ -252,6 +254,51 @@ describe("applyOpenAiCapabilities", () => {
     applyOpenAiCapabilities(model, { id: "m" });
     expect(model.reasoning).toBeUndefined();
     expect(model.reasoningLevels).toBeUndefined();
+  });
+});
+
+// ── Vision AUTORITAIRE : `capabilities.vision` ───────
+// Preuve du bug : le sélecteur « Vision Model » de Settings → Analysis Models
+// n'exposait que les modèles dont le champ `vision` valait déjà true. Or ce
+// champ venait d'une heuristique de NOM (`inferVision`), qui rate les noms
+// opaques de Switchy (« Clef », « Deepseek-Fast », « Beam »…), alors que
+// l'endpoint `/v1/models` DÉCLARE `capabilities.vision` par service.
+describe("parseDeclaredVision / applyOpenAiCapabilities (vision autoritaire)", () => {
+  it("Switchy `capabilities: { vision: true }` → vision = true", () => {
+    expect(parseDeclaredVision({ id: "Clef", capabilities: { vision: true } })).toBe(true);
+    expect(parseDeclaredVision({ id: "Beam", capabilities: { vision: false } })).toBe(false);
+  });
+
+  it("Ollama `capabilities: ['completion','vision']` → true ; liste sans vision → false", () => {
+    expect(parseDeclaredVision({ capabilities: ["completion", "tools", "thinking", "vision"] })).toBe(true);
+    expect(parseDeclaredVision({ capabilities: ["completion"] })).toBe(false);
+  });
+
+  it("provider muet (aucune capacité déclarée) → undefined (on n'invente rien)", () => {
+    expect(parseDeclaredVision({ id: "m" })).toBeUndefined();
+    expect(parseDeclaredVision({ capabilities: [] })).toBeUndefined();
+  });
+
+  it("input_modalities: ['text','image'] → true (OpenAI / DeepSeek)", () => {
+    expect(parseDeclaredVision({ input_modalities: ["text", "image"] })).toBe(true);
+  });
+
+  it("« Clef » : nom RATÉ par l'heuristique + vision déclarée par le provider → apparaît dans le sélecteur", () => {
+    // Ce nom n'est reconnu par aucune branche de `inferVision` : c'est ce qui
+    // produisait le symptôme (2 modèles proposés au lieu de 6).
+    expect(inferVision("Clef")).toBe(false);
+
+    const discovered: DiscoveredModel = { id: "Clef", name: "Clef" };
+    applyOpenAiCapabilities(discovered, { id: "Clef", capabilities: { vision: true } });
+    expect(discovered.vision).toBe(true);
+    // Le sélecteur filtre sur la capacité RÉSOLUE → le modèle est proposé.
+    expect(resolveModelCapability(discovered as any, "vision")).toBe(true);
+  });
+
+  it("l'override manuel prime toujours sur la détection autoritaire", () => {
+    const m: any = { vision: true, visionOverride: "no" };
+    expect(resolveModelCapability(m, "vision")).toBe(false);
+    expect(resolveModelCapability({ vision: false, visionOverride: "yes" } as any, "vision")).toBe(true);
   });
 });
 
@@ -901,5 +948,88 @@ describe("backfillRegisteredModelReasoningLevels (fs simulé)", () => {
     expect(filled).toBe(1);
     expect(loadModelLibrary().models.find((m) => m.id === "m1")!.reasoningLevels)
       .toEqual(["low", "medium", "high"]);
+  });
+});
+// ── Backfill de la capacité VISION (fs simulé) ────────
+// Sans ce backfill, un modèle déjà enregistré garde POUR TOUJOURS la valeur de
+// l'heuristique de nom (« Clef » → false) et reste absent du sélecteur
+// « Vision Model », même après un scan qui a révélé `capabilities.vision: true`.
+describe("backfillRegisteredModelVision (fs simulé)", () => {
+  /** Sème un modèle DÉJÀ enregistré (nom opaque raté par `inferVision`). */
+  function seedClef(extra: Record<string, unknown> = {}): void {
+    saveModelLibrary({
+      models: [{
+        id: "m1",
+        providerId: "p1",
+        modelId: "Clef",
+        name: "Clef",
+        isDefault: true,
+        reasoning: false,
+        vision: false,
+        contextWindow: 262144,
+        maxTokens: 8192,
+        visionOverride: "auto",
+        ...extra,
+      }],
+      defaultModelId: "m1",
+      projectModes: {},
+    } as any);
+  }
+
+  beforeEach(() => {
+    fsState.files = {};
+  });
+
+  it("vision déclarée par le provider sur un nom raté par l'heuristique → `vision` persisté true", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "http://10.10.0.5:3008/v1" });
+    saveProviders([provider]);
+    seedClef();
+    expect(inferVision("Clef")).toBe(false); // l'heuristique rate ce nom
+
+    const changed = await backfillRegisteredModelVision(provider, [
+      { id: "Clef", name: "Clef", vision: true },
+    ]);
+    expect(changed).toBe(1);
+
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.vision).toBe(true);
+    expect(resolveModelCapability(persisted, "vision")).toBe(true);
+  });
+
+  it("provider qui déclare l'absence de vision → corrige une valeur fausse (pas de modèle fantôme)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "http://10.10.0.5:3008/v1" });
+    saveProviders([provider]);
+    seedClef({ modelId: "Beam", name: "Beam", vision: true });
+
+    const changed = await backfillRegisteredModelVision(provider, [
+      { id: "Beam", name: "Beam", vision: false },
+    ]);
+    expect(changed).toBe(1);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.vision).toBe(false);
+  });
+
+  it("le backfill ne touche PAS l'override manuel (visionOverride prime toujours)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "http://10.10.0.5:3008/v1" });
+    saveProviders([provider]);
+    seedClef({ visionOverride: "no", vision: true });
+
+    await backfillRegisteredModelVision(provider, [{ id: "Clef", name: "Clef", vision: true }]);
+    const persisted = loadModelLibrary().models.find((m) => m.id === "m1")!;
+    expect(persisted.visionOverride).toBe("no");
+    expect(resolveModelCapability(persisted, "vision")).toBe(false);
+  });
+
+  it("provider muet / modèle non enregistré / Anthropic → aucune écriture (0)", async () => {
+    const provider = makeProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com" });
+    saveProviders([provider]);
+    seedClef();
+
+    expect(await backfillRegisteredModelVision(provider, [{ id: "Clef", name: "Clef" }])).toBe(0);
+    expect(await backfillRegisteredModelVision(provider, [{ id: "Autre", name: "x", vision: true }])).toBe(0);
+    expect(await backfillRegisteredModelVision(
+      makeProvider({ type: "anthropic", baseUrl: "https://api.anthropic.com" }),
+      [{ id: "Clef", name: "Clef", vision: true }],
+    )).toBe(0);
+    expect(loadModelLibrary().models.find((m) => m.id === "m1")!.vision).toBe(false);
   });
 });

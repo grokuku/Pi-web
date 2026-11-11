@@ -457,10 +457,43 @@ function inputModalitiesIncludeImage(value: unknown): boolean {
 }
 
 /**
+ * Lit la capacité VISION **déclarée** par une entrée de `GET {baseUrl}/models`
+ * (ou par le corps de `POST /api/show` pour Ollama). Trois formes rencontrées :
+ *
+ *  - `capabilities: { vision: true }` — **Switchy**, MESURÉ sur
+ *    `GET /v1/models` (chaque service porte `capabilities.vision`) ;
+ *  - `capabilities: ["completion", "tools", "thinking", "vision"]` — API native
+ *    Ollama `/api/show` ;
+ *  - `input_modalities: ["text", "image"]` — OpenAI / DeepSeek ;
+ *  - `supports_vision: boolean` — indices de certains agrégateurs.
+ *
+ * Renvoie `undefined` quand le provider ne déclare RIEN : on n'invente jamais de
+ * capacité, l'heuristique de nom (`inferVision`) reste alors le seul défaut.
+ * L'override manuel (`visionOverride`) prime de toute façon à la résolution
+ * (`resolveModelCapability`).
+ */
+export function parseDeclaredVision(entry: Record<string, unknown>): boolean | undefined {
+  const caps = entry.capabilities;
+  if (Array.isArray(caps)) {
+    const names = caps
+      .filter((c): c is string => typeof c === "string")
+      .map((c) => c.trim().toLowerCase());
+    if (names.length > 0) return names.includes("vision");
+  } else if (caps && typeof caps === "object") {
+    const raw = (caps as Record<string, unknown>).vision;
+    if (typeof raw === "boolean") return raw;
+  }
+  if (typeof entry.supports_vision === "boolean") return entry.supports_vision;
+  if (inputModalitiesIncludeImage(entry.input_modalities)) return true;
+  return undefined;
+}
+
+/**
  * Reporte sur un `DiscoveredModel` les capacités DÉCLARÉES par une entrée
  * `GET {baseUrl}/models` d'un provider compatible OpenAI. Ne remplit un champ
  * que si le provider l'expose réellement (`effort`, `supported_parameters`,
- * `context_window`, `input_modalities`) — sinon le modèle reste INCHANGÉ.
+ * `context_window`, `capabilities`, `input_modalities`) — sinon le modèle reste
+ * INCHANGÉ.
  */
 export function applyOpenAiCapabilities(model: DiscoveredModel, entry: Record<string, unknown>): void {
   const levels = parseEffortLevels(entry.effort);
@@ -475,7 +508,11 @@ export function applyOpenAiCapabilities(model: DiscoveredModel, entry: Record<st
     const cw = entry.context_window ?? entry.context_length ?? entry.max_context_length;
     if (typeof cw === "number" && cw > 0) model.contextWindow = cw;
   }
-  if (model.vision === undefined && inputModalitiesIncludeImage(entry.input_modalities)) model.vision = true;
+  // Capacité de vision AUTORITAIRE : `capabilities.vision` (Switchy, Ollama…) ou
+  // `input_modalities`. Elle remplace l'heuristique de nom, qui rate les noms
+  // opaques (« Clef », « Deepseek-Fast », « Beam »…).
+  const declaredVision = parseDeclaredVision(entry);
+  if (declaredVision !== undefined) model.vision = declaredVision;
 }
 
 /**
@@ -870,6 +907,13 @@ async function enrichWithOllamaCapabilities(
           }
         }
 
+        // ── Capacité de VISION AUTORITAIRE : `capabilities` (Ollama /api/show)
+        // PRIME sur l'heuristique d'architecture ci-dessus, qui ne reconnaît que
+        // les familles connues. Liste vide / absente = information inconnue →
+        // aucun changement (`parseDeclaredVision` renvoie `undefined`).
+        const declaredVision = parseDeclaredVision(data as Record<string, unknown>);
+        if (declaredVision !== undefined) model.vision = declaredVision;
+
         // ── Capacité de raisonnement AUTORITAIRE : objet `thinking` ──
         // Ollama renvoie `{ thinking: { values: [...], default: "medium" } }`.
         const parsedThinking = parseOllamaThinking((data as any).thinking);
@@ -964,6 +1008,62 @@ export async function backfillRegisteredModelReasoningLevels(
   }
 }
 
+/**
+ * Rétro-renseignement de la capacité de **VISION** des modèles DÉJÀ enregistrés
+ * à partir de la détection AUTORITAIRE du provider (`capabilities.vision` de
+ * Switchy / `capabilities` d'Ollama, portée par `DiscoveredModel.vision`).
+ *
+ * Pendant exact de `backfillRegisteredModelReasoningLevels`, et pour la même
+ * raison : les modèles enregistrés AVANT que la détection autoritaire n'existe
+ * portent la valeur de l'heuristique de nom, qui rate les noms opaques
+ * (« Clef », « Deepseek-Fast », « Beam »…). Sans ce backfill, ils resteraient
+ * invisibles dans le sélecteur « Vision Model » de Settings → Analysis Models.
+ *
+ * RÈGLES :
+ *  - seul un provider qui DÉCLARE la capacité (booléen) est pris en compte ;
+ *    sinon le modèle reste inchangé (aucune valeur inventée) ;
+ *  - le champ `vision` n'est PAS un choix utilisateur (son choix vit dans
+ *    `visionOverride`, qui prime à la résolution) → il est CORRIGÉ dans les deux
+ *    sens quand le provider le déclare ;
+ *  - best-effort : toute erreur est journalisée mais ne fait jamais échouer le scan.
+ *
+ * @returns nombre de modèles corrigés (0 = aucune écriture).
+ */
+export async function backfillRegisteredModelVision(
+  provider: ProviderConfig,
+  models: DiscoveredModel[],
+): Promise<number> {
+  // Anthropic / Google : pas de capacité déclarée par modèle via leur API de
+  // liste → no-op (les presets + `visionOverride` restent la voie).
+  if (provider.type === "anthropic" || provider.type === "google") return 0;
+  try {
+    const { loadModelLibrary, saveModelLibrary } = await import("./model-library.js");
+    const library = loadModelLibrary();
+    const candidates = library.models.filter((m) => m.providerId === provider.id);
+    if (candidates.length === 0) return 0;
+
+    const declared = new Map<string, boolean>();
+    for (const m of models) {
+      if (typeof m.vision === "boolean") declared.set(m.id, m.vision);
+    }
+    if (declared.size === 0) return 0;
+
+    let changed = 0;
+    for (const model of candidates) {
+      const vision = declared.get(model.modelId);
+      if (vision === undefined || model.vision === vision) continue;
+      model.vision = vision;
+      changed++;
+    }
+    if (changed > 0) saveModelLibrary(library);
+    return changed;
+  } catch (e: any) {
+    // Best-effort : ne jamais faire échouer la découverte des modèles.
+    console.warn("[providers] Backfill de la capacité vision échoué :", e?.message || e);
+    return 0;
+  }
+}
+
 // ── Backfill global (déclencheur sans geste manuel) ──
 
 /**
@@ -1003,6 +1103,15 @@ export async function backfillAllOllamaProvidersReasoningLevels(): Promise<numbe
         // Backfill déjà best-effort : on isole chaque provider pour continuer.
         console.warn(
           `[providers] Backfill réflexion (${provider.name || provider.id}) échoué :`,
+          e?.message || e,
+        );
+      }
+      try {
+        // Même déclencheur « gratuit » pour la VISION (capabilities.vision).
+        total += await backfillRegisteredModelVision(provider, cached);
+      } catch (e: any) {
+        console.warn(
+          `[providers] Backfill vision (${provider.name || provider.id}) échoué :`,
           e?.message || e,
         );
       }
@@ -1098,6 +1207,9 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
     // enregistrés (le coût /api/show est déjà payé ci-dessus). Ne bloque jamais
     // le scan : toute erreur est absorbée. Voir la fonction pour les règles. ──
     await backfillRegisteredModelReasoningLevels(provider, models);
+    // Même principe pour la capacité de VISION (capabilities.vision) : sans ce
+    // backfill, un modèle au nom opaque reste `vision: false` pour toujours.
+    await backfillRegisteredModelVision(provider, models);
 
     // Update provider status
     updateProvider(provider.id, {
