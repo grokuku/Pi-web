@@ -100,10 +100,19 @@ RUN test -f /app/backend/dist/index.js \
 FROM ${BASE_IMAGE} AS runtime
 
 # ─── System packages (light) ─────────────────────────────────────────────
-# --no-install-recommends : cohérent avec le bloc Chromium ci-dessous (aucune
-# dépendance « Recommends » n'est utilisée par l'image ; on ne mesure pas le
-# gain ici). Versions non épinglées : la base est déjà figée par BASE_IMAGE.
+# --no-install-recommends : cohérent avec le bloc Chromium ci-dessous (on ne
+# mesure pas le gain ici). COROLLAIRE À NE PAS PERDRE DE VUE : plus aucun paquet
+# « Recommends » n'accompagne les paquets listés — tout ce dont l'image a besoin
+# doit donc être nommé ICI.
+# ca-certificates : EXPLICITE et INDISPENSABLE. L'image node:22-slim ne le
+# fournit PAS (le Dockerfile officiel de Node installe ca-certificates/curl/
+# wget puis les purge par `apt-get purge -y --auto-remove`) et sur Debian
+# `curl`, `git` et `openssh-client` ne le portent qu'en Recommends. Sans lui,
+# `curl` meurt en 77 (CURLE_SSL_CACERT_BADFILE) sur le PREMIER téléchargement
+# TLS de l'étage (tarball Go, puis archive CBM) : ce bloc doit donc précéder
+# ces deux RUN. Versions non épinglées : la base est déjà figée par BASE_IMAGE.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     git curl openssh-client \
     nano mc procps \
     build-essential python3 \
