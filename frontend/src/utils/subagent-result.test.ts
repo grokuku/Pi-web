@@ -8,6 +8,7 @@ import {
   extractSubagentResults,
   firstResultHeading,
   isSubagentResultFailed,
+  resultBodyForMarkdown,
   subagentStatusLabelKey,
 } from "./subagent-result";
 
@@ -117,5 +118,28 @@ describe("countContentLines", () => {
   it("compte les lignes (0 si vide)", () => {
     expect(countContentLines("a\nb\nc")).toBe(3);
     expect(countContentLines("")).toBe(0);
+  });
+});
+
+describe("resultBodyForMarkdown", () => {
+  it("retire la SEULE ligne d'en-tête « ### … » (déjà rendue par le bloc)", () => {
+    const content = "🧩 Résultat du sous-agent\n\n### Exécution (execute) — succès\n\n- puce\n- **gras**";
+    const body = resultBodyForMarkdown(content);
+    expect(body).not.toContain("###");
+    expect(body.startsWith("🧩 Résultat du sous-agent")).toBe(true);
+    // Le markdown du corps est INCHANGÉ (il est rendu par le composant partagé).
+    expect(body).toContain("- puce\n- **gras**");
+  });
+
+  it("conserve les en-têtes des résultats SUIVANTS (lot de plusieurs runs)", () => {
+    const content = "### A (execute) — succès\n\ncorps A\n\n### B (review) — succès\n\ncorps B";
+    const body = resultBodyForMarkdown(content);
+    expect(body.startsWith("corps A")).toBe(true);
+    expect(body).toContain("### B (review) — succès");
+  });
+
+  it("contenu sans en-tête : renvoyé tel quel", () => {
+    expect(resultBodyForMarkdown("juste du texte\n- puce")).toBe("juste du texte\n- puce");
+    expect(resultBodyForMarkdown("")).toBe("");
   });
 });

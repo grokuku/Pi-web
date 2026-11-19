@@ -210,8 +210,15 @@ describe("SubAgentResultMessage — réglage « replié par défaut »", () => {
 
     // L'en-tête existe = le message est bien dans le fil (pas filtré).
     expect(collapseHeader()).toBeTruthy();
-    // Déplié, le contenu complet (conversationnel) est intact — rien n'est tronqué.
+    // Déplié, le corps conversationnel est INTÉGRALEMENT rendu (rien n'est
+    // tronqué). Il passe désormais par le rendu markdown partagé : on compare
+    // donc le texte NORMALISÉ (les retours à la ligne deviennent des blocs) et
+    // SANS la ligne d'en-tête « ### … », qui est portée par l'en-tête du bloc
+    // repliable et n'est jamais dupliquée dans le corps.
     fireEvent.click(collapseHeader());
-    expect(body()!.textContent).toBe(CONTENT);
+    const text = (body()!.closest(".prose-hacker")?.textContent ?? "").replace(/\s+/g, " ").trim();
+    expect(text).toContain("🧩 Résultat du sous-agent (délégation terminée)");
+    expect(text).toContain("Travail terminé : 3 fichiers modifiés.");
+    expect(text).not.toContain("###");
   });
 });

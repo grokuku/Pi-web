@@ -45,6 +45,9 @@ import {
   neutralizeUnavailableToolErrors,
   DELEGATE_TOOL_NAME,
 } from "./harness-stream.js";
+// Règles d'activation des tools (module PUR, cf. tool-whitelist.ts) : importées
+// pour l'usage INTERNE + ré-exportées plus bas pour ne pas casser l'API publique.
+import { activeToolsForMode, filterPlatformTools, isHarnessToolAllowed } from "./tool-whitelist.js";
 import { buildMemoryInjection } from "./memory-service.js";
 import type { PiWebPromptContext } from "./system-prompt.js";
 // Branchement des extensions du SDK : `createMcpExtension()` dans les factories +
@@ -2336,134 +2339,26 @@ export function getSessionMessages(projectId: string): any[] {
 
 // ── Mode Management ───────────────────────────────────
 
-const BASE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-// Firecrawl tools removed — librarian_search replaces them.
-const FIRECRAWL_TOOLS: string[] = [];
-
-// ── Blocage plateforme ──
-// Le SDK Pi (>= 0.84.4) expose le tool "powershell" sans garde OS : l'heuristique
-// getExtensionToolNames le classe comme tool d'extension et l'active dans TOUS
-// les modes. Or il throw à l'exécution sur Linux ("only available on Windows"),
-// faisant perdre un tour à l'agent à chaque appel. On le bloque donc explicitement
-// sur toute plateforme non-Windows.
-const PLATFORM_BLOCKED_TOOLS: string[] =
-  process.platform === "win32" ? [] : ["powershell"];
-
-/** Retire les tools bloqués par plateforme d'une liste de noms de tools. */
-function filterPlatformTools(names: string[]): string[] {
-  return names.filter((name) => !PLATFORM_BLOCKED_TOOLS.includes(name));
-}
-// ── Liste blanche des tools du mode HARNESS (BUG10) ──
-// L'orchestrateur ne lit pas le code : il délègue. Il n'a donc AUCUN tool de
-// base (read/bash/edit/write/grep/find/ls).
-//
-// AVANT (BUG10) : `toolsForMode(session, [])` renvoyait TOUS les tools
-// d'extension — `memory_*`, `render_design`/`get_design`, `log_commit_note`,
-// `open_preview`/`preview_html`, `web_screenshot`… ~20 outils dont l'orchestrateur
-// n'a rien à faire, injectés dans le prompt À CHAQUE TOUR (tokens gaspillés),
-// en contradiction permanente avec sa bannière (« ne faites jamais… »), et
-// élargissant sa surface d'action réelle. Le contrôle runtime ne vérifiait que
-// les BASE_TOOLS, donc rien de tout cela n'était détecté.
-//
-// DÉSORMAIS : liste blanche EXPLICITE. Un tool absent d'ici ne parvient plus à
-// l'orchestrateur. Toute addition doit être justifiée par son prompt.
-//  - delegate* : la raison d'être du mode (déléguer, lister/relayer/arrêter un run).
-//  - cbm_* : exploration structurelle du dépôt (cf. harness-stream.ts : en mode
-//    harness l'orchestrateur garde `delegate` + les cbm_* — lecture seule).
-//  - librarian_* : lire de la doc/un page (texte) plutôt qu'une capture.
-//  - exploration_* : carnet de découvertes (lecture/écriture passive, 0 action).
-//  - analyze_file : pièce jointe de l'utilisateur (PDF/texte/image) qu'il peut
-//    demander d'identifier SANS délégation — conservé par prudence.
-//  - web_screenshot : montrer/vérifier un rendu à la demande explicite de
-//    l'utilisateur — conservé par prudence (légitime pour 2 des 4 rôles).
-// ÉCARTÉS (aucun n'est cité par le prompt de l'orchestrateur) :
-// memory_store/memory_search/memory_delete, render_design/get_design,
-// log_commit_note, open_preview/preview_html.
-export const HARNESS_TOOL_WHITELIST: readonly string[] = Object.freeze([
-  DELEGATE_TOOL_NAME,
-  "delegate_list",
-  "delegate_steer",
-  "delegate_stop",
-  "cbm_search",
-  "cbm_trace",
-  "cbm_code",
-  "cbm_search_code",
-  "cbm_diff",
-  "cbm_arch",
-  "cbm_cypher",
-  "cbm_schema",
-  "librarian_search",
-  "librarian_archive",
-  "exploration_note",
-  "exploration_notes",
-  "analyze_file",
-  "web_screenshot",
-]);
-
-// Préfixes de tools dont le nom est DYNAMIQUE : les serveurs MCP de
-// l'utilisateur (`mcp__<serveur>__<outil>`, cf. ~/.pi/agent/mcp.json). On ne
-// peut pas les lister à l'avance ; les retirer priverait l'orchestrateur des
-// serveurs MCP configurés sur la machine (régression silencieuse). Conservés
-// par prudence (cf. rapport LOT 4b).
-export const HARNESS_TOOL_PREFIXES: readonly string[] = Object.freeze(["mcp__"]);
-
-/** Vrai si `name` a le droit d'être actif en mode harness. */
-export function isHarnessToolAllowed(name: string): boolean {
-  if (typeof name !== "string" || !name) return false;
-  if (HARNESS_TOOL_WHITELIST.includes(name)) return true;
-  return HARNESS_TOOL_PREFIXES.some((prefix) => name.startsWith(prefix));
-}
-
-/** Noms des tools MCP (`mcp__…`) enregistrés dans la session, s'il y en a. */
-function getMcpToolNames(session: any): string[] {
-  try {
-    const allTools = session?.getAllTools?.() ?? [];
-    return allTools
-      .map((t: any) => t?.name)
-      .filter((name: unknown): name is string =>
-        typeof name === "string" && HARNESS_TOOL_PREFIXES.some((p) => name.startsWith(p)),
-      ); // déjà filtrés plateforme : les mcp_* ne sont pas bloqués
-  } catch { return []; }
-}
-// Tools d'orchestration à EXCLURE des modes non-harness (BUG-71).
-// En mode CODE/REVIEW, le LLM doit travailler directement,
-// pas déléguer via delegate ; idem pour les tools de CONTRÔLE des runs
-// (LOT 3/4 : delegate_list / delegate_steer / delegate_stop) qui n'ont de sens
-// qu'en mode harness — en mode CODE, seuls les tools de base doivent rester.
-const HARNESS_EXCLUDE = ["delegate", "delegate_list", "delegate_steer", "delegate_stop"];
-
-/** Get extension tool names registered in the session */
-function getExtensionToolNames(session: any, exclude: string[] = []): string[] {
-  try {
-    const allTools = session.getAllTools?.() ?? [];
-    return allTools
-      .map((t: any) => t.name)
-      .filter((name: string) => !BASE_TOOLS.includes(name))
-      .filter((name: string) => !exclude.includes(name))
-      // Exclure les tools bloqués par plateforme (ex: powershell sur Linux)
-      .filter((name: string) => !PLATFORM_BLOCKED_TOOLS.includes(name));
-  } catch { return []; }
-}
-
-/** Merge base tools + extension tools for a given mode */
-function toolsForMode(session: any, baseTools: string[], exclude: string[] = []): string[] {
-  return [...baseTools, ...getExtensionToolNames(session, exclude)];
-}
-
-/**
- * Tools ACTIFS d'un mode — point unique de vérité (BUG10).
- *  - `harness` : liste blanche explicite + tools MCP dynamiques de l'utilisateur.
- *    Jamais `toolsForMode` (qui ajouterait inconditionnellement TOUS les tools
- *    d'extension, donc ~20 outils inutiles à l'orchestrateur).
- *  - `code` : tools de base + tools d'extension, hors tools d'orchestration
- *    (BUG-71) — comportement historique inchangé.
- */
-export function activeToolsForMode(session: any, mode: AgentMode): string[] {
-  if (mode === "harness") {
-    return filterPlatformTools([...HARNESS_TOOL_WHITELIST, ...getMcpToolNames(session)]);
-  }
-  return filterPlatformTools(toolsForMode(session, BASE_TOOLS, HARNESS_EXCLUDE));
-}
+// ── Mode Management ──
+// Les RÈGLES (liste blanche du mode harness, tools de base, filtrage
+// plateforme, tools MCP dynamiques) vivent dans `tool-whitelist.ts` : fonctions
+// PURES, sans dépendance lourde. Elles étaient ici, et un simple
+// `await import("./session.js")` (~3 s à froid — timeout vitest par défaut : 5 s)
+// faisait expirer `harness-tool-whitelist.test.ts` sous charge.
+// Ré-exportées ci-dessous : l'API publique de `session.ts` ne change pas.
+export {
+  BASE_TOOLS,
+  HARNESS_EXCLUDE,
+  HARNESS_TOOL_PREFIXES,
+  HARNESS_TOOL_WHITELIST,
+  PLATFORM_BLOCKED_TOOLS,
+  activeToolsForMode,
+  filterPlatformTools,
+  getExtensionToolNames,
+  getMcpToolNames,
+  isHarnessToolAllowed,
+  toolsForMode,
+} from "./tool-whitelist.js";
 
 // Mode-specific instructions (hardcoded defaults; no longer stored in model-library)
 // NB : la bannière et les instructions de mode vivent désormais dans

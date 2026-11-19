@@ -19,6 +19,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { I18nProvider } from "../../i18n";
 import { GitPanel } from "./GitPanel";
 import type { Project } from "../../types";
+import { resetFetchThrottle } from "../../utils/git-verification";
 
 // ── Helpers ─────────────────────────────────────────────
 
@@ -102,10 +103,15 @@ let fetchMock: ReturnType<typeof vi.fn>;
 let fetchImpl: (input: unknown) => Promise<Response>;
 // Statut renvoyé par projet ; une entrée absente fait échouer le fetch (seed KO).
 let statuses: Record<string, FullStatus | NotRepoStatus>;
+// Réponse de POST /git/fetch par projet (défaut : fetch réussi, horodaté).
+let fetchResults: Record<string, { ok: boolean; reason?: string; fetchedAt?: string | null }>;
 
 beforeEach(() => {
   localStorage.setItem("pi-web-language", "en");
   sessionStorage.clear();
+  // Le throttle d'auto-fetch est une mémoire de MODULE : sans purge, le fetch
+  // d'un test précédent empêcherait celui du test suivant.
+  resetFetchThrottle();
   // jsdom n'implémente pas matchMedia : requis par ModalDialog (useIsMobile)
   // dès qu'une modale (identifiants) est montée.
   window.matchMedia = ((query: string) => ({
@@ -119,8 +125,21 @@ beforeEach(() => {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   statuses = {};
+  fetchResults = {};
   fetchImpl = async (input: unknown) => {
     const url = String(input);
+    const fetchMatch = url.match(/^\/api\/projects\/([^/]+)\/git\/fetch$/);
+    if (fetchMatch) {
+      const id = fetchMatch[1];
+      const result = fetchResults[id] ?? { ok: true, fetchedAt: new Date().toISOString() };
+      return jsonResponse({
+        ok: result.ok,
+        reason: result.reason,
+        fetchedAt: result.ok ? result.fetchedAt ?? new Date().toISOString() : null,
+        lastFetchAt: result.ok ? result.fetchedAt ?? new Date().toISOString() : null,
+        status: result.ok ? statuses[id] : null,
+      });
+    }
     const match = url.match(/^\/api\/projects\/([^/]+)\/git\/status$/);
     if (match) {
       const status = statuses[match[1]];

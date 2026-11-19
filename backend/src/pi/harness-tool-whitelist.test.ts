@@ -14,6 +14,19 @@
  *  2. DYNAMIQUE : `activeToolsForMode(session, "harness")` sur un registre
  *     VOLONTAIREMENT large ne renvoie QUE la liste blanche (+ les `mcp__…`
  *     dynamiques) — et le mode code reste inchangé.
+ *
+ * ⚠️ CE FICHIER N'IMPORTE PLUS `session.ts` (2026-11) : il expirait de façon
+ * intermittente (2 fois signalé : 08/11 et 19/11). MESURÉ : le premier import
+ * dynamique de `session.js` coûte ~3,0 s isolé et ~4,8 à 5,0 s pendant la suite
+ * complète (charge parallèle) — soit le timeout PAR DÉFAUT de vitest (5 s) ;
+ * reproduit en lançant deux suites en parallèle (5022 ms / 5044 ms).
+ * La liste blanche et `activeToolsForMode` sont des fonctions PURES : elles
+ * vivent désormais dans `tool-whitelist.ts` (aucune dépendance lourde), chargé
+ * en quelques ms. Le timeout global reste à 5 s (ne JAMAIS le relever : cela
+ * masquerait les vrais blocages).
+ * Les verrous STATIQUES continuent, eux, de lire `session.ts` sur disque
+ * (gratuit) : ils vérifient que la branche harness de `applyModeToSession`
+ * utilise bien la liste blanche.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +34,12 @@ import { describe, expect, it } from "vitest";
 
 const SESSION_SOURCE = readFileSync(
   fileURLToPath(new URL("./session.ts", import.meta.url)),
+  "utf8",
+);
+
+/** Source du module PUR testé ici (garde-fou « il doit rester léger »). */
+const WHITELIST_SOURCE = readFileSync(
+  fileURLToPath(new URL("./tool-whitelist.ts", import.meta.url)),
   "utf8",
 );
 
@@ -77,8 +96,9 @@ const REQUIRED_IN_HARNESS = [
 
 /** Bloc source de la branche harness d'`applyModeToSession`. */
 function harnessBranchSource(): string {
-  // On se limite à la FONCTION `applyModeToSession` : `if (mode === "harness")`
-  // apparaît aussi dans `activeToolsForMode` (plus haut dans le fichier).
+  // On se limite à la FONCTION `applyModeToSession` : c'est elle qui APPLIQUE
+  // la liste blanche à la session (les RÈGLES, elles, vivent dans
+  // `tool-whitelist.ts`, testées dynamiquement plus bas).
   const fnStart = SESSION_SOURCE.indexOf("export async function applyModeToSession");
   if (fnStart < 0) throw new Error("applyModeToSession introuvable dans session.ts");
   const start = SESSION_SOURCE.indexOf('if (mode === "harness") {', fnStart);
@@ -104,7 +124,7 @@ describe("BUG10 — verrou statique : le mode harness n'injecte plus tous les to
 
 describe("BUG10 — comportement : activeToolsForMode", () => {
   it("mode harness : liste blanche seule (+ mcp__ dynamiques), aucun tool d'exécution", async () => {
-    const { activeToolsForMode } = await import("./session.js");
+    const { activeToolsForMode } = await import("./tool-whitelist.js");
     const session = fakeSession();
     const harness = activeToolsForMode(session, "harness");
 
@@ -115,7 +135,7 @@ describe("BUG10 — comportement : activeToolsForMode", () => {
   });
 
   it("mode harness : les outils « en cas de doute » restent disponibles", async () => {
-    const { activeToolsForMode } = await import("./session.js");
+    const { activeToolsForMode } = await import("./tool-whitelist.js");
     const harness = activeToolsForMode(fakeSession(), "harness");
     // Conservés volontairement (cf. rapport) : pièce jointe de l'utilisateur,
     // vérification/montrée d'un rendu, serveurs MCP configurés par l'utilisateur.
@@ -125,7 +145,7 @@ describe("BUG10 — comportement : activeToolsForMode", () => {
   });
 
   it("mode code : inchangé (base + extensions, hors tools d'orchestration)", async () => {
-    const { activeToolsForMode } = await import("./session.js");
+    const { activeToolsForMode } = await import("./tool-whitelist.js");
     const code = activeToolsForMode(fakeSession(), "code");
     for (const name of ["read", "bash", "edit", "write", "grep", "find", "ls"]) {
       expect(code, name).toContain(name);
@@ -139,10 +159,35 @@ describe("BUG10 — comportement : activeToolsForMode", () => {
   });
 
   it("le prédicat isHarnessToolAllowed est cohérent avec la liste appliquée", async () => {
-    const { activeToolsForMode, isHarnessToolAllowed } = await import("./session.js");
+    const { activeToolsForMode, isHarnessToolAllowed } = await import("./tool-whitelist.js");
     const harness = activeToolsForMode(fakeSession(), "harness");
     for (const name of harness) expect(isHarnessToolAllowed(name), name).toBe(true);
     for (const name of FORBIDDEN_IN_HARNESS) expect(isHarnessToolAllowed(name), name).toBe(false);
     expect(isHarnessToolAllowed("outil_totalement_inconnu")).toBe(false);
+  });
+});
+
+// ── Garde-fou de CHARGE : la liste blanche doit rester importable sans le SDK ──
+// Le test dynamique ci-dessus expirait parce qu'il chargeait `session.ts` (~3 s à
+// froid, ~5 s sous charge). Si quelqu'un ré-introduit un import lourd dans
+// `tool-whitelist.ts`, la fragilité revient sans se voir : on la verrouille ici.
+describe("BUG10 — le module de liste blanche reste PUR (importable sans le SDK)", () => {
+  it("n'importe ni session.js ni le SDK ni les extensions (imports runtime)", () => {
+    const runtimeImports = [...WHITELIST_SOURCE.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"([^"]+)"/gm)]
+      .map((m) => m[1]);
+    for (const spec of runtimeImports) {
+      expect(spec, spec).not.toContain("session.js");
+      expect(spec, spec).not.toContain("@earendil-works");
+      expect(spec, spec).not.toContain("extension");
+    }
+  });
+
+  it("les règles ne sont plus dupliquées dans session.ts (source unique)", () => {
+    // session.ts RÉ-EXPORTE le module au lieu de redéfinir la liste blanche.
+    expect(SESSION_SOURCE).toMatch(
+      /export\s*\{[^}]*activeToolsForMode[^}]*\}\s*from\s*"\.\/tool-whitelist\.js"/,
+    );
+    expect(SESSION_SOURCE).not.toMatch(/const HARNESS_TOOL_WHITELIST\s*[:=]/);
+    expect(SESSION_SOURCE).not.toMatch(/function activeToolsForMode\b/);
   });
 });

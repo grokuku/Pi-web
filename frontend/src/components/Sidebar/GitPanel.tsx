@@ -9,6 +9,15 @@ import { useTranslation, type TFunction } from "../../i18n";
 import { parseJsonResponse } from "../../utils/api";
 import { apiErrorLabels } from "../../utils/model-library-api";
 import { decideGitFailure } from "../../utils/git-errors";
+import {
+  badgeState,
+  isSuccessfulFetch,
+  markFetchAttempt,
+  shouldAutoFetch,
+  type FetchFailureReason,
+  type GitFetchResponse,
+  type VerificationState,
+} from "../../utils/git-verification";
 
 // ── Libellés i18n de parseJsonResponse : apiErrorLabels() est partagé par
 // utils/model-library-api.ts (une seule définition pour tout le frontend).
@@ -28,6 +37,10 @@ interface GitStatusFull {
   // d'identifiants) et présence d'un jeton. Absents = backend plus ancien.
   host?: string | null;
   hasCredentials?: boolean;
+  // Dernier fetch RÉUSSI du dépôt (mémoire du backend), null = jamais vérifié.
+  // Base des trois états du badge : « à jour » (fetch récent) / « vérifié il y
+  // a X » (fetch ancien) / « non vérifié » (aucun fetch réussi).
+  lastFetchAt?: string | null;
 }
 
 interface GitStatusNotRepo {
@@ -35,6 +48,7 @@ interface GitStatusNotRepo {
   isEmpty: boolean;
   host?: string | null;
   hasCredentials?: boolean;
+  lastFetchAt?: string | null;
 }
 
 type GitStatus = GitStatusFull | GitStatusNotRepo;
@@ -64,9 +78,24 @@ function changeParts(s: GitStatusFull): string[] {
 }
 
 // ── Badges d'état de la ligne compacte (branche exclue) ──
-// dirty → ambre (~N +M…) · clean → vert (✓) · ahead → accent (↑K) ·
+// dirty → ambre (~N +M…) · clean → VÉRIFIÉ (✓ à jour / horloge si la photo du
+// distant est datée / alerte si aucun fetch réussi) · ahead → accent (↑K) ·
 // behind → ambre (↓K) ; les badges coexistent si pertinent.
-function CompactStateBadges({ status, t }: { status: GitStatus | null; t: TFunction }) {
+function CompactStateBadges({
+  status,
+  verification,
+  ago,
+  reason,
+  t,
+}: {
+  status: GitStatus | null;
+  verification: VerificationState;
+  /** « il y a 5 min » (null si aucun fetch réussi). */
+  ago: string | null;
+  /** Raison du dernier échec de fetch (affichée en infobulle). */
+  reason: FetchFailureReason | null;
+  t: TFunction;
+}) {
   if (!status) return null;
 
   if ("notRepo" in status) {
@@ -90,12 +119,38 @@ function CompactStateBadges({ status, t }: { status: GitStatus | null; t: TFunct
         >
           {parts.join(" ")}
         </span>
-      ) : (
+      ) : verification === "fresh" ? (
         <span
           className="text-hacker-accent text-[0.6875rem] border border-hacker-accent/40 bg-hacker-accent/5 px-1 rounded font-mono shrink-0"
           title={t("gitPanel.upToDate")}
+          data-testid="git-verify-badge"
+          data-verification="fresh"
         >
           ✓
+        </span>
+      ) : verification === "stale" ? (
+        // Fetch ancien : on DATE la photo au lieu d'affirmer « à jour ».
+        <span
+          className="text-hacker-text-dim text-[0.6875rem] border border-hacker-border bg-hacker-bg/30 px-1 rounded font-mono shrink-0 flex items-center"
+          title={`${t("gitPanel.checkedAgo", ago || "…")} — ${t("gitPanel.staleHint")}`}
+          data-testid="git-verify-badge"
+          data-verification="stale"
+        >
+          <HolafIcon name="clock" size={9} />
+        </span>
+      ) : (
+        // AUCUN fetch réussi (ou le dernier a échoué) : jamais « à jour ».
+        <span
+          className="text-hacker-warn text-[0.6875rem] border border-hacker-warn/40 bg-hacker-warn/5 px-1 rounded font-mono shrink-0 flex items-center"
+          title={
+            reason
+              ? `${t("gitPanel.notVerified")} — ${fetchReasonLabel(reason, t)}`
+              : t("gitPanel.notVerifiedHint")
+          }
+          data-testid="git-verify-badge"
+          data-verification="unverified"
+        >
+          <HolafIcon name="alert-triangle" size={9} />
         </span>
       )}
       {status.ahead > 0 && (
@@ -116,6 +171,22 @@ function CompactStateBadges({ status, t }: { status: GitStatus | null; t: TFunct
       )}
     </>
   );
+}
+
+/** Libellé lisible d'une raison d'échec de fetch (jamais un code brut à l'écran). */
+function fetchReasonLabel(reason: FetchFailureReason | null, t: TFunction): string {
+  switch (reason) {
+    case "no_remote":
+      return t("gitPanel.fetchReasonNoRemote");
+    case "auth":
+      return t("gitPanel.fetchReasonAuth");
+    case "network":
+      return t("gitPanel.fetchReasonNetwork");
+    case "timeout":
+      return t("gitPanel.fetchReasonTimeout");
+    default:
+      return t("gitPanel.fetchReasonOther");
+  }
 }
 
 // ── GitProjectSection : section git d'UN projet (réutilisable) ──
@@ -169,9 +240,24 @@ function GitProjectSection({
   const [forgettingCredentials, setForgettingCredentials] = useState(false);
   const [showPushModal, setShowPushModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  // ── Vérification du DISTANT (git fetch) ──
+  // `verifiedAt` = horodatage du dernier fetch RÉUSSI (base du badge) ;
+  // `verifyError` = dernière tentative RATÉE (raison). Une tentative ratée
+  // interdit d'afficher « à jour » : c'est exactement le mensonge d'origine.
+  const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
+  const [verifyError, setVerifyError] = useState<FetchFailureReason | null>(null);
+  const [verifying, setVerifying] = useState(false);
 
-  const fetchStatus = useCallback(async () => {
-    if (!project.git?.remote) return;
+  // Conserve l'horodatage le PLUS RÉCENT (une réponse /git/status antérieure à
+  // un fetch ne doit pas faire reculer la date de vérification).
+  const keepMostRecent = (prev: string | null, next: string | null | undefined): string | null => {
+    if (!next) return prev;
+    if (!prev) return next;
+    return new Date(next).getTime() >= new Date(prev).getTime() ? next : prev;
+  };
+
+  const fetchStatus = useCallback(async (): Promise<GitStatus | null> => {
+    if (!project.git?.remote) return null;
     setLoading(true);
     setError("");
     try {
@@ -181,10 +267,15 @@ function GitProjectSection({
       const data: GitStatus = await parseJsonResponse<GitStatus>(res, apiErrorLabels(t));
       setStatus(data);
       setLastFetchedAt(new Date().toISOString());
+      // `lastFetchAt` vient du backend (dernier fetch RÉUSSI, mémoire du
+      // process) : après un F5 on sait donc encore si le distant a été consulté.
+      setVerifiedAt((prev) => keepMostRecent(prev, data.lastFetchAt));
       // Remonte le statut au parent : badges + auto-dépliage (dirty→déplié).
       onStatusChange(data);
+      return data;
     } catch (err: any) {
       setError(err.message);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -195,6 +286,55 @@ function GitProjectSection({
   const fetchRef = useRef(fetchStatus);
   useEffect(() => { fetchRef.current = fetchStatus; });
 
+  /**
+   * Rafraîchit les RÉFÉRENCES DISTANTES (`POST /git/fetch`).
+   *
+   * - `force = false` : passe par le throttle anti-rafale (60 s par dépôt) ;
+   * - `force = true`  : le bouton « Vérifier les mises à jour » — ignore le
+   *   throttle, mais jamais deux fois en parallèle ;
+   * - NON bloquant pour l'affichage : le statut déjà connu reste à l'écran,
+   *   seul ce contrôle prend du temps (et il ne lève jamais : la route renvoie
+   *   un résultat structuré `{ ok:false, reason }`).
+   */
+  const verifyRemote = useCallback(
+    async (force: boolean): Promise<void> => {
+      if (!project.git?.remote) return;
+      if (!force && !shouldAutoFetch(project.id)) return;
+      // Enregistré pour une tentative comme pour un échec : plus de fetch en
+      // boucle si le panneau se replie/déplie ou si le distant est injoignable.
+      markFetchAttempt(project.id);
+      setVerifying(true);
+      try {
+        const res = await fetch(`/api/projects/${project.id}/git/fetch`, { method: "POST" });
+        const data = await parseJsonResponse<GitFetchResponse>(res, apiErrorLabels(t));
+        if (isSuccessfulFetch(data)) {
+          setVerifyError(null);
+          setVerifiedAt(data.fetchedAt);
+          // Statut RELU après le fetch : ahead/behind immédiatement frais
+          // (le badge ↓N apparaît sans attendre le prochain polling).
+          if (data.status && typeof data.status === "object") {
+            const fresh = data.status as GitStatus;
+            setStatus(fresh);
+            onStatusChange(fresh);
+          }
+        } else {
+          // ÉCHEC : le distant n'a PAS été consulté. On ne garde pas « à jour »
+          // (c'était le mensonge d'origine) — l'état devient « non vérifié ».
+          setVerifyError(data?.reason ?? "error");
+        }
+      } catch {
+        // Réseau/HTTP cassé : même conclusion honnête, sans écraser le statut.
+        setVerifyError("error");
+      } finally {
+        setVerifying(false);
+      }
+    },
+    [project.id, project.git?.remote, t, onStatusChange]
+  );
+
+  const verifyRef = useRef(verifyRemote);
+  useEffect(() => { verifyRef.current = verifyRemote; });
+
   // Notifie le parent à chaque transition de chargement (et à l'unmount) :
   // le parent compte les sections en vol pour le spinner ⟳.
   useEffect(() => {
@@ -204,8 +344,19 @@ function GitProjectSection({
 
   // Seed au montage : renseigne le badge d'état et permet l'auto-dépliage,
   // y compris pour une section repliée (une seule requête, aucun polling).
+  // Puis VÉRIFICATION DU DISTANT (throttlée, non bloquante) : le statut connu
+  // s'affiche immédiatement, le fetch se fait derrière — c'est ce fetch qui
+  // rend le badge honnête (« à jour » n'est dit que sur une photo récente).
   useEffect(() => {
-    fetchRef.current();
+    let cancelled = false;
+    void (async () => {
+      const data = await fetchRef.current();
+      if (cancelled) return;
+      // Un dépôt pas encore cloné n'a pas de références à rafraîchir.
+      if (data && "notRepo" in data) return;
+      await verifyRef.current(false);
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -225,7 +376,13 @@ function GitProjectSection({
     userToggledRef.current = false;
     const refreshTriggered = refreshKey !== lastRefreshKey.current;
     lastRefreshKey.current = refreshKey;
-    if (refreshTriggered || (justOpened && userToggled)) fetchRef.current();
+    if (refreshTriggered || (justOpened && userToggled)) {
+      fetchRef.current();
+      // Ouverture du panneau (ou ⟳ / événement) : on retente une vérification
+      // du distant, throttlée par dépôt — replier/déplier souvent ne déclenche
+      // donc pas une rafale de fetchs.
+      void verifyRef.current(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, refreshKey]);
 
@@ -388,7 +545,64 @@ function GitProjectSection({
   // Dépôt distant affiché en clair (sans schéma ni .git).
   const remoteShort = project.git.remote.replace(/^https?:\/\//, "").replace(/\.git$/, "");
 
+  // ── État de VÉRIFICATION du distant — la seule base du badge « à jour » ──
+  // Une tentative ratée interdit « à jour » : sans succès antérieur on dit
+  // « non vérifié », avec un succès antérieur on DATE la photo (« vérifié il y
+  // a X »). C'est exactement ce que l'ancien code ne savait pas faire.
+  const verifyState: VerificationState = badgeState(verifiedAt, verifyError !== null);
+  const verifiedAgo = verifiedAt ? formatTimeAgo(verifiedAt, t) : null;
+  // Raison affichée quand rien n'a pu être vérifié : le code brut (`network`,
+  // `auth`…) n'est jamais montré tel quel. null = aucune tentative encore
+  // terminée (en vol) → on explique simplement qu'on n'a rien affirmé.
+  const verifyReason: FetchFailureReason | null = verifyError;
+  const notVerifiedText = verifyReason
+    ? t("gitPanel.fetchFailed", fetchReasonLabel(verifyReason, t))
+    : t("gitPanel.notVerified");
+
+  // Fraîcheur HONNÊTE du statut affiché : trois états distincts.
+  //  - à jour  → un fetch RÉCENT a comparé au distant ;
+  //  - vérifié il y a X → fetch ancien (photo datée, assumée) ;
+  //  - non vérifié → aucun fetch réussi / le dernier a échoué : on n'affirme rien.
+  const verification = verifying ? (
+    <span
+      className="text-hacker-text-dim text-[0.6875rem] flex items-center gap-1 shrink-0"
+      title={t("gitPanel.checking")}
+      data-testid="git-verify-pending"
+    >
+      <HolafIcon name="refresh" size={9} className="animate-spin" />
+      {t("gitPanel.checking")}
+    </span>
+  ) : verifyState === "fresh" ? (
+    <span
+      className="text-hacker-accent text-[0.6875rem] flex items-center gap-1 shrink-0"
+      title={t("gitPanel.upToDateChecked", verifiedAgo || t("gitPanel.timeNow"))}
+      data-testid="git-verify-fresh"
+    >
+      <HolafIcon name="check" size={9} />
+      {t("gitPanel.upToDate")}
+    </span>
+  ) : verifyState === "stale" ? (
+    <span
+      className="text-hacker-text-dim text-[0.6875rem] flex items-center gap-1 shrink-0"
+      title={t("gitPanel.staleHint")}
+      data-testid="git-verify-stale"
+    >
+      <HolafIcon name="clock" size={9} />
+      {t("gitPanel.checkedAgo", verifiedAgo || "…")}
+    </span>
+  ) : (
+    <span
+      className="text-hacker-warn text-[0.6875rem] flex items-center gap-1 shrink-0"
+      title={`${t("gitPanel.notVerifiedHint")}`}
+      data-testid="git-verify-unverified"
+    >
+      <HolafIcon name="alert-triangle" size={9} />
+      {t("gitPanel.notVerified")}
+    </span>
+  );
+
   // Fraîcheur du statut affiché (moment de la dernière réponse /git/status).
+  // Conservé pour l'état « pas encore un dépôt » (aucun fetch possible).
   const freshness = lastFetchedAt ? (
     <span
       className="text-hacker-text-dim text-[0.6875rem] flex items-center gap-1 shrink-0"
@@ -427,7 +641,13 @@ function GitProjectSection({
         <HolafIcon name="git-branch" size={9} className="inline mr-0.5 -mt-0.5" />
         {branchBadge}
       </span>
-      <CompactStateBadges status={status} t={t} />
+      <CompactStateBadges
+        status={status}
+        verification={verifyState}
+        ago={verifiedAgo}
+        reason={verifyReason}
+        t={t}
+      />
       {/* Échec de chargement : indicateur visible MÊME replié — sinon un seed
           en échec (ex. NetworkError INFRA-01) restait totalement silencieux.
           Le retry est automatique (prochain pi_event / retour au premier plan)
@@ -549,12 +769,14 @@ function GitProjectSection({
       {/* ── Normal repo ── */}
       {normalStatus && (
         <div className="space-y-1.5 px-1">
-          {/* meta : remote (tronqué) + fraîcheur sur une seule ligne */}
+          {/* meta : remote (tronqué) + VÉRIFICATION du distant sur une ligne.
+              On affiche la vérification (et non la fraîcheur du statut) : le
+              statut local ne dit rien du distant tant qu'aucun fetch n'a eu lieu. */}
           <div className="flex items-center justify-between gap-2">
             <span className="text-hacker-text-bright text-[0.6875rem] truncate" title={project.git.remote}>
               {remoteShort}
             </span>
-            {freshness}
+            {verification}
           </div>
 
           {/* trio ~N +M −K (+ staged/conflits si présents) */}
@@ -618,10 +840,31 @@ function GitProjectSection({
             </div>
           )}
 
+          {/* Arbre propre ET pas d'écart connu : l'ancien texte annonçait
+              « à jour » sans avoir consulté le distant (le mensonge d'origine).
+              Ici, « à jour » n'est dit QUE sur une vérification RÉCENTE. */}
           {normalStatus.isClean && normalStatus.ahead === 0 && normalStatus.behind === 0 && (
-            <div className="text-hacker-text-dim text-[0.75rem] flex items-center gap-1">
-              <HolafIcon name="check" size={10} className="text-hacker-accent" />
-              {t("gitPanel.upToDate")}
+            <div className="text-[0.75rem] flex items-center gap-1" data-testid="git-clean-line">
+              {verifyState === "fresh" ? (
+                <>
+                  <HolafIcon name="check" size={10} className="text-hacker-accent" />
+                  <span className="text-hacker-text-dim">{t("gitPanel.upToDate")}</span>
+                </>
+              ) : verifyState === "stale" ? (
+                <>
+                  <HolafIcon name="clock" size={10} className="text-hacker-text-dim" />
+                  <span className="text-hacker-text-dim">
+                    {t("gitPanel.checkedAgo", verifiedAgo || "…")} — {t("gitPanel.staleHint")}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <HolafIcon name="alert-triangle" size={10} className="text-hacker-warn shrink-0" />
+                  <span className="text-hacker-warn">
+                    {notVerifiedText}
+                  </span>
+                </>
+              )}
             </div>
           )}
 
@@ -663,6 +906,22 @@ function GitProjectSection({
               {t("gitPanel.push")}
             </button>
           </div>
+
+          {/* ── Vérifier les mises à jour : FORCE le fetch, hors throttle ──
+              C'est le seul moyen d'obtenir une réponse fraîche sur place
+              (l'auto-fetch est borné à un par minute et par dépôt). État
+              visuel pendant l'opération, et le résultat est HONNÊTE : un
+              échec laisse « non vérifié », jamais « à jour ». */}
+          <button
+            onClick={() => { void verifyRemote(true); }}
+            disabled={verifying || actionLoading !== null}
+            title={t("gitPanel.checkUpdatesTitle")}
+            data-testid="git-verify-remote"
+            className="w-full flex items-center justify-center gap-1 px-2 py-1 border border-hacker-border text-[0.6875rem] text-hacker-text-dim hover:border-hacker-accent hover:text-hacker-accent transition-colors disabled:opacity-40"
+          >
+            <HolafIcon name="refresh" size={9} className={verifying ? "animate-spin" : ""} />
+            {verifying ? t("gitPanel.checking") : t("gitPanel.checkUpdates")}
+          </button>
 
           {/* Les identifiants SONT persistés (chiffrés) : moyen d'effacement
               toujours présent (grisé s'il n'y a rien à oublier). */}

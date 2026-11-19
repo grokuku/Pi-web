@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   remoteUrl: "https://github.com/owner/repo.git",
   calls: [] as string[][],
   pushError: null as unknown,
+  pullError: null as unknown,
   status: null as any,
   creds: new Map<string, { username: string; password: string }>(),
   // Simulation d'un remote absent / d'une écriture .git/config impossible.
@@ -63,6 +64,7 @@ vi.mock("simple-git", () => {
       },
       pull: async () => {
         state.calls.push(["pull"]);
+        if (state.pullError) throw state.pullError;
         return { summary: { changes: 0, insertions: 0, deletions: 0 } };
       },
       getRemotes: async () =>
@@ -98,6 +100,7 @@ vi.mock("./credential-store.js", () => ({
 
 const {
   gitPush,
+  gitPull,
   gitCommitAndPush,
   setGitCredentials,
   getRemoteHost,
@@ -124,6 +127,7 @@ beforeEach(() => {
   state.calls.length = 0;
   state.instances.length = 0;
   state.pushError = null;
+  state.pullError = null;
   state.remoteUrl = "https://github.com/owner/repo.git";
   state.creds.clear();
   state.noRemotes = false;
@@ -463,5 +467,76 @@ describe("B3 — restoreRemoteUrl : l'échec remonte et se voit", () => {
     expect(joined).toContain("Credentials may be leaked");
     // Aucune valeur secrète dans le log d'incident.
     expect(joined).not.toContain(FAKE_TOKEN);
+  });
+});
+
+// ── J — FUITE DE JETON DANS LES MESSAGES D'ÉCHEC (pull / push) ───────────────
+//
+// Pi-Web authentifie en injectant TEMPORAIREMENT le jeton dans l'URL du remote.
+// Quand git échoue, il RECOPIE cette URL dans son message ; ce message remonte
+// jusqu'à l'écran de l'utilisateur (et peut finir dans un rapport de bug).
+//
+// ⚠️ Deux exigences distinctes, à ne pas confondre :
+//   1. la CLASSIFICATION porte sur le message BRUT (`GIT_AUTH_REQUIRED`,
+//      `GIT_UNREACHABLE`…) : elle ne doit PAS changer ;
+//   2. seul le message RENVOYÉ est expurgé (jeton → `****`).
+describe("J — aucun message d'échec git ne divulgue le jeton", () => {
+  /** Faux jeton : jamais une vraie clé dans un test. */
+  const SECRET = "ghp_SECRET";
+
+  const authFailure = () =>
+    new Error(
+      `fatal: unable to access 'https://x-access-token:${SECRET}@github.com/owner/repo.git/': ` +
+        `The requested URL returned error: 403`
+    );
+
+  it("push : jeton absent du message renvoyé, CODE inchangé (GIT_AUTH_REQUIRED)", async () => {
+    state.pushError = authFailure();
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+
+    // 1. Classification INCHANGÉE : elle a été faite sur le message brut.
+    expect(err).toBeInstanceOf(GitAuthError);
+    // 2. Message expurgé, mais toujours utile (hôte + cause conservés).
+    expect(err.message).not.toContain(SECRET);
+    expect(err.message).toContain("https://****@github.com");
+    expect(err.message).toContain("403");
+  });
+
+  it("pull : même barrière (le pull est l'autre appelant de classifyGitFailure)", async () => {
+    state.pullError = authFailure();
+
+    const err = (await gitPull(repoDir).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GitAuthError);
+    expect(err.message).not.toContain(SECRET);
+    expect(err.message).toContain("https://****@github.com");
+  });
+
+  it("échec réseau : reste GIT_UNREACHABLE après expurgation (pas de code au hasard)", async () => {
+    state.pushError = new Error(
+      `fatal: unable to access 'https://user:${SECRET}@github.com/owner/repo.git/': ` +
+        `Could not resolve host: github.com`
+    );
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GitUnreachableError);
+    expect(err.message).not.toContain(SECRET);
+    expect(err.message).toContain("//****@github.com");
+  });
+
+  it("mot de passe contenant un @ : aucun FRAGMENT du secret ne subsiste", async () => {
+    // Le `@` du mot de passe ne doit pas laisser `//****@RET@host`.
+    state.pushError = new Error(
+      `fatal: unable to access 'https://user:ghp_SEC@RET@github.com/owner/repo.git/': 403`
+    );
+
+    const err = (await gitPush(repoDir).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GitAuthError);
+    expect(err.message).not.toContain("ghp_SEC");
+    expect(err.message).not.toContain("RET@github.com");
+    expect(err.message).toContain("//****@github.com");
   });
 });

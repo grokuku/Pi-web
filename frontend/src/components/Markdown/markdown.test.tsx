@@ -85,6 +85,53 @@ describe("MarkdownContent — non-régression GFM", () => {
   });
 });
 
+describe("MarkdownContent — message assistant complet (puces, italique, citation, tableau GFM)", () => {
+  // Message réaliste d'agent : c'est CE contenu que l'utilisateur voit dans le
+  // fil. Rendu VERBATIM = bug (markdown non rendu) ; ici on verrouille chaque
+  // construction : liste, italique, citation, tableau 3 colonnes REMPLI, code
+  // inline et gras.
+  const MD = [
+    "**Ce qu'il faudrait**",
+    "",
+    "- ⚠️ *Il lit la dernière position connue de `origin/main` …*",
+    "- ⚠️ « À jour » = « rien à récupérer selon une photo périmée ».",
+    "",
+    "> Une citation.",
+    "",
+    "| Option | Coût | Risque |",
+    "| --- | --- | --- |",
+    "| fetch | faible | réseau |",
+    "| poll | moyen | bruit |",
+  ].join("\n");
+
+  it("rend ul/li, em, blockquote, table (3 th, cellules remplies), code et strong", () => {
+    const { container } = renderMd(MD);
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelector("em")).not.toBeNull();
+    expect(container.querySelector("blockquote")).not.toBeNull();
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    expect(table!.querySelectorAll("th")).toHaveLength(3);
+    const cells = Array.from(table!.querySelectorAll("td"));
+    expect(cells).toHaveLength(6);
+    for (const cell of cells) expect((cell.textContent || "").trim()).not.toBe("");
+    expect(container.querySelector("code")!.textContent).toContain("origin/main");
+    expect(container.querySelector("strong")!.textContent).toContain("Ce qu'il faudrait");
+    // Tableau large : enveloppé dans un conteneur DÉFILANT (jamais coupé par
+    // l'`overflow-hidden` de la carte du message).
+    expect(table!.parentElement!.className).toBe("markdown-table-wrapper");
+  });
+
+  it("n'INJECTE aucun ⚠️ : l'emoji du contenu reste dans l'item, aucune puce substituée", () => {
+    const { container } = renderMd(MD);
+    const sourceCount = (MD.match(/⚠️/g) || []).length;
+    expect((container.textContent!.match(/⚠️/g) || []).length).toBe(sourceCount);
+    for (const li of Array.from(container.querySelectorAll("li"))) {
+      expect((li.textContent || "").trimStart().startsWith("⚠️")).toBe(true);
+    }
+  });
+});
+
 describe("isExternalImageSrc — critère d'externalité", () => {
   it("classe externe/local selon l'hôte et le schéma", () => {
     expect(isExternalImageSrc("https://evil.example/tracker.png")).toBe(true);

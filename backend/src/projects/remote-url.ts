@@ -32,3 +32,27 @@ export function sanitizeRemoteUrl(url: string): string {
   if (at === -1) return url;
   return `${protocol}${authority.slice(at + 1)}${rest}`;
 }
+
+/**
+ * Expurge les identifiants embarqués d'un MESSAGE (erreur git, log) — et non
+ * d'une URL seule.
+ *
+ * Pourquoi : Pi-Web authentifie en injectant temporairement le jeton dans l'URL
+ * du remote (`https://user:token@host/…`). Quand git échoue, il RECOPIE cette
+ * URL dans son message (« fatal: unable to access 'https://user:token@host/…' »).
+ * Ce message remonte jusqu'à l'écran de l'utilisateur (et peut finir dans un
+ * rapport de bug) : un jeton ne doit JAMAIS en sortir.
+ *
+ *   fatal: unable to access 'https://u:ghp_x@github.com/o/r': 403
+ * → fatal: unable to access 'https://****@github.com/o/r': 403
+ *
+ * ⚠️ Nettoyage du TEXTE, pas d'une URL : contrairement à `sanitizeRemoteUrl`
+ * (qui analyse une URL complète), on remplace ici toute autorité `//…@` où
+ * qu'elle apparaisse dans la phrase. `[^/\s]*` est GREEDY : on va jusqu'au
+ * DERNIER `@` de l'autorité, sinon un mot de passe contenant `@` laisserait un
+ * fragment du secret (`//****@ss@host`).
+ */
+export function redactSecretsInMessage(msg: string): string {
+  if (!msg) return msg;
+  return msg.replace(/\/\/[^/\s]*@/g, "//****@");
+}

@@ -268,10 +268,29 @@ const MarkdownImage = memo(function MarkdownImage({
   );
 });
 
+// ── Tableau GFM ────────────────────────────────────────────────────────────
+// Enveloppe défilante : un tableau large (3 colonnes remplies, cellules
+// longues) débordait de la carte du message (`overflow-hidden` sur le conteneur
+// du groupe assistant) → colonnes de droite COUPÉES, donc cellules qui
+// paraissent vides/décalées. Le wrapper borne la largeur et rend le défilement
+// horizontal possible, sans toucher au HTML du tableau.
+const MarkdownTable = memo(function MarkdownTable({
+  node: _node, // hast node — ignoré, ne doit pas fuir vers le DOM
+  children,
+  ...rest
+}: ComponentPropsWithoutRef<"table"> & ExtraProps) {
+  return (
+    <div className="markdown-table-wrapper">
+      <table {...rest}>{children}</table>
+    </div>
+  );
+});
+
 // ── Composants markdown exposés (identité stable → memoïsation efficace) ────
 export const markdownComponents = {
   pre: MarkdownCodeBlock,
   img: MarkdownImage,
+  table: MarkdownTable,
 };
 
 // ── Composant de rendu principal ───────────────────────────────────────────
@@ -292,4 +311,4 @@ export const MarkdownContent = memo(function MarkdownContent({
 });
 
 // Réexports utiles (tests / consommateurs avancés).
-export { MarkdownCodeBlock, MarkdownImage };
+export { MarkdownCodeBlock, MarkdownImage, MarkdownTable };

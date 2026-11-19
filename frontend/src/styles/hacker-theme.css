@@ -242,6 +242,18 @@ body {
   margin: 0.25em 0 0.5em 1.5em;
   list-style-position: outside;
 }
+/* Tailwind preflight supprime les marqueurs de liste (`ol, ul, menu {
+   list-style: none }`, preflight.css) et le seul rappel ci-dessus ne rétablit
+   que la POSITION : sans les règles ci-dessous, une liste markdown s'affiche
+   comme du texte simplement indenté, SANS puce. Conséquence vécue dans le fil :
+   un item dont le modèle préfixe le texte d'un emoji (ex. ⚠️) donne
+   l'impression que l'emoji « remplace » la puce. On rétablit donc les types de
+   marqueurs, y compris pour les listes imbriquées. */
+.prose-hacker ul { list-style-type: disc; }
+.prose-hacker ol { list-style-type: decimal; }
+.prose-hacker ul ul { list-style-type: circle; }
+.prose-hacker ul ul ul { list-style-type: square; }
+.prose-hacker li > p { margin-bottom: 0; }
 .prose-hacker li {
   margin-bottom: 0.15em;
 }
@@ -320,6 +332,17 @@ body {
   border-collapse: collapse;
   font-size: 0.75rem;
   margin: 0.5em 0;
+}
+/* Enveloppe défilante des tableaux GFM (cf. MarkdownTable) : un tableau large
+   débordait de la carte du message (`overflow-hidden`) et ses colonnes de
+   droite étaient coupées — elles paraissaient alors vides / décalées. */
+.markdown-table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-table-wrapper > table {
+  margin: 0;
 }
 .prose-hacker th, .prose-hacker td {
   border: 1px solid var(--border);

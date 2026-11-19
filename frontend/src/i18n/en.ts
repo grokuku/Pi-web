@@ -855,6 +855,24 @@ export const en = {
     upToDate: "Up to date",
     workingChanges: "Pending changes",
     lastFetch: "Status freshness",
+    // ── Vérification du DISTANT (fetch) : trois états distincts ──
+    // « Up to date » n'est affiché que si le distant a été consulté il y a peu.
+    checkUpdates: "Check for updates",
+    checkUpdatesTitle:
+      "Fetch the remote and re-compare now (ignores the 1-minute anti-spam delay)",
+    checking: "Checking the remote…",
+    checkedAgo: (ago: string) => `Checked ${ago}`,
+    upToDateChecked: (ago: string) => `Up to date — remote checked ${ago}`,
+    notVerified: "Not verified",
+    notVerifiedHint:
+      "The remote has not been queried — the status may be out of date. Use “Check for updates”.",
+    staleHint: "The remote has not been queried recently — use “Check for updates”.",
+    fetchReasonNoRemote: "no remote configured",
+    fetchReasonAuth: "credentials required",
+    fetchReasonNetwork: "remote unreachable",
+    fetchReasonTimeout: "the remote did not answer",
+    fetchReasonOther: "the check failed",
+    fetchFailed: (reason: string) => `Not verified — ${reason}`,
     pushTitle: "Stage all → commit → push",
     ahead: (n: number) => `${n} ahead`,
     behind: (n: number) => `${n} behind`,

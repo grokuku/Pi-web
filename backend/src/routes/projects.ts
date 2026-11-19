@@ -11,7 +11,11 @@ import {
   removeLinkedProject,
   resolvePushRepos,
 } from "../projects/manager.js";
-import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, GitTimeoutError, GitRemoteHostUnknownError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff } from "../projects/git.js";
+import { detectGit, getGitHistory, gitPull, gitPush, gitCheckout, syncGitInfo, getGitStatus, gitClone, gitInit, gitCommitAndPush, gitCommitPushPreview, getGitIdentity, setGitIdentity, GitIdentityError, GitAuthError, GitRemoteSchemeError, GitUnreachableError, GitPushRejectedError, GitTimeoutError, GitRemoteHostUnknownError, setGitCredentials, getRemoteHost, hostFromRemoteUrl, getGitDiff, gitFetch, getLastFetchAt } from "../projects/git.js";
+// Expurgation des messages git : importée du module PUR `remote-url.js` (et non
+// de `git.js`) pour rester la VRAIE fonction même quand `git.js` est mocké par
+// un test de route.
+import { redactSecretsInMessage } from "../projects/remote-url.js";
 
 /**
  * Longueur maximale d'un identifiant git (username ou token). Un PAT GitHub
@@ -42,7 +46,12 @@ const router = Router();
  *   GIT_LOCKED         (409) index.lock d'une autre opération
  */
 function sendGitErrorResponse(res: Response, error: any): void {
-  const msg = error?.message || String(error || "Unknown error");
+  // ⚠️ DERNIÈRE BARRIÈRE avant l'écran : tout message git (brut ou déjà
+  // classé) repasse par `redactSecretsInMessage`. Le message peut recopier
+  // l'URL temporaire d'authentification (`https://user:token@host/…`) et finir
+  // dans l'infobulle de l'UI, puis dans un rapport de bug. Le CODE d'erreur,
+  // lui, est déterminé par le TYPE de l'erreur (inchangé par l'expurgation).
+  const msg = redactSecretsInMessage(error?.message || String(error || "Unknown error"));
   if (error instanceof GitIdentityError) {
     res.status(400).json({ error: msg, code: "GIT_IDENTITY_REQUIRED" });
     return;
@@ -270,7 +279,41 @@ router.post("/:id/git/sync", async (req: Request, res: Response) => {
     const updated = await syncGitInfo(project);
     res.json(updated);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: redactSecretsInMessage(error?.message || String(error)) });
+  }
+});
+
+// POST git fetch — rafraîchit les RÉFÉRENCES DISTANTES (origin) sans toucher
+// au travail local. Pi-Web ne faisait jamais de fetch : `git status` comparait
+// donc la branche au DERNIER `origin/main` connu et annonçait « à jour » sur
+// une photo potentiellement périmée (le distant avait pu avancer).
+//
+// ⚠️ Un fetch qui échoue (pas de réseau, pas d'identifiants, aucun remote)
+// n'est PAS une erreur bloquante : la réponse reste 200 avec un résultat
+// STRUCTURÉ { ok:false, reason }, pour que l'UI affiche « non vérifié » au lieu
+// du mensonge « à jour ». Les codes d'erreur classiques (GIT_AUTH_REQUIRED, …)
+// restent réservés aux erreurs inattendues, via `sendGitErrorResponse`.
+router.post("/:id/git/fetch", async (req: Request, res: Response) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+    const fetch = await gitFetch(project.cwd);
+    // `host`/`hasCredentials` renvoyés même en échec : le panneau met à jour son
+    // état complet d'un seul coup (bouton « Oublier les identifiants »).
+    const host = hostFromRemoteUrl(project.git?.remote);
+    const hasCredentials = host ? credentialStore.has(host) : false;
+    // Statut RELECTURE après le fetch : l'UI affiche immédiatement un
+    // ahead/behind frais, sans attendre le prochain polling. Il porte les MÊMES
+    // champs que `/git/status` (hôte, identifiants, dernier fetch), sinon le
+    // panneau perdrait ces informations en le fusionnant.
+    const status = fetch.ok
+      ? { ...(await getGitStatus(project.cwd)), host, hasCredentials, lastFetchAt: fetch.fetchedAt }
+      : null;
+    res.json({ ...fetch, host, hasCredentials, status });
+  } catch (error: any) {
+    sendGitErrorResponse(res, error);
   }
 });
 
@@ -551,7 +594,8 @@ router.post("/:id/git/commit-push/preview", async (req: Request, res: Response) 
         code: "GIT_LOCKED",
       });
     } else {
-      res.status(400).json({ error: msg });
+      // Un message git peut recopier l'URL authentifiée du remote.
+      res.status(400).json({ error: redactSecretsInMessage(msg) });
     }
   }
 });
@@ -571,7 +615,7 @@ router.post("/:id/git/checkout", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: redactSecretsInMessage(error?.message || String(error)) });
   }
 });
 
@@ -588,11 +632,15 @@ router.get("/:id/git/status", async (req: Request, res: Response) => {
     // s'il y a réellement un jeton pour cet hôte. `hostFromRemoteUrl` ne lance
     // aucune commande git (l'origin du projet est déjà connue) : pas de coût
     // supplémentaire sur un endpoint déjà interrogé toutes les 30 s.
+    // `lastFetchAt` : dernier fetch RÉUSSI de ce dépôt (mémoire du process).
+    // L'UI distingue ainsi « à jour » (fetch récent) de « vérifié il y a X »
+    // et de « non vérifié » — plus jamais « à jour » sur une photo périmée.
     const host = hostFromRemoteUrl(project.git?.remote);
     res.json({
       ...status,
       host,
       hasCredentials: host ? credentialStore.has(host) : false,
+      lastFetchAt: getLastFetchAt(project.cwd),
     });
   } catch (error: any) {
     sendApiError(res, error);
@@ -633,7 +681,7 @@ router.post("/:id/git/init", async (req: Request, res: Response) => {
     await syncGitInfo(project);
     res.json({ result });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: redactSecretsInMessage(error?.message || String(error)) });
   }
 });
 

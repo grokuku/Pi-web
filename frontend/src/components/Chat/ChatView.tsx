@@ -14,7 +14,7 @@ import { SubAgentBlock } from "./SubAgentBlock";
 import { ParallelSubAgents } from "./ParallelSubAgents";
 import { ToolCallTimer } from "./ToolCallTimer";
 import { buildToolSummaryFromCall, formatToolDuration, type UnavailableToolKind, type ToolSummaryLabels } from "../../utils/toolSummaries";
-import { countContentLines, extractSubagentResults, firstResultHeading, isSubagentResultFailed, subagentStatusLabelKey } from "../../utils/subagent-result";
+import { countContentLines, extractSubagentResults, firstResultHeading, isSubagentResultFailed, resultBodyForMarkdown, subagentStatusLabelKey } from "../../utils/subagent-result";
 import { readDisplayDetailExpanded, writeDisplayDetailExpanded, subscribeDisplayDetail } from "../../utils/display-detail";
 import { useTranslation } from "../../i18n";
 import { pushOverlay, popOverlay, isTopOverlay } from "../../hooks/useOverlayStack";
@@ -1718,7 +1718,15 @@ export const SubAgentResultMessage = memo(function SubAgentResultMessage({ messa
             </>
           }
         >
-          <div className="text-hacker-text-bright/90 text-xs whitespace-pre-wrap break-words">{message.content}</div>
+          {/* Corps = le markdown du sous-agent, rendu par le composant PARTAGÉ
+              (react-markdown + remark-gfm, cf. components/Markdown/markdown.tsx).
+              Avant : `whitespace-pre-wrap` en texte brut → puces, italique,
+              citations et tableaux GFM du sous-agent s'affichaient VERBATIM
+              (markdown non rendu dans le fil). La ligne d'en-tête « ### … » est
+              retirée : elle est déjà portée par l'en-tête du bloc. */}
+          <div className="prose-hacker text-hacker-text-bright/90 text-xs break-words">
+            <MarkdownContent content={resultBodyForMarkdown(message.content)} />
+          </div>
         </CollapsibleBlock>
       </div>
     </div>

@@ -3,10 +3,10 @@ import { existsSync, readdirSync, mkdirSync, statSync, unlinkSync, readFileSync,
 import path from "path";
 import { fileURLToPath } from "url";
 import type { Project } from "./manager.js";
-import { Mutex } from "../utils/mutex.js";
+import { Mutex, MutexTimeoutError } from "../utils/mutex.js";
 import { updateProjectGit } from "./manager.js";
 import { credentialStore } from "./credential-store.js";
-import { sanitizeRemoteUrl } from "./remote-url.js";
+import { sanitizeRemoteUrl, redactSecretsInMessage } from "./remote-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -121,6 +121,17 @@ function isLockError(msg: string): boolean {
 
 // Default timeout for git operations that may hang (push, pull, clone, etc.)
 const GIT_NETWORK_TIMEOUT_MS = 30_000;
+
+/**
+ * Budget d'un `git fetch` — PLUS COURT qu'un push/pull/clone.
+ *
+ * Un fetch est une opération de CONFORT (rafraîchir la photo du distant), pas
+ * une action utilisateur dont le résultat est attendu : mieux vaut rendre la
+ * main avec « non vérifié » au bout de 20 s que bloquer l'UI. Il reste borné
+ * par le timeout natif de simple-git (`timeout: { block }`), qui tue réellement
+ * le process enfant.
+ */
+const GIT_FETCH_TIMEOUT_MS = 20_000;
 
 // Délai maximal d'attente du MUTEX par dépôt. Strictement supérieur au timeout
 // d'une opération git : une opération coincée libère la place avec un message
@@ -428,6 +439,192 @@ export async function gitPush(cwd: string): Promise<string> {
       }
     }
   });
+}
+
+// ── Fetch : rafraîchir la photo du distant ────────────
+//
+// POURQUOI : `git status` compare la branche locale au DERNIER `origin/main`
+// connu, refs distantes qui ne bougent QU'À un `fetch`. Pi-Web n'en faisait
+// jamais : le badge annonçait « à jour » alors qu'il comparait à une photo
+// périmée du distant (le distant avait pu avancer sans que rien ne le sache).
+
+/** Raisons d'échec d'un fetch — DISTINCTES, jamais un 500 anonyme. */
+export type GitFetchFailureReason =
+  /** Aucun remote `origin` : cas NORMAL, rien à comparer (ce n'est pas une erreur). */
+  | "no_remote"
+  /** Identifiants absents/refusés, ou remote non-HTTPS : un jeton corrigerait. */
+  | "auth"
+  /** Distant injoignable (DNS, firewall, réseau coupé). */
+  | "network"
+  /** git n'a rien répondu dans le budget (attente d'identifiants, réseau figé…). */
+  | "timeout"
+  /** Toute autre erreur git (dépôt cassé, ref invalide…). */
+  | "error";
+
+export interface GitFetchResult {
+  /** true uniquement si les refs distantes ont réellement été rafraîchies. */
+  ok: boolean;
+  /** Cause de l'échec (absent si ok). */
+  reason?: GitFetchFailureReason;
+  /** Message lisible (message git brut / explication) — jamais un secret. */
+  message?: string;
+  /** Horodatage ISO du fetch RÉUSSI ; null si celui-ci a échoué. */
+  fetchedAt: string | null;
+  /**
+   * Dernier fetch RÉUSSI connu pour ce dépôt (mémoire du process). Permet à
+   * l'UI de dire « vérifié il y a X » plutôt que « à jour » sur une photo
+   * dont elle ignore l'âge — y compris après un rechargement de page.
+   */
+  lastFetchAt: string | null;
+}
+
+/**
+ * Dernier fetch réussi, par dépôt (cwd). Mémoire de PROCESS uniquement :
+ * aucun fichier d'état, aucune écriture disque. Un redémarrage du backend
+ * repart donc sur « non vérifié » — ce qui est la vérité (les refs distantes
+ * peuvent avoir bougé pendant l'arrêt).
+ */
+const lastFetchAtByCwd = new Map<string, string>();
+
+/** Dernier fetch réussi connu pour ce dépôt (null = jamais vérifié). */
+export function getLastFetchAt(cwd: string): string | null {
+  return lastFetchAtByCwd.get(cwd) ?? null;
+}
+
+/**
+ * Expurgation des messages git : implémentée dans `remote-url.ts` (fonction
+ * PURE, sans dépendance) afin que la route `sendGitErrorResponse` puisse
+ * l'importer SANS passer par ce module (qui est mocké dans les tests de route).
+ */
+
+/**
+ * Traduit un échec de fetch en raison DISTINCTE (mêmes prédicats que
+ * `classifyGitFailure`, mais jamais d'exception : un fetch qui échoue n'est
+ * pas une action bloquante). Le message renvoyé est toujours expurgé.
+ */
+function classifyFetchFailure(msg: string, error: any): { reason: GitFetchFailureReason; message: string } {
+  const failure = classifyFetchFailureRaw(msg, error);
+  return { ...failure, message: redactSecretsInMessage(failure.message) };
+}
+
+function classifyFetchFailureRaw(
+  msg: string,
+  error: any
+): { reason: GitFetchFailureReason; message: string } {
+  if (isBlockTimeoutError(error) || isBlockTimeoutError({ message: msg })) {
+    return {
+      reason: "timeout",
+      message:
+        `git fetch did not answer within ${Math.round(GIT_FETCH_TIMEOUT_MS / 1000)}s — git is ` +
+        `probably waiting for credentials (interactive prompts are disabled). The status shown ` +
+        `is NOT up to date; save the token for this host, then retry.`,
+    };
+  }
+  // Ordre identique à classifyGitFailure : un échec SSH est un problème
+  // d'identifiants non transmissibles, pas un problème réseau.
+  if (isSshFailureMessage(msg)) {
+    return { reason: "auth", message: msg };
+  }
+  if (isAuthError(msg)) {
+    return { reason: "auth", message: msg };
+  }
+  if (isUnreachableMessage(msg)) {
+    return { reason: "network", message: msg };
+  }
+  return { reason: "error", message: msg || "git fetch failed" };
+}
+
+/**
+ * Rafraîchit les références distantes du dépôt (`git fetch origin`).
+ *
+ * Garde-fous :
+ *  - passe par `gitInstance()` (via `gitWithAuth`) → `GIT_TERMINAL_PROMPT=0`
+ *    et timeout natif `{ block: GIT_FETCH_TIMEOUT_MS }` : un fetch qui
+ *    demanderait un mot de passe échoue immédiatement au lieu d'attendre ;
+ *  - passe par le MUTEX du dépôt : un fetch ÉCRIT dans `.git` (refs distantes)
+ *    et ne doit jamais courser un commit/push en cours ;
+ *  - aucun fichier d'identifiants : le jeton passe par l'URL temporaire du
+ *    remote, restaurée dans un `finally` (échec de restauration journalisé) ;
+ *  - ne LÈVE jamais : renvoie `{ ok: false, reason }` (l'appelant décide).
+ */
+export async function gitFetch(cwd: string): Promise<GitFetchResult> {
+  try {
+    return await getGitMutex(cwd).run(() => runGitFetch(cwd));
+  } catch (error: any) {
+    // Mutex non obtenu (une autre opération du dépôt est coincée) : on ne
+    // prétend pas avoir vérifié quoi que ce soit.
+    if (error instanceof MutexTimeoutError) {
+      return {
+        ok: false,
+        reason: "timeout",
+        message: redactSecretsInMessage(error.message),
+        fetchedAt: null,
+        lastFetchAt: getLastFetchAt(cwd),
+      };
+    }
+    throw error;
+  }
+}
+
+async function runGitFetch(cwd: string): Promise<GitFetchResult> {
+  const lastFetchAt = getLastFetchAt(cwd);
+
+  // Pas d'origin → cas NORMAL (dépôt local seul) : rien à rafraîchir, aucune
+  // erreur à montrer. On le dit explicitement (`no_remote`).
+  const remoteUrl = await readRemoteUrl(cwd);
+  if (!remoteUrl) {
+    return {
+      ok: false,
+      reason: "no_remote",
+      message: "This repository has no 'origin' remote — there is nothing to fetch.",
+      fetchedAt: null,
+      lastFetchAt,
+    };
+  }
+
+  let git: SimpleGit | null = null;
+  try {
+    // `gitWithAuth` part de `gitInstance()` : on hérite de GIT_TERMINAL_PROMPT=0
+    // et du timeout `block` borné à GIT_FETCH_TIMEOUT_MS.
+    git = await gitWithAuth(cwd, GIT_FETCH_TIMEOUT_MS);
+    await git.fetch(["origin"]);
+    const fetchedAt = new Date().toISOString();
+    lastFetchAtByCwd.set(cwd, fetchedAt);
+    console.log(`[git] fetch succeeded: cwd=${cwd} at=${fetchedAt}`);
+    return { ok: true, fetchedAt, lastFetchAt: fetchedAt };
+  } catch (error: any) {
+    // `gitWithAuth` refuse un remote SSH porteur d'identifiants : les refs n'ont
+    // donc PAS été rafraîchies, et c'est un problème d'identifiants.
+    if (error instanceof GitRemoteSchemeError) {
+      console.log(`[git] fetch refused (remote scheme): cwd=${cwd}`);
+      return {
+        ok: false,
+        reason: "auth",
+        // `buildRemoteSchemeMessage` a déjà expurgé l'URL, mais on applique la
+        // même barrière que pour les autres messages (défense en profondeur).
+        message: redactSecretsInMessage(error.message),
+        fetchedAt: null,
+        lastFetchAt,
+      };
+    }
+    const failure = classifyFetchFailure(error?.message || String(error), error);
+    console.log(`[git] fetch failed (${failure.reason}): cwd=${cwd}`);
+    return { ok: false, ...failure, fetchedAt: null, lastFetchAt };
+  } finally {
+    // Le jeton a pu être injecté dans l'URL du remote : il est retiré dans TOUS
+    // les cas. Un échec de restauration n'est jamais avalé (seul signal qu'un
+    // identifiant est resté dans `.git/config`).
+    if (git) {
+      try {
+        await restoreRemoteUrl(cwd);
+      } catch (e: any) {
+        console.error(
+          `[git] CRITICAL: Failed to restore remote URL after fetch. Credentials may be leaked! ` +
+          `cwd=${cwd} remote=origin: ${e?.message || e}`
+        );
+      }
+    }
+  }
 }
 
 // ── Commit message generation ─────────────────────────
@@ -763,6 +960,14 @@ async function currentBranchSafe(cwd: string): Promise<string> {
  *   "block timeout reached" ne suffit pas à identifier de façon fiable.
  */
 function classifyGitFailure(label: string, msg: string, remoteUrl?: string | null, error?: any): Error {
+  // ⚠️ SÉPARATION CLASSIFICATION / EXPURGATION (ne pas inverser) :
+  //   - la CLASSIFICATION ci-dessous porte sur `msg` BRUT : les prédicats
+  //     (isAuthError, isUnreachableMessage, isSshFailureMessage…) dépendent du
+  //     texte EXACT renvoyé par git ; expurger d'abord ferait perdre le motif
+  //     « unable to access '//****@host' » / « Could not resolve host » etc.,
+  //     donc le code d'erreur (GIT_AUTH_REQUIRED, GIT_UNREACHABLE, …) ;
+  //   - l'EXPURGATION ne s'applique QU'À CE QUI EST RENVOYÉ : ces messages
+  //     remontent jusqu'à l'écran de l'utilisateur (et dans ses rapports).
   // Timeout RÉEL (process tué par le plugin `timeout.block` de simple-git) :
   // message honnête, sans jamais accuser le réseau.
   if (isBlockTimeoutError(error) || isBlockTimeoutError({ message: msg })) {
@@ -771,19 +976,21 @@ function classifyGitFailure(label: string, msg: string, remoteUrl?: string | nul
   // Ordre important : « unable to access … 403 » est une erreur d'IDENTIFIANTS
   // (le serveur a répondu), donc l'auth est testée avant l'injoignabilité.
   if (isSshFailureMessage(msg)) {
+    // `buildRemoteSchemeMessage` expurge déjà l'URL, on repasse la barrière
+    // (défense en profondeur) : le message est destiné à l'utilisateur.
     return new GitRemoteSchemeError(
-      buildRemoteSchemeMessage(remoteUrl || "git@<host>:<owner>/<repo>.git"),
+      redactSecretsInMessage(buildRemoteSchemeMessage(remoteUrl || "git@<host>:<owner>/<repo>.git")),
       remoteUrl || undefined,
       sshRemoteToHttps(remoteUrl || "") || undefined
     );
   }
   if (isAuthError(msg)) {
-    return new GitAuthError(`${label} authentication failed: ${msg}`);
+    return new GitAuthError(`${label} authentication failed: ${redactSecretsInMessage(msg)}`);
   }
   if (isUnreachableMessage(msg)) {
-    return new GitUnreachableError(`${label} failed: the remote did not answer (${msg})`);
+    return new GitUnreachableError(`${label} failed: the remote did not answer (${redactSecretsInMessage(msg)})`);
   }
-  return new Error(`${label} failed: ${msg}`);
+  return new Error(`${label} failed: ${redactSecretsInMessage(msg)}`);
 }
 
 /**
@@ -800,8 +1007,11 @@ function classifyGitFailure(label: string, msg: string, remoteUrl?: string | nul
  * On ne convertit JAMAIS le remote en silence (le protocole d'un dépôt ne se
  * change pas dans le dos de l'utilisateur).
  */
-async function gitWithAuth(cwd: string): Promise<SimpleGit> {
-  const git = gitInstance(cwd);
+async function gitWithAuth(
+  cwd: string,
+  blockTimeoutMs: number = GIT_NETWORK_TIMEOUT_MS
+): Promise<SimpleGit> {
+  const git = gitInstance(cwd, blockTimeoutMs);
 
   let remoteUrl: string;
   try {
@@ -1016,7 +1226,9 @@ export async function gitCommit(
           if (result.commit === null || result.summary.changes === 0) return "Nothing to commit";
           return `Committed ${result.summary.changes} change(s) as ${result.commit.slice(0, 7)} (lock cleared)`;
         } catch (e2: any) {
-          throw new Error(`Git commit failed (lock persisted): ${e2.message || e2}`);
+          // Défense en profondeur : un message git peut recopier une URL
+          // porteuse d'identifiants — jamais de jeton dans une erreur client.
+          throw new Error(`Git commit failed (lock persisted): ${redactSecretsInMessage(String(e2?.message || e2))}`);
         }
       }
       if (msg.includes("author identity") || msg.includes("Please tell me who you are") || msg.includes("unable to auto-detect email address")) {
@@ -1211,7 +1423,7 @@ export async function gitCheckout(
       await git.checkout(ref);
       return `Checked out ${ref}`;
     } catch (error: any) {
-      throw new Error(`Git checkout failed: ${error.message}`);
+      throw new Error(`Git checkout failed: ${redactSecretsInMessage(error.message)}`);
     }
   });
 }
@@ -1263,7 +1475,8 @@ export async function gitClone(
       return `Cloned ${remote} (${branch})`;
     } catch (error: any) {
       const msg = error.message || "";
-      console.error(`[git-clone] Clone WITH auth FAILED: ${msg}`);
+      // Log SERVEUR : le message git peut recopier l'URL d'authentification.
+      console.error(`[git-clone] Clone WITH auth FAILED: ${redactSecretsInMessage(msg)}`);
       throw classifyGitFailure("Git clone", msg, remote, error);
     }
   }
@@ -1285,7 +1498,7 @@ export async function gitClone(
     return `Cloned ${remote} (${branch})`;
   } catch (error: any) {
     const msg = error.message || "";
-    console.error(`[git-clone] Clone WITHOUT auth FAILED: ${msg}`);
+    console.error(`[git-clone] Clone WITHOUT auth FAILED: ${redactSecretsInMessage(msg)}`);
     throw classifyGitFailure("Git clone", msg, remote, error);
   }
 }
@@ -1325,7 +1538,7 @@ export async function gitInit(cwd: string, remote: string, branch: string = "mai
 
       return `Initialized repo, remote set to ${remote}`;
     } catch (error: any) {
-      throw new Error(`Git init failed: ${error.message}`);
+      throw new Error(`Git init failed: ${redactSecretsInMessage(error.message)}`);
     }
   });
 }

@@ -856,6 +856,25 @@ export const fr = {
     upToDate: "À jour",
     workingChanges: "Modifications en attente",
     lastFetch: "Fraîcheur du statut",
+    // ── Vérification du DISTANT (fetch) : trois états distincts ──
+    // « À jour » n'est affiché que si le distant a été consulté il y a peu.
+    checkUpdates: "Vérifier les mises à jour",
+    checkUpdatesTitle:
+      "Interroger le distant et re-comparer maintenant (ignore le délai anti-rafale d'une minute)",
+    checking: "Vérification du distant…",
+    checkedAgo: (ago: string) => `Vérifié ${ago}`,
+    upToDateChecked: (ago: string) => `À jour — distant consulté ${ago}`,
+    notVerified: "Non vérifié",
+    notVerifiedHint:
+      "Le distant n'a pas été consulté — le statut peut être périmé. Utilisez « Vérifier les mises à jour ».",
+    staleHint:
+      "Le distant n'a pas été consulté récemment — utilisez « Vérifier les mises à jour ».",
+    fetchReasonNoRemote: "aucun dépôt distant configuré",
+    fetchReasonAuth: "identifiants requis",
+    fetchReasonNetwork: "distant injoignable",
+    fetchReasonTimeout: "le distant n'a pas répondu",
+    fetchReasonOther: "échec de la vérification",
+    fetchFailed: (reason: string) => `Non vérifié — ${reason}`,
     pushTitle: "Indexer tout → commit → push",
     ahead: (n: number) => `${n} en avance`,
     behind: (n: number) => `${n} en retard`,
