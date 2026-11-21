@@ -153,7 +153,10 @@ export const en = {
     historyResynced: (n: number) => `History resynced: ${n} message${n !== 1 ? "s" : ""}`,
     // ── Safety net 6210d1c: displayed content from local cache ──
     localCache: "Displaying from local cache — waiting for sync…",
-    localCacheWriteFailed: "Local chat cache is disabled: browser storage quota exceeded. Recent messages may not survive a reload.",
+    localCacheWriteFailed:
+      "Local display cache disabled: the browser refused the writes. No conversation is lost — the thread is reloaded from the server; only the immediate display is slower.",
+    localCacheEvicted: (n: number) =>
+      `Local cache: ${n} other thread${n > 1 ? "s" : ""} evicted to stay within the maximum size (they will be reloaded from the server).`,
     // ── LOT 3: history timeline blocks ──
     toolResultLabel: "Tool result",
     bashExecutionLabel: "Command",

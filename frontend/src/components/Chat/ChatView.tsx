@@ -31,7 +31,7 @@ import { routeSubagentEnvelope, resetSubagentRuns, insertDatedRuns, delegateAnch
 import { DatedSubAgentBlock } from "./SubAgentBlock";
 import { DaySeparator } from "./DaySeparator";
 import { withDaySeparators } from "../../utils/day-separator";
-import { parseChatCacheSnapshot } from "../../utils/chat-cache";
+import { loadChatCache, saveChatCache } from "../../utils/chat-local-cache";
 import { resolveScrollAction } from "../../utils/chat-scroll";
 import { promptMessageType, clientTimeZone } from "../../utils/session-sync";
 import { buildProviderErrorRun, groupProviderFailures } from "../../utils/llm-errors";
@@ -183,9 +183,11 @@ const LocalCacheBanner = memo(function LocalCacheBanner() {
   );
 });
 
-// Quota localStorage atteint : les écritures suivantes sont désactivées pour
-// éviter des exceptions répétées. Le bandeau reste visible une seule fois et
-// aucune donnée (y compris celle des autres projets) n'est purgée.
+// Cache local inutilisable (stockage indisponible ou écriture refusée) : les
+// écritures suivantes sont désactivées pour éviter des exceptions répétées.
+// Le bandeau est HONNÊTE : le fil n'est PAS perdu (au rechargement il est
+// relu depuis le serveur, seule source de vérité) — seul l'affichage immédiat
+// au montage est dégradé.
 const LocalCacheWriteFailedBanner = memo(function LocalCacheWriteFailedBanner() {
   const { t } = useTranslation();
   return (
@@ -316,6 +318,33 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   const [localCacheOnly, setLocalCacheOnly] = useState(false);
   const [localCacheWriteFailed, setLocalCacheWriteFailed] = useState(false);
   const localCacheDisabledRef = useRef(false);
+  // Séquençage des restaurations depuis le cache local (lecture asynchrone) :
+  // seule la dernière demande pour le projet affiché peut s'appliquer.
+  const cacheRestoreSeqRef = useRef(0);
+  // Éviction d'autres fils notifiée UNE fois (jamais de purge silencieuse ni
+  // de spam de toasts).
+  const cacheEvictionNotifiedRef = useRef(false);
+
+  // Écriture du snapshot local du fil (asynchrone, jamais d'exception).
+  // Traduction HONNÊTE du résultat :
+  //  - le cache est un simple confort d'affichage ; le backend étant la source
+  //    de vérité, un échec d'écriture ne perd AUCUN message ;
+  //  - « unavailable »/« error » → un bandeau unique + arrêt des tentatives ;
+  //  - éviction d'AUTRES fils pour tenir dans le budget global → toast (jamais
+  //    de purge silencieuse des données d'un autre projet) ;
+  //  - « too-large » → silence (fil trop gros : la resync serveur s'en charge).
+  const writeThreadCache = useCallback(async (pid: string, msgs: DisplayMessage[]) => {
+    const res = await saveChatCache(pid, msgs);
+    if (res.status === "unavailable" || res.status === "error") {
+      localCacheDisabledRef.current = true;
+      setLocalCacheWriteFailed(true);
+      return;
+    }
+    if (res.evicted.length > 0 && !cacheEvictionNotifiedRef.current) {
+      cacheEvictionNotifiedRef.current = true;
+      toast(t("chat.localCacheEvicted", res.evicted.length), "info", 6000);
+    }
+  }, [t]);
 
   const hasContent = messages.length > 0;
   const prevProjectIdRef = useRef(projectId);
@@ -330,6 +359,10 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     const prevId = prevProjectIdRef.current;
     if (prevId && prevId !== projectId) {
       chatHistory.saveMessagesFor(messagesRef.current, prevId);
+      // Snapshot du fil QUITTÉ : écrit AVANT de vider le ref (sinon un
+      // changement de projet rapide — avant le debounce de 500 ms — laissait
+      // le fil précédent sans cache).
+      void writeThreadCache(prevId, messagesRef.current);
       // Also persist assistantId for the project we're leaving
       chatHistory.setAssistantIdFor(prevId, currentAssistantIdRef.current);
       // LOT 2b (étanchéité) : on purge les runs TERMINÉS du projet QUITTÉ (les
@@ -345,35 +378,44 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
     // Restore from chatHistory store (now kept up-to-date by pi_event routing)
     const stored = chatHistory.getMessages();
     if (stored.length > 0) {
+      // Une restauration asynchrone encore en vol est invalidée : la mémoire du
+      // hook est la vérité vivante du fil.
+      cacheRestoreSeqRef.current += 1;
       setMessages(stored);
       // Contenu tenu à jour par les events/pi_history backend : vérité vivante.
       setLocalCacheOnly(false);
       // Restore the assistantId for in-progress streaming reconciliation
       currentAssistantIdRef.current = chatHistory.getAssistantIdFor(projectId);
     } else {
-      // Fallback: localStorage for sessions that predate the routing fix.
-      // Garde d'ancienneté : un snapshot de PLUS de 24 h ne doit jamais être
-      // présenté comme l'état courant (le backend a pu tourner des heures
-      // entre-temps) → chat vide, la resync backend (pi_history) fera foi.
-      try {
-        const snap = parseChatCacheSnapshot(localStorage.getItem(`pi-web-chat-${projectId}`));
-        if (snap && snap.fresh) {
-          chatHistory.saveMessages(snap.messages);
-          setMessages(snap.messages);
-          // Contenu issu du CACHE (pas du backend) : bandeau discret jusqu'à
-          // la première resync pi_history.
-          setLocalCacheOnly(true);
-        } else {
-          if (snap) {
-            console.log(`[Chat] Cache local de ${projectId} périmé (${snap.ageMs === Infinity ? "sans horodatage" : Math.round(snap.ageMs / 3_600_000) + " h"}) — ignoré, en attente de resync backend`);
-          }
-          setMessages([]);
-          setLocalCacheOnly(false);
+      // Fallback : cache local (IndexedDB, repli localStorage) pour les
+      // sessions qui précèdent le correctif de routage, et pour peindre le fil
+      // sans attendre le tour réseau de la resync backend.
+      // Garde d'ancienneté (24 h) : un snapshot plus vieux ne doit JAMAIS être
+      // présenté comme l'état courant → chat vide, la resync backend fera foi.
+      // LECTURE ASYNCHRONE : elle ne s'applique que si, entre-temps, aucune
+      // autre source (events live, pi_history) n'a rempli le fil — sinon on
+      // écraserait la vérité backend par un snapshot périmé.
+      setMessages([]);
+      setLocalCacheOnly(false);
+      const requestedProject = projectId;
+      cacheRestoreSeqRef.current += 1;
+      const seq = cacheRestoreSeqRef.current;
+      void loadChatCache(requestedProject).then((snap) => {
+        // Un changement de projet (ou une seconde restauration) a eu lieu depuis.
+        if (seq !== cacheRestoreSeqRef.current) return;
+        if (!snap) return;
+        if (historyReceivedRef.current.has(requestedProject)) return;
+        if (messagesRef.current.length > 0) return;
+        if (!snap.fresh) {
+          console.log(`[Chat] Cache local de ${requestedProject} périmé (${snap.ageMs === Infinity ? "sans horodatage" : Math.round(snap.ageMs / 3_600_000) + " h"}) — ignoré, en attente de resync backend`);
+          return;
         }
-      } catch {
-        setMessages([]);
-        setLocalCacheOnly(false);
-      }
+        chatHistory.saveMessages(snap.messages);
+        setMessages(snap.messages);
+        // Contenu issu du CACHE (pas du backend) : bandeau discret jusqu'à
+        // la première resync pi_history.
+        setLocalCacheOnly(true);
+      }).catch(() => { /* cache indisponible : le backend fera foi */ });
       currentAssistantIdRef.current = null;
     }
     setError("");
@@ -391,27 +433,16 @@ export function ChatView({ send, on, activeProject, isStreaming, streamingStalle
   useEffect(() => { serverHistoryMetaRef.current = serverHistoryMeta; }, [serverHistoryMeta]);
   useEffect(() => { loadingEarlierRef.current = loadingEarlier; }, [loadingEarlier]);
 
-  // Debounced persistence (expensive — localStorage + JSON.stringify blocks main thread)
+  // Debounced persistence — l'écriture du cache est ASYNCHRONE (IndexedDB) :
+  // elle ne bloque plus le thread principal pendant le streaming, et le
+  // plafonnement se compte en OCTETS (plafond global + éviction LRU des autres
+  // fils), plus en nombre de messages.
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       if (!projectId) return;
       chatHistory.saveMessages(messagesRef.current);
-      // BUG-22 fix: limiter à 200 messages pour éviter QuotaExceededError (5-10MB)
-      const maxMessages = 200;
-      const toSave = messagesRef.current.length > maxMessages
-        ? messagesRef.current.slice(-maxMessages)
-        : messagesRef.current;
-      try {
-        if (!localCacheDisabledRef.current) {
-          localStorage.setItem(`pi-web-chat-${projectId}`, JSON.stringify(toSave));
-        }
-      } catch (error) {
-        if ((error as { name?: string })?.name === "QuotaExceededError") {
-          localCacheDisabledRef.current = true;
-          setLocalCacheWriteFailed(true);
-        }
-      }
+      if (!localCacheDisabledRef.current) void writeThreadCache(projectId, messagesRef.current);
       saveTimerRef.current = null;
     }, 500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };

@@ -49,6 +49,12 @@ beforeEach(() => {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  // Le fil non vide monte l'observer de croissance (auto-follow du scroll).
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
 });
 
 afterEach(() => {
@@ -73,7 +79,7 @@ describe("ChatView — erreurs et persistance honnêtes", () => {
     expect(screen.getAllByText(/backend exploded/)).toHaveLength(1);
   });
 
-  it("QuotaExceededError affiche une seule bannière et désactive les écritures suivantes", async () => {
+  it("écriture du cache refusée → une seule bannière HONNÊTE (aucune perte annoncée) et écritures stoppées", async () => {
     const originalSetItem = Storage.prototype.setItem;
     const writes: string[] = [];
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
@@ -85,16 +91,29 @@ describe("ChatView — erreurs et persistance honnêtes", () => {
     });
     renderChat();
 
-    expect(await screen.findByText(/Local chat cache is disabled/, {}, { timeout: 1500 })).toBeTruthy();
-    expect(screen.getAllByText(/Local chat cache is disabled/)).toHaveLength(1);
-    expect(writes).toHaveLength(1);
+    // Un fil non vide déclenche l'écriture du cache (un fil vide n'écrit rien).
+    await act(async () => {
+      handlers.get("pi_history")?.({ projectId: "p1", messages: [{ role: "user", content: "hi", timestamp: Date.now() }] });
+    });
+
+    const banner = await screen.findByText(/Local display cache disabled/, {}, { timeout: 1500 });
+    expect(screen.getAllByText(/Local display cache disabled/)).toHaveLength(1);
+    // LE MESSAGE DIT LA VÉRITÉ : le backend est la source de vérité, rien n'est
+    // perdu — il ne doit JAMAIS annoncer une perte de messages.
+    const text = banner.textContent ?? "";
+    expect(text).toMatch(/No conversation is lost/i);
+    expect(text).toMatch(/reloaded from the server/i);
+    expect(text).not.toMatch(/may not survive|may be lost|can be lost/i);
+
+    const attemptsAfterBanner = writes.length;
+    expect(attemptsAfterBanner).toBeGreaterThan(0);
 
     // Une nouvelle erreur provoque un rendu : aucune nouvelle tentative de cache.
     await act(async () => {
       handlers.get("error")?.({ projectId: "p1", error: "still visible" });
     });
     await new Promise((resolve) => setTimeout(resolve, 550));
-    expect(writes).toHaveLength(1);
-    expect(screen.getAllByText(/Local chat cache is disabled/)).toHaveLength(1);
+    expect(writes).toHaveLength(attemptsAfterBanner);
+    expect(screen.getAllByText(/Local display cache disabled/)).toHaveLength(1);
   }, 3000);
 });

@@ -153,7 +153,10 @@ export const fr = {
     historyResynced: (n: number) => `Historique resynchronisé : ${n} message${n > 1 ? "s" : ""}`,
     // ── Filet de secours 6210d1c : contenu affiché issu du cache local ──
     localCache: "Affichage depuis un cache local — en attente de synchronisation…",
-    localCacheWriteFailed: "Cache local du fil désactivé : quota de stockage du navigateur dépassé. Les messages récents peuvent être perdus au rechargement.",
+    localCacheWriteFailed:
+      "Cache d'affichage local désactivé : le navigateur refuse les écritures. Aucune conversation n'est perdue — le fil est rechargé depuis le serveur ; seul l'affichage immédiat est plus lent.",
+    localCacheEvicted: (n: number) =>
+      `Cache local : ${n} autre${n > 1 ? "s" : ""} fil${n > 1 ? "s" : ""} évincé${n > 1 ? "s" : ""} pour tenir dans la taille maximale (ils seront rechargés depuis le serveur).`,
     // ── LOT 3 : blocs de timeline de l'historique ──
     toolResultLabel: "Résultat d'outil",
     bashExecutionLabel: "Commande",
