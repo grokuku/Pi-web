@@ -15,7 +15,17 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { GIT_SAFETY_RULES, guardBashToolCall } from "./bash-guard.js";
+import {
+  buildHarnessRolePrompt,
+  CBM_EXPLORATION_GUIDE,
+  LIBRARY_GUIDE,
+  SCRATCHPAD_GUIDE,
+  type HarnessRole,
+} from "./harness-prompts.js";
 import { buildPiWebSystemPrompt } from "./system-prompt.js";
+
+/** Rôles de sous-agent (fonctions de routage du mode harness). */
+const ROLES: HarnessRole[] = ["planning", "execute", "review", "integrate"];
 
 const EXTENSION_SOURCE = readFileSync(
   fileURLToPath(new URL("../../../extensions/harness-orchestrator/index.ts", import.meta.url)),
@@ -31,17 +41,26 @@ describe("injection de GIT_SAFETY_RULES — prompts de rôle (extension harness)
   });
 
   it("concatène la consigne aux 4 prompts de rôle (planning, execute, review, integrate)", () => {
-    // Chaque prompt se termine par `… + CBM_EXPLORATION_GUIDE + SCRATCHPAD_GUIDE + GIT_SAFETY_RULES`.
-    const injections = EXTENSION_SOURCE.match(/\+ SCRATCHPAD_GUIDE \+ GIT_SAFETY_RULES/g) ?? [];
-    expect(injections).toHaveLength(4);
+    // La chaîne de guides a migré dans le module PUR backend/src/pi/harness-prompts.ts
+    // (buildHarnessRolePrompt) : c'est le TEXTE réellement envoyé, donc on l'IMPORTE
+    // au lieu de grepper une concaténation dans la source de l'extension.
+    for (const role of ROLES) {
+      const prompt = buildHarnessRolePrompt(role);
+      expect(prompt.endsWith(GIT_SAFETY_RULES), `${role} : la consigne doit clore le prompt`).toBe(true);
+      expect(prompt).toContain(CBM_EXPLORATION_GUIDE);
+      expect(prompt).toContain(SCRATCHPAD_GUIDE);
+      expect(prompt).toContain(LIBRARY_GUIDE);
+    }
   });
 
   it("chaque rôle de routage déclare bien la consigne", () => {
-    for (const role of ["planning", "execute", "review", "integrate"]) {
+    for (const role of ROLES) {
       expect(EXTENSION_SOURCE, role).toContain(`name: "${role}"`);
     }
-    // Aucune autre constante de guide ne doit être oubliée dans la chaîne.
-    expect(EXTENSION_SOURCE).not.toMatch(/\+ SCRATCHPAD_GUIDE,(?!\s*\n)/);
+    // Aucun rôle ne doit composer son prompt à la main (ce serait une 2e source).
+    expect(EXTENSION_SOURCE).not.toMatch(/systemPrompt: `## RÔLE/);
+    const built = EXTENSION_SOURCE.match(/buildHarnessRolePrompt\("/g) ?? [];
+    expect(built).toHaveLength(4);
   });
 });
 

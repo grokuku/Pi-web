@@ -60,6 +60,14 @@ export function filterPlatformTools(names: string[]): string[] {
 // ÉCARTÉS (aucun n'est cité par le prompt de l'orchestrateur) :
 // memory_store/memory_search/memory_delete, render_design/get_design,
 // log_commit_note, open_preview/preview_html.
+//
+// DÉCISION EXPLICITE (outillage des SOUS-AGENTS) : `open_preview`/`preview_html` ont
+// été donnés aux rôles `execute` et `review` (extensions/harness-orchestrator/
+// index.ts, PREVIEW_TOOLS) parce que l'un ÉCRIT les pages et l'autre VÉRIFIE un
+// rendu. Ils ne sont PAS ajoutés ici : l'orchestrateur ne produit ni ne vérifie de
+// rendu (il délègue), donc les lui donner élargirait sa surface et son prompt à
+// CHAQUE tour sans usage — exactement le BUG10 que cette liste blanche corrige.
+// Verrouillé par backend/src/pi/subagent-preview-tools.test.ts.
 export const HARNESS_TOOL_WHITELIST: readonly string[] = Object.freeze([
   DELEGATE_TOOL_NAME,
   "delegate_list",

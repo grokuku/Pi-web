@@ -36,8 +36,11 @@ import { getProject } from "../projects/manager.js";
 import { isPathAllowed } from "../utils/path-security.js";
 
 // ─── Config ──────────────────────────────────────────────
-const INLINE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const INLINE_MAX_SIZE = 500 * 1024;  // 500 KB
+// EXPORTÉS parce que les descriptions des tools LLM (pi/preview-tools.ts) les
+// INTERPOLENT : les limites annoncées au modèle sont ainsi les limites
+// réellement appliquées ici, sans risque de dérive silencieuse.
+export const INLINE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const INLINE_MAX_SIZE = 500 * 1024;  // 500 KB
 
 // CSP appliqué à TOUTES les réponses de preview (documents HTML surtout).
 // `sandbox` sans `allow-same-origin` → origine opaque + scripts autorisés.

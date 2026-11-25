@@ -20,6 +20,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { librarianTools } from "./librarian-tools.js";
+import {
+  buildHarnessRolePrompt,
+  CBM_EXPLORATION_GUIDE,
+  LIBRARY_GUIDE,
+  SCRATCHPAD_GUIDE,
+} from "./harness-prompts.js";
 
 const EXTENSION_SOURCE = readFileSync(
   fileURLToPath(new URL("../../../extensions/harness-orchestrator/index.ts", import.meta.url)),
@@ -46,10 +52,12 @@ function readStringArrayConstant(name: string): string[] {
 const CBM_TOOLS = readStringArrayConstant("CBM_TOOLS");
 const EXPLORATION_TOOLS = readStringArrayConstant("EXPLORATION_TOOLS");
 const LIBRARY_TOOLS = readStringArrayConstant("LIBRARY_TOOLS");
+const PREVIEW_TOOLS = readStringArrayConstant("PREVIEW_TOOLS");
 const SPREADS: Record<string, string[]> = {
   LIBRARY_TOOLS,
   CBM_TOOLS,
   EXPLORATION_TOOLS,
+  PREVIEW_TOOLS,
 };
 
 /** Bloc source de chaque rôle (`name: "<role>"` → rôle suivant). */
@@ -139,9 +147,9 @@ describe("web_screenshot : usage ciblé (rendu), pas la lecture de texte", () =>
   });
 
   it("la consigne distingue LIRE (Libry) et VÉRIFIER UN RENDU (screenshot)", () => {
-    const guide = EXTENSION_SOURCE.match(/const LIBRARY_GUIDE = `([\s\S]*?)`;/);
-    expect(guide).not.toBeNull();
-    const text = guide![1];
+    // Le texte a migré dans backend/src/pi/harness-prompts.ts (source unique, gelée
+    // par prompt-snapshots.test.ts) : on lit la valeur, plus la source de l'extension.
+    const text = LIBRARY_GUIDE;
     expect(text).toContain("librarian_search");
     expect(text).toContain("librarian_archive");
     expect(text).toContain("web_screenshot");
@@ -163,6 +171,7 @@ describe("non-régression : les autres tools de chaque rôle sont inchangés", (
   ];
   const EXPLORATION = ["exploration_note", "exploration_notes"];
   const LIBRARY = ["librarian_search", "librarian_archive"];
+  const PREVIEW = ["open_preview", "preview_html"];
 
   it("planning", () => {
     expect(roleTools("planning")).toEqual([
@@ -188,6 +197,7 @@ describe("non-régression : les autres tools de chaque rôle sont inchangés", (
       "ls",
       "analyze_file",
       "web_screenshot",
+      ...PREVIEW,
       ...LIBRARY,
       ...CBM,
       ...EXPLORATION,
@@ -202,6 +212,7 @@ describe("non-régression : les autres tools de chaque rôle sont inchangés", (
       "ls",
       "analyze_file",
       "web_screenshot",
+      ...PREVIEW,
       ...LIBRARY,
       ...CBM,
       ...EXPLORATION,
@@ -225,21 +236,26 @@ describe("non-régression : les autres tools de chaque rôle sont inchangés", (
     expect(CBM_TOOLS).toEqual(CBM);
     expect(EXPLORATION_TOOLS).toEqual(EXPLORATION);
     expect(LIBRARY_TOOLS).toEqual(LIBRARY);
+    expect(PREVIEW_TOOLS).toEqual(PREVIEW);
   });
 });
 
 describe("la consigne Libry/Rendu est présente dans les 4 rôles", () => {
-  it("chaque prompt de rôle concatène LIBRARY_GUIDE", () => {
+  it("chaque prompt de rôle contient LIBRARY_GUIDE", () => {
+    // buildHarnessRolePrompt est la SEULE voie de composition (prompt-snapshots.test.ts
+    // gèle le résultat) : on vérifie le texte effectivement envoyé, pas une concaténation.
     for (const role of ROLES) {
-      expect(roleSource(role), role).toMatch(/`\s*\+\s*LIBRARY_GUIDE\s*\+/);
+      expect(buildHarnessRolePrompt(role), role).toContain(LIBRARY_GUIDE);
     }
   });
 
-  it("la chaîne de guides reste complète (4 occurrences identiques)", () => {
-    const injections =
-      EXTENSION_SOURCE.match(
-        /\+ LIBRARY_GUIDE \+ CBM_EXPLORATION_GUIDE \+ SCRATCHPAD_GUIDE \+ GIT_SAFETY_RULES/g,
-      ) ?? [];
-    expect(injections).toHaveLength(4);
+  it("la chaîne de guides reste complète (mêmes guides dans les 4 rôles)", () => {
+    const references = ROLES.map((role) => buildHarnessRolePrompt(role));
+    expect(references).toHaveLength(4);
+    for (const prompt of references) {
+      expect(prompt).toContain(LIBRARY_GUIDE);
+      expect(prompt).toContain(CBM_EXPLORATION_GUIDE);
+      expect(prompt).toContain(SCRATCHPAD_GUIDE);
+    }
   });
 });

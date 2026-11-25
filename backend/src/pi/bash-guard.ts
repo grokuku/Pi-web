@@ -196,7 +196,10 @@ function containsGitWritePattern(value: string): boolean {
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const SHORT_FLAG_RE = /^-[A-Za-z]+$/;
 
-const REFUSAL_HINT =
+// EXPORTÉ pour le filet de non-régression des prompts (prompt-snapshots.test.ts) :
+// ce texte est renvoyé AU MODÈLE dans `reason` quand le garde-fou bloque un appel
+// — c'est donc une consigne de prompt au même titre que GIT_SAFETY_RULES.
+export const REFUSAL_HINT =
   "L'utilisateur gère seul son historique git. Un commit que tu ne reconnais pas est TOUJOURS un travail de l'utilisateur : ne le défais pas, signale-le dans ton rapport. " +
   `Seules les lectures sont autorisées : git ${ALLOWED_SUBCOMMANDS_TEXT}, ${CONDITIONAL_READS.join(", ")}.`;
 
