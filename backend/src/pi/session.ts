@@ -1748,7 +1748,13 @@ export async function compactSession(
 ): Promise<any> {
   const state = await getReadySession(projectId);
   if (!state?.session) throw new Error("No active Pi session for this project");
-  return compactSessionInternal(state.session, customInstructions);
+  const result = await compactSessionInternal(state.session, customInstructions);
+  // Publie l'état de session DÈS la compaction (comme le fait la commande
+  // `/compact`). Après une compaction, le SDK renvoie `contextUsage.tokens =
+  // null` (« unknown … before next LLM response ») : sans cette publication,
+  // l'UI gardait le compteur du tour précédent jusqu'à la fin du tour suivant.
+  emitSessionUpdate(projectId);
+  return result;
 }
 
 // ── Debug log helper for compaction ──────────────────────

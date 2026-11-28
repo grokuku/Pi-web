@@ -29,6 +29,7 @@ import { initToastTheme, toast } from "./utils/holaf-toast";
 import { applyPiWebTheme, persistThemeName, readSavedThemeName, THEME_STORAGE_KEY, type PiWebThemeId } from "./theme/pi-web-theme";
 import { getPreviewMode, setPreviewMode, onPreviewModeChange, loadLastPreview, saveLastPreview, popupFeatures, type PreviewMode, type LastPreview } from "./utils/preview-mode";
 import { mergeServerSessionState, clientTimeZone, fetchProjectSession } from "./utils/session-sync";
+import { applyContextUsage, EMPTY_CONTEXT_STATS, type ContextStats } from "./utils/context-usage";
 import { readPersistedSidebarWidth, readPersistedZoom } from "./utils/persisted-layout";
 import { useHasActiveSubAgentRun } from "./stores/subagentRuns";
 
@@ -58,7 +59,9 @@ class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean;
 interface ProjectSessionState {
   isStreaming: boolean;
   session: any;
-  stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
+  // `tokens`/`contextPercent` à null = taille du contexte INCONNUE (juste après
+  // une compaction) — cf. utils/context-usage.ts.
+  stats: ContextStats | null;
   activity: Activity | null;  // activité en cours (StatusBar), dérivée des pi_event
   lastEventAt: number;  // timestamp of last pi_event received (0 = never)
 }
@@ -393,10 +396,14 @@ function App() {
       // r.json())` sans `r.ok` → une charge `{ error }` devenait « session »).
       void fetchProjectSession(activeProject.id).then((s) => {
         if (s === null) return;
-        updateProjectSession(activeProject.id, { session: s });
+        // La bascule de modèle peut compacter (`compactToFit`) : le snapshot
+        // porte alors `contextUsage.tokens = null` → l'indicateur doit passer
+        // en « taille inconnue » plutôt que garder l'ancienne valeur.
+        const nextStats = applyContextUsage(getProjectSession(activeProject.id).stats, (s as any).contextUsage);
+        updateProjectSession(activeProject.id, nextStats ? { session: s, stats: nextStats } : { session: s });
       });
     }
-  }, [activeProject?.id, updateProjectSession]);
+  }, [activeProject?.id, updateProjectSession, getProjectSession]);
 
   // ── Thème choisi (ex-« accent ») : persistance dans la NOUVELLE clé ──
   // (l'ancienne clé `pi-web-accent` est migrée puis supprimée — voir
@@ -664,7 +671,7 @@ function App() {
           if (evt.message?.usage) {
             const u = evt.message.usage;
             const state = getProjectSession(projectId);
-            const prevStats = state.stats || { tokens: 0, contextPercent: 0, totalTokens: 0 };
+            const prevStats = state.stats || EMPTY_CONTEXT_STATS;
             const lastInputTokens = u.input || 0;
             const lastOutputTokens = u.output || 0;
             const totalTokens = prevStats.totalTokens + lastInputTokens + lastOutputTokens;
@@ -677,19 +684,14 @@ function App() {
         case "session_update": {
           if (evt.session) {
             const state = getProjectSession(projectId);
-            if (!state.stats) {
-              state.stats = { tokens: 0, contextPercent: 0, totalTokens: 0 };
-            }
-            const cu = evt.session.contextUsage;
-            if (cu && cu.tokens !== null && cu.contextWindow > 0) {
-              const prevStats = state.stats;
-              state.stats = {
-                tokens: cu.tokens,
-                contextPercent: Math.round(cu.percent ?? 0),
-                totalTokens: prevStats.totalTokens,
-              };
-            }
-            updateProjectSession(projectId, { session: evt.session });
+            const patch: Partial<ProjectSessionState> = { session: evt.session };
+            // Taille du contexte : le SDK renvoie `tokens: null` juste après une
+            // compaction (la valeur exacte n'arrive qu'à la réponse LLM
+            // suivante). On propage cet état « inconnu » — garder l'ancien
+            // nombre afficherait une taille périmée comme si elle était vraie.
+            const nextStats = applyContextUsage(state.stats, (evt.session as any).contextUsage);
+            if (nextStats) patch.stats = nextStats;
+            updateProjectSession(projectId, patch);
             if (evt.session.activeMode) {
               activeModeByProjectRef.current.set(projectId, evt.session.activeMode);
             }

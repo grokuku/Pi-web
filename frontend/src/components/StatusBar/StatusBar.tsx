@@ -2,12 +2,13 @@ import type { Project, Activity } from "../../types";
 import { PiLogo } from "../common/PiLogo";
 import { useTranslation } from "../../i18n";
 import { resolveActivityDisplay } from "../../utils/activity-label";
+import { EMPTY_CONTEXT_STATS, hasKnownContextSize, type ContextStats } from "../../utils/context-usage";
 
 interface Props {
   activeProject: Project | null;
   isStreaming: boolean;
   streamingStalled?: boolean;
-  stats: { tokens: number; contextPercent: number; totalTokens: number } | null;
+  stats: ContextStats | null;
   session: any;
   connected: boolean;
   activeMode?: string;
@@ -32,7 +33,16 @@ export function StatusBar({
 }: Props) {
   const { t } = useTranslation();
   // Show zero stats when a session exists but stats haven't been populated yet
-  const displayStats = stats || (session ? { tokens: 0, contextPercent: 0, totalTokens: 0 } : null);
+  const displayStats = stats || (session ? EMPTY_CONTEXT_STATS : null);
+  // Taille du contexte CONNUE ? Après une compaction le SDK renvoie
+  // `tokens: null` (valeur exacte au prochain message) : on affiche alors un
+  // état explicite au lieu d'un nombre périmé — cf. utils/context-usage.ts.
+  const ctxKnown = hasKnownContextSize(displayStats);
+  const ctxWindowLabel = session?.model?.contextWindow
+    ? session.model.contextWindow >= 1000000
+      ? `${(session.model.contextWindow / 1000000).toFixed(0)}M`
+      : `${(session.model.contextWindow / 1000).toFixed(0)}K`
+    : null;
 
   // ── Libellé d'activité dynamique ──
   // Affiche CE QUE l'agent fait (routage, réflexion, outil, réponse) et couvre
@@ -133,30 +143,36 @@ export function StatusBar({
       {/* Stats */}
       {displayStats && (
         <>
-          {/* Current context: last prompt size */}
-          <span className="text-hacker-text-dim" title={t('statusBar.contextTooltip', displayStats.tokens.toLocaleString(), displayStats.totalTokens.toLocaleString())}>
-            {t('statusBar.ctx', (displayStats.tokens / 1000).toFixed(1))}
-          </span>
+          {/* Current context: last prompt size (ou état honnête si inconnue) */}
+          {ctxKnown ? (
+            <span className="text-hacker-text-dim" title={t('statusBar.contextTooltip', displayStats.tokens!.toLocaleString(), displayStats.totalTokens.toLocaleString())}>
+              {t('statusBar.ctx', (displayStats.tokens! / 1000).toFixed(1))}
+            </span>
+          ) : (
+            <span className="text-hacker-warn" title={t('statusBar.contextCompactedTooltip', displayStats.totalTokens.toLocaleString())}>
+              {t('statusBar.ctxCompacted')}
+            </span>
+          )}
           <span className="text-hacker-border-bright">│</span>
           <div className="flex items-center gap-1.5">
             <div className="w-16 h-1.5 bg-hacker-border rounded-sm overflow-hidden">
               <div
                 className={`h-full transition-all ${
-                  displayStats.contextPercent > 80
+                  (displayStats.contextPercent ?? 0) > 80
                     ? "bg-hacker-warn"
-                    : displayStats.contextPercent > 60
+                    : (displayStats.contextPercent ?? 0) > 60
                     ? "bg-hacker-info"
                     : "bg-hacker-accent"
                 }`}
-                style={{ width: `${Math.min(displayStats.contextPercent, 100)}%` }}
+                style={{ width: `${Math.min(displayStats.contextPercent ?? 0, 100)}%` }}
               />
             </div>
             <span className="text-hacker-text-dim min-w-[27px]">
-              {displayStats.contextPercent}%
+              {displayStats.contextPercent === null ? t('statusBar.contextPercentUnknown') : `${displayStats.contextPercent}%`}
             </span>
-            {session?.model?.contextWindow && (
+            {ctxWindowLabel && (
               <span className="text-hacker-text-dim" title={t('statusBar.contextWindow')}>
-                /{session.model.contextWindow >= 1000000 ? `${(session.model.contextWindow / 1000000).toFixed(0)}M` : `${(session.model.contextWindow / 1000).toFixed(0)}K`}
+                /{ctxWindowLabel}
               </span>
             )}
           </div>

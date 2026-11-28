@@ -320,6 +320,12 @@ export const en = {
     ctx: (n: string) => `ctx ${n}K`,
     contextTooltip: (ctx: string, total: string) => `Context: ${ctx} tokens\nTotal: ${total} tokens`,
     contextWindow: "Model context window",
+    // After compaction the SDK no longer knows the context size: say it
+    // explicitly instead of showing the stale value.
+    ctxCompacted: "ctx — compacted",
+    contextCompactedTooltip: (total: string) =>
+      `Context compacted — the exact token count will be known on the next message (no estimate shown).\nTotal: ${total} tokens`,
+    contextPercentUnknown: "—",
   },
   usage: {
     title: "Usage Statistics",

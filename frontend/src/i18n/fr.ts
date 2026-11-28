@@ -320,6 +320,12 @@ export const fr = {
     ctx: (n: string) => `ctx ${n}K`,
     contextTooltip: (ctx: string, total: string) => `Contexte : ${ctx} jetons\nTotal : ${total} jetons`,
     contextWindow: "Fenêtre de contexte du modèle",
+    // Après compaction, le SDK ne connaît plus la taille du contexte : on
+    // l'annonce explicitement au lieu d'afficher l'ancienne valeur.
+    ctxCompacted: "ctx — compacté",
+    contextCompactedTooltip: (total: string) =>
+      `Contexte compacté — la taille exacte en jetons sera connue au prochain message (aucune estimation affichée).\nTotal : ${total} jetons`,
+    contextPercentUnknown: "—",
   },
   usage: {
     title: "Statistiques d'utilisation",
